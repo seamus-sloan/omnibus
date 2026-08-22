@@ -33,7 +33,7 @@ enum UploadKind: Equatable, Sendable {
 }
 
 /// One commit's worth of picked files: a single EPUB, a single `.m4a`/`.m4b`,
-/// or every `.mp3` of one multi-part audiobook.
+/// or the `.mp3` parts of one multi-part audiobook.
 struct UploadBatch: Equatable, Sendable {
     var kind: UploadKind
     var urls: [URL]
@@ -62,14 +62,24 @@ enum UploadFlow {
     static let ebookExtensions: Set<String> = ["epub"]
 
     /// Extensions `/api/uploads/audiobooks` accepts, matching `audiobook_ext_of`
-    /// on the server. Deliberately narrower than `Book.audioFormats`, which
-    /// describes what the library can *play* — offering `.flac` here would
-    /// transfer a whole audiobook before the server answered 415.
-    static let audiobookExtensions: Set<String> = ["m4a", "m4b", "mp3"]
+    /// on the server. This is the same narrow set the player and downloader
+    /// already use, so it is shared rather than restated — `Book.audioFormats`
+    /// is the *broad* list of what a library may contain, and routing on that
+    /// transferred whole `.flac`/`.wav` files the server then answered 415.
+    static let audiobookExtensions: Set<String> = Book.selectableAudioFormats
+
+    /// Longest title the server will accept, mirroring
+    /// `MetadataOverrides::TITLE_MAX_LEN` in `shared/src/ebook/overrides.rs`.
+    /// Enforced here because the server validates *after* filing the book, so
+    /// an over-long title lands a book on disk and then answers 400.
+    static let titleMaxLength = 500
+
+    /// Longest author/series value, mirroring `MetadataOverrides::NAME_MAX_LEN`.
+    static let nameMaxLength = 250
 
     /// Which ingest a filename targets, or `nil` when neither accepts it.
     static func kind(for filename: String) -> UploadKind? {
-        let ext = (filename as NSString).pathExtension.lowercased()
+        let ext = fileExtension(of: filename)
         if ebookExtensions.contains(ext) { return .ebook }
         if audiobookExtensions.contains(ext) { return .audiobook }
         return nil
@@ -79,7 +89,7 @@ enum UploadFlow {
     /// so this is courtesy rather than contract — but sending `audio/mp4` for
     /// an MP3, as the sheet used to, is a lie worth not telling.
     static func mimeType(for filename: String) -> String {
-        switch (filename as NSString).pathExtension.lowercased() {
+        switch fileExtension(of: filename) {
         case "epub": "application/epub+zip"
         case "mp3": "audio/mpeg"
         case "m4a", "m4b": "audio/mp4"
@@ -89,40 +99,54 @@ enum UploadFlow {
 
     /// Split a picked selection into one batch per book the server would file.
     ///
-    /// Every `.mp3` in the selection becomes one multi-part audiobook, which is
-    /// the only grouping `classify_audio_set` accepts; each EPUB and each
-    /// `.m4a`/`.m4b` container is its own book, so they get a batch apiece
-    /// rather than the 400 that sending two containers in one request earns.
+    /// Each EPUB and each `.m4a`/`.m4b` container is its own book, so they get a
+    /// batch apiece rather than the 400 that sending two containers in one
+    /// request earns. `.mp3` files are grouped **by their containing folder**:
+    /// `classify_audio_set` files a set of MP3s as one book, and a folder is the
+    /// only signal available for which of them actually belong together. Lumping
+    /// every picked MP3 into one book instead merged unrelated single-track
+    /// audiobooks with no way back short of deleting the result.
     ///
-    /// Batches follow the pick order, except that the MP3 set lands last: it
+    /// Batches follow the pick order, except that MP3 sets land last: a set
     /// isn't complete until the whole selection has been walked, so it cannot
     /// take the position of the first part it collected.
     static func selection(for urls: [URL]) -> UploadSelection {
         var result = UploadSelection()
-        var mp3s: [URL] = []
+        var mp3Folders: [URL] = []
+        var mp3ByFolder: [URL: [URL]] = [:]
+
         for url in urls {
             let name = url.lastPathComponent
             switch kind(for: name) {
             case .ebook:
                 result.batches.append(UploadBatch(kind: .ebook, urls: [url]))
-            case .audiobook where (name as NSString).pathExtension.lowercased() == "mp3":
-                mp3s.append(url)
+            case .audiobook where fileExtension(of: name) == "mp3":
+                let folder = url.deletingLastPathComponent()
+                if mp3ByFolder[folder] == nil { mp3Folders.append(folder) }
+                mp3ByFolder[folder, default: []].append(url)
             case .audiobook:
                 result.batches.append(UploadBatch(kind: .audiobook, urls: [url]))
             case nil:
                 result.unsupported.append(name)
             }
         }
-        if !mp3s.isEmpty {
-            result.batches.append(UploadBatch(kind: .audiobook, urls: mp3s))
+
+        for folder in mp3Folders {
+            guard let parts = mp3ByFolder[folder] else { continue }
+            result.batches.append(UploadBatch(kind: .audiobook, urls: parts))
         }
         return result
     }
 
     /// The commit form fields for a confirmed upload, in a fixed order so the
-    /// request body is deterministic. Blank optional fields are omitted rather
-    /// than sent empty — `norm` on the server would discard them anyway, and
-    /// an absent part is the honest way to say "no value".
+    /// request body is deterministic.
+    ///
+    /// Blank optional fields are omitted. Note this means a *cleared* series
+    /// cannot be pushed: the server reads an absent part as "keep the file's
+    /// embedded value", and sending an empty string is identical because its
+    /// `norm` trims-and-drops. Clearing needs a server-side absent-vs-empty
+    /// distinction; until then the metadata editor is where a wrong series
+    /// gets removed.
     static func commitFields(
         kind: UploadKind, title: String, author: String, series: String, seriesIndex: String
     ) -> [(name: String, value: String)] {
@@ -131,31 +155,49 @@ enum UploadFlow {
             ("author", author.trimmingCharacters(in: .whitespacesAndNewlines)),
         ]
         guard kind.acceptsSeries else { return fields }
-        let trimmedSeries = series.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedSeries.isEmpty { fields.append(("series", trimmedSeries)) }
-        let trimmedIndex = seriesIndex.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedIndex.isEmpty { fields.append(("series_index", trimmedIndex)) }
+        if let series = series.nilIfBlank { fields.append(("series", series)) }
+        if let seriesIndex = seriesIndex.nilIfBlank {
+            fields.append(("series_index", seriesIndex))
+        }
         return fields
     }
 
-    /// Whether the confirm sheet may submit. Both fields are required by the
-    /// commit handlers, so the button is disabled rather than letting the
-    /// server answer 400.
+    /// Whether the confirm sheet may submit.
+    ///
+    /// Both fields are required by the commit handlers, and both carry a length
+    /// cap the server enforces only *after* the book is filed and indexed — so
+    /// an over-long title would land a book on disk, answer 400, and file a
+    /// second copy on the retry. The button stands down instead.
     static func canCommit(title: String, author: String) -> Bool {
-        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard let title = title.nilIfBlank, let author = author.nilIfBlank else { return false }
+        return title.count <= titleMaxLength && author.count <= nameMaxLength
     }
 
-    /// Content types the file importer offers — exactly what the two endpoints
-    /// accept, so an upload cannot fail on format after the whole file has
-    /// been transferred.
+    /// Whether an optional confirm-sheet field is short enough to commit.
+    static func isWithinNameCap(_ value: String) -> Bool {
+        (value.nilIfBlank?.count ?? 0) <= nameMaxLength
+    }
+
+    /// Content types the file importer offers, derived from the accepted
+    /// extensions so the two cannot drift.
+    ///
+    /// A `UTType` can carry sibling extensions the server does not take —
+    /// `public.mp3` also claims `mpga` — so this narrows the picker rather than
+    /// matching it exactly, and [`selection(for:)`] stays the real gate. It is
+    /// still worth deriving: naming `UTType.mpeg4Audio` by hand offered `mp4`
+    /// and `mpg4`, which are not audiobooks at all.
     static var pickerTypes: [UTType] {
-        var types: [UTType] = [.epub, .mp3, .mpeg4Audio]
-        for ext in ["m4b", "m4a"] {
-            if let type = UTType(filenameExtension: ext), !types.contains(type) {
-                types.append(type)
-            }
+        let extensions = ebookExtensions.sorted() + audiobookExtensions.sorted()
+        var types: [UTType] = []
+        for ext in extensions {
+            guard let type = UTType(filenameExtension: ext), !types.contains(type) else { continue }
+            types.append(type)
         }
         return types
+    }
+
+    /// Lowercased extension of a filename, the one place that parse happens.
+    private static func fileExtension(of filename: String) -> String {
+        (filename as NSString).pathExtension.lowercased()
     }
 }

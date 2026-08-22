@@ -55,6 +55,10 @@ enum MultipartBody {
         files: [MultipartFile]
     ) -> Data {
         var body = Data()
+        // Data grows geometrically, so appending a multi-part audiobook without
+        // this re-copies the whole prefix several times and transiently holds
+        // old buffer + new one — enough on its own to jetsam a large upload.
+        body.reserveCapacity(files.reduce(4096) { $0 + $1.data.count + 256 })
         for field in fields {
             body.append("--\(boundary)\r\n")
             let name = escapeHeaderParameter(field.name)

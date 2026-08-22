@@ -67,9 +67,16 @@ struct UploadStagingTests {
         #expect(try Data(contentsOf: staged.urls[1]) == Data("PK:02.mp3".utf8))
     }
 
-    @Test func stageDisambiguatesTwoPartsThatShareAFilename() async throws {
+    @Test func stagePreservesFilenamesWhenTwoPartsCollide() async throws {
         // Two folders, same filename — legitimate for a multi-part audiobook
-        // split across discs. A plain copy into one directory would throw.
+        // split across discs. Each part gets its own numbered slot, so the
+        // ORIGINAL name goes out on the wire and the server's own
+        // `dedupe_part_name` resolves the clash.
+        //
+        // The previous scheme renamed client-side to `track01-1.mp3`, which was
+        // worse than useless: '-' (0x2D) sorts before '.' (0x2E), and
+        // `build_parts_list` breaks ties on filename, so two discs both tagged
+        // 1..N interleaved on playback.
         let discOne = try makeSourceDir(["track01.mp3"], contents: "ONE")
         let discTwo = try makeSourceDir(["track01.mp3"], contents: "TWO")
         defer {
@@ -88,15 +95,40 @@ struct UploadStagingTests {
         defer { UploadService.discard(directory) }
 
         #expect(staged.urls.count == 2)
-        let names = staged.urls.map(\.lastPathComponent)
-        #expect(Set(names).count == 2, "both parts must survive under distinct names")
-        #expect(names[0] == "track01.mp3")
-        #expect(names[1] == "track01-1.mp3")
-        // The extension has to survive the rename — the server routes on it.
-        #expect(names.allSatisfy { $0.hasSuffix(".mp3") })
-        // Distinct bytes, so neither part overwrote the other.
+        // Both keep the name the reader picked; no client-side rename can
+        // reorder what the server sorts.
+        #expect(staged.urls.map(\.lastPathComponent) == ["track01.mp3", "track01.mp3"])
+        #expect(Set(staged.urls.map(\.path)).count == 2, "distinct paths, same filename")
         #expect(try Data(contentsOf: staged.urls[0]) == Data("ONE:track01.mp3".utf8))
         #expect(try Data(contentsOf: staged.urls[1]) == Data("TWO:track01.mp3".utf8))
+    }
+
+    @Test func stageSurvivesAThirdPartCollidingWithADisambiguatedName() async throws {
+        // The old single-shot rename produced "track-2.mp3" for the third part
+        // and threw, because the second part was already called that.
+        let one = try makeSourceDir(["track.mp3", "track-2.mp3"], contents: "ONE")
+        let two = try makeSourceDir(["track.mp3"], contents: "TWO")
+        defer {
+            try? FileManager.default.removeItem(at: one)
+            try? FileManager.default.removeItem(at: two)
+        }
+        let batch = UploadBatch(
+            kind: .audiobook,
+            urls: [
+                one.appendingPathComponent("track.mp3"),
+                one.appendingPathComponent("track-2.mp3"),
+                two.appendingPathComponent("track.mp3"),
+            ]
+        )
+
+        let (staged, directory) = try await UploadService.stage(batch)
+        defer { UploadService.discard(directory) }
+
+        #expect(staged.urls.count == 3)
+        #expect(
+            staged.urls.map(\.lastPathComponent) == ["track.mp3", "track-2.mp3", "track.mp3"]
+        )
+        #expect(Set(staged.urls.map(\.path)).count == 3)
     }
 
     @Test func stageGivesEachBatchItsOwnDirectory() async throws {
@@ -122,7 +154,9 @@ struct UploadStagingTests {
         let batch = UploadBatch(kind: .ebook, urls: [source.appendingPathComponent("a.epub")])
 
         let (staged, directory) = try await UploadService.stage(batch)
-        UploadService.discard(directory)
+        // The synchronous core, so the assertion does not race the detached
+        // task `discard` normally fires.
+        UploadService.discardNow(directory)
 
         #expect(!FileManager.default.fileExists(atPath: staged.urls[0].path))
         #expect(!FileManager.default.fileExists(atPath: directory.path))

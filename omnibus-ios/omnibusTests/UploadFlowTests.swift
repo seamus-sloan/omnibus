@@ -10,8 +10,8 @@ import UniformTypeIdentifiers
 
 @testable import omnibus
 
-private func url(_ name: String) -> URL {
-    URL(fileURLWithPath: "/tmp/picked/\(name)")
+private func url(_ name: String, in folder: String = "picked") -> URL {
+    URL(fileURLWithPath: "/tmp/\(folder)/\(name)")
 }
 
 struct UploadFlowTests {
@@ -43,12 +43,48 @@ struct UploadFlowTests {
         let extensions = Set(
             UploadFlow.pickerTypes.flatMap { $0.tags[.filenameExtension] ?? [] }
         )
-        #expect(extensions.contains("epub"))
-        #expect(extensions.contains("mp3"))
-        #expect(extensions.contains("m4a"))
-        #expect(extensions.contains("m4b"))
-        #expect(!extensions.contains("flac"))
-        #expect(!extensions.contains("wav"))
+        let accepted = UploadFlow.ebookExtensions.union(UploadFlow.audiobookExtensions)
+        #expect(accepted.isSubset(of: extensions), "every accepted format must be pickable")
+        // Exclusivity, not just membership — the previous assertion passed with
+        // `mp4`/`mpg4` on the list because it only checked that four names were
+        // present. `mpga` is the one documented residual: `public.mp3` claims it
+        // as a sibling extension and no narrower UTType exists.
+        #expect(extensions.subtracting(accepted) == ["mpga"])
+    }
+
+    @Test func acceptedAudioSetIsTheSharedNarrowOne() {
+        // Same three members as the player/downloader set, by construction
+        // rather than by coincidence, so a format addition cannot land in one
+        // and not the other.
+        #expect(UploadFlow.audiobookExtensions == Book.selectableAudioFormats)
+    }
+
+    // MARK: - Length caps
+
+    @Test func canCommitRejectsValuesTheServerWouldRefuseAfterFilingTheBook() {
+        // The server validates overrides only after copying the file into the
+        // library and reindexing, so an over-long title lands a book on disk,
+        // answers 400, and duplicates it on the retry.
+        let longTitle = String(repeating: "a", count: UploadFlow.titleMaxLength + 1)
+        let longName = String(repeating: "a", count: UploadFlow.nameMaxLength + 1)
+        #expect(!UploadFlow.canCommit(title: longTitle, author: "Herbert"))
+        #expect(!UploadFlow.canCommit(title: "Dune", author: longName))
+        #expect(
+            UploadFlow.canCommit(
+                title: String(repeating: "a", count: UploadFlow.titleMaxLength),
+                author: String(repeating: "a", count: UploadFlow.nameMaxLength)
+            )
+        )
+    }
+
+    @Test func optionalFieldsAreCappedToo() {
+        #expect(UploadFlow.isWithinNameCap(""))
+        #expect(UploadFlow.isWithinNameCap(String(repeating: "a", count: UploadFlow.nameMaxLength)))
+        #expect(
+            !UploadFlow.isWithinNameCap(
+                String(repeating: "a", count: UploadFlow.nameMaxLength + 1)
+            )
+        )
     }
 
     @Test func mimeTypeMatchesTheContainerRatherThanGuessingMp4() {
@@ -68,7 +104,7 @@ struct UploadFlowTests {
         #expect(selection.unsupported.isEmpty)
     }
 
-    @Test func selectionGroupsEveryMp3IntoOneMultiPartAudiobook() {
+    @Test func selectionGroupsMp3sFromOneFolderIntoOneMultiPartAudiobook() {
         // `classify_audio_set` files a set of .mp3 parts as a single book; one
         // request per file made an N-part audiobook into N one-chapter books.
         let picked = [url("01.mp3"), url("02.mp3"), url("03.mp3")]
@@ -76,6 +112,31 @@ struct UploadFlowTests {
         #expect(selection.batches.count == 1)
         #expect(selection.batches.first?.kind == .audiobook)
         #expect(selection.batches.first?.urls == picked)
+    }
+
+    @Test func selectionKeepsMp3sFromDifferentFoldersAsSeparateBooks() {
+        // Three standalone single-track audiobooks are the ordinary case that
+        // one-batch-for-every-mp3 merged into a single book, recoverable only
+        // by deleting it. The folder is the one signal available for which
+        // parts actually belong together.
+        let picked = [
+            url("book-a.mp3", in: "A"), url("book-b.mp3", in: "B"), url("book-c.mp3", in: "C"),
+        ]
+        let selection = UploadFlow.selection(for: picked)
+        #expect(selection.batches.count == 3)
+        #expect(selection.batches.allSatisfy { $0.urls.count == 1 })
+    }
+
+    @Test func selectionGroupsPerFolderAcrossAMixedMp3Pick() {
+        let picked = [
+            url("01.mp3", in: "A"), url("01.mp3", in: "B"), url("02.mp3", in: "A"),
+        ]
+        let selection = UploadFlow.selection(for: picked)
+        #expect(selection.batches.count == 2)
+        // Folder A keeps both of its parts, in pick order, and folder A comes
+        // first because its first part was picked first.
+        #expect(selection.batches[0].urls == [url("01.mp3", in: "A"), url("02.mp3", in: "A")])
+        #expect(selection.batches[1].urls == [url("01.mp3", in: "B")])
     }
 
     @Test func selectionGivesEachContainerItsOwnCommit() {

@@ -22,8 +22,24 @@ struct UploadConfirmSheet: View {
     /// Seeded once from the inspection — re-seeding on every render would
     /// stomp the reader's edits.
     @State private var seeded = false
+    /// Set on the first Add. The sheet stays on screen and hit-testable for the
+    /// whole dismissal animation, so without this a second tap commits the same
+    /// draft again — two transfers, and two copies of the book in the library.
+    @State private var isSubmitting = false
 
-    private var canCommit: Bool { UploadFlow.canCommit(title: title, author: author) }
+    private var isOnline: Bool { Connectivity.shared.isOnline }
+
+    /// An upload is never queued (rule 08), so the write itself is gated, not
+    /// just the flow's entry: the confirm step puts an unbounded human pause
+    /// between picking a file and committing it, and the reader can lose
+    /// connectivity inside that window.
+    private var canCommit: Bool {
+        UploadFlow.canCommit(title: title, author: author)
+            && UploadFlow.isWithinNameCap(series)
+            && UploadFlow.isWithinNameCap(seriesIndex)
+            && isOnline
+            && !isSubmitting
+    }
 
     var body: some View {
         NavigationStack {
@@ -53,6 +69,8 @@ struct UploadConfirmSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
+                        guard !isSubmitting else { return }
+                        isSubmitting = true
                         Haptics.tap()
                         onCommit(
                             UploadConfirmation(
@@ -93,6 +111,11 @@ struct UploadConfirmSheet: View {
             )
             .font(.ui(13.5))
             .foregroundStyle(palette.ink2Color)
+            if !isOnline {
+                Text("You're offline — adding a book needs a connection.")
+                    .font(.ui(12.5))
+                    .foregroundStyle(palette.badColor)
+            }
         }
     }
 

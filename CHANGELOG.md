@@ -76,10 +76,11 @@ recent releases are recorded below; everything earlier is available via the
   "title and author are required to file the book", because the app posted the
   file straight to the commit endpoint and skipped the confirm step those
   fields come from. It now reads the file's embedded metadata, shows it for you
-  to correct, and files the book under what you confirmed — and the file picker
-  offers only the formats the server accepts, so an upload can no longer be
-  rejected after transferring the whole file. Picking several MP3s adds one
-  audiobook with all its parts instead of one book per file (#2100)
+  to correct, and files the book under what you confirmed. The file picker now
+  offers only formats the server can take, so a wrong-format pick is caught
+  before anything is sent rather than after. Picking several MP3s from one
+  folder adds a single audiobook with all its parts, instead of one book per
+  file (#2100)
 
 ## [0.22.10] - 2026-08-18
 

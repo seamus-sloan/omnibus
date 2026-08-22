@@ -99,15 +99,25 @@ struct MultipartBodyTests {
         #expect(body.range(of: payload) != nil)
     }
 
-    @Test func fieldOrderIsStableAcrossEncodes() {
-        // Dictionary iteration order varies per process; the fields array is
-        // what keeps a request body — and this test — deterministic.
-        let fields = UploadFlow.commitFields(
-            kind: .ebook, title: "Dune", author: "Herbert", series: "Dune", seriesIndex: "1"
+    @Test func fieldsAppearInTheOrderGiven() {
+        // Asserts the concrete byte order, not that two encodes of one array
+        // agree — which is true of any deterministic encoder, including a
+        // Dictionary-based one, so it could not fail.
+        let body = decoded(
+            MultipartBody.encode(
+                boundary: "B",
+                fields: UploadFlow.commitFields(
+                    kind: .ebook, title: "Dune", author: "Herbert",
+                    series: "Dune", seriesIndex: "1"
+                ),
+                files: []
+            )
         )
-        let first = decoded(MultipartBody.encode(boundary: "B", fields: fields, files: []))
-        let second = decoded(MultipartBody.encode(boundary: "B", fields: fields, files: []))
-        #expect(first == second)
+        let positions = ["title", "author", "series", "series_index"].map {
+            body.range(of: "name=\"\($0)\"")?.lowerBound
+        }
+        #expect(positions.allSatisfy { $0 != nil })
+        #expect(positions == positions.sorted { ($0 ?? body.endIndex) < ($1 ?? body.endIndex) })
     }
 
     @Test func escapesAQuoteThatWouldCloseTheHeaderEarly() {
@@ -144,8 +154,16 @@ struct MultipartBodyTests {
             )
         )
         #expect(body.contains(#"filename="two%0D%0Alines.epub""#))
-        // One header line for the disposition, not three.
-        #expect(body.components(separatedBy: "Content-Disposition").count == 2)
+        // The disposition must occupy exactly one physical line. Counting
+        // occurrences of "Content-Disposition" cannot show that — splitting one
+        // header across three lines does not add occurrences — so count the
+        // CRLFs the body is allowed to contain instead: header, blank line,
+        // payload terminator, and the closing boundary.
+        let dispositionLine = body
+            .components(separatedBy: "\r\n")
+            .first { $0.contains("Content-Disposition") }
+        #expect(dispositionLine?.hasSuffix(#"filename="two%0D%0Alines.epub""#) == true)
+        #expect(!body.contains("two\r\nlines"))
     }
 
     @Test func leavesAPercentAloneSoOrdinaryFilenamesArentMangled() {

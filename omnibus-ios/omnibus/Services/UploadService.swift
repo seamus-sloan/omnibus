@@ -2,10 +2,10 @@
 //  The two-step "add your own books" ingest: inspect a picked file for its
 //  embedded metadata, then commit it with the metadata the user confirmed.
 //
-//  Both steps are online-only and throw on failure. An upload is a command —
-//  it files bytes into a shared library and kicks a reindex — so it never
-//  queues in the outbox (rule 08, tests 1 and 2), and the sheet disables the
-//  control while offline rather than letting the request fail after the fact.
+//  Both steps are online-only and throw on failure. An upload is library-wide
+//  state — it files bytes into a shared library and kicks a reindex — so it
+//  never queues in the outbox (rule 08, test 1), and the sheet disables its
+//  controls while offline rather than letting the request fail after the fact.
 
 import Foundation
 
@@ -18,14 +18,20 @@ struct UploadConfirmation: Equatable, Sendable {
 }
 
 enum UploadService {
+    /// Parent of every per-batch staging directory, so a sweep can find
+    /// leftovers from a crash or a dismissal that outran its cleanup.
+    private static var stagingRoot: URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("omnibus-uploads", isDirectory: true)
+    }
+
     /// Copy a batch's picked file(s) into this app's temporary directory,
     /// returning the batch rebased onto the copies plus the directory holding
     /// them.
     ///
     /// Two reasons, both about the confirm step: the picker's URLs are
     /// security-scoped and that access must be released promptly, while the
-    /// human pause before the user hits Add is unbounded. Copying also keeps a
-    /// large book on disk across that pause instead of resident in a `Data`.
+    /// human pause before the user hits Add is unbounded.
     ///
     /// The copy runs detached because this target builds with approachable
     /// concurrency, under which a `nonisolated async` function runs on its
@@ -38,25 +44,22 @@ enum UploadService {
     private static func stageOnDisk(
         _ batch: UploadBatch
     ) throws -> (batch: UploadBatch, directory: URL) {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("omnibus-uploads/\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true
-        )
+        let directory = stagingRoot
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
         var staged: [URL] = []
         for (index, source) in batch.urls.enumerated() {
+            // Each part gets its own numbered subdirectory so a copy can never
+            // collide, which lets the *original* filename go out on the wire.
+            // Renaming client-side to dodge a collision was worse than useless:
+            // the server already dedupes with `dedupe_part_name`, and a `-N`
+            // suffix sorts before the bare stem ('-' < '.'), which is the
+            // tiebreak `build_parts_list` uses — so it reordered two-disc books.
+            let slot = directory.appendingPathComponent("\(index)", isDirectory: true)
+            try FileManager.default.createDirectory(at: slot, withIntermediateDirectories: true)
+
             let scoped = source.startAccessingSecurityScopedResource()
             defer { if scoped { source.stopAccessingSecurityScopedResource() } }
-            // Two parts picked from different folders can share a name, and
-            // the copy — like the server's own filing — would collide.
-            var name = source.lastPathComponent
-            var destination = directory.appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: destination.path) {
-                let ext = (name as NSString).pathExtension
-                let stem = (name as NSString).deletingPathExtension
-                name = ext.isEmpty ? "\(stem)-\(index)" : "\(stem)-\(index).\(ext)"
-                destination = directory.appendingPathComponent(name)
-            }
+            let destination = slot.appendingPathComponent(source.lastPathComponent)
             try FileManager.default.copyItem(at: source, to: destination)
             staged.append(destination)
         }
@@ -64,18 +67,37 @@ enum UploadService {
     }
 
     /// Delete a staged copy once its upload has finished, succeeded or not.
+    /// Detached for the same reason [`stage`] is — removing a multi-part book
+    /// is N unlinks, and the callers are all on the main actor.
     static func discard(_ directory: URL) {
+        Task.detached(priority: .utility) { discardNow(directory) }
+    }
+
+    /// The synchronous body of [`discard`], so a caller that must observe the
+    /// deletion (a test) does not have to race the detached task.
+    static func discardNow(_ directory: URL) {
         try? FileManager.default.removeItem(at: directory)
+    }
+
+    /// Delete every staged copy left behind by a previous run.
+    ///
+    /// Staging outlives its owner in the cases cleanup can't reach — a crash, a
+    /// kill mid-confirm — and iOS does not purge `tmp` while the app runs, so
+    /// without this a failed upload's copy is unreachable disk forever.
+    static func sweepStaleStaging() {
+        Task.detached(priority: .utility) {
+            try? FileManager.default.removeItem(at: stagingRoot)
+        }
     }
 
     /// Parse the picked file(s) and return the metadata to pre-fill the confirm
     /// form with. Nothing is written — the server discards its tempfile.
     static func inspect(_ batch: UploadBatch) async throws -> UploadConfirmation {
-        let files = try await loadParts(batch)
+        let (body, boundary) = try await encodedBody(for: batch, fields: [])
         switch batch.kind {
         case .ebook:
             let inspection: UploadInspection = try await APIClient.shared.upload(
-                batch.kind.inspectPath, files: files
+                batch.kind.inspectPath, body: body, boundary: boundary
             )
             return UploadConfirmation(
                 title: inspection.title ?? "",
@@ -85,7 +107,7 @@ enum UploadService {
             )
         case .audiobook:
             let inspection: AudiobookInspection = try await APIClient.shared.upload(
-                batch.kind.inspectPath, files: files
+                batch.kind.inspectPath, body: body, boundary: boundary
             )
             return UploadConfirmation(
                 title: inspection.title ?? "", author: inspection.author ?? ""
@@ -99,7 +121,6 @@ enum UploadService {
     static func commit(
         _ batch: UploadBatch, as confirmation: UploadConfirmation
     ) async throws -> UploadCommitResult {
-        let files = try await loadParts(batch)
         let fields = UploadFlow.commitFields(
             kind: batch.kind,
             title: confirmation.title,
@@ -107,20 +128,48 @@ enum UploadService {
             series: confirmation.series,
             seriesIndex: confirmation.seriesIndex
         )
-        let result: UploadCommitResult = try await APIClient.shared.upload(
-            batch.kind.commitPath, files: files, fields: fields
+        let (body, boundary) = try await encodedBody(for: batch, fields: fields)
+        // Invalidate whatever the outcome: the server files and indexes the
+        // book *before* it validates the overrides, and its 30s request timeout
+        // can fire after the same point — so a thrown error does not mean the
+        // library is unchanged.
+        defer { Task { await invalidateLibrary() } }
+        return try await APIClient.shared.upload(
+            batch.kind.commitPath, body: body, boundary: boundary
         )
-        // The library listing and its pages now predate a book that exists.
-        await OfflineStore.shared.cacheDelete(CacheKey.library)
-        await OfflineStore.shared.cacheDeletePrefix("books_page:")
-        return result
     }
 
-    /// Read every staged part off disk, off the main thread for the same
-    /// reason [`stage`] copies there.
-    private static func loadParts(_ batch: UploadBatch) async throws -> [MultipartFile] {
+    /// Drop every cached read a new book invalidates, and resync the offline
+    /// mirror. Named rather than inlined so the next write that adds a book has
+    /// one place to call — `CheckInView` open-codes a different, disjoint set.
+    static func invalidateLibrary() async {
+        let store = OfflineStore.shared
+        // The paged listing is the real library cache; `CacheKey.library`
+        // itself is never written by anything, so deleting it is a no-op.
+        await store.cacheDeletePrefix(CacheKey.libraryPagePrefix)
+        await store.cacheDelete(CacheKey.authors)
+        await store.cacheDelete(CacheKey.series)
+        await store.cacheDelete(CacheKey.shelves)
+        await store.cacheDelete(CacheKey.shelfPreviews)
+        // The SQLite mirror is not a cache key — it backs offline paging and
+        // search, and its own sync self-throttles to once per five minutes.
+        await LibraryIndex.shared.sync(force: true)
+    }
+
+    /// Read the staged parts and encode the multipart body, all off the caller's
+    /// actor.
+    ///
+    /// Encoding here rather than inside `APIClient` matters: `upload` is an
+    /// actor method, so concatenating a multi-hundred-megabyte body there would
+    /// hold the actor every other request in the app funnels through.
+    private static func encodedBody(
+        for batch: UploadBatch, fields: [(name: String, value: String)]
+    ) async throws -> (body: Data, boundary: String) {
         try await Task.detached(priority: .userInitiated) {
-            try batch.urls.map(loadPart)
+            let files = try batch.urls.map(loadPart)
+            let boundary = MultipartBody.makeBoundary()
+            let body = MultipartBody.encode(boundary: boundary, fields: fields, files: files)
+            return (body, boundary)
         }.value
     }
 
@@ -128,12 +177,16 @@ enum UploadService {
     /// live in this app's temporary directory — [`stage`] copied them out of
     /// the picker's security-scoped location — so no scope is claimed here and
     /// a slow confirm step cannot outlive one.
+    ///
+    /// `.mappedIfSafe` keeps the source pages file-backed and evictable instead
+    /// of dirty anonymous memory; the file is one this app just wrote to its own
+    /// tmp directory and nothing mutates it, which is what makes mapping safe.
     private static func loadPart(_ url: URL) throws -> MultipartFile {
         let name = url.lastPathComponent
         return MultipartFile(
             fileName: name,
             mimeType: UploadFlow.mimeType(for: name),
-            data: try Data(contentsOf: url)
+            data: try Data(contentsOf: url, options: .mappedIfSafe)
         )
     }
 }

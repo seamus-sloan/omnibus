@@ -304,9 +304,10 @@ Features/           — one directory per surface: Account, AddBooks, Auth,
                       commit carries) and `UploadConfirmSheet` is the editable
                       confirm step the commit endpoints require
 Models/             — Codable mirrors of the `shared/` wire DTOs
-Networking/         — APIClient (plus a separate upload session, whose
-                      resource timeout is a whole-transfer budget a
-                      large audiobook needs), MultipartBody (the
+Networking/         — APIClient (plus a separate upload session: a
+                      whole-transfer budget, kept near the server's own 30s
+                      request timeout rather than far past it, and one that
+                      never claims the probe slot), MultipartBody (the
                       form-data encoder, split out so a request's wire
                       shape is unit-testable), keychain-backed TokenStore
 Offline/            — Cache (read-through policies), OfflineStore (SQLite
@@ -336,7 +337,8 @@ Comic/              — the native CBZ pager: ComicReaderView (paged TabView +
 Services/           — AuthService, LibraryService, UserDataService,
                       UploadService (the two-step book ingest: inspect a
                       picked file, then commit it under the confirmed
-                      metadata — never queued, per rule 08 test 2)
+                      metadata — never queued, per rule 08 test 1:
+                      an upload is library-wide, not per-user, state)
 ```
 
 **TestFlight release:** the manually-triggered

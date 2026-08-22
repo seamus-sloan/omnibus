@@ -23,6 +23,9 @@ struct AddBooksSheet: View {
     @State private var activeDraft: UploadDraft?
     /// Names the picker allowed through that neither endpoint accepts.
     @State private var unsupported: [String] = []
+    /// The in-flight inspect pipeline, held so dismissal can cancel it rather
+    /// than let it write into torn-down `@State`.
+    @State private var pipeline: Task<Void, Never>?
 
     private var isOnline: Bool { Connectivity.shared.isOnline }
 
@@ -67,6 +70,11 @@ struct AddBooksSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        // Anything still staged belongs to a run that is over — a crash, or a
+        // dismissal that outran its own cleanup. iOS does not purge tmp while
+        // the app runs, so nothing else would ever reclaim it.
+        .onAppear { UploadService.sweepStaleStaging() }
+        .onDisappear(perform: tearDown)
         .sheet(isPresented: $showCheckIn) { CheckInView() }
         .sheet(item: $activeDraft, onDismiss: presentNextDraft) { draft in
             UploadConfirmSheet(
@@ -150,30 +158,66 @@ struct AddBooksSheet: View {
 
     // MARK: - Upload pipeline
 
-    /// Group the pick into one batch per book, then inspect each.
+    /// Group the pick into one batch per book, then inspect them in turn.
+    ///
+    /// Sequentially, not concurrently: the confirm sheets are shown one at a
+    /// time anyway, so a fan-out only front-loads a whole file's worth of
+    /// memory per batch that the reader cannot act on yet.
     private func stage(_ urls: [URL]) {
         let selection = UploadFlow.selection(for: urls)
         unsupported = selection.unsupported
-        for batch in selection.batches { inspect(batch) }
+        guard !selection.batches.isEmpty else { return }
+
+        let queued = selection.batches.map { batch in
+            let task = UploadTask(name: batch.displayName)
+            uploads.append(task)
+            return (batch, task)
+        }
+        let previous = pipeline
+        pipeline = Task {
+            await previous?.value
+            for (batch, task) in queued {
+                if Task.isCancelled {
+                    task.state = .failed("Cancelled.")
+                    continue
+                }
+                await inspect(batch, into: task)
+            }
+        }
     }
 
-    private func inspect(_ batch: UploadBatch) {
-        let task = UploadTask(name: batch.displayName)
-        uploads.append(task)
-        Task {
-            do {
-                let (staged, directory) = try await UploadService.stage(batch)
-                let confirmation = try await UploadService.inspect(staged)
-                task.state = .needsDetails
-                pending.append(
-                    UploadDraft(
-                        batch: staged, directory: directory, confirmation: confirmation, task: task
-                    )
+    private func inspect(_ batch: UploadBatch, into task: UploadTask) async {
+        var staging: URL?
+        do {
+            let (staged, directory) = try await UploadService.stage(batch)
+            staging = directory
+            let confirmation = try await UploadService.inspect(staged)
+            task.state = .needsDetails
+            pending.append(
+                UploadDraft(
+                    batch: staged, directory: directory, confirmation: confirmation, task: task
                 )
-                presentNextDraft()
-            } catch {
-                task.state = .failed(Self.message(for: error))
-            }
+            )
+            presentNextDraft()
+        } catch {
+            task.state = .failed(Self.message(for: error))
+            // The copy is already on disk by the time inspect can fail, and
+            // only commit/cancel discard — without this it is unreachable.
+            if let staging { UploadService.discard(staging) }
+        }
+    }
+
+    /// Cancel in-flight work and release every staged copy the sheet still
+    /// owns. Tapping Done drops `pending` and `activeDraft` on the floor, so
+    /// the bytes they point at have to go with them.
+    private func tearDown() {
+        pipeline?.cancel()
+        pipeline = nil
+        for draft in pending { UploadService.discard(draft.directory) }
+        pending.removeAll()
+        if let activeDraft {
+            UploadService.discard(activeDraft.directory)
+            self.activeDraft = nil
         }
     }
 
@@ -195,7 +239,10 @@ struct AddBooksSheet: View {
                 draft.task.state = .failed(Self.message(for: error))
             }
             UploadService.discard(draft.directory)
-            presentNextDraft()
+            // No presentNextDraft here: `onDismiss` already drains the queue on
+            // both exit paths, and re-arming `activeDraft` mid-dismissal is
+            // silently dropped by `sheet(item:)` — which then wedges the queue
+            // forever behind the `activeDraft == nil` guard.
         }
     }
 
