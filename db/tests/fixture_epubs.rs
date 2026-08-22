@@ -406,6 +406,17 @@ const EXPECTED: &[Expected] = &[
         has_cover: true,
     },
     Expected {
+        filename: "standalone-glacier.epub",
+        title: "Glacier Notation",
+        authors: &["Adele Goldberg"],
+        publisher: Some("Omnibus Test Press"),
+        published: Some("1973-03-05"),
+        language: "en",
+        series: None,
+        series_index: None,
+        has_cover: true,
+    },
+    Expected {
         filename: "frontmatter-relay.epub",
         title: "Frontmatter Relay",
         authors: &["Rozsa Peter"],
