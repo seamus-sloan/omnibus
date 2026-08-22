@@ -117,6 +117,14 @@ recent releases are recorded below; everything earlier is available via the
   through is refused before a byte is sent rather than after. Picking several
   MP3s from one folder adds a single audiobook with all its parts, instead of
   one book per file (#2100)
+- Downloading a multi-part audiobook in the iOS app now takes the whole book.
+  Only its first part was ever stored, but the player treated that part as the
+  entire book: resuming anywhere past it snapped back to the end of part one,
+  marked the book finished, and saved that position over the real one. Every
+  part is downloaded now, they play as one continuous timeline, and a copy that
+  doesn't cover the whole book is streamed rather than played from disk — so a
+  partial download left by an older version can't finish a book you're in the
+  middle of. Single-file audiobooks are unaffected (#2103)
 
 ## [0.22.10] - 2026-08-18
 

@@ -42,6 +42,31 @@ enum DownloadKind: String, Sendable, CaseIterable {
     }
 }
 
+/// One file a download is made of. An ebook or a single-file audiobook has
+/// exactly one; a multi-part audiobook has one per part, in ordinal order.
+///
+/// Mirrors `PlannedFile` in `frontend/src/offline/downloads.rs`, which has
+/// planned per-part since the web client learned to store audiobooks.
+struct DownloadFile: Codable, Sendable, Equatable {
+    /// Audio part ordinal. `0` for an ebook, whose download is one file.
+    var ordinal: Int64
+    /// Server path this file is fetched from, query included.
+    var urlPath: String
+    /// File **name** inside `OfflineStore.downloadsDirectory`, never an
+    /// absolute path.
+    ///
+    /// The container directory carries a UUID that iOS reassigns when the app
+    /// is reinstalled, so an absolute path stored here goes stale and every
+    /// downloaded book silently reverts to streaming — unreadable offline
+    /// despite the file still sitting on disk. Resolve through `localURL`.
+    var name: String
+    /// Bytes on disk so far — the final size once `done`.
+    var receivedBytes: Int64 = 0
+    /// The size the server reported for this file; `0` until it has.
+    var totalBytes: Int64 = 0
+    var done: Bool = false
+}
+
 /// A book whose files have been pulled down for offline use.
 struct DownloadRecord: Sendable, Identifiable {
     enum State: String, Sendable {
@@ -50,9 +75,9 @@ struct DownloadRecord: Sendable, Identifiable {
 
     var id: String { Self.key(bookUUID, kind) }
 
-    /// Registry identity for a (book, format) pair. Also what rides on a
-    /// download task's `taskDescription`, so a completion delivered after a
-    /// relaunch can still say what it belongs to.
+    /// Registry identity for a (book, format) pair. Also the stem of what
+    /// rides on a download task's `taskDescription`, so a completion
+    /// delivered after a relaunch can still say what it belongs to.
     static func key(_ uuid: String, _ kind: DownloadKind) -> String {
         "\(uuid):\(kind.rawValue)"
     }
@@ -66,27 +91,73 @@ struct DownloadRecord: Sendable, Identifiable {
         return (String(key[key.startIndex..<separator]), kind)
     }
 
+    /// What one file's transfer carries as its `taskDescription`: the record
+    /// key plus the part it is fetching. A multi-part book hands several
+    /// tasks to one background session at once, so the record key alone can
+    /// no longer say which file a completion belongs to.
+    static func taskKey(_ recordID: String, ordinal: Int64) -> String {
+        "\(recordID)#\(ordinal)"
+    }
+
+    /// The record key a `taskDescription` belongs to. Tolerates the
+    /// un-suffixed form so a transfer started by a build that predates
+    /// per-part tasks is still attributed after an upgrade.
+    static func recordID(fromTaskKey key: String) -> String {
+        key.split(separator: "#", maxSplits: 1).first.map(String.init) ?? key
+    }
+
+    /// The part ordinal a `taskDescription` names, or `nil` for the
+    /// un-suffixed legacy form.
+    static func ordinal(fromTaskKey key: String) -> Int64? {
+        let parts = key.split(separator: "#", maxSplits: 1)
+        guard parts.count == 2 else { return nil }
+        return Int64(parts[1])
+    }
+
     var bookUUID: String
     var kind: DownloadKind
     var format: String
     var state: State
-    /// File **name** inside `OfflineStore.downloadsDirectory`, never an
-    /// absolute path.
+    /// Every file this download is made of, in play order.
     ///
-    /// The container directory carries a UUID that iOS reassigns when the app
-    /// is reinstalled, so an absolute path stored here goes stale and every
-    /// downloaded book silently reverts to streaming — unreadable offline
-    /// despite the file still sitting on disk. Resolve through `localURL`.
-    var localPath: String?
-    var totalBytes: Int64
-    var receivedBytes: Int64
+    /// A list rather than one path because of multi-part audiobooks: the
+    /// download route serves one part per request, so a record that could
+    /// only name a single file left the player treating part 1 as the whole
+    /// book — every resume past its end clamped backwards and marked the
+    /// book finished.
+    var files: [DownloadFile]
     var updatedAt: Int64
     var error: String?
     /// `BookFileInfo.etag` for the file this download came from, as it read
     /// when the download started. Compared against a later metadata refresh
     /// to drive "Update available"; `nil` for records written before
     /// validators existed, which reads as "can't tell", never as "stale".
+    ///
+    /// One value for the whole record, not one per file: every part of an
+    /// audiobook belongs to the same `book_files` row and shares its
+    /// validator.
     var sourceEtag: String?
+
+    /// Where in [`files`] a transfer's part ordinal lands. A `nil` ordinal is
+    /// a task started by a build that predates per-part downloads, which by
+    /// construction had exactly one file.
+    func index(ofOrdinal ordinal: Int64?) -> Int? {
+        guard let ordinal else { return files.isEmpty ? nil : 0 }
+        return files.firstIndex { $0.ordinal == ordinal }
+    }
+
+    /// The single file this download consists of, or `nil` when it has more
+    /// than one.
+    ///
+    /// Also what gets mirrored to the legacy `local_path` column, so a build
+    /// that predates multi-part downloads reads a multi-part record as
+    /// having no local copy — and streams the book — rather than playing
+    /// part 1 as though it were all of it.
+    var localPath: String? { files.count == 1 ? files[0].name : nil }
+
+    var receivedBytes: Int64 { files.reduce(0) { $0 + $1.receivedBytes } }
+
+    var totalBytes: Int64 { files.reduce(0) { $0 + max($1.totalBytes, $1.receivedBytes) } }
 
     var fraction: Double {
         guard totalBytes > 0 else { return state == .complete ? 1 : 0 }
@@ -179,6 +250,12 @@ actor OfflineStore {
         // simply carries a null and reads as "can't tell".
         if !hasColumn("downloads", "source_etag") {
             exec("ALTER TABLE downloads ADD COLUMN source_etag TEXT")
+        }
+        // Additive too: a row written before downloads could hold more than
+        // one file carries a null here and is read back through
+        // `local_path` as the single file it is.
+        if !hasColumn("downloads", "files") {
+            exec("ALTER TABLE downloads ADD COLUMN files TEXT")
         }
         // Coalescing key for the outbox: a second position write for the same
         // book should replace the first, not queue behind it.
@@ -799,31 +876,38 @@ actor OfflineStore {
         let sql = """
             INSERT INTO downloads
               (book_uuid, kind, format, state, local_path, total_bytes, received_bytes,
-               updated_at, error, source_etag)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               updated_at, error, source_etag, files)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(book_uuid, kind) DO UPDATE SET
               format = excluded.format, state = excluded.state, local_path = excluded.local_path,
               total_bytes = excluded.total_bytes, received_bytes = excluded.received_bytes,
               updated_at = excluded.updated_at, error = excluded.error,
-              source_etag = excluded.source_etag
+              source_etag = excluded.source_etag, files = excluded.files
             """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         bind(stmt, 1, record.bookUUID)
         bind(stmt, 2, record.kind.rawValue)
         bind(stmt, 3, record.format)
         bind(stmt, 4, record.state.rawValue)
+        // Null for a multi-part record — see `DownloadRecord.localPath`.
         if let path = record.localPath { bind(stmt, 5, path) } else { sqlite3_bind_null(stmt, 5) }
         sqlite3_bind_int64(stmt, 6, record.totalBytes)
         sqlite3_bind_int64(stmt, 7, record.receivedBytes)
         sqlite3_bind_int64(stmt, 8, Int64(Date().timeIntervalSince1970))
         if let error = record.error { bind(stmt, 9, error) } else { sqlite3_bind_null(stmt, 9) }
         if let etag = record.sourceEtag { bind(stmt, 10, etag) } else { sqlite3_bind_null(stmt, 10) }
+        if let files = try? JSONEncoder().encode(record.files),
+           let json = String(data: files, encoding: .utf8) {
+            bind(stmt, 11, json)
+        } else {
+            sqlite3_bind_null(stmt, 11)
+        }
         sqlite3_step(stmt)
     }
 
     private static let downloadColumns = """
         book_uuid, kind, format, state, local_path, total_bytes, received_bytes, updated_at,
-        error, source_etag
+        error, source_etag, files
         """
 
     func download(for uuid: String, kind: DownloadKind) -> DownloadRecord? {
@@ -858,10 +942,8 @@ actor OfflineStore {
 
     func deleteDownload(_ uuid: String, kind: DownloadKind) {
         guard isOpen else { return }
-        if let record = download(for: uuid, kind: kind), let name = record.localPath {
-            try? FileManager.default.removeItem(
-                at: Self.downloadsDirectory.appendingPathComponent(name)
-            )
+        if let record = download(for: uuid, kind: kind) {
+            Self.removeFiles(of: record)
         }
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
@@ -928,10 +1010,7 @@ actor OfflineStore {
         guard !orphans.isEmpty else { return [] }
 
         for record in orphans {
-            guard let name = record.localPath else { continue }
-            try? FileManager.default.removeItem(
-                at: Self.downloadsDirectory.appendingPathComponent(name)
-            )
+            Self.removeFiles(of: record)
         }
         var delete: OpaquePointer?
         defer { sqlite3_finalize(delete) }
@@ -945,22 +1024,70 @@ actor OfflineStore {
         return orphans.map(\.id)
     }
 
+    /// Delete every file a record points at. A multi-part audiobook holds one
+    /// per part, so deleting `localPath` alone would leave the rest on disk
+    /// counting against "Storage used" with no row left to remove them from.
+    private static func removeFiles(of record: DownloadRecord) {
+        for file in record.files {
+            try? FileManager.default.removeItem(
+                at: downloadsDirectory.appendingPathComponent(file.name)
+            )
+        }
+    }
+
     private func readDownload(_ stmt: OpaquePointer?) -> DownloadRecord? {
         guard let uuid = text(stmt, 0) else { return nil }
         let format = text(stmt, 2) ?? ""
+        let state = DownloadRecord.State(rawValue: text(stmt, 3) ?? "") ?? .failed
         return DownloadRecord(
             bookUUID: uuid,
             kind: DownloadKind(rawValue: text(stmt, 1) ?? "")
                 ?? DownloadKind.inferred(fromFormat: format),
             format: format,
-            state: DownloadRecord.State(rawValue: text(stmt, 3) ?? "") ?? .failed,
-            localPath: text(stmt, 4),
-            totalBytes: sqlite3_column_int64(stmt, 5),
-            receivedBytes: sqlite3_column_int64(stmt, 6),
+            state: state,
+            files: Self.readFiles(
+                json: text(stmt, 10),
+                legacyPath: text(stmt, 4),
+                totalBytes: sqlite3_column_int64(stmt, 5),
+                receivedBytes: sqlite3_column_int64(stmt, 6),
+                state: state
+            ),
             updatedAt: sqlite3_column_int64(stmt, 7),
             error: text(stmt, 8),
             sourceEtag: text(stmt, 9)
         )
+    }
+
+    /// The file list of a stored row, reconstructing it from the pre-list
+    /// columns for a record written before downloads could hold more than one
+    /// file. Those are all single-file by construction, so the legacy path and
+    /// the row's byte counters describe it completely.
+    private static func readFiles(
+        json: String?,
+        legacyPath: String?,
+        totalBytes: Int64,
+        receivedBytes: Int64,
+        state: DownloadRecord.State
+    ) -> [DownloadFile] {
+        if let json, let data = json.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode([DownloadFile].self, from: data),
+           !decoded.isEmpty {
+            return decoded
+        }
+        guard let legacyPath else { return [] }
+        return [
+            DownloadFile(
+                ordinal: 0,
+                urlPath: "",
+                // Rows written before `name` became container-relative hold a
+                // path under a container UUID iOS has since reassigned. The
+                // file is still there under its own name.
+                name: (legacyPath as NSString).lastPathComponent,
+                receivedBytes: receivedBytes,
+                totalBytes: totalBytes,
+                done: state == .complete
+            )
+        ]
     }
 
     // MARK: - Account scoping

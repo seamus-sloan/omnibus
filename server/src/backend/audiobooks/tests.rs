@@ -867,6 +867,118 @@ async fn api_get_audiobook_download_serves_first_part_as_attachment() {
     assert_eq!(body.as_ref(), &payload[..]);
 }
 
+/// `?part=` is what lets an offline client take a whole multi-part book.
+/// Without it the download route serves part 0 and nothing else, which is
+/// what made a four-part audiobook look complete on the device after one
+/// part.
+#[tokio::test]
+async fn api_get_audiobook_download_serves_the_requested_part_by_ordinal() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let library_path = dir.path().to_string_lossy().to_string();
+    std::fs::create_dir_all(dir.path().join("Author/Book")).unwrap();
+    let second: Vec<u8> = (40u8..90).collect();
+    for (name, bytes) in [
+        ("Author/Book/01.mp3", vec![0u8; 10]),
+        ("Author/Book/02.mp3", second.clone()),
+    ] {
+        std::fs::File::create(dir.path().join(name))
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
+    }
+
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let uuid = seed_audiobook_with_parts(
+        &pool,
+        &library_path,
+        "MP3",
+        &[
+            (0, "Author/Book/01.mp3", 60.0),
+            (1, "Author/Book/02.mp3", 60.0),
+        ],
+    )
+    .await;
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/audiobooks/{uuid}/download?part=1"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let disposition = res
+        .headers()
+        .get(axum::http::header::CONTENT_DISPOSITION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        disposition.contains("02.mp3"),
+        "should serve the requested ordinal, got {disposition:?}"
+    );
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(body.as_ref(), &second[..]);
+}
+
+#[tokio::test]
+async fn api_get_audiobook_download_returns_404_for_an_unknown_part_ordinal() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let library_path = dir.path().to_string_lossy().to_string();
+    std::fs::create_dir_all(dir.path().join("Author/Book")).unwrap();
+    std::fs::File::create(dir.path().join("Author/Book/01.mp3"))
+        .unwrap()
+        .write_all(&[0u8; 10])
+        .unwrap();
+
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let uuid = seed_audiobook_with_parts(
+        &pool,
+        &library_path,
+        "MP3",
+        &[(0, "Author/Book/01.mp3", 60.0)],
+    )
+    .await;
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/audiobooks/{uuid}/download?part=7"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+/// The `can_download` gate is what `?part=` was added for — it must hold
+/// on the per-part URL too, or planning an offline download against it
+/// would hand a `can_download = 0` user the whole book.
+#[tokio::test]
+async fn api_get_audiobook_download_part_returns_403_when_user_cannot_download() {
+    let (app, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    revoke_can_download(&pool, user.id).await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(get_with_bearer(
+            "/api/audiobooks/some-uuid/download?part=1",
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
 /// AC1 (#1810): `/parts/{ordinal}` is the in-app playback stream, not a
 /// download — it must stay reachable even for a `can_download = 0` user.
 /// Only the `Content-Disposition: attachment` `/download` route enforces

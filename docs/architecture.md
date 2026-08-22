@@ -314,10 +314,18 @@ Networking/         — APIClient (plus a separate upload session, whose
                       unit-testable), keychain-backed TokenStore
 Offline/            — Cache (read-through policies), OfflineStore (SQLite
                       replica; `downloads.source_etag` snapshots the file's
-                      content validator per rule 09), DownloadManager (which
-                      compares that snapshot against a later metadata refresh
-                      to drive "Update available" — three-valued, so "can't
-                      tell" never reads as "not stale"), SyncEngine (the
+                      content validator per rule 09, and `downloads.files`
+                      holds the per-file plan — one entry per audiobook part,
+                      so a multi-part book is stored as the several files it
+                      actually is), DownloadManager (which plans an audiobook
+                      from its manifest rather than from the download URL,
+                      pulls every part through the `can_download`-gated
+                      `/api/audiobooks/{uuid}/download?part=N`, installs the
+                      whole set in one swap at the end so a replacement can
+                      never mix editions, and compares that snapshot against a
+                      later metadata refresh to drive "Update available" —
+                      three-valued, so "can't tell" never reads as "not
+                      stale"), SyncEngine (the
                       mutation outbox — see rule 08), Connectivity,
                       PositionPushThrottle (shared by the reader, the comic
                       pager, and the audio player: every relocate writes the
