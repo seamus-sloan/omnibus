@@ -4,10 +4,19 @@
 //  identity so `MainTabView` renders with no server behind it (AppState.init /
 //  bootstrap). Nothing here reads library content — only the shell's own
 //  chrome, which is local.
+//
+//  Timeouts are deliberately generous. A loaded CI runner is an order of
+//  magnitude slower than a dev machine — a single app launch there can take
+//  the better part of a minute — and CI runs under
+//  `-retry-tests-on-failure`, so a too-tight wait reads as a real failure
+//  twice over rather than as the slow render it is.
 
 import XCTest
 
 final class ShellChromeTests: XCTestCase {
+    /// One render's worth of patience on the slowest machine this runs on.
+    private let renderTimeout: TimeInterval = 60
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -26,14 +35,17 @@ final class ShellChromeTests: XCTestCase {
         app.buttons["Library"].frame.minY
     }
 
-    /// Tapping a tab during the shell's entry transition is dropped, so retry
-    /// until the destination actually renders.
+    /// Switch tabs, tolerating a tap that lands during the shell's entry
+    /// transition and is dropped. Two attempts with a full render's patience
+    /// each, rather than many short ones — on a slow runner a short wait
+    /// retries a tab that was already switching, which is both wrong and
+    /// expensive.
     private func switchTab(_ app: XCUIApplication, to tab: String, expecting: String) -> Bool {
         let item = app.buttons[tab]
-        guard item.waitForExistence(timeout: 30) else { return false }
-        for _ in 0..<5 {
+        guard item.waitForExistence(timeout: renderTimeout) else { return false }
+        for _ in 0..<2 {
             item.tap()
-            if app.staticTexts[expecting].waitForExistence(timeout: 6) { return true }
+            if app.staticTexts[expecting].waitForExistence(timeout: renderTimeout) { return true }
         }
         return false
     }
@@ -47,11 +59,14 @@ final class ShellChromeTests: XCTestCase {
         XCTAssertTrue(switchTab(app, to: "Search", expecting: "Browse"), "search tab should render")
 
         let field = app.textFields.firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 15), "search field should render")
+        XCTAssertTrue(field.waitForExistence(timeout: renderTimeout), "search field should render")
         let restingTop = tabBarTop(app)
 
         field.tap()
-        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 15), "keyboard should come up")
+        XCTAssertTrue(
+            app.keyboards.element.waitForExistence(timeout: renderTimeout),
+            "keyboard should come up"
+        )
 
         let keyboardTop = app.keyboards.element.frame.minY
         XCTAssertGreaterThanOrEqual(
@@ -65,20 +80,24 @@ final class ShellChromeTests: XCTestCase {
     }
 
     /// The other half of the contract: pinning the shell must not cost a
-    /// focused field inside a tab its keyboard avoidance.
+    /// focused field inside a tab its keyboard avoidance. Addressed by
+    /// identifier — `textFields.firstMatch` on a screen this dense is both
+    /// ambiguous and expensive to resolve.
     func testFieldInsideATabStaysAboveTheKeyboard() throws {
         let app = launchToShell()
         XCTAssertTrue(
             switchTab(app, to: "You", expecting: "Send to Kindle"), "you tab should render"
         )
 
-        let field = app.textFields.firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 15), "kindle email field should render")
-        for _ in 0..<6 where !field.isHittable {
+        let field = app.textFields["kindle-email"]
+        XCTAssertTrue(field.waitForExistence(timeout: renderTimeout), "kindle field should render")
+        for _ in 0..<3 where !field.isHittable {
             app.swipeUp()
         }
+        XCTAssertTrue(field.isHittable, "kindle field should be reachable by scrolling")
+
         field.tap()
-        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: renderTimeout))
 
         XCTAssertLessThanOrEqual(
             field.frame.maxY, app.keyboards.element.frame.minY,
