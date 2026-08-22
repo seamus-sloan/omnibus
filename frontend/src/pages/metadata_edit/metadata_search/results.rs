@@ -13,7 +13,50 @@ use super::sources::SourceSummary;
 use super::{PickerState, Stage};
 use crate::focus_after_paint::focus_after_paint;
 
-/// The results screen: query row, then whatever the last search produced.
+/// One labelled field of the query.
+///
+/// Separate fields rather than one box because that is the only way to say
+/// which part is which — and each provider is asked in its own terms, so the
+/// distinction is load-bearing rather than cosmetic. Open Library matches
+/// `title=` against the title field alone: hand it "Dune Frank Herbert" and it
+/// answers with books written *about* Dune.
+#[component]
+fn QueryField(
+    slug: &'static str,
+    label: &'static str,
+    value: Signal<String>,
+    autofocus: bool,
+) -> Element {
+    let mut value = value;
+    rsx! {
+        label { class: "mes-query-field", r#for: "mes-query-{slug}",
+            span { class: "mes-query-label", "{label}" }
+            input {
+                id: "mes-query-{slug}",
+                class: "mes-query-input",
+                "data-testid": "mes-query-{slug}",
+                r#type: if slug == "isbn" { "text" } else { "search" },
+                value: "{value}",
+                // The ISBN starts empty on purpose (see `seed_from`), so its
+                // placeholder says what it is for rather than naming the field
+                // a second time.
+                // The ISBN's placeholder says what filling it *does*, since
+                // it is the one field that changes the shape of the answer.
+                placeholder: if slug == "isbn" { "one exact edition" } else { label },
+                // The overlay opens having already searched, so focus lands on
+                // the field a reader is most likely to correct.
+                onmounted: move |e| {
+                    if autofocus {
+                        focus_after_paint(&e);
+                    }
+                },
+                oninput: move |e| value.set(e.value()),
+            }
+        }
+    }
+}
+
+/// The results screen: query fields, then whatever the last search produced.
 #[component]
 pub(super) fn ResultsScreen(
     state: PickerState,
@@ -21,8 +64,8 @@ pub(super) fn ResultsScreen(
     on_search: EventHandler<()>,
     on_select: EventHandler<ProviderEdition>,
 ) -> Element {
-    let mut query = state.query;
     let searching = stage == Stage::Searching;
+    let nothing_to_ask = super::request_from(state).is_none();
 
     rsx! {
         div { class: "mes-screen mes-screen-results", "data-testid": "mes-results",
@@ -33,26 +76,42 @@ pub(super) fn ResultsScreen(
                     e.prevent_default();
                     on_search.call(());
                 },
-                input {
-                    id: "mes-query",
-                    class: "mes-query-input",
-                    "data-testid": "mes-query",
-                    r#type: "search",
-                    value: "{query}",
-                    aria_label: "Search providers",
-                    placeholder: "title and author",
-                    onmounted: move |e| focus_after_paint(&e),
-                    oninput: move |e| query.set(e.value()),
+                QueryField {
+                    slug: "title",
+                    label: "Title",
+                    value: state.title,
+                    autofocus: true,
+                }
+                QueryField {
+                    slug: "author",
+                    label: "Author",
+                    value: state.author,
+                    autofocus: false,
+                }
+                QueryField {
+                    slug: "isbn",
+                    label: "ISBN",
+                    value: state.isbn,
+                    autofocus: false,
                 }
                 button {
                     r#type: "submit",
                     class: "btn mes-query-btn",
                     "data-testid": "mes-search",
-                    disabled: searching || query().trim().is_empty(),
+                    // Any one field is enough: an ISBN alone is the strongest
+                    // question there is, and a title alone is the commonest.
+                    disabled: searching || nothing_to_ask,
                     if searching { "Searching\u{2026}" } else { "Search" }
                 }
             }
             {match stage {
+                // Opened but not yet asked. Not the empty-results note, which
+                // would claim a search had happened and found nothing.
+                Stage::Ready => rsx! {
+                    p { class: "mes-note", "data-testid": "mes-ready",
+                        "Check the fields, then search. An ISBN narrows every source to that one edition."
+                    }
+                },
                 Stage::Searching => rsx! {
                     p { class: "mes-note", role: "status", "data-testid": "mes-searching",
                         "Asking every configured source\u{2026}"

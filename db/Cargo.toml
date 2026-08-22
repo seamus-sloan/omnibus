@@ -163,6 +163,28 @@ urlencoding = "2"
 # download, just a direct edge for this crate's own use.
 regex = "1"
 
+# Metadata-search relevance scoring: candidates are folded to a comparable
+# form before they are matched, and that fold has to survive a non-Latin
+# title. NFKD decomposition is what lets the combining-mark strip turn
+# "Sōseki" and "Soseki" into one string without transliterating away the
+# scripts that carry meaning in their own characters -- which is why this is
+# `unicode-normalization` and not `deunicode` (already a dependency, but it
+# romanizes: "Dong Jing" for a Japanese title, so two providers reporting the
+# identical title would still compare equal only by accident). The
+# general-category passes (`\p{Mn}`, `\p{Mc}`) ride on `regex` above.
+# Already present in Cargo.lock transitively (via idna/url), so this adds no
+# new download, just a direct edge -- same situation as `regex` itself.
+unicode-normalization = "0.1"
+
+# Provider throttling: parsing the `Retry-After` header a rate-limiting
+# provider sends, which RFC 9110 allows to be either delta-seconds or an
+# HTTP-date. Already in Cargo.lock transitively (hyper serves `Date` with
+# it), so this is a direct edge rather than a new download. Levenshtein
+# distance is deliberately NOT a dependency: the one we need is plain (not
+# Damerau) over `char`s, which is a dozen lines and is unit-tested in
+# `metadata_lookup::relevance`.
+httpdate = "1"
+
 # F4.3 Send-to-Kindle: SMTP delivery of the EPUB as an email attachment.
 # rustls-based TLS matches the async-TLS choice used by sqlx/reqwest so we
 # never pull in OpenSSL; `builder` provides the multipart `Message` API.

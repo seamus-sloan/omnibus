@@ -129,7 +129,7 @@ fn edition() -> ProviderEdition {
     ProviderEdition {
         source: MetadataProvider::GoogleBooks,
         provider_ref: "gb-volume-1".into(),
-        isbn13: "9780141439518".into(),
+        isbn13: Some("9780141439518".into()),
         isbn10: Some("0141439513".into()),
         title: "Pride and Prejudice".into(),
         authors: vec!["Jane Austen".into()],
@@ -142,12 +142,13 @@ fn edition() -> ProviderEdition {
         series_index: Some("1".into()),
         first_publish_year: Some(1813),
         genres: vec!["Fiction".into(), "Classics".into()],
+        relevance: None,
     }
 }
 
 #[test]
 fn provider_edition_narrows_to_external_book_meta_carrying_every_shared_field() {
-    let meta = ExternalBookMeta::from(edition());
+    let meta = ExternalBookMeta::try_from(edition()).expect("the fixture carries an ISBN");
     // The check-in payload is the same record — attribution included — minus
     // the handle only the picker needs.
     assert_eq!(
@@ -187,25 +188,59 @@ fn provider_edition_deserializes_without_the_picker_only_fields() {
 fn edition_search_request_validate_accepts_a_query_with_no_provider_filter() {
     let req = EditionSearchRequest {
         query: "pride and prejudice".into(),
+        title: None,
+        author: None,
+        isbn: None,
         providers: None,
     };
     assert!(req.validate().is_ok());
 }
 
 #[test]
-fn edition_search_request_validate_rejects_a_blank_query() {
+fn edition_search_request_validate_rejects_a_request_that_asks_nothing() {
     let req = EditionSearchRequest {
         query: "   ".into(),
+        title: None,
+        author: None,
+        isbn: None,
         providers: None,
     };
-    let err = req.validate().expect_err("a blank query must be rejected");
-    assert!(err.contains("query is required"), "got: {err}");
+    assert_eq!(
+        req.validate(),
+        Err("a title, author, or ISBN is required".to_string())
+    );
+}
+
+#[test]
+fn edition_search_request_validate_accepts_an_isbn_with_no_free_text() {
+    // The strongest question any provider takes. The picker composes `query`
+    // from title and author, so an ISBN-only search has no free text at all —
+    // requiring one made this search impossible to express.
+    let req = EditionSearchRequest {
+        query: String::new(),
+        isbn: Some("9780441013593".into()),
+        ..EditionSearchRequest::default()
+    };
+    assert_eq!(req.validate(), Ok(()));
+}
+
+#[test]
+fn edition_search_request_validate_accepts_an_author_with_no_free_text() {
+    let req = EditionSearchRequest {
+        query: String::new(),
+        author: Some("Frank Herbert".into()),
+        ..EditionSearchRequest::default()
+    };
+    assert_eq!(req.validate(), Ok(()));
 }
 
 #[test]
 fn edition_search_request_validate_rejects_an_oversized_query() {
     let req = EditionSearchRequest {
         query: "x".repeat(SEARCH_QUERY_MAX_LEN + 1),
+        title: None,
+        author: None,
+        isbn: None,
         providers: None,
     };
     let err = req
@@ -218,6 +253,9 @@ fn edition_search_request_validate_rejects_an_oversized_query() {
 fn edition_search_request_validate_rejects_an_explicitly_empty_provider_list() {
     let req = EditionSearchRequest {
         query: "pride and prejudice".into(),
+        title: None,
+        author: None,
+        isbn: None,
         providers: Some(Vec::new()),
     };
     let err = req
@@ -256,7 +294,7 @@ fn candidate() -> ProviderEdition {
     ProviderEdition {
         source: MetadataProvider::OpenLibrary,
         provider_ref: "/works/OL1W".into(),
-        isbn13: "9780141439518".into(),
+        isbn13: Some("9780141439518".into()),
         isbn10: None,
         title: "Pride and Prejudice".into(),
         authors: vec!["Jane Austen".into()],
@@ -269,6 +307,7 @@ fn candidate() -> ProviderEdition {
         series_index: None,
         first_publish_year: Some(1813),
         genres: vec!["Fiction".into()],
+        relevance: None,
     }
 }
 
@@ -276,7 +315,7 @@ fn hydrate_request() -> EditionHydrateRequest {
     EditionHydrateRequest {
         source: MetadataProvider::OpenLibrary,
         provider_ref: "/works/OL1W".into(),
-        isbn13: "9780141439518".into(),
+        isbn13: Some("9780141439518".into()),
     }
 }
 
@@ -302,10 +341,34 @@ fn edition_hydrate_request_validate_rejects_an_oversized_provider_ref() {
 }
 
 #[test]
-fn edition_hydrate_request_validate_rejects_a_blank_isbn13() {
+fn edition_hydrate_request_validate_accepts_an_absent_isbn13() {
+    // The handle identifies the candidate; the ISBN is a hint that names a
+    // printing when there is one. A candidate from a work-level search has
+    // none at all, and must still be re-fetchable.
     let mut req = hydrate_request();
-    req.isbn13 = String::new();
-    assert_eq!(req.validate(), Err("isbn13 is required".to_string()));
+    req.isbn13 = None;
+    assert_eq!(req.validate(), Ok(()));
+}
+
+#[test]
+fn edition_hydrate_request_validate_rejects_an_oversized_isbn13() {
+    let mut req = hydrate_request();
+    req.isbn13 = Some("9".repeat(EditionSearchRequest::ISBN_MAX_LEN + 1));
+    assert!(req
+        .validate()
+        .is_err_and(|m| m.starts_with("isbn13 exceeds")));
+}
+
+#[test]
+fn provider_edition_without_an_isbn_cannot_narrow_to_the_check_in_payload() {
+    // The check-in wire contract stays frozen while the picker's loosens: its
+    // `isbn13` is a non-optional `String`, mirrored non-optionally in the iOS
+    // decoder, so a candidate with none is skipped rather than given a blank.
+    let candidate = ProviderEdition {
+        isbn13: None,
+        ..edition()
+    };
+    assert_eq!(ExternalBookMeta::try_from(candidate), Err(NoIsbn));
 }
 
 #[test]

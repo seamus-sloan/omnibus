@@ -33,6 +33,18 @@ const ISBN13: &str = "9780134685991";
 /// held to.
 const ISBN10: &str = "0134685997";
 
+/// A title-only query, which is what these tests mean by "search for QUERY".
+/// The structured shape is exercised on its own in `query::tests` and through
+/// the fan-out's provider-request assertions.
+fn title_query(text: &str) -> SearchQuery {
+    SearchQuery::from_text(text)
+}
+
+/// An ISBN-only query, for the paths that exercise a provider's exact lookup.
+fn title_query_isbn(isbn13: &str) -> SearchQuery {
+    SearchQuery::new(None, None, Some(isbn13))
+}
+
 fn config_for(server: &MockServer) -> MetadataLookupConfig {
     MetadataLookupConfig {
         openlibrary_base: server.uri(),
@@ -41,6 +53,8 @@ fn config_for(server: &MockServer) -> MetadataLookupConfig {
         // env here would make the suite depend on the developer's `.env`.
         hardcover_base: server.uri(),
         keys: ProviderKeys::default(),
+        // An isolated tracker: a cooldown must never leak between tests.
+        throttle: crate::metadata_lookup::ThrottleTracker::fresh(),
         timeout: Duration::from_secs(5),
     }
 }
@@ -329,6 +343,8 @@ fn offline_config(key: Option<&str>) -> MetadataLookupConfig {
             googlebooks: key.map(str::to_string),
             hardcover: None,
         },
+        // An isolated tracker: a cooldown must never leak between tests.
+        throttle: crate::metadata_lookup::ThrottleTracker::fresh(),
         timeout: Duration::from_secs(5),
     }
 }
@@ -504,11 +520,37 @@ async fn search_by_title_surfaces_provider_error_when_fallback_fails() {
 }
 
 #[tokio::test]
+async fn search_by_title_drops_a_rung_whose_answer_does_not_match_the_query() {
+    // Hardcover's title search went from an exact-match filter to full-text,
+    // so an unscored ladder would hand check-in whatever a fuzzy engine ranked
+    // first as its one confident answer.
+    let server = MockServer::start().await;
+    mount_ol_search(
+        &server,
+        json!({ "docs": [{
+            "key": "/works/OL1W",
+            "title": "Something Else Entirely",
+            "isbn": [ISBN13],
+        }]}),
+    )
+    .await;
+    mount_gb_search(&server, json!({ "totalItems": 0 })).await;
+
+    let results = search_provider_by_title(&config_for(&server), QUERY)
+        .await
+        .unwrap();
+    assert!(results.is_empty(), "got {results:?}");
+}
+
+#[tokio::test]
 async fn search_by_title_caps_the_candidate_list() {
+    // Titles that actually answer QUERY — the ladder scores each rung now, so
+    // a fixture of unrelated titles would be filtered out and prove nothing
+    // about the cap.
     let docs: Vec<serde_json::Value> = (0..20)
         .map(|i| {
             json!({
-                "title": format!("Book {i}"),
+                "title": format!("Effective Java, Printing {i}"),
                 // Distinct valid ISBN-13s: vary the payload, recompute the check digit.
                 "isbn": [with_check_digit(&format!("9780000000{i:02}"))],
             })
@@ -536,14 +578,79 @@ fn with_check_digit(prefix12: &str) -> String {
 #[test]
 fn search_urls_percent_encode_the_query_and_carry_the_key() {
     let keyed = offline_config(Some("sekret"));
-    let gb = googlebooks::search_url(&keyed, "war & peace").unwrap();
+    let gb = googlebooks::search_url(&keyed, &title_query("war & peace")).unwrap();
     assert!(
         gb.contains("q=war+%26+peace") && gb.ends_with("&key=sekret"),
         "got: {gb}"
     );
-    let ol = openlibrary::search_url(&keyed, "war & peace").unwrap();
+    let ol = openlibrary::search_url(&keyed, &title_query("war & peace")).unwrap();
     assert!(
         ol.starts_with("http://ol.test/search.json?title=war+%26+peace"),
         "got: {ol}"
     );
+}
+
+#[test]
+fn open_library_sends_the_author_as_its_own_parameter() {
+    // The whole point of the structured query. Flattened into `title=`, the
+    // author's name is searched *inside the title field*, which ranks books
+    // written about the book above the book.
+    let url = openlibrary::search_url(
+        &offline_config(None),
+        &SearchQuery::new(Some("Dune"), Some("Frank Herbert"), None),
+    )
+    .unwrap();
+    assert!(url.contains("title=Dune"), "got: {url}");
+    assert!(url.contains("author=Frank+Herbert"), "got: {url}");
+}
+
+#[test]
+fn open_library_asks_by_isbn_alone_when_the_query_carries_one() {
+    let url = openlibrary::search_url(
+        &offline_config(None),
+        &SearchQuery::new(Some("Dune"), Some("Frank Herbert"), Some(ISBN13)),
+    )
+    .unwrap();
+    assert!(url.contains(&format!("isbn={ISBN13}")), "got: {url}");
+    // An identifier names the edition outright; narrowing it by title could
+    // only exclude the very row it identifies.
+    assert!(!url.contains("title="), "got: {url}");
+    assert!(!url.contains("author="), "got: {url}");
+}
+
+#[test]
+fn google_books_sends_title_and_author_as_bare_text() {
+    // Verified against the live API: Google's general search ranks the bare
+    // phrase at least as well as `intitle:`/`inauthor:` and tolerates typos
+    // far better, where a field-scoped query with a misspelling finds nothing.
+    let url = googlebooks::search_url(
+        &offline_config(None),
+        &SearchQuery::new(Some("Dune"), Some("Frank Herbert"), None),
+    )
+    .unwrap();
+    assert!(url.contains("q=Dune+Frank+Herbert"), "got: {url}");
+    assert!(!url.contains("intitle"), "got: {url}");
+}
+
+#[test]
+fn google_books_scopes_the_query_to_the_isbn_when_it_has_one() {
+    let url = googlebooks::search_url(
+        &offline_config(None),
+        &SearchQuery::new(Some("Dune"), None, Some(ISBN13)),
+    )
+    .unwrap();
+    assert!(url.contains(&format!("q=isbn%3A{ISBN13}")), "got: {url}");
+}
+
+#[test]
+fn open_library_omits_a_term_it_has_no_value_for() {
+    // An empty `title=` is a 500 from Open Library, not an unconstrained
+    // search — so an author-only query must leave the pair out entirely.
+    let url = openlibrary::search_url(
+        &offline_config(None),
+        &SearchQuery::new(None, Some("Frank Herbert"), None),
+    )
+    .unwrap();
+    assert!(url.contains("author=Frank+Herbert"), "got: {url}");
+    assert!(!url.contains("title="), "got: {url}");
 }

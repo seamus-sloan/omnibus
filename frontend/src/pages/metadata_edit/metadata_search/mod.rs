@@ -12,7 +12,9 @@
 //! paint agree, and the reveal happens once, after hydration.
 
 use dioxus::prelude::*;
-use omnibus_shared::metadata_lookup::{ProviderEdition, ProviderSearchSource};
+use omnibus_shared::metadata_lookup::{
+    EditionSearchRequest, ProviderEdition, ProviderSearchSource,
+};
 use omnibus_shared::EbookMetadata;
 
 use super::form_grid::FormFields;
@@ -40,8 +42,12 @@ pub(super) const EMPTY: &str = "\u{2014}";
 /// filling in a wizard rather than picking a book.
 #[derive(Clone, PartialEq)]
 pub(super) enum Stage {
-    /// A search is in flight. The opening state — the query is already known,
-    /// so the overlay searches on open rather than asking first.
+    /// Opened, nothing asked yet. The fields are filled in from the book but
+    /// no request has gone out, so the reader can see exactly what is about to
+    /// be searched — and drop the ISBN if they want the wider list — before
+    /// anything is spent on it.
+    Ready,
+    /// A search is in flight.
     Searching,
     /// Candidates are on screen.
     Results,
@@ -58,7 +64,17 @@ pub(super) enum Stage {
 #[derive(Clone, Copy)]
 pub(super) struct PickerState {
     pub(super) stage: Signal<Stage>,
-    pub(super) query: Signal<String>,
+    /// The three things a provider can be asked for, held apart.
+    ///
+    /// One box would have to be split back into these to be useful, and that
+    /// split cannot be done honestly: "Dune Frank Herbert" typed into a single
+    /// field is indistinguishable from a book whose title happens to contain
+    /// its author's name. Open Library matches `title=` against the title
+    /// field alone, so guessing wrong there returns the books written *about*
+    /// the book instead of the book.
+    pub(super) title: Signal<String>,
+    pub(super) author: Signal<String>,
+    pub(super) isbn: Signal<String>,
     pub(super) editions: Signal<Vec<ProviderEdition>>,
     pub(super) sources: Signal<Vec<ProviderSearchSource>>,
     /// A selected candidate is re-fetched in full behind the reveal; until it
@@ -83,26 +99,20 @@ fn field_slug(label: &str) -> String {
         .collect()
 }
 
-/// The search a freshly-opened overlay runs: the book's own title and primary
-/// author, which is the query the reader wanted in the overwhelmingly common
-/// case.
-fn seed_query(fields: FormFields) -> String {
-    let title = fields.title.peek().clone();
-    let author = fields.authors.peek().first().cloned();
-    compose_query(&title, author.as_deref())
-}
-
-/// The seeded query itself, split from the signal reads so the rule it
-/// encodes — never a leading or trailing space, never whitespace alone — is
-/// testable without a Dioxus runtime.
-fn compose_query(title: &str, author: Option<&str>) -> String {
-    let title = title.trim();
-    let author = author.map(str::trim).unwrap_or_default();
-    match (title.is_empty(), author.is_empty()) {
-        (true, _) => author.to_string(),
-        (false, true) => title.to_string(),
-        (false, false) => format!("{title} {author}"),
-    }
+/// What the overlay's fields are filled in with when it opens: the book's own
+/// title, primary author, and ISBN.
+///
+/// The ISBN is seeded like the rest, because it is what the book says. It does
+/// narrow the search hard — every provider goes to its exact-identifier lookup
+/// — but that is the honest answer to the question the fields are asking, and
+/// the reader can see it sitting there and clear it before pressing Search.
+fn seed_from(fields: FormFields) -> (String, String, String) {
+    let author = fields.authors.peek().first().cloned().unwrap_or_default();
+    (
+        fields.title.peek().trim().to_string(),
+        author.trim().to_string(),
+        fields.isbn13.peek().trim().to_string(),
+    )
 }
 
 /// The trigger that opens the picker, and the overlay itself while open.
@@ -176,9 +186,12 @@ fn SearchOverlay(
     on_close: EventHandler<()>,
 ) -> Element {
     let server_url = use_server_url();
+    let (title, author, isbn) = seed_from(fields);
     let state = PickerState {
-        stage: use_signal(|| Stage::Searching),
-        query: use_signal(|| seed_query(fields)),
+        stage: use_signal(|| Stage::Ready),
+        title: use_signal(|| title.clone()),
+        author: use_signal(|| author.clone()),
+        isbn: use_signal(|| isbn.clone()),
         editions: use_signal(Vec::new),
         sources: use_signal(Vec::new),
         hydrating: use_signal(|| false),
@@ -186,9 +199,11 @@ fn SearchOverlay(
     let run_search = search_handler(state, server_url.clone());
     let on_select = select_handler(state, server_url);
 
-    // The query is already known, so the overlay opens searching rather than
-    // asking the reader to press a button to ask the question they just asked.
-    use_hook(|| run_search.call(()));
+    // Deliberately no search on open. The fields are seeded from the book,
+    // including its ISBN — and an ISBN narrows every provider to one exact
+    // edition, which is the right answer to that question and the wrong
+    // default for a reader who wanted to browse. Searching only on click puts
+    // that choice in front of them first, where clearing the ISBN is obvious.
 
     rsx! {
         div {
@@ -238,24 +253,68 @@ fn SearchOverlay(
     }
 }
 
+/// The request the three fields describe, or `None` when they are all blank.
+///
+/// No inference: what the reader can see in the fields is exactly what each
+/// provider is asked for. `query` still carries the composed phrase, because
+/// the REST front door accepts free text from clients that have no picker —
+/// but nothing here depends on it round-tripping.
+pub(super) fn request_from(state: PickerState) -> Option<EditionSearchRequest> {
+    // Read, not `peek`: the results screen calls this to decide whether Search
+    // is enabled, and `peek` does not subscribe — the button would keep its
+    // first answer while the reader typed.
+    build_request(&(state.title)(), &(state.author)(), &(state.isbn)())
+}
+
+/// The request itself, split from the signal reads so the rule it encodes is
+/// testable without a Dioxus runtime.
+fn build_request(title: &str, author: &str, isbn: &str) -> Option<EditionSearchRequest> {
+    let field = |v: &str| {
+        let v = v.trim().to_string();
+        (!v.is_empty()).then_some(v)
+    };
+    let (title, author, isbn) = (field(title), field(author), field(isbn));
+    if title.is_none() && author.is_none() && isbn.is_none() {
+        return None;
+    }
+    Some(EditionSearchRequest {
+        // Free text for the REST front door, which accepts a query from
+        // clients that have no picker. Nothing here reads it back.
+        query: [title.as_deref(), author.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" "),
+        title,
+        author,
+        isbn,
+        providers: None,
+    })
+}
+
+/// The text the client-side tiebreak measures word coverage against. The
+/// server's relevance score leads the ordering; this only breaks its ties.
+fn ordering_hint(req: &EditionSearchRequest) -> String {
+    req.query.clone()
+}
+
 /// Run the fan-out search for the current query.
 fn search_handler(state: PickerState, server_url: String) -> EventHandler<()> {
     let mut stage = state.stage;
     let mut editions = state.editions;
     let mut sources = state.sources;
-    let query = state.query;
     EventHandler::new(move |()| {
-        let q = query.peek().trim().to_string();
-        if q.is_empty() {
+        let Some(req) = request_from(state) else {
             stage.set(Stage::Results);
             return;
-        }
+        };
         let url = server_url.clone();
+        let ordering_hint = ordering_hint(&req);
         stage.set(Stage::Searching);
         spawn(async move {
-            match data::search_editions(&url, &q).await {
+            match data::search_editions(&url, req).await {
                 Ok(found) => {
-                    editions.set(candidates::in_stable_order(found.editions, &q));
+                    editions.set(candidates::in_stable_order(found.editions, &ordering_hint));
                     sources.set(found.sources);
                     stage.set(Stage::Results);
                 }
@@ -279,9 +338,13 @@ fn select_handler(state: PickerState, server_url: String) -> EventHandler<Provid
         hydrating.set(true);
         let url = server_url.clone();
         spawn(async move {
-            let fetched =
-                data::hydrate_edition(&url, edition.source, &edition.provider_ref, &edition.isbn13)
-                    .await;
+            let fetched = data::hydrate_edition(
+                &url,
+                edition.source,
+                &edition.provider_ref,
+                edition.isbn13.as_deref(),
+            )
+            .await;
             // A slow hydrate must not overwrite a candidate the reader has
             // since replaced, or reappear after they went back to the list.
             let showing_ours = matches!(

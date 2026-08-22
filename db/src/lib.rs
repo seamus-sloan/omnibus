@@ -103,7 +103,7 @@ pub use merge::{merge_books, undo_merge, MergeError, MergeOutcome};
 pub use metadata_lookup::{
     all_cover_hosts, catalog, cover_hosts, hydrate_edition, provider_cover_image_config,
     search_all_providers, search_provider_by_isbn, search_provider_by_title, MetadataLookupConfig,
-    MetadataLookupError, ProviderKeys, MAX_COVER_REDIRECTS,
+    MetadataLookupError, ProviderKeys, SearchQuery, ThrottleTracker, MAX_COVER_REDIRECTS,
 };
 pub use metadata_overrides::*;
 pub use missing_files::{

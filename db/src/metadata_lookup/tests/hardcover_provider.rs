@@ -8,6 +8,7 @@ use serde_json::json;
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use super::super::providers;
 use super::super::providers::hardcover;
 use super::super::*;
 use super::{
@@ -47,11 +48,14 @@ async fn mount_hc_edition(server: &MockServer, book_id: Option<i64>) {
         .await;
 }
 
-/// Substrings unique to each of the two `books` queries, so a mock can answer
-/// them differently. Held as constants because an unbalanced brace inside a
-/// string literal is exactly the kind of thing a naive parser trips over.
+/// Substring unique to the `books(where: {id:` query, so a mock can tell it
+/// from the edition lookup and the `search` endpoint that share this URL.
+/// Held as a constant because an unbalanced brace inside a string literal is
+/// exactly the kind of thing a naive parser trips over.
+///
+/// Its `{title:` sibling went with the exact-title filter this provider used
+/// to send; text search now goes through `search` (see `SEARCH_QUERY_MARKER`).
 const ID_QUERY_MARKER: &str = "books(where: {id:";
-const TITLE_QUERY_MARKER: &str = "books(where: {title:";
 
 /// A Hardcover `books` row, as both the id lookup and the title search return.
 fn hc_book() -> serde_json::Value {
@@ -64,6 +68,48 @@ fn hc_book() -> serde_json::Value {
         "image": { "url": "https://hc.test/cover.jpg" },
         "editions": [{ "isbn_13": ISBN13 }],
     })
+}
+
+/// Substring unique to the `search` query, so a mock can tell it from the two
+/// `books(where:)` queries that share the same URL.
+const SEARCH_QUERY_MARKER: &str = "query_type";
+
+/// One `search` hit document. A different shape from [`hc_book`] on purpose:
+/// the search endpoint answers with `author_names` / `featured_series` /
+/// `genres` where the `books` query answers with `contributions` /
+/// `book_series` / `cached_tags`, and its `id` is a **string**.
+fn hc_search_document() -> serde_json::Value {
+    json!({
+        "id": "42",
+        "slug": "effective-java",
+        "title": "Effective Java",
+        "description": "  The definitive guide.  ",
+        "author_names": ["Joshua Bloch"],
+        "featured_series": { "position": 3.0, "series": { "name": "The Java Series" } },
+        "genres": ["Programming", "Reference"],
+        "pages": 416,
+        "release_year": 2018,
+        "image": { "url": "https://hc.test/cover.jpg" },
+        // Spans every edition of the work, which is exactly why no single one
+        // of them can be attributed to this candidate.
+        "isbns": [ISBN13, ISBN10, "9780141439518"],
+    })
+}
+
+/// Mount the `search` endpoint with the given hit documents.
+async fn mount_hc_search(server: &MockServer, documents: serde_json::Value) {
+    Mock::given(method("POST"))
+        .and(wiremock::matchers::body_string_contains(
+            SEARCH_QUERY_MARKER.to_string(),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "search": { "results": {
+                "found": 1,
+                "hits": documents,
+            }}},
+        })))
+        .mount(server)
+        .await;
 }
 
 async fn mount_hc_books(server: &MockServer, marker: &str, books: serde_json::Value) {
@@ -171,37 +217,78 @@ async fn hardcover_isbn_miss_falls_through_to_a_clean_unresolved() {
 }
 
 #[tokio::test]
-async fn hardcover_title_search_maps_rows_and_takes_the_isbn_from_the_edition() {
+async fn hardcover_text_search_maps_a_search_document() {
     let server = MockServer::start().await;
-    mount_ol_search(&server, json!({ "docs": [] })).await;
-    mount_gb_search(&server, json!({ "totalItems": 0 })).await;
-    mount_hc_books(&server, TITLE_QUERY_MARKER, json!([hc_book()])).await;
+    mount_hc_search(&server, json!([{ "document": hc_search_document() }])).await;
 
-    let results = search_provider_by_title(&hardcover_config_for(&server), QUERY)
+    let results = hardcover::by_text(&hardcover_config_for(&server), QUERY)
         .await
         .unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].source, MetadataProvider::Hardcover);
-    // No caller-supplied ISBN on the search path, so it comes from the row's
-    // representative edition.
-    assert_eq!(results[0].isbn13, ISBN13);
-    assert_eq!(results[0].series.as_deref(), Some("The Java Series"));
+    let first = &results[0];
+    assert_eq!(first.source, MetadataProvider::Hardcover);
+    assert_eq!(first.title, "Effective Java");
+    assert_eq!(first.authors, vec!["Joshua Bloch"]);
+    assert_eq!(first.description.as_deref(), Some("The definitive guide."));
+    assert_eq!(first.series.as_deref(), Some("The Java Series"));
+    assert_eq!(first.series_index.as_deref(), Some("3"));
+    assert_eq!(first.pages, Some(416));
+    assert_eq!(first.first_publish_year, Some(2018));
+    assert_eq!(first.genres, vec!["Programming", "Reference"]);
+    // The book id, which is what `by_ref` re-fetches by.
+    assert_eq!(first.provider_ref, "42");
 }
 
 #[tokio::test]
-async fn hardcover_title_search_skips_a_row_with_no_isbn() {
-    // Without an ISBN a candidate can't be checked in, so it isn't offered.
+async fn hardcover_text_search_never_attributes_a_works_isbn_to_a_candidate() {
+    // `isbns` lists every edition Hardcover knows for the work, so no single
+    // entry names *this* candidate's printing. Taking one anyway would put a
+    // specific edition's identifier on a row describing all of them.
     let server = MockServer::start().await;
-    mount_ol_search(&server, json!({ "docs": [] })).await;
-    mount_gb_search(&server, json!({ "totalItems": 0 })).await;
-    let mut isbnless = hc_book();
-    isbnless["editions"] = json!([]);
-    mount_hc_books(&server, TITLE_QUERY_MARKER, json!([isbnless])).await;
+    mount_hc_search(&server, json!([{ "document": hc_search_document() }])).await;
 
-    let results = search_provider_by_title(&hardcover_config_for(&server), QUERY)
+    let results = hardcover::by_text(&hardcover_config_for(&server), QUERY)
         .await
         .unwrap();
-    assert!(results.is_empty());
+    assert_eq!(results[0].isbn13, None);
+    assert_eq!(results[0].isbn10, None);
+}
+
+#[tokio::test]
+async fn hardcover_text_search_skips_a_document_with_no_title_or_id() {
+    let server = MockServer::start().await;
+    let mut untitled = hc_search_document();
+    untitled["title"] = json!("   ");
+    let mut unidentified = hc_search_document();
+    unidentified["id"] = serde_json::Value::Null;
+    mount_hc_search(
+        &server,
+        json!([{ "document": untitled }, { "document": unidentified }, { "document": null }]),
+    )
+    .await;
+
+    let results = hardcover::by_text(&hardcover_config_for(&server), QUERY)
+        .await
+        .unwrap();
+    assert!(results.is_empty(), "got {results:?}");
+}
+
+#[tokio::test]
+async fn hardcover_text_search_answers_a_phrase_carrying_the_author() {
+    // The regression this endpoint switch exists for. The old exact-title
+    // filter (`books(where: {title: {_eq: …}})`) matched nothing whatsoever
+    // for a query shaped "title author", which is what the picker seeds — so
+    // Hardcover reported a clean miss for every book that has an author.
+    let server = MockServer::start().await;
+    mount_hc_search(&server, json!([{ "document": hc_search_document() }])).await;
+
+    let results = hardcover::by_text(
+        &hardcover_config_for(&server),
+        "Effective Java Joshua Bloch",
+    )
+    .await
+    .unwrap();
+    assert_eq!(results.len(), 1, "a phrase must reach the search endpoint");
 }
 
 // ── the picker's fields: genres, print pages, ISBN-10 ────────────
@@ -219,37 +306,51 @@ fn hc_book_with_picker_fields() -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn hardcover_title_search_populates_genres_print_pages_and_isbn10() {
+async fn hardcover_by_ref_populates_genres_print_pages_and_isbn10() {
+    // The `books` shape, reached by handle — which is where the picker's
+    // fields come from now that the search document carries no edition.
     let server = MockServer::start().await;
     mount_hc_books(
         &server,
-        TITLE_QUERY_MARKER,
+        ID_QUERY_MARKER,
         json!([hc_book_with_picker_fields()]),
     )
     .await;
 
-    let results = hardcover::by_title(&hardcover_config_for(&server), QUERY)
+    let found = hardcover::by_ref(&hardcover_config_for(&server), "42")
         .await
-        .unwrap();
-    let first = results.first().expect("the fixture row must map");
+        .unwrap()
+        .expect("the fixture row must map");
     // Only the `Genre` bucket of `cached_tags` — moods aren't genres.
-    assert_eq!(first.genres, vec!["Programming", "Reference"]);
-    assert_eq!(first.pages, Some(416));
-    assert_eq!(first.isbn10.as_deref(), Some(ISBN10));
+    assert_eq!(found.genres, vec!["Programming", "Reference"]);
+    assert_eq!(found.pages, Some(416));
+    assert_eq!(found.isbn10.as_deref(), Some(ISBN10));
+    assert_eq!(found.isbn13.as_deref(), Some(ISBN13));
 }
 
 #[tokio::test]
 async fn hardcover_leaves_the_new_fields_unset_when_the_row_omits_them() {
     let server = MockServer::start().await;
-    mount_hc_books(&server, TITLE_QUERY_MARKER, json!([hc_book()])).await;
+    mount_hc_books(&server, ID_QUERY_MARKER, json!([hc_book()])).await;
 
-    let results = hardcover::by_title(&hardcover_config_for(&server), QUERY)
+    let found = hardcover::by_ref(&hardcover_config_for(&server), "42")
+        .await
+        .unwrap()
+        .expect("the fixture row must map");
+    assert!(found.genres.is_empty());
+    assert_eq!(found.pages, None);
+    assert_eq!(found.isbn10, None);
+}
+
+#[tokio::test]
+async fn hardcover_by_ref_refuses_a_handle_that_is_not_a_book_id() {
+    // An `isbn:` fallback ref belongs on the ISBN path; addressing it here
+    // would interpolate a non-numeric value into an `Int!` variable.
+    let server = MockServer::start().await;
+    let found = hardcover::by_ref(&hardcover_config_for(&server), "isbn:9780134685991")
         .await
         .unwrap();
-    let first = results.first().expect("the fixture row must map");
-    assert!(first.genres.is_empty());
-    assert_eq!(first.pages, None);
-    assert_eq!(first.isbn10, None);
+    assert!(found.is_none());
 }
 
 #[tokio::test]
@@ -268,7 +369,7 @@ async fn hardcover_isbn_lookup_drops_edition_fields_from_a_different_printing() 
         .await
         .unwrap()
         .expect("hardcover should resolve the scanned isbn");
-    assert_eq!(edition.isbn13, ISBN13);
+    assert_eq!(edition.isbn13.as_deref(), Some(ISBN13));
     assert_eq!(edition.pages, None);
     assert_eq!(edition.isbn10, None);
     // Work-level fields are unaffected — they were never edition-scoped.
@@ -348,4 +449,120 @@ async fn hardcover_reports_no_book_number_when_the_series_has_no_position() {
         .expect("the fixture resolves");
     assert_eq!(found.series.as_deref(), Some("The Java Series"));
     assert_eq!(found.series_index, None);
+}
+
+#[tokio::test]
+async fn hardcover_check_in_rung_resolves_an_edition_for_a_work_level_hit() {
+    // The ladder needs an ISBN — check-in stores one per physical copy — and
+    // Hardcover's full-text search answers with works. Without the resolve,
+    // this rung would answer and then be discarded wholesale.
+    let server = MockServer::start().await;
+    mount_ol_search(&server, json!({ "docs": [] })).await;
+    mount_gb_search(&server, json!({ "totalItems": 0 })).await;
+    mount_hc_search(&server, json!([{ "document": hc_search_document() }])).await;
+    mount_hc_books(&server, ID_QUERY_MARKER, json!([hc_book()])).await;
+
+    let results = search_provider_by_title(&hardcover_config_for(&server), QUERY)
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 1, "the rung must still answer");
+    assert_eq!(results[0].source, MetadataProvider::Hardcover);
+    assert_eq!(
+        results[0].isbn13, ISBN13,
+        "resolved from the book record, not borrowed from the work's isbns list"
+    );
+}
+
+#[tokio::test]
+async fn hardcover_check_in_rung_is_a_clean_miss_when_the_edition_cannot_be_resolved() {
+    // The resolve is a recovery from a rung that already had nothing usable,
+    // so its failure is that same miss — never a user-facing provider error.
+    let server = MockServer::start().await;
+    mount_ol_search(&server, json!({ "docs": [] })).await;
+    mount_gb_search(&server, json!({ "totalItems": 0 })).await;
+    mount_hc_search(&server, json!([{ "document": hc_search_document() }])).await;
+    mount_hc_books(&server, ID_QUERY_MARKER, json!([])).await;
+
+    let results = search_provider_by_title(&hardcover_config_for(&server), QUERY)
+        .await
+        .unwrap();
+    assert!(results.is_empty(), "got {results:?}");
+}
+
+#[tokio::test]
+async fn hardcover_429_records_a_cooldown() {
+    // Hardcover surfaces its transport failure through `HardcoverError`, whose
+    // `#[error(transparent)]` forwards `source()` past the `reqwest::Error` —
+    // so the shared error-chain sniff cannot see the status and this provider
+    // has to record its own.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+    let config = hardcover_config_for(&server);
+
+    let err = hardcover::by_text(&config, QUERY).await;
+    assert!(err.is_err(), "a 429 is a failure, not a miss");
+    assert!(
+        config
+            .throttle
+            .remaining(MetadataProvider::Hardcover)
+            .is_some(),
+        "the refusal must be remembered, or the next search walks back into it"
+    );
+}
+
+#[tokio::test]
+async fn open_library_429_records_a_cooldown() {
+    // Open Library wraps with `.context(...)`, which keeps the `reqwest::Error`
+    // in the chain — so the shared sniff does see it.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/search.json"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+    let config = config_for(&server);
+
+    let _ = providers::run(
+        MetadataProvider::OpenLibrary,
+        &config,
+        &super::title_query(QUERY),
+    )
+    .await;
+    assert!(config
+        .throttle
+        .remaining(MetadataProvider::OpenLibrary)
+        .is_some());
+}
+
+#[tokio::test]
+async fn hardcover_text_search_reads_a_null_search_envelope_as_no_hits() {
+    // `search` is a nullable GraphQL field: Hasura answers `{"data":{"search":
+    // null}}` alongside an `errors` array. Failing to decode that would report
+    // an outage where the honest answer is "nothing found".
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({ "data": { "search": null } })),
+        )
+        .mount(&server)
+        .await;
+
+    let results = hardcover::by_text(&hardcover_config_for(&server), QUERY)
+        .await
+        .expect("a null envelope is not a failure");
+    assert!(results.is_empty());
+}
+
+#[tokio::test]
+async fn hardcover_by_ref_refuses_a_handle_wider_than_a_graphql_int() {
+    // `$id: Int!` is 32-bit; a wider value would pass a local parse and then
+    // be refused server-side as a coercion error.
+    let server = MockServer::start().await;
+    let found = hardcover::by_ref(&hardcover_config_for(&server), "9999999999")
+        .await
+        .unwrap();
+    assert!(found.is_none());
 }
