@@ -44,6 +44,11 @@ recent releases are recorded below; everything earlier is available via the
 
 ### Changed
 
+- **The metadata search takes a title, an author, and an ISBN separately.** One
+  box could not say which part was which, so the search had to guess — and
+  guessing wrong is what sent "Dune Frank Herbert" to Open Library as a title
+  and got back five books written *about* Dune. Three fields, each seeded from
+  the book, and an ISBN alone is now a valid search
 - **Fetch metadata now asks each source in its own terms.** The search used to
   flatten the book's title and author into one phrase and hand that to every
   provider, which meant Open Library searched the author's name *inside the

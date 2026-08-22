@@ -4,97 +4,6 @@
 use super::*;
 
 #[test]
-fn compose_query_joins_the_title_and_the_primary_author() {
-    assert_eq!(
-        compose_query("Effective Java", Some("Joshua Bloch")),
-        "Effective Java Joshua Bloch"
-    );
-}
-
-#[test]
-fn compose_query_emits_no_stray_space_when_one_half_is_missing() {
-    // A book with no author must not seed `"Title "`, which searches as a
-    // different string than the title.
-    assert_eq!(compose_query("Effective Java", None), "Effective Java");
-    assert_eq!(
-        compose_query("Effective Java", Some("   ")),
-        "Effective Java"
-    );
-    assert_eq!(compose_query("  ", Some("Joshua Bloch")), "Joshua Bloch");
-}
-
-#[test]
-fn compose_query_is_empty_when_the_book_has_neither() {
-    // Which is what leaves the Search button disabled rather than firing a
-    // request the endpoint would 400.
-    assert_eq!(compose_query("   ", None), "");
-}
-
-fn seed() -> Seed {
-    Seed {
-        title: Some("Dune".into()),
-        author: Some("Frank Herbert".into()),
-        isbn13: Some("9780441013593".into()),
-    }
-}
-
-#[test]
-fn request_sends_the_structured_fields_while_the_box_is_untouched() {
-    // The overwhelmingly common case, and the one the flattened query got
-    // wrong: Open Library must receive `title=Dune&author=Frank+Herbert`, not
-    // one phrase searched inside the title field.
-    let seed = seed();
-    let req = seed.request(&seed.composed());
-    assert_eq!(req.title.as_deref(), Some("Dune"));
-    assert_eq!(req.author.as_deref(), Some("Frank Herbert"));
-    assert_eq!(req.isbn.as_deref(), Some("9780441013593"));
-    assert_eq!(req.query, "Dune Frank Herbert");
-}
-
-#[test]
-fn request_tolerates_surrounding_whitespace_in_an_untouched_box() {
-    let seed = seed();
-    let req = seed.request(&format!("  {}  ", seed.composed()));
-    assert_eq!(req.title.as_deref(), Some("Dune"));
-}
-
-#[test]
-fn request_falls_back_to_free_text_once_the_reader_edits_the_box() {
-    // A reader who retyped it is asking for something specific, and free text
-    // cannot honestly be split back into a title and an author — guessing a
-    // split would search for something they did not type.
-    let req = seed().request("dune messiah");
-    assert_eq!(req.query, "dune messiah");
-    assert_eq!(req.title, None);
-    assert_eq!(req.author, None);
-    assert_eq!(req.isbn, None);
-}
-
-#[test]
-fn request_carries_no_isbn_when_the_form_has_none() {
-    let seed = Seed {
-        isbn13: None,
-        ..seed()
-    };
-    let req = seed.request(&seed.composed());
-    assert_eq!(req.isbn, None);
-    assert_eq!(req.title.as_deref(), Some("Dune"));
-}
-
-#[test]
-fn request_omits_a_title_the_book_does_not_have() {
-    // Sent as `Some("")` the server would take the structured branch and then
-    // clean it away, searching with nothing.
-    let seed = Seed {
-        title: None,
-        ..seed()
-    };
-    let req = seed.request(&seed.composed());
-    assert_eq!(req.title, None);
-    assert_eq!(req.query, "Frank Herbert");
-}
-
-#[test]
 fn field_slug_matches_the_forms_own_label_slugging_without_its_prefix() {
     assert_eq!(field_slug("Title"), "title");
     assert_eq!(field_slug("ISBN-13"), "isbn-13");
@@ -177,4 +86,70 @@ mod gate {
         assert!(after.contains("revealed"), "revealed after the transition");
         assert!(!after.contains("gated"));
     }
+}
+
+// ── the query fields ─────────────────────────────────────────────
+
+#[test]
+fn build_request_sends_each_field_as_itself() {
+    // The whole point of three fields: Open Library gets `title=Dune` and
+    // `author=Frank+Herbert`, never one phrase searched inside the title.
+    let req = build_request("Dune", "Frank Herbert", "9780441013593").expect("has content");
+    assert_eq!(req.title.as_deref(), Some("Dune"));
+    assert_eq!(req.author.as_deref(), Some("Frank Herbert"));
+    assert_eq!(req.isbn.as_deref(), Some("9780441013593"));
+}
+
+#[test]
+fn build_request_trims_and_treats_a_blank_field_as_absent() {
+    let req = build_request("  Dune  ", "   ", "").expect("has content");
+    assert_eq!(req.title.as_deref(), Some("Dune"));
+    assert_eq!(req.author, None);
+    assert_eq!(req.isbn, None);
+}
+
+#[test]
+fn build_request_keeps_the_structure_however_the_reader_edits_it() {
+    // The regression this replaced: a single stray keystroke used to drop all
+    // three structured fields and send the whole phrase as free text, which
+    // put five books *about* Dune above the novel.
+    let req = build_request("Dune ", "Frank Herbert", "").expect("has content");
+    assert_eq!(req.title.as_deref(), Some("Dune"));
+    assert_eq!(req.author.as_deref(), Some("Frank Herbert"));
+}
+
+#[test]
+fn build_request_accepts_an_isbn_on_its_own() {
+    // The strongest question any provider takes, and one the single box could
+    // never express.
+    let req = build_request("", "", "9780441013593").expect("an ISBN is enough");
+    assert_eq!(req.isbn.as_deref(), Some("9780441013593"));
+    assert_eq!(req.title, None);
+    assert_eq!(req.query, "", "no title or author to compose from");
+}
+
+#[test]
+fn build_request_accepts_an_author_on_its_own() {
+    let req = build_request("", "Frank Herbert", "").expect("an author is enough");
+    assert_eq!(req.author.as_deref(), Some("Frank Herbert"));
+    assert_eq!(req.title, None);
+}
+
+#[test]
+fn build_request_is_none_when_every_field_is_blank() {
+    assert!(build_request("", "  ", "").is_none());
+}
+
+#[test]
+fn build_request_composes_the_free_text_query_for_a_rest_client() {
+    assert_eq!(
+        build_request("Dune", "Frank Herbert", "")
+            .expect("has content")
+            .query,
+        "Dune Frank Herbert"
+    );
+    assert_eq!(
+        build_request("Dune", "", "").expect("has content").query,
+        "Dune"
+    );
 }

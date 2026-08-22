@@ -299,10 +299,80 @@ test.describe
       // Prefilled from the book, and already run — the reader lands on results,
       // not on a form asking the question they just asked.
       await expect(page.getByTestId("metadata-search")).toBeVisible();
-      await expect(page.getByTestId("mes-query")).toHaveValue(
-        `${TARGET.title} ${TARGET.authors[0]}`,
+      // Three fields, each seeded from the book — not one phrase that would
+      // have to be split back apart to be useful.
+      await expect(page.getByTestId("mes-query-title")).toHaveValue(
+        TARGET.title,
       );
+      await expect(page.getByTestId("mes-query-author")).toHaveValue(
+        TARGET.authors[0]!,
+      );
+      await expect(page.getByTestId("mes-query-isbn")).toBeVisible();
       await expect(page.getByTestId("mes-candidates")).toBeVisible();
+    });
+
+    test("sends each query field as itself, however the reader edits them", async ({
+      page,
+      request,
+    }) => {
+      // The regression this replaces: any keystroke used to collapse the three
+      // structured fields into one free-text phrase, which Open Library then
+      // matched against its title field alone.
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await openResults(page, uuid);
+
+      const sent = page.waitForRequest(
+        (r) =>
+          r.url().includes("/metadata/editions/search") &&
+          r.method() === "POST",
+      );
+      await page.getByTestId("mes-query-title").fill("Minor Lemmas");
+      await page.getByTestId("mes-query-author").fill("Germain");
+      await page.getByTestId("mes-query-isbn").fill("9781234567897");
+      await page.getByTestId("mes-search").click();
+
+      const body = JSON.parse((await sent).postData() ?? "{}");
+      const req = body.req ?? body;
+      expect(req.title).toBe("Minor Lemmas");
+      expect(req.author).toBe("Germain");
+      expect(req.isbn).toBe("9781234567897");
+    });
+
+    test("searches on an ISBN alone", async ({ page, request }) => {
+      // The strongest question any provider takes, and one a single box could
+      // not express.
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await openResults(page, uuid);
+
+      await page.getByTestId("mes-query-title").fill("");
+      await page.getByTestId("mes-query-author").fill("");
+      await page.getByTestId("mes-query-isbn").fill("9781234567897");
+      await expect(page.getByTestId("mes-search")).toBeEnabled();
+
+      const sent = page.waitForRequest(
+        (r) =>
+          r.url().includes("/metadata/editions/search") &&
+          r.method() === "POST",
+      );
+      await page.getByTestId("mes-search").click();
+      const body = JSON.parse((await sent).postData() ?? "{}");
+      const req = body.req ?? body;
+      expect(req.isbn).toBe("9781234567897");
+      expect(req.title ?? null).toBeNull();
+    });
+
+    test("disables the search until at least one field has something in it", async ({
+      page,
+      request,
+    }) => {
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await openResults(page, uuid);
+      for (const f of ["title", "author", "isbn"]) {
+        await page.getByTestId(`mes-query-${f}`).fill("");
+      }
+      await expect(page.getByTestId("mes-search")).toBeDisabled();
+      await page.getByTestId("mes-query-author").fill("Germain");
+      await expect(page.getByTestId("mes-search")).toBeEnabled();
     });
 
     test("closes on the close button and on a click outside", async ({
