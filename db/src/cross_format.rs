@@ -47,10 +47,14 @@ impl From<crate::books::BooksError> for CrossFormatError {
     fn from(e: crate::books::BooksError) -> Self {
         match e {
             crate::books::BooksError::Db(inner) => CrossFormatError::Sqlx(inner),
-            // This module never decodes overrides JSON; fold the variant
-            // rather than panic so a future caller can't slip through.
+            // This module never reads overrides, so neither the decode nor
+            // the fold-through variant is reachable here; fold them rather
+            // than panic so a future caller can't slip through.
             crate::books::BooksError::OverridesJson(inner) => {
                 CrossFormatError::Sqlx(sqlx::Error::Decode(Box::new(inner)))
+            }
+            crate::books::BooksError::Other(msg) => {
+                CrossFormatError::Sqlx(sqlx::Error::Decode(msg.into()))
             }
         }
     }

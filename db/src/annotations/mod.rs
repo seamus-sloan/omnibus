@@ -41,6 +41,7 @@ impl From<crate::books::BooksError> for HighlightError {
             crate::books::BooksError::OverridesJson(inner) => {
                 Self::Sqlx(sqlx::Error::Decode(Box::new(inner)))
             }
+            crate::books::BooksError::Other(msg) => Self::Sqlx(sqlx::Error::Decode(msg.into())),
         }
     }
 }

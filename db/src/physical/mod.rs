@@ -54,4 +54,10 @@ pub enum PhysicalError {
     /// A database error not covered by a more specific variant above.
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
+    /// A non-database failure surfaced from a dependency of these writes.
+    /// Coarse and message-carrying: callers render it as an opaque internal
+    /// failure, so folding it into `Sqlx` would only make that variant mean
+    /// "a database error occurred" less than always.
+    #[error("{0}")]
+    Other(String),
 }

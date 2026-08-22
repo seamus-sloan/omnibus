@@ -77,6 +77,11 @@ pub enum KoboError {
     /// log instead of being disguised as a protocol error.
     #[error("shelf membership lookup failed: {0}")]
     Shelf(String),
+    /// A non-database failure surfaced from another data-layer module, for
+    /// the same reason [`Self::Shelf`] exists: the real cause survives into
+    /// the log instead of being disguised as a `Sqlx` error.
+    #[error("{0}")]
+    Other(String),
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
 }
@@ -94,12 +99,13 @@ impl From<crate::books::BooksError> for KoboError {
     fn from(e: crate::books::BooksError) -> Self {
         match e {
             crate::books::BooksError::Db(inner) => Self::Sqlx(inner),
-            // `resolve_canonical_book_uuid` never decodes overrides JSON, so
-            // this arm is unreachable in practice; fold it into a decode error
-            // rather than panicking, mirroring `ratings`/`read_status`.
+            // `resolve_canonical_book_uuid` never reads overrides, so these
+            // arms are unreachable in practice; fold them rather than
+            // panicking, mirroring `ratings`/`read_status`.
             crate::books::BooksError::OverridesJson(inner) => {
                 Self::Sqlx(sqlx::Error::Decode(Box::new(inner)))
             }
+            crate::books::BooksError::Other(msg) => Self::Other(msg),
         }
     }
 }
@@ -120,7 +126,7 @@ impl From<crate::metadata_overrides::MetadataOverridesError> for KoboError {
             other @ (crate::metadata_overrides::MetadataOverridesError::BookNotFound(_)
             | crate::metadata_overrides::MetadataOverridesError::TooManyValues {
                 ..
-            }) => Self::Sqlx(sqlx::Error::Protocol(other.to_string())),
+            }) => Self::Other(other.to_string()),
         }
     }
 }

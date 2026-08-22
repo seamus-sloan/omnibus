@@ -990,3 +990,20 @@ async fn merge_books_promotes_a_physical_root_target_that_gains_files() {
         "merge must promote off the pseudo-root"
     );
 }
+
+#[test]
+fn map_settings_error_returns_other_for_non_db_variants() {
+    let validation =
+        super::undo::map_settings_error(crate::settings::SettingsError::Validation("bad".into()));
+    assert!(
+        matches!(&validation, MergeError::Other(msg) if msg.contains("bad")),
+        "expected Other carrying the validation message, got {validation:?}"
+    );
+
+    let json_err = serde_json::from_str::<i32>("nope").unwrap_err();
+    let json = super::undo::map_settings_error(crate::settings::SettingsError::Json(json_err));
+    assert!(
+        matches!(json, MergeError::Other(_)),
+        "expected Other, got {json:?}"
+    );
+}

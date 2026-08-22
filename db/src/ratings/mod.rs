@@ -28,12 +28,13 @@ impl From<crate::books::BooksError> for RatingError {
         match e {
             crate::books::BooksError::Db(inner) => Self::Sqlx(inner),
             // `resolve_canonical_book_uuid` is the only `BooksError`-returning
-            // call this module makes and it never decodes JSON, so the
-            // `OverridesJson` variant is unreachable here. Fold it into a
-            // decode error rather than panicking, mirroring `progress`.
+            // call this module makes and it never reads overrides, so neither
+            // remaining variant is reachable here. Fold them into a decode
+            // error rather than panicking, mirroring `progress`.
             crate::books::BooksError::OverridesJson(inner) => {
                 Self::Sqlx(sqlx::Error::Decode(Box::new(inner)))
             }
+            crate::books::BooksError::Other(msg) => Self::Sqlx(sqlx::Error::Decode(msg.into())),
         }
     }
 }
