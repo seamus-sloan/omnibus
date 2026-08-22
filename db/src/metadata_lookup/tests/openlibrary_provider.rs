@@ -10,8 +10,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::super::providers::openlibrary;
 use super::super::*;
 use super::{
-    config_for, gb_hit, mount_gb, mount_ol, mount_ol_search, ol_hit, ol_search_hit, ISBN10, ISBN13,
-    OL_PATH, QUERY,
+    config_for, gb_hit, mount_gb, mount_ol, mount_ol_search, ol_hit, ol_search_hit, title_query,
+    ISBN10, ISBN13, OL_PATH, QUERY,
 };
 
 // ── invalid response bodies ──────────────────────────────────────
@@ -198,11 +198,11 @@ async fn openlibrary_search_pairs_the_isbn10_with_the_edition_it_answered_with()
     let server = MockServer::start().await;
     mount_ol_search(&server, ol_search_hit()).await;
 
-    let results = openlibrary::by_title(&config_for(&server), QUERY)
+    let results = openlibrary::search(&config_for(&server), &title_query(QUERY))
         .await
         .unwrap();
     let first = results.first().expect("the fixture doc must map");
-    assert_eq!(first.isbn13, ISBN13);
+    assert_eq!(first.isbn13.as_deref(), Some(ISBN13));
     assert_eq!(first.isbn10.as_deref(), Some(ISBN10));
     assert_eq!(
         first.genres,
@@ -224,10 +224,10 @@ async fn openlibrary_search_drops_an_isbn10_from_another_edition_of_the_work() {
     )
     .await;
 
-    let results = openlibrary::by_title(&config_for(&server), QUERY)
+    let results = openlibrary::search(&config_for(&server), &title_query(QUERY))
         .await
         .unwrap();
     let first = results.first().expect("the fixture doc must map");
-    assert_eq!(first.isbn13, ISBN13);
+    assert_eq!(first.isbn13.as_deref(), Some(ISBN13));
     assert_eq!(first.isbn10, None);
 }

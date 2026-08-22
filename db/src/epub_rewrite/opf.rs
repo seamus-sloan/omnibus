@@ -1,10 +1,8 @@
-//! In-place OPF `<metadata>` rewrite. Copies the source OPF
-//! through byte-for-byte via quick-xml events, dropping the descriptive
-//! `<dc:*>` elements (and the two `calibre:series` metas) and re-emitting them
-//! from the book's effective metadata. Everything else — the package
-//! `unique-identifier`, `<dc:identifier>`s, the `<meta name="cover">` pointer,
-//! refinements, and the whole manifest/spine — is preserved untouched, so the
-//! EPUB's identity and structure survive.
+//! In-place OPF `<metadata>` rewrite. Copies the source OPF through
+//! byte-for-byte via quick-xml events, dropping the descriptive `<dc:*>`
+//! elements (and the two `calibre:series` metas) and re-emitting them from the
+//! book's effective metadata. Identifiers, the cover pointer, refinements, and
+//! the whole manifest/spine are preserved, so the EPUB's identity survives.
 
 use std::fmt::Write as _;
 

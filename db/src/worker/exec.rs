@@ -109,7 +109,7 @@ impl Worker {
     /// success, the last reported `processed` count is pulled out of the
     /// progress map so a Phase-2 in-flight report stays reflected in the final
     /// `Done` (today there is no in-flight reporter, so this is always 0).
-    /// The `TaskSuccessDetail` (issue #1057's ghost warning, or #1739's bake
+    /// The `TaskSuccessDetail` (a scan's ghost warning, or a bake's
     /// errors) rides straight through onto the matching `Done` field — a
     /// task produces at most one of the two, so the other is always `None`.
     fn project_terminal(&self, id: TaskId, outcome: &TaskOutcome) -> ProgressState {

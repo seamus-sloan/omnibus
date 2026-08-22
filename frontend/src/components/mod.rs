@@ -1,9 +1,8 @@
-//! Nav is platform-specific: `TopNav` on web, `BottomNav` on mobile.
-//!
-//! The `web` and `mobile` features are **mutually exclusive** — enabling
-//! both at once (e.g. because a workspace-wide `cargo build` unified them)
-//! triggers a `compile_error!`. Build each platform crate with `cargo build
-//! -p <crate>` so its exclusive feature set is used.
+//! Shared UI components. Nav is platform-specific: `TopNav` on web, `BottomNav`
+//! on mobile. The `web` and `mobile` features are **mutually exclusive** —
+//! enabling both at once (e.g. because a workspace-wide `cargo build` unified
+//! them) triggers a `compile_error!`. Build each platform crate with
+//! `cargo build -p <crate>` so its exclusive feature set is used.
 
 #[cfg(all(feature = "web", feature = "mobile"))]
 compile_error!(

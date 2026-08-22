@@ -33,6 +33,7 @@ impl SyncDelta {
         self.changes.is_empty()
     }
 
+    /// How many changes the device still has to apply.
     pub fn len(&self) -> usize {
         self.changes.len()
     }

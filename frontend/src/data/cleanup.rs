@@ -1,9 +1,8 @@
-//! Library-cleanup review client wrappers: per-kind counts, the pending
-//! queue, the decide/detect/undo/delete-entity writes. Web/SSR call the
+//! Library-cleanup review client wrappers: per-kind counts, the pending queue,
+//! and the decide/detect/undo/delete-entity writes. Web/SSR call the
 //! `rpc_cleanup_*` server functions; mobile posts the same `/api/rpc/cleanup/*`
-//! routes over `reqwest`, since the admin cleanup surface has no separate REST
-//! twin. No mobile UI ships yet — the transport exists so the data layer keeps
-//! compiling under the mobile gate.
+//! routes over `reqwest`, since the admin cleanup surface has no REST twin. No
+//! mobile UI ships yet — the transport exists to keep the data layer compiling.
 
 use omnibus_shared::{CleanupCounts, CleanupKind, Decision, SuggestionCard};
 

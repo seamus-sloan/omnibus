@@ -1,10 +1,8 @@
-//! Public reading-journal section for the book-detail page. Renders every
-//! reader's entries plus an owner-only composer with a live markdown editor
-//! (see `journal_editor.js`). Entries, the current user, and the write surface
-//! all attach post-mount so SSR and first-hydration paint stay identical
-//! (rule 07); bodies are sanitized server-side. The draft composer lives in
-//! [`composer`] and the per-entry card (plus its inline editor) in
-//! [`entry_card`] — this file keeps the page-level listing/orchestration.
+//! Public reading-journal section for the book-detail page: every reader's
+//! entries plus an owner-only composer with a live markdown editor. Entries,
+//! the current user, and the write surface all attach post-mount so SSR and
+//! first-hydration paint stay identical; bodies are sanitized server-side. The
+//! composer lives in [`composer`] and the per-entry card in [`entry_card`].
 
 use dioxus::prelude::*;
 use omnibus_shared::JournalEntry;

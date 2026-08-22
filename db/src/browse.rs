@@ -1,11 +1,8 @@
-//! Browse-all index pages: `/authors` and `/series`. Returns every row
-//! (capped at `INDEX_LIMIT`) so the UI's client-side sort/filter has the
-//! full list to work with; per-row counts come back override-aware so the
-//! index stays consistent with the discovery-detail reads. Counts are
-//! computed in a single reverse-index-driven `GROUP BY` pass (one
-//! `effective` membership CTE, not a correlated subquery per row) so a
-//! multi-thousand-author library doesn't pay an O(rows × books) cost.
-//! Single-tenant today — no per-user ACL filtering.
+//! Browse-all index pages for `/authors` and `/series`: every row (capped at
+//! `INDEX_LIMIT`) so the UI's client-side sort/filter has the full list, with
+//! override-aware per-row counts computed in a single reverse-index-driven
+//! `GROUP BY` pass rather than a correlated subquery per row. Single-tenant
+//! today — no per-user ACL filtering.
 
 use omnibus_shared::{AuthorSummary, SeriesSummary};
 use sqlx::{Row, SqlitePool};

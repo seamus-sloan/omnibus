@@ -1,4 +1,4 @@
-//! Tests for the export-with-overrides EPUB rewrite (F5.8 #1372).
+//! Tests for the export-with-overrides EPUB rewrite.
 
 use std::io::{Cursor, Read, Write};
 

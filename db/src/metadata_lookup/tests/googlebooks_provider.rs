@@ -7,11 +7,12 @@ use serde_json::json;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use super::super::providers;
 use super::super::providers::{googlebooks, publication_year};
 use super::super::*;
 use super::{
-    config_for, gb_hit, keyed_config_for, mount_gb, mount_ol, offline_config, GB_PATH, ISBN10,
-    ISBN13,
+    config_for, gb_hit, keyed_config_for, mount_gb, mount_ol, offline_config, title_query_isbn,
+    GB_PATH, ISBN10, ISBN13,
 };
 
 #[tokio::test]
@@ -163,7 +164,7 @@ async fn googlebooks_falls_back_to_bare_query_when_isbn_search_is_empty() {
     assert_eq!(meta.title, "Effective Java");
     // Bare-text search may return a sibling edition; the meta must still carry
     // the *scanned* ISBN so a check-in stores the barcode that was scanned.
-    assert_eq!(meta.isbn13, ISBN13);
+    assert_eq!(meta.isbn13.as_deref(), Some(ISBN13));
     server.verify().await;
 }
 
@@ -374,6 +375,45 @@ async fn googlebooks_drops_an_isbn10_that_names_a_different_printing() {
         .await
         .unwrap()
         .expect("the fixture volume must resolve");
-    assert_eq!(edition.isbn13, ISBN13);
+    assert_eq!(edition.isbn13.as_deref(), Some(ISBN13));
     assert_eq!(edition.isbn10, None);
+}
+
+#[tokio::test]
+async fn a_swallowed_bare_text_failure_still_leaves_the_cooldown_it_recorded() {
+    // `by_isbn` degrades a failed bare-text fallback to a clean miss, so a 429
+    // can be recorded while the call still answers `Ok(None)`. Treating that
+    // `Ok` as "the provider is fine" would erase the refusal we just learned.
+    let server = MockServer::start().await;
+    // The field-scoped query misses cleanly...
+    Mock::given(method("GET"))
+        .and(path(GB_PATH))
+        .and(query_param("q", format!("isbn:{ISBN13}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "totalItems": 0 })))
+        .mount(&server)
+        .await;
+    // ...and the bare-text fallback is refused.
+    Mock::given(method("GET"))
+        .and(path(GB_PATH))
+        .and(query_param("q", ISBN13))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+    let config = keyed_config_for(&server);
+
+    let found = providers::run(
+        MetadataProvider::GoogleBooks,
+        &config,
+        &title_query_isbn(ISBN13),
+    )
+    .await
+    .expect("the fallback's failure degrades to a miss");
+    assert!(found.is_empty());
+    assert!(
+        config
+            .throttle
+            .remaining(MetadataProvider::GoogleBooks)
+            .is_some(),
+        "the refusal must outlive the Ok that swallowed it"
+    );
 }

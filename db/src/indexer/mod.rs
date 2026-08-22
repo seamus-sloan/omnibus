@@ -36,6 +36,12 @@ pub use progress::{ScanUpdate, PHASE_PARSING, PHASE_SYNCING, PHASE_WALKING};
 pub enum IndexerError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+    /// A non-database failure surfaced from a dependency of these reads.
+    /// Coarse and message-carrying: no caller branches on which dependency
+    /// it came from, and folding it into `Db` would make that variant mean
+    /// "a database error occurred" only most of the time.
+    #[error("{0}")]
+    Other(String),
 }
 
 impl From<crate::settings::SettingsError> for IndexerError {
@@ -44,14 +50,13 @@ impl From<crate::settings::SettingsError> for IndexerError {
             crate::settings::SettingsError::Db(inner) => IndexerError::Db(inner),
             // `Validation`/`Json` are only produced by `set_hardcover_api_key`
             // and the F5.1 metadata-precedence writes, which no indexer path
-            // calls — keep the arms exhaustive but do not widen
-            // `IndexerError`'s surface for cases the caller graph can't reach.
-            crate::settings::SettingsError::Validation(msg) => IndexerError::Db(
-                sqlx::Error::Protocol(format!("unexpected settings validation error: {msg}")),
-            ),
-            crate::settings::SettingsError::Json(inner) => IndexerError::Db(sqlx::Error::Protocol(
-                format!("unexpected settings JSON error: {inner}"),
-            )),
+            // calls.
+            crate::settings::SettingsError::Validation(msg) => {
+                IndexerError::Other(format!("unexpected settings validation error: {msg}"))
+            }
+            crate::settings::SettingsError::Json(inner) => {
+                IndexerError::Other(format!("unexpected settings JSON error: {inner}"))
+            }
         }
     }
 }
@@ -76,11 +81,11 @@ pub const MASS_MISSING_FRACTION: f64 = 0.20;
 /// percentage guard.
 pub const MASS_MISSING_MIN_ABSOLUTE: usize = 10;
 
-/// Warn threshold: below [`MASS_MISSING_FRACTION`] (the #819 abort guard)
-/// but still large enough that a dropped mount or partial sync shouldn't
+/// Warn threshold: below [`MASS_MISSING_FRACTION`] (the abort guard) but
+/// still large enough that a dropped mount or partial sync shouldn't
 /// ghost books silently. Half the abort fraction — a scan in this band
 /// still proceeds (unlike the abort guard) but its `Done` state carries a
-/// dismissible warning (issue #1057).
+/// dismissible warning.
 pub const MASS_MISSING_WARN_FRACTION: f64 = 0.10;
 
 /// Error raised when the removal pass would flag an implausible share of the
@@ -407,7 +412,7 @@ fn classify_arrivals<'a>(
 /// The removal pass runs only on a fully-trusted enumeration. On a partial
 /// scan (unreadable subdir, or a once-populated root now reading empty) this
 /// returns nothing, so no book is flagged missing and no `merged_uuids` row
-/// is eroded (issue #819). An already-fileless book is left untouched.
+/// is eroded. An already-fileless book is left untouched.
 fn collect_departures<'a>(
     db: &'a [books::IndexedRow],
     disk_by_key: &std::collections::HashMap<&str, &ebook::StatEntry>,

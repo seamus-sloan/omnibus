@@ -1,9 +1,8 @@
-//! Unit tests for the `thumbs` module — `thumbs_dir` env-var resolution,
-//! `thumb_path_for` formatting, `is_stale` mtime comparison (incl. the
-//! same-second tie case), `ThumbSize` FromStr roundtrip, `thumb_etag`
-//! derivation, `generate_thumbnail`'s lossy WebP output, the one-time
-//! previous-scheme purge, and LRU-on-read `evict_if_over_cap` cap
-//! enforcement.
+//! Unit tests for the `thumbs` module: `thumbs_dir` env-var resolution,
+//! `thumb_path_for` formatting, `is_stale` mtime comparison (including the
+//! same-second tie), `ThumbSize` FromStr roundtrip, `thumb_etag` derivation,
+//! `generate_thumbnail`'s lossy WebP output, the one-time previous-scheme
+//! purge, and LRU-on-read `evict_if_over_cap` enforcement.
 
 use super::*;
 use crate::test_support::EnvVarGuard;

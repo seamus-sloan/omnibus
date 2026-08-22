@@ -138,6 +138,8 @@ fn config_for(server: &MockServer) -> MetadataLookupConfig {
         // env here would make the suite depend on the developer's `.env`.
         hardcover_base: server.uri(),
         keys: ProviderKeys::default(),
+        // An isolated tracker: a cooldown must never leak between tests.
+        throttle: crate::metadata_lookup::ThrottleTracker::fresh(),
         timeout: Duration::from_secs(5),
     }
 }

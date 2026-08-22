@@ -125,7 +125,7 @@ async fn diff_ebook_library_for_reindex(
 /// Used by [`crate::worker::Worker`] to feed the UI's live activity panel.
 /// `Send + 'static` because the callback rides into the Phase-B
 /// `spawn_blocking` (and back out). Returns the scan's ghost-count tallies
-/// (issue #1057) so the caller can decide whether to attach a warning.
+/// so the caller can decide whether to attach a warning.
 pub async fn reindex_with_progress(
     pool: &SqlitePool,
     library_path: &str,

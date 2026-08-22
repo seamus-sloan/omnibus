@@ -1,10 +1,8 @@
 //! Sleep-timer controls shared by the listen page and the mini-dock.
-//!
-//! [`SleepPanelBody`] renders the content — the preset grid (Off through
-//! 4 hours), an "End of chapter" option, a live countdown status, and a
-//! fade-out toggle; [`SleepPanel`] wraps it in the full player's scrim +
-//! panel chrome, while the mini-dock hosts the same body inside its upward
-//! popover. State lives in the app-scoped [`super::sleep::SleepController`].
+//! [`SleepPanelBody`] renders the content — the preset grid, an "End of
+//! chapter" option, a live countdown status, and a fade-out toggle — while
+//! [`SleepPanel`] wraps it in the full player's scrim and panel chrome. State
+//! lives in the app-scoped [`super::sleep::SleepController`].
 
 #![cfg(not(feature = "mobile"))]
 

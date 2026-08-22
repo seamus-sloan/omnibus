@@ -47,7 +47,6 @@ jobs:
               - "scripts/ios-test.sh"
               - "scripts/xccov-to-lcov.sh"
               - ".github/workflows/ios-tests.yml"
-              - ".github/actions/ci-gate/action.yml"
 
   unit:
     name: unit tests (omnibusTests)
@@ -156,7 +155,6 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/ci-gate
+      - uses: seamus-sloan/gh-actions/ci-gate@v1
         with:
           needs: ${{ toJSON(needs) }}

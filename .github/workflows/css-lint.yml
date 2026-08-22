@@ -52,7 +52,6 @@ jobs:
               - "frontend/assets/**/*.css"
               - ".stylelintrc.json"
               - ".github/workflows/css-lint.yml"
-              - ".github/actions/ci-gate/action.yml"
               - "flake.nix"
               - "flake.lock"
 
@@ -102,7 +101,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/ci-gate
+      - uses: seamus-sloan/gh-actions/ci-gate@v1
         with:
           needs: ${{ toJSON(needs) }}

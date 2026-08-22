@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::scan::SEARCH_QUERY_MAX_LEN;
 
 /// Which external provider a lookup resolved against.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetadataProvider {
     OpenLibrary,
@@ -208,9 +208,21 @@ pub struct ProviderEdition {
     /// that carries none, which every provider can also be re-queried by.
     pub provider_ref: String,
     /// The normalized ISBN-13 that identifies this edition (13 digits, no
-    /// hyphens). Required, exactly as on the check-in path: a candidate a
-    /// provider can't put an ISBN on isn't an edition anyone can act on.
-    pub isbn13: String,
+    /// hyphens), when the provider ties one to *this* edition.
+    ///
+    /// **Optional, deliberately.** A search hit is very often a *work* rather
+    /// than a printing: Open Library's `search.json` carries one `isbn` list
+    /// spanning every edition, and Hardcover's `search` document carries an
+    /// `isbns` array doing the same. Requiring one here used to drop those
+    /// candidates outright — silently, and worst for exactly the books a
+    /// reader is most likely to be fixing up by hand (pre-ISBN works,
+    /// translations, small-press printings). What a candidate must have is a
+    /// [`Self::provider_ref`] to be re-fetched by, not an ISBN.
+    ///
+    /// The check-in path still requires one, and enforces that on its own
+    /// boundary — see [`ExternalBookMeta`] and the `TryFrom` below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isbn13: Option<String>,
     /// ISBN-10 for the **same** printing as [`Self::isbn13`], when the
     /// provider carries one.
     ///
@@ -254,6 +266,20 @@ pub struct ProviderEdition {
     /// a column no source could ever fill.
     #[serde(default)]
     pub genres: Vec<String>,
+    /// How strongly this candidate matches the query that found it, in
+    /// **hundredths of a point** (so `1000` is a perfect title match) — or
+    /// `None` from a source that did not score, which is what an older client
+    /// and every hand-written test fixture send.
+    ///
+    /// Fixed-point rather than a float so this type keeps `Eq`, and so two
+    /// candidates that scored identically compare identically rather than
+    /// depending on float formatting.
+    ///
+    /// It is derived from the candidate and the query alone — never from
+    /// which provider answered — so a source dropping out removes its rows
+    /// and reorders nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relevance: Option<i32>,
 }
 
 impl ProviderEdition {
@@ -290,6 +316,12 @@ impl ProviderEdition {
                 slot.clone_from(from);
             }
         };
+        // The ISBN can legitimately be absent on one side and present on the
+        // other: a Hardcover *search* document lists a work's ISBNs without
+        // tying one to an edition, while the record its detail lookup returns
+        // does. Filling — rather than leaving the hydrated record bare — is
+        // what stops a re-fetch from erasing an identifier the list row had.
+        fill(&mut self.isbn13, &thinner.isbn13);
         fill(&mut self.isbn10, &thinner.isbn10);
         fill(&mut self.year, &thinner.year);
         fill(&mut self.publisher, &thinner.publisher);
@@ -327,14 +359,40 @@ impl ProviderEdition {
     }
 }
 
-impl From<ProviderEdition> for ExternalBookMeta {
+/// A [`ProviderEdition`] that names no ISBN-13 cannot become an
+/// [`ExternalBookMeta`].
+///
+/// Not a general failure: the picker is *expected* to surface candidates like
+/// this, and the check-in path is expected to skip them. It exists so the
+/// narrowing is a decision the compiler forces a caller to make, rather than
+/// an `unwrap_or_default` that would put an empty ISBN on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoIsbn;
+
+impl std::fmt::Display for NoIsbn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("provider candidate carries no ISBN-13")
+    }
+}
+
+impl std::error::Error for NoIsbn {}
+
+impl TryFrom<ProviderEdition> for ExternalBookMeta {
+    type Error = NoIsbn;
+
     /// Narrow a search candidate to the check-in payload, dropping the fields
     /// that type doesn't carry — `provider_ref`, `isbn10`, `series_index`,
-    /// and `genres`. The check-in wire contract stays frozen; the picker
-    /// keeps the rest.
-    fn from(e: ProviderEdition) -> Self {
-        Self {
-            isbn13: e.isbn13,
+    /// `relevance`, and `genres`. The check-in wire contract stays frozen;
+    /// the picker keeps the rest.
+    ///
+    /// Fails with [`NoIsbn`] when the candidate has none. Check-in stores the
+    /// ISBN per physical copy and prints it on its confirm screens, and the
+    /// iOS client decodes `isbn13` as a non-optional `String` — so a
+    /// candidate without one is not something that flow can act on, and
+    /// inventing a blank would break the client outright.
+    fn try_from(e: ProviderEdition) -> Result<Self, Self::Error> {
+        Ok(Self {
+            isbn13: e.isbn13.ok_or(NoIsbn)?,
             title: e.title,
             authors: e.authors,
             year: e.year,
@@ -345,7 +403,7 @@ impl From<ProviderEdition> for ExternalBookMeta {
             series: e.series,
             first_publish_year: e.first_publish_year,
             source: e.source,
-        }
+        })
     }
 }
 
@@ -366,6 +424,17 @@ pub enum ProviderSearchStatus {
     /// top-level context, never the error chain below it — which is where a
     /// request URL, and so a `?key=`, would render.
     Failed { message: String },
+    /// Skipped without a request: this provider rate-limited us recently and
+    /// is still inside its cooldown.
+    ///
+    /// Distinct from [`Self::Failed`] on purpose. A failure is "we asked and
+    /// it went wrong"; this is "we did not ask, and here is when it is worth
+    /// asking again" — which is the difference between a reader retrying
+    /// immediately for nothing and knowing to come back later.
+    Throttled {
+        /// Whole seconds left on the cooldown, rounded up.
+        retry_after_secs: u64,
+    },
 }
 
 /// One row of the per-source status table returned alongside the candidates.
@@ -379,7 +448,32 @@ pub struct ProviderSearchSource {
 /// Body for `POST /api/metadata/editions/search`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditionSearchRequest {
+    /// The query as free text — what the reader sees in the search box, and
+    /// the whole request from a client that sends nothing else.
     pub query: String,
+    /// The book's title on its own, when the caller can separate it.
+    ///
+    /// The three fields below are what let each provider be asked in *its*
+    /// terms rather than handed one flattened string. Open Library takes a
+    /// `title=`/`author=` pair and searches the author's name inside the
+    /// title field if you give it the concatenation — for "Dune Frank
+    /// Herbert" that returns five books *about* Dune and not the novel.
+    ///
+    /// Absent means "the reader typed something specific": fall back to
+    /// treating [`Self::query`] as the title with no author, which is the
+    /// only honest reading of free text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The primary author, paired with [`Self::title`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// An ISBN the caller already holds for this book, in any format — it is
+    /// normalized (and a bad one discarded) server-side.
+    ///
+    /// The strongest signal there is, and the one the old flat query threw
+    /// away even when the edit form had it sitting in a field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isbn: Option<String>,
     /// Which providers to ask. Absent means every configured one; this is the
     /// hook a provider-filter UI plugs into without a wire change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -387,19 +481,52 @@ pub struct EditionSearchRequest {
 }
 
 impl EditionSearchRequest {
-    /// Reject a blank or oversized `query`, and an explicitly-empty provider
-    /// list — which would otherwise search nothing and look like an outage.
-    /// Handlers translate `Err(_)` into 400. Mirrors
-    /// [`crate::scan::ScanSearchRequest::validate`], including its cap.
+    /// Maximum length of the supplied `isbn`. An ISBN-13 with separators is
+    /// 17 characters; this leaves room for stray whitespace without letting
+    /// an unbounded blob through to `normalize_isbn`.
+    pub const ISBN_MAX_LEN: usize = 32;
+
+    /// Reject a request that asks *nothing*, an oversized field, and an
+    /// explicitly-empty provider list — which would otherwise search nothing
+    /// and look like an outage. Handlers translate `Err(_)` into 400.
+    ///
+    /// "Asks nothing" means every field is blank, not that `query` is blank: a
+    /// structured request carries its question in `title`/`author`/`isbn`, and
+    /// an ISBN-only search — the strongest question any provider takes — has
+    /// no free text to compose a `query` from at all. Requiring `query` here
+    /// made that search impossible to express.
     pub fn validate(&self) -> Result<(), String> {
-        if self.query.trim().is_empty() {
-            return Err("query is required".into());
+        let blank = |v: &Option<String>| v.as_deref().is_none_or(|s| s.trim().is_empty());
+        if self.query.trim().is_empty()
+            && blank(&self.title)
+            && blank(&self.author)
+            && blank(&self.isbn)
+        {
+            return Err("a title, author, or ISBN is required".into());
         }
         if self.query.chars().count() > SEARCH_QUERY_MAX_LEN {
             return Err(format!("query exceeds {SEARCH_QUERY_MAX_LEN} characters"));
         }
         if self.providers.as_ref().is_some_and(|p| p.is_empty()) {
             return Err("providers must name at least one provider when supplied".into());
+        }
+        // The structured fields ride the same request and reach the same
+        // outbound URLs, so they get the same cap. Blank is allowed and means
+        // absent — a client clearing an empty form field shouldn't 400.
+        for (name, value) in [("title", &self.title), ("author", &self.author)] {
+            if value
+                .as_ref()
+                .is_some_and(|v| v.chars().count() > SEARCH_QUERY_MAX_LEN)
+            {
+                return Err(format!("{name} exceeds {SEARCH_QUERY_MAX_LEN} characters"));
+            }
+        }
+        if self
+            .isbn
+            .as_ref()
+            .is_some_and(|v| v.chars().count() > Self::ISBN_MAX_LEN)
+        {
+            return Err(format!("isbn exceeds {} characters", Self::ISBN_MAX_LEN));
         }
         Ok(())
     }
@@ -415,9 +542,15 @@ impl EditionSearchRequest {
 pub struct EditionHydrateRequest {
     pub source: MetadataProvider,
     pub provider_ref: String,
-    /// The candidate's ISBN-13, which is what every provider can be re-asked
-    /// by regardless of what its own handle looks like.
-    pub isbn13: String,
+    /// The candidate's ISBN-13, when it has one.
+    ///
+    /// Optional because a candidate now may not have one at all — and because
+    /// the ISBN was never the handle that made a re-fetch possible.
+    /// `provider_ref` is: every provider can be re-asked by its own id, and
+    /// only some can be re-asked by ISBN. When present it is still preferred,
+    /// since it names a *printing* where a bare handle may name a work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isbn13: Option<String>,
 }
 
 impl EditionHydrateRequest {
@@ -429,7 +562,9 @@ impl EditionHydrateRequest {
 
     /// Reject a blank or oversized handle. The ISBN itself is validated by
     /// `normalize_isbn` further down, where a bad check digit reports the
-    /// specific failure. Handlers translate `Err(_)` into 400.
+    /// specific failure — and where a bad one is *discarded* rather than
+    /// fatal, since the handle alone is enough to re-fetch by. Handlers
+    /// translate `Err(_)` into 400.
     pub fn validate(&self) -> Result<(), String> {
         if self.provider_ref.trim().is_empty() {
             return Err("provider_ref is required".into());
@@ -440,8 +575,15 @@ impl EditionHydrateRequest {
                 Self::PROVIDER_REF_MAX_LEN
             ));
         }
-        if self.isbn13.trim().is_empty() {
-            return Err("isbn13 is required".into());
+        if self
+            .isbn13
+            .as_ref()
+            .is_some_and(|v| v.chars().count() > EditionSearchRequest::ISBN_MAX_LEN)
+        {
+            return Err(format!(
+                "isbn13 exceeds {} characters",
+                EditionSearchRequest::ISBN_MAX_LEN
+            ));
         }
         Ok(())
     }

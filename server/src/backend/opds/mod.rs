@@ -1,40 +1,8 @@
-//! `/opds/*` — an OPDS 1.2 Atom catalog for third-party e-reader clients,
-//! gated behind the same live sessions as `/api/*` plus an HTTP Basic
-//! fallback (each handler takes [`crate::auth::OpdsAuthUser`] directly),
-//! since Basic is the only scheme OPDS clients like KOReader can send.
-//! For the same reason the download/cover links a feed hands out point at
-//! the [`delegate`] routes on this router — the `/api/*` originals sit
-//! behind cookie/bearer-only auth. Deliberately ebook-library scoped —
-//! every read filters to `settings.ebook_library_path` — so every
-//! acquisition entry carries a working download link. A category browse is
-//! not implemented in either catalog; the `/opds/v2/*` JSON catalog
-//! carries category (subject/genre) data inline on every publication.
-//!
-//! `/opds/v2/*` is the OPDS 2.0 JSON counterpart (`application/opds+json`,
-//! [`omnibus_shared::opds`]) for modern OPDS clients — a distinct path
-//! rather than `Accept`-negotiated on `/opds` itself, so a client (or a
-//! proxy cache keyed on path) never needs content negotiation to reach it,
-//! and so this module's routing table stays as simple as the Atom one's.
-//! The `json_*` submodules mirror the flat `atom`-era module names
-//! one-for-one (`json_nav` ~ `nav`, `json_authors` ~ `authors`, …) and
-//! reuse their DB reads and format-selection helpers directly, so the two
-//! catalogs cannot silently drift on what a book, author, or search result
-//! actually is.
-//!
-//! Every browse/search/new/nav/author/series **acquisition** read also
-//! narrows to books the caller may see (#932, [`retain_shelf_visible`]): a
-//! book confined to a manual shelf the viewer cannot see (a private shelf
-//! owned by someone else) is dropped, even though the file itself is
-//! otherwise an ordinary, generally-served library book. A book with no
-//! shelf membership, or with at least one shelf visible to the viewer, is
-//! unaffected. The byte-serving [`delegate`] routes apply the single-uuid
-//! form ([`is_shelf_hidden`]) so a known uuid can't be fetched directly
-//! around the feeds either. **Known gap:** the per-author/per-series
-//! *navigation*-level `book_count` shown in `/opds/authors/{letter}` and
-//! `/opds/series` (sourced from `db::list_authors`/`list_series`, informational
-//! summary text only) is **not** narrowed by this filter — only the actual
-//! acquisition-feed entries are. A shelf-exclusive book can still nudge
-//! that count without ever appearing as an entry.
+//! `/opds/*` — an OPDS 1.2 Atom catalog for third-party e-reader clients — and
+//! `/opds/v2/*`, its OPDS 2.0 JSON counterpart, whose `json_*` submodules mirror
+//! the Atom ones one-for-one and reuse their DB reads so the two can't drift.
+//! Both authenticate via [`crate::auth::OpdsAuthUser`] (session or HTTP Basic),
+//! are ebook-library scoped, and hand out byte links on the [`delegate`] routes.
 
 use axum::{
     http::{header, StatusCode},
@@ -200,13 +168,19 @@ fn json_nav_link(title: &str, href: &str) -> opds2::Link {
 }
 
 /// Drop every book in `books` that's confined to a manual shelf `user`
-/// cannot see (#932): on at least one manual shelf, and every one of those
+/// cannot see: on at least one manual shelf, and every one of those
 /// shelves is private and owned by someone else. A book on no shelf at
 /// all, or on any shelf visible to `user`, is untouched — so this only
 /// ever narrows a page the caller already fetched through the normal
 /// (shelf-unaware) library read. Every browse/search/new/nav handler in
 /// both catalogs runs its page through this after the e-reader-format
 /// filter, so the two catalogs can't drift on the rule.
+///
+/// **Known gap:** the per-author/per-series *navigation*-level `book_count`
+/// shown in `/opds/authors/{letter}` and `/opds/series` (sourced from
+/// `db::list_authors`/`list_series`, informational summary text only) is not
+/// narrowed by this filter — only the acquisition-feed entries are. A
+/// shelf-exclusive book can still nudge that count without ever appearing.
 async fn retain_shelf_visible(
     state: &AppState,
     user: &OpdsAuthUser,

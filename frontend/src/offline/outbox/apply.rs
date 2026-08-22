@@ -1,9 +1,8 @@
-//! Optimistic cache application for outbox mutations: patch the replica's
-//! JSON rows so the UI reflects an offline write immediately. Every helper
-//! is a silent no-op when the affected list was never cached — the next
-//! online fetch supersedes anyway. Also reused on online-success paths so
-//! the replica stays coherent without waiting for a refetch, and by the
-//! drain's temp→real id remap.
+//! Optimistic cache application for outbox mutations: patch the replica's JSON
+//! rows so the UI reflects an offline write immediately. Every helper is a
+//! silent no-op when the affected list was never cached — the next online fetch
+//! supersedes anyway. Also reused on online-success paths so the replica stays
+//! coherent without a refetch, and by the drain's temp-to-real id remap.
 
 use omnibus_shared::{
     Bookmark, Highlight, HighlightColor, JournalEntry, ProgressRecord, Shelf, ShelfPage,

@@ -1,10 +1,8 @@
-//! Transition-table tests for [`auto_transition`], plus the effectful
-//! hook's pulled-out decision points: [`apply_fetched_status`]'s `load_seq`
-//! guard and [`decide_transition_write`]'s write decision (including the
-//! never-downgrade case). Driven the same way `pages/comic_reader.rs` drives
-//! `apply_bootstrap_outcome` — signals constructed inside a mounted dummy
-//! component (`VirtualDom::rebuild_in_place`), since a `Signal` needs an
-//! active Dioxus scope to read or write.
+//! Transition-table tests for [`auto_transition`], plus the effectful hook's
+//! pulled-out decision points: [`apply_fetched_status`]'s `load_seq` guard and
+//! [`decide_transition_write`]'s write decision, including the never-downgrade
+//! case. Signals are constructed inside a mounted dummy component, since a
+//! `Signal` needs an active Dioxus scope to read or write.
 
 use dioxus::prelude::*;
 use omnibus_shared::{ReadStatus, ReadStatusRecord, SetReadStatus};

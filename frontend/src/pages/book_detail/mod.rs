@@ -32,6 +32,8 @@ mod view;
 #[cfg(not(feature = "mobile"))]
 mod body;
 #[cfg(not(feature = "mobile"))]
+mod chips;
+#[cfg(not(feature = "mobile"))]
 mod export_menu;
 #[cfg(not(feature = "mobile"))]
 mod hero;

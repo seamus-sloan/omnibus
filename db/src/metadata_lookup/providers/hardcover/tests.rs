@@ -24,7 +24,7 @@ fn map_book_normalizes_a_hyphenated_edition_isbn_when_no_scanned_isbn_is_given()
 
     let meta = map_book(row, None).expect("a valid, hyphenated isbn13 should still map");
 
-    assert_eq!(meta.isbn13, "9780134685991");
+    assert_eq!(meta.isbn13.as_deref(), Some("9780134685991"));
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn map_book_uses_the_scanned_isbn_over_a_malformed_edition_isbn() {
     let meta = map_book(row, Some("9780134685991"))
         .expect("the scanned isbn is authoritative and needs no edition fallback");
 
-    assert_eq!(meta.isbn13, "9780134685991");
+    assert_eq!(meta.isbn13.as_deref(), Some("9780134685991"));
 }
 
 #[test]

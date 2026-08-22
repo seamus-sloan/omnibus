@@ -1,9 +1,8 @@
-//! `/api/auth/*` handlers plus the small router that mounts them.
-//!
-//! Cookie sessions (web) vs bearer sessions (mobile) are selected by
-//! `client_kind` in the request body: `ios`/`android`/`bearer` → bearer
-//! session, token in the JSON response; anything else (or unset) → cookie
-//! session, token in `Set-Cookie`.
+//! `/api/auth/*` handlers plus the small router that mounts them. Cookie
+//! sessions (web) and bearer sessions (mobile) are selected by `client_kind` in
+//! the request body: `ios`/`android`/`bearer` yields a bearer session with the
+//! token in the JSON response; anything else (or unset) yields a cookie session
+//! with the token in `Set-Cookie`.
 
 use axum::{
     extract::{Path, State},

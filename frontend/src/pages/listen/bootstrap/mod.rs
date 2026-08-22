@@ -1,10 +1,8 @@
 //! Web-only `OmnibusAudio` bootstrap: installs the JS control surface on
 //! `window`, wires Rust callbacks for time / duration / play / pause, then
 //! fetches the manifest and branches on `mode` (direct vs hls) to seed
-//! playback. Extracted from `BookListenPage` so the parent stays under the
-//! 150-line component cap; everything here is web-feature gated. The
-//! callback closures live in [`callbacks`], the manifest branch in
-//! [`manifest`], and the JS strings in [`js`].
+//! playback. Everything here is web-feature gated; the callback closures live
+//! in [`callbacks`], the manifest branch in [`manifest`], the JS in [`js`].
 
 #![cfg(feature = "web")]
 

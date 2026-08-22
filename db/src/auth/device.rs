@@ -78,8 +78,8 @@ pub fn validate_client_version(version: Option<&str>) -> AuthResult<()> {
 /// Accepts any `sqlx::Executor` so callers can pass either a `&SqlitePool` for
 /// a standalone insert or `&mut *tx` from within a transaction — the login
 /// path in `server::auth::handlers::issue_session` uses the latter to keep the
-/// device + session inserts atomic (see #627: an orphan device row leaks if
-/// `create_session` fails after `register_device` has already committed).
+/// device + session inserts atomic — an orphan device row leaks if
+/// `create_session` fails after `register_device` has already committed.
 /// The `trg_devices_cap_per_user` trigger (migration `0041`) evicts the
 /// user's least-recently-seen device(s) beyond `MAX_DEVICES_PER_USER` as
 /// part of this same INSERT, so callers don't need a separate step.

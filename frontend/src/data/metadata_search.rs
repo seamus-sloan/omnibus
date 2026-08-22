@@ -4,7 +4,7 @@
 //! as the other web-only data wrappers).
 
 use omnibus_shared::metadata_lookup::{
-    EditionSearchResponse, MetadataProvider, ProviderEdition, ProviderInfo,
+    EditionSearchRequest, EditionSearchResponse, MetadataProvider, ProviderEdition, ProviderInfo,
 };
 use omnibus_shared::EbookMetadata;
 
@@ -27,13 +27,17 @@ pub async fn list_metadata_providers(_server_url: &str) -> Result<Vec<ProviderIn
     Ok(Vec::new())
 }
 
-/// Web/SSR: search every configured provider for `query`.
+/// Web/SSR: search every configured provider.
+///
+/// Takes the whole request rather than a string so the structured
+/// title/author/ISBN ride along — which is what lets each provider be asked in
+/// its own terms instead of being handed one flattened phrase.
 #[cfg(not(feature = "mobile"))]
 pub async fn search_editions(
     _server_url: &str,
-    query: &str,
+    req: EditionSearchRequest,
 ) -> Result<EditionSearchResponse, DataError> {
-    crate::rpc::rpc_search_editions(query.to_string())
+    crate::rpc::rpc_search_editions(req)
         .await
         .map_err(note_server_fn_err)
 }
@@ -42,22 +46,25 @@ pub async fn search_editions(
 #[cfg(feature = "mobile")]
 pub async fn search_editions(
     _server_url: &str,
-    _query: &str,
+    _req: EditionSearchRequest,
 ) -> Result<EditionSearchResponse, DataError> {
     Err(DataError::Other("edition search is web-only".into()))
 }
 
 /// Web/SSR: re-fetch one selected candidate in full. `Ok(None)` means the
-/// provider no longer knows the ISBN — the caller keeps the candidate it
+/// provider no longer knows the candidate — the caller keeps the one it
 /// already has.
+///
+/// `isbn13` is optional because a candidate may not have one; the handle is
+/// what the re-fetch is keyed on either way.
 #[cfg(not(feature = "mobile"))]
 pub async fn hydrate_edition(
     _server_url: &str,
     source: MetadataProvider,
     provider_ref: &str,
-    isbn13: &str,
+    isbn13: Option<&str>,
 ) -> Result<Option<ProviderEdition>, DataError> {
-    crate::rpc::rpc_hydrate_edition(source, provider_ref.to_string(), isbn13.to_string())
+    crate::rpc::rpc_hydrate_edition(source, provider_ref.to_string(), isbn13.map(str::to_string))
         .await
         .map_err(note_server_fn_err)
 }
@@ -68,7 +75,7 @@ pub async fn hydrate_edition(
     _server_url: &str,
     _source: MetadataProvider,
     _provider_ref: &str,
-    _isbn13: &str,
+    _isbn13: Option<&str>,
 ) -> Result<Option<ProviderEdition>, DataError> {
     Err(DataError::Other("edition search is web-only".into()))
 }

@@ -1,9 +1,7 @@
-//! Admin log-viewer wire types.
-//!
-//! Produced by `db::logs` from the on-disk rolling JSON logs and served to
-//! the admin `/logs` page. A [`LogQuery`] carries the level/module/time-range
-//! filters and page cursor; a [`LogPage`] returns one newest-first page of
-//! [`LogRecord`]s plus a `has_more` flag.
+//! Admin log-viewer wire types, produced by `db::logs` from the on-disk rolling
+//! JSON logs and served to the admin `/logs` page. A [`LogQuery`] carries the
+//! level/module/time-range filters and page cursor; a [`LogPage`] returns one
+//! newest-first page of [`LogRecord`]s plus a `has_more` flag.
 
 use serde::{Deserialize, Serialize};
 

@@ -1,8 +1,6 @@
 //! Tests for `EbookMetadata` and `MetadataOverrides`: display fallbacks,
-//! override validation, and override-merge layering.
-//!
-//! Split by sub-topic (mirrors `opds/tests/`): `validate()`/`merge()`/
-//! `BulkMetadataEdit` tests live in sibling modules; shared fixture
+//! override validation, and override-merge layering. `validate()` / `merge()` /
+//! `BulkMetadataEdit` cases live in the sibling modules below; shared fixture
 //! builders and `display_title` tests stay here.
 
 mod bulk;

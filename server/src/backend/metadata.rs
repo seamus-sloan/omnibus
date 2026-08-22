@@ -62,8 +62,38 @@ pub(super) async fn post_edition_search(
         Ok(c) => c,
         Err(e) => return internal("edition_search_provider_keys", e),
     };
-    let found = db::search_all_providers(&config, req.query.trim(), req.providers.as_deref()).await;
+    let found =
+        db::search_all_providers(&config, &search_query(&req), req.providers.as_deref()).await;
     Json(found).into_response()
+}
+
+/// Turn a request into the query the providers are actually asked.
+///
+/// The structured fields win when the caller sent them; free text falls back
+/// to a title-only query, which is the only honest reading of a string a
+/// reader typed. Mirrors `omnibus_frontend::rpc::metadata_search`'s own
+/// helper — the two front doors must agree on what a request means.
+fn search_query(req: &EditionSearchRequest) -> db::SearchQuery {
+    // Built first, then checked for content — the structured fields are
+    // *cleaned* (blanks trimmed to absent, an unusable ISBN discarded), so
+    // branching on `is_some()` alone would let `{"query":"Dune","title":"  "}`
+    // throw the reader's query away and search for nothing.
+    let structured = db::SearchQuery::new(
+        req.title.as_deref(),
+        req.author.as_deref(),
+        req.isbn.as_deref(),
+    );
+    if structured.is_empty() {
+        return db::SearchQuery::from_text(&req.query);
+    }
+    // Returned as-is. An earlier version backfilled an absent `title` from the
+    // free text, which for an author-only search copied the author's name into
+    // the title slot — asking Open Library for a book whose *title* contains
+    // "Frank Herbert" and scoring every candidate against that, which is the
+    // precise bug this whole path exists to remove. A query with no title is
+    // handled honestly downstream: `relevance::filter_and_rank` has nothing to
+    // rank against and returns the providers' own results unscored.
+    structured
 }
 
 #[cfg(test)]

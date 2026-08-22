@@ -1,11 +1,8 @@
-//! Native Kobo wireless sync (`/kobo/<TOKEN>/v1/*`).
-//!
-//! Mounted outside the `/api/*` auth gate; each route authenticates via its
-//! path token ([`KoboAuthUser`]). Serves the initialization handshake, the
-//! library enumeration, per-book metadata, KEPUB download, the read-state
-//! GET/PUT, tags, and cover images. Split by protocol phase: [`auth`]
-//! (handshake/token exchange), [`sync`] (library sync + read-state GET),
-//! [`state`] (read-state PUT), and [`resources`] (download/cover/tags).
+//! Native Kobo wireless sync (`/kobo/<TOKEN>/v1/*`), mounted outside the
+//! `/api/*` auth gate — each route authenticates via its path token
+//! ([`KoboAuthUser`]). Split by protocol phase: [`auth`] (handshake and token
+//! exchange), [`sync`] (library sync plus read-state GET), [`state`]
+//! (read-state PUT), and [`resources`] (download, cover, tags).
 
 use axum::{
     extract::Path,

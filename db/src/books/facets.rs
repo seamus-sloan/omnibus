@@ -1,10 +1,8 @@
-//! Full-library facet-count aggregate. [`library_facets`] tallies the
-//! sidebar facets (authors / series / formats / tags / genres) across the *entire*
-//! configured library in one grouped query each, so the landing sidebar stays
-//! correct even though the list itself is keyset-paginated and the client only
-//! holds one page. Counts are deliberately over the unfiltered library —
-//! mirroring the former client-side `facet_counts`, which tallied the full
-//! hydrated list regardless of the active filter selection.
+//! Full-library facet-count aggregate. [`library_facets`] tallies the sidebar
+//! facets (authors / series / formats / tags / genres) across the entire
+//! configured library in one grouped query each, so the sidebar stays correct
+//! even though the list itself is keyset-paginated and the client holds only
+//! one page. Counts are deliberately over the unfiltered library.
 
 use omnibus_shared::{FacetCount, FacetCounts};
 use sqlx::SqlitePool;

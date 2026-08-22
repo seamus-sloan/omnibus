@@ -9,6 +9,7 @@ pub async fn async_sleep_ms(ms: u32) {
     gloo_timers::future::TimeoutFuture::new(ms).await;
 }
 
+/// Native/server counterpart of the web timer, backed by `tokio::time`.
 // `tokio` is an optional dep enabled only by `server` and `mobile` — gate
 // on those explicitly rather than a bare `not(web)`, which would try to
 // link `tokio` in a plain no-feature build and fail.

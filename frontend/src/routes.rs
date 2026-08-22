@@ -142,7 +142,7 @@ pub fn Logs() -> Element {
     rsx! {}
 }
 
-/// Route target for `/admin/health` (#952) — wraps [`AdminHealthPage`] in
+/// Route target for `/admin/health` — wraps [`AdminHealthPage`] in
 /// the platform screen layout. Web/server only; the in-page `use_is_admin`
 /// gate (backed by the `AdminUser`-gated `rpc_get_admin_health`) keeps the
 /// chrome off a non-admin screen (AC2/AC4).
@@ -268,7 +268,7 @@ pub fn BookRead(uuid: String) -> Element {
 }
 
 /// Mobile variant of [`BookRead`]: the reader with the persistent
-/// [`crate::pages::MobileMiniPlayer`] docked beneath it (#1133) — launched
+/// [`crate::pages::MobileMiniPlayer`] docked beneath it — launched
 /// immersively from book detail, or simply carrying an already-playing
 /// audiobook into the reader. Same `rd-immersive` reflow contract as the web
 /// variant; mobile renders client-side only, so no hydration constraint.

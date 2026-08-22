@@ -102,6 +102,8 @@ pub struct Entitlement {
     pub reading_state: ReadingState,
 }
 
+/// The ownership record for one book: its ids, timestamps, and the removal /
+/// visibility / lock flags the device reads.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct BookEntitlement {
@@ -118,6 +120,8 @@ pub struct BookEntitlement {
     pub origin_category: &'static str,
 }
 
+/// The bibliographic half of an entitlement, plus the download and cover
+/// pointers the device follows.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct BookMetadata {
@@ -133,6 +137,7 @@ pub struct BookMetadata {
     pub contributor_roles: Vec<Contributor>,
 }
 
+/// One credited name and the role it is credited under.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Contributor {
@@ -140,6 +145,7 @@ pub struct Contributor {
     pub role: &'static str,
 }
 
+/// Where and in what form the device can fetch this book's bytes.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct DownloadUrl {
@@ -150,6 +156,8 @@ pub struct DownloadUrl {
     pub drm_type: &'static str,
 }
 
+/// Server-side reading state for one book, as the device consumes it:
+/// status, bookmark, and the device's own echoed statistics.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ReadingState {
@@ -167,6 +175,7 @@ pub struct ReadingState {
     pub statistics: Option<Statistics>,
 }
 
+/// Where the reader is in the book's lifecycle, and when that last moved.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct StatusInfo {
@@ -179,6 +188,8 @@ pub struct StatusInfo {
     pub last_modified: Option<String>,
 }
 
+/// The device's position in a book: percentages, the `KoboSpan` anchor, and
+/// the event time the device arbitrates freshness on.
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "PascalCase")]
 pub struct CurrentBookmark {
@@ -450,6 +461,8 @@ impl StateRequest {
     pub const MAX_READING_STATES: usize = 128;
 }
 
+/// One book's worth of an inbound `state` PUT. Every field is optional —
+/// firmware sends only what changed.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct StateEntry {
@@ -488,6 +501,7 @@ pub struct StateResponse {
     pub update_results: Vec<UpdateResult>,
 }
 
+/// Per-book outcome of a `state` PUT, one sub-result per updated block.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateResult {
@@ -496,6 +510,7 @@ pub struct UpdateResult {
     pub current_bookmark_result: ResultTag,
 }
 
+/// A single `{"Result": ...}` tag; Kobo checks each one reads `Success`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ResultTag {

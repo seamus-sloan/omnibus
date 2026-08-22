@@ -1,6 +1,6 @@
 //! HTTP-layer contract tests for the Reading Services annotation channel,
 //! driving `reading_services_router` via `oneshot` against an in-memory DB
-//! (#928 pattern). The device flow — PATCH upload → checkforchanges → GET →
+//! The device flow — PATCH upload → checkforchanges → GET →
 //! reconcile-by-omission — is replayed at the HTTP layer, including the AC5
 //! first-sync guard for pre-wireless backlogs.
 

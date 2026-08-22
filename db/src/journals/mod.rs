@@ -1,12 +1,8 @@
-//! Public per-book journal CRUD.
-//!
-//! Published entries are public: [`list_journal_entries`] returns every user's
-//! published entries for a book (a shared reading log), attributed by author,
-//! plus the viewer's own drafts. Create/update/delete are
-//! owner-scoped — a non-owner edit/delete is indistinguishable from a missing
-//! row (`NotFound`). Bodies soft-reference the durable `books.uuid` (no
-//! FK/cascade) through the merged-uuid-aware canonical resolver. Markdown is
-//! rendered to sanitized HTML on read (see [`markdown`]).
+//! Public per-book journal CRUD. [`list_journal_entries`] returns every user's
+//! published entries for a book — a shared reading log, attributed by author —
+//! plus the viewer's own drafts. Create/update/delete are owner-scoped, a
+//! non-owner edit being indistinguishable from a missing row. Bodies
+//! soft-reference `books.uuid` and render to sanitized HTML (see [`markdown`]).
 
 use std::collections::HashSet;
 
@@ -37,6 +33,8 @@ const SELECT_ENTRY: &str = "SELECT je.id, je.book_uuid, je.user_id AS author_id,
 /// an unbounded REST response.
 pub const LIST_JOURNAL_ENTRIES_LIMIT: i64 = 1_000;
 
+/// Failure space for journal CRUD: unknown book, missing (or non-owned)
+/// entry, or the underlying SQL.
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
     #[error("book not found")]
@@ -52,12 +50,13 @@ impl From<crate::books::BooksError> for JournalError {
         match e {
             crate::books::BooksError::Db(inner) => Self::Sqlx(inner),
             // `resolve_canonical_book_uuid` is the only `BooksError`-returning
-            // call this module makes and it never decodes JSON, so the
-            // `OverridesJson` variant is unreachable here — fold it into a
-            // decode error rather than panicking (mirrors `ratings`).
+            // call this module makes and it never reads overrides, so neither
+            // remaining variant is reachable here — fold them into a decode
+            // error rather than panicking (mirrors `ratings`).
             crate::books::BooksError::OverridesJson(inner) => {
                 Self::Sqlx(sqlx::Error::Decode(Box::new(inner)))
             }
+            crate::books::BooksError::Other(msg) => Self::Sqlx(sqlx::Error::Decode(msg.into())),
         }
     }
 }

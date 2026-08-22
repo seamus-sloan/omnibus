@@ -995,6 +995,27 @@ html, body { overscroll-behavior: none; }
 }
 /* Under the cover, tags sit tight against the format badges. */
 .bd-cover-col .bd-tag-list { margin-top: 12px; }
+/* Admin-only "+ genres" / "+ tags" pill at the end of a hero chip list —
+   dashed to read as an affordance rather than a value, matching the landing
+   cell's edit hint. */
+.bd-add-chip {
+  border-style: dashed;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+}
+@media (hover: hover) {
+  .bd-add-chip:hover { color: var(--ink-0); border-color: var(--accent); }
+}
+/* Editing mode: the ChipEditor's chips + input + dropdown flow as flex items
+   of the chip list itself (`.chip-editor-root` is display:contents). */
+.bd-chips-editor-host {
+  align-items: center;
+}
+.bd-chips-editor-host .chip-editor-input-wrap {
+  min-width: 90px;
+}
 
 /* Rating + actions card */
 .bd-rating-card {
@@ -6651,9 +6672,32 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .mes-empty { color: var(--ink-3); }
 
 /* Screen one — query + results */
-.mes-query { display: flex; gap: 8px; align-items: stretch; }
+/* Title, Author, ISBN, then Search. Wraps to two rows on a narrow overlay
+   rather than squeezing three fields into unusable widths. */
+.mes-query {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+.mes-query-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 150px;
+  min-width: 0;
+}
+/* The ISBN is usually empty and is the least-used of the three, so it gets
+   the narrowest share when space is tight. */
+.mes-query-field:has(> #mes-query-isbn) { flex: 1 1 110px; }
+.mes-query-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
 .mes-query-input {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   height: 38px;
   padding: 0 12px;

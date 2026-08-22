@@ -1,9 +1,8 @@
-//! Offline download registry: which books are stored locally, per format,
-//! with live progress for the UI. The in-memory map is the runtime source
-//! of truth (synchronously readable from components and URL builders);
-//! every transition is mirrored to the SQLite `downloads` table so state
-//! survives a cold start. The fetch loop lives in [`engine`]; staleness
-//! detection, the validators poll, and redownload live in [`staleness`].
+//! Offline download registry: which books are stored locally, per format, with
+//! live progress for the UI. The in-memory map is the runtime source of truth
+//! (synchronously readable from components and URL builders); every transition
+//! mirrors to the SQLite `downloads` table so state survives a cold start. The
+//! fetch loop lives in [`engine`], staleness and redownload in [`staleness`].
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{OnceLock, RwLock};

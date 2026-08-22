@@ -1,7 +1,6 @@
 //! Shelf mutations: create, update, delete, and hand-picked membership edits.
-//!
-//! Hand-picked uuids are resolved to the canonical `books.uuid`
-//! ([`resolve_canonical_book_uuid`]) before storage so a format-merged input
+//! Hand-picked uuids resolve to the canonical `books.uuid` via
+//! [`resolve_canonical_book_uuid`] before storage, so a format-merged input
 //! still points at the surviving book. Name collisions per owner surface as
 //! [`ShelfError::NameTaken`].
 

@@ -1,10 +1,7 @@
-//! Unit tests for `auth::device` — covers the SQL roundtrip
-//! (`register_device` / `list_devices_for_user`) plus the input-validation
-//! guards on `device_name` / `client_version` (length cap, control-char
-//! rejection), the `LIST_DEVICES_LIMIT` response ceiling, and the
-//! `trg_devices_cap_per_user` eviction trigger. Validation tests are pure
-//! unit; register/list and pre-insert rejection tests share an in-memory
-//! pool via `auth::test_support::pool`.
+//! Unit tests for `auth::device`: the `register_device` /
+//! `list_devices_for_user` SQL roundtrip, the `device_name` / `client_version`
+//! validation guards, the `LIST_DEVICES_LIMIT` response ceiling, and the
+//! `trg_devices_cap_per_user` eviction trigger.
 
 use std::collections::HashSet;
 

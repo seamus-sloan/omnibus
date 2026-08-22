@@ -1,11 +1,8 @@
 //! Helpers for bootstrapping authenticated sessions in handler integration
-//! tests. Lets each test attach a real bearer token (or cookie) in one line
-//! instead of repeating the create-user → create-session dance.
-//!
-//! User creation goes through raw SQL rather than [`db::auth::create_user`]
-//! because the production helper auto-promotes the first user to admin and
-//! flips `registration_enabled` off afterward. Tests want explicit role
-//! assignment, not the registration policy.
+//! tests, so each test attaches a real bearer token (or cookie) in one line.
+//! User creation goes through raw SQL rather than [`db::auth::create_user`],
+//! which auto-promotes the first user to admin and flips `registration_enabled`
+//! off — tests want explicit role assignment, not the registration policy.
 
 use omnibus_db::{
     self as db,

@@ -1,11 +1,8 @@
 //! Connectivity state and the sync engine. `NetState` rides a
-//! `tokio::sync::watch` channel (the `token_store::subscribe` house
-//! pattern) so background threads never touch Dioxus signals; UI
-//! components subscribe inside a `use_future`. The drain replays the
-//! outbox in enqueue order with last-write-wins semantics — the project's
-//! committed conflict stance — and a
-//! stale guard on progress writes so a queued position can't clobber a
-//! newer one written by another device while this one was offline.
+//! `tokio::sync::watch` channel so background threads never touch Dioxus
+//! signals; UI components subscribe inside a `use_future`. The drain replays
+//! the outbox in enqueue order with last-write-wins semantics, plus a stale
+//! guard so a queued position can't clobber a newer one from another device.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{OnceLock, RwLock};

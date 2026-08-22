@@ -11,6 +11,7 @@ use crate::ebook::toc::EpubStructure;
 #[cfg(test)]
 mod tests;
 
+/// Failure space for the spine/chapter structure reads and writes.
 #[derive(Debug, thiserror::Error)]
 pub enum EpubStructureError {
     #[error(transparent)]

@@ -1,10 +1,8 @@
 //! Process-wide, bounded ring buffer of captured ERROR-level tracing events.
-//!
-//! Populated by the tracing `Layer` installed in `server::logging::init_tracing`
-//! (no explicit call site at each error) and read by the admin-gated
-//! `rpc_get_last_errors` server function. A fast, in-memory companion to the
-//! durable on-disk JSON log sink (`crate::logs`) — not a replacement: lost on
-//! restart, by design.
+//! Populated by the tracing `Layer` installed in
+//! `server::logging::init_tracing` and read by the admin-gated
+//! `rpc_get_last_errors`. A fast in-memory companion to the durable on-disk
+//! JSON log sink ([`crate::logs`]) — not a replacement: lost on restart.
 
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};

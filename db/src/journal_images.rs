@@ -1,17 +1,8 @@
-//! Filesystem storage for images embedded in journal entries (F3.2b).
-//! Files live under `<journal_images_dir()>/<uuidv4>.<ext>` and are served by
-//! `GET /api/journals/images/{name}`. Unlike thumbs/kepub this is durable user
-//! data, not a regenerable cache — so there is no capacity-based eviction.
-//! Orphans (an upload whose draft/entry is discarded or edited to remove it)
-//! are cleaned up best-effort by `journals::{update_journal_entry,
-//! delete_journal_entry}`, which diff before/after `body_md` image references
-//! and delete any file no longer referenced by any entry. There is no
-//! separate drafts table — a draft is a `journal_entries` row with
-//! `status = 'draft'` — so this also covers the composer's Cancel button
-//! (which deletes the draft row) and an abandoned-then-edited draft. An
-//! upload whose draft is *never* saved or explicitly cancelled (e.g. the tab
-//! is closed mid-compose) is not swept; that residual case was judged not
-//! worth a periodic boot sweep for the added complexity.
+//! Filesystem storage for images embedded in journal entries. Files live under
+//! `<journal_images_dir()>/<uuidv4>.<ext>` and are served by
+//! `GET /api/journals/images/{name}`. Durable user data rather than a
+//! regenerable cache, so there is no capacity eviction; orphans are swept
+//! best-effort by `journals::{update_journal_entry, delete_journal_entry}`.
 
 use std::collections::HashSet;
 use std::path::PathBuf;

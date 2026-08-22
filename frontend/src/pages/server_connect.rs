@@ -1,9 +1,7 @@
-//! Pre-login "Connect to server" screen (mobile).
-//!
-//! Lets the user enter the backend base URL, probes it for reachability,
-//! persists it, then advances to the login form. On web the base is
-//! same-origin, so this route is meaningless and the page just redirects to
-//! the landing route.
+//! Pre-login "Connect to server" screen (mobile). Lets the user enter the
+//! backend base URL, probes it for reachability, persists it, then advances to
+//! the login form. On web the base is same-origin, so this route is meaningless
+//! and the page just redirects to the landing route.
 
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;

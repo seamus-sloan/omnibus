@@ -44,6 +44,42 @@ recent releases are recorded below; everything earlier is available via the
 
 ### Changed
 
+- **The metadata search takes a title, an author, and an ISBN separately.** One
+  box could not say which part was which, so the search had to guess — and
+  guessing wrong is what sent "Dune Frank Herbert" to Open Library as a title
+  and got back five books written *about* Dune. Three fields, each seeded from
+  the book, and an ISBN alone is now a valid search
+- **Fetch metadata now asks each source in its own terms.** The search used to
+  flatten the book's title and author into one phrase and hand that to every
+  provider, which meant Open Library searched the author's name *inside the
+  title field* — asking for "Dune Frank Herbert" returned five books written
+  **about** Dune and not the novel — and Hardcover, whose title filter is
+  exact-match only, matched nothing at all for any book that has an author.
+  Title, author, and the ISBN already sitting in the edit form now travel
+  separately, Hardcover goes through its own full-text search endpoint, and an
+  ISBN routes every source straight to the exact edition
+- **Results are filtered, not just ordered.** Study guides, summaries, and
+  "analysis of" editions are dropped rather than ranked below the book, a
+  mistyped title still finds its match, and coincidental matches no longer
+  fill the list. Each candidate is scored from the candidate and your query
+  alone — never from which source answered — so a source being slow or
+  unreachable removes its rows and reorders nothing else
+- **Editions without an ISBN now show up.** A source that describes a *work*
+  rather than one printing — which is most of what Hardcover's search returns,
+  and how Open Library files older or uncatalogued books — used to have its
+  candidates discarded silently, with nothing on screen to say so. They are
+  listed now, and selecting one still fetches its full record
+- Searching by **ISBN alone**, or by **author alone**, now works — both were
+  rejected or silently mangled before
+- The picker **no longer searches the moment it opens**. All three fields are
+  filled in from the book, including its ISBN, and you press Search. An ISBN
+  narrows every source to that one edition, so seeing it sitting there — and
+  being able to clear it first — is the difference between a short list you
+  asked for and one you can't explain
+- **A source that rate-limits us is left alone until it recovers.** Its row
+  says "rate limited, skipping for 10m" rather than "unavailable", and the search
+  no longer spends a request re-asking a source that has already refused —
+  which on Google Books' free tier could otherwise keep failing for hours
 - The metadata edit page now has one fetch-from-outside action instead of
   three: "Fetch metadata" replaces both the "Fetch from Hardcover" panel
   (one provider, one field at a time) and that page's "Fetch Summary" button
@@ -72,6 +108,15 @@ recent releases are recorded below; everything earlier is available via the
   through the same correction (and echo tagging) a boot restore does, so it
   writes no position and never moves the restore anchor. Added an explicit
   single/two-page reader setting on iOS, matching web (#2081)
+- Uploading a book from the iOS app works. Every upload previously failed with
+  "title and author are required to file the book", because the app posted the
+  file straight to the commit endpoint and skipped the confirm step those
+  fields come from. It now reads the file's embedded metadata, shows it for you
+  to correct, and files the book under what you confirmed. The file picker is
+  narrowed to the formats the server accepts, and anything else it still lets
+  through is refused before a byte is sent rather than after. Picking several
+  MP3s from one folder adds a single audiobook with all its parts, instead of
+  one book per file (#2100)
 - Raising the keyboard on iOS no longer drags the tab bar up with it: the
   keyboard now covers the bar instead of stacking on top of it, while fields
   inside a tab keep their keyboard avoidance (#2102)

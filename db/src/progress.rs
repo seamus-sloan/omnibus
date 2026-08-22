@@ -1,13 +1,8 @@
-//! Server-authoritative reading/listening position sync plus batched
-//! session reports. Position upserts are most-recent-wins on
+//! Server-authoritative reading/listening position sync plus batched session
+//! reports. Position upserts are most-recent-wins on
 //! `(user_id, book_uuid, format)` by client event time, not server receipt
-//! time. Session inserts go to the per-format `reading_sessions` /
-//! `listening_sessions` tables; all rows soft-reference `books.uuid`.
-//!
-//! Split by concern: [`upsert`] holds the write-path validation, [`state`]
-//! the per-book position/statistics/rate read-write, [`resume`] the
-//! resume-card aggregation, and [`session`] the session-report recording.
-//! Re-exported here as `omnibus_db::progress::*`.
+//! time; session inserts go to the per-format `reading_sessions` /
+//! `listening_sessions` tables. All rows soft-reference `books.uuid`.
 
 use omnibus_shared::ProgressFormat;
 
@@ -28,6 +23,7 @@ pub use state::{
 };
 pub use upsert::{upsert_progress, upsert_progress_tx};
 
+/// Failure space for the position and session-report writes.
 #[derive(Debug, thiserror::Error)]
 pub enum ProgressError {
     #[error("book not found")]
@@ -49,12 +45,15 @@ impl From<crate::books::BooksError> for ProgressError {
         match e {
             crate::books::BooksError::Db(inner) => ProgressError::Sqlx(inner),
             // `resolve_book_id_by_uuid` is the only `BooksError`-returning
-            // call this module makes, and it never decodes JSON, so the
-            // `OverridesJson` variant is unreachable here in practice. Fold
-            // it into a generic decode error rather than panicking so a
-            // future caller can't introduce an unhandled path silently.
+            // call this module makes, and it never reads overrides, so neither
+            // remaining variant is reachable here in practice. Fold them into a
+            // generic decode error rather than panicking so a future caller
+            // can't introduce an unhandled path silently.
             crate::books::BooksError::OverridesJson(inner) => {
                 ProgressError::Sqlx(sqlx::Error::Decode(Box::new(inner)))
+            }
+            crate::books::BooksError::Other(msg) => {
+                ProgressError::Sqlx(sqlx::Error::Decode(msg.into()))
             }
         }
     }

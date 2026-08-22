@@ -119,31 +119,37 @@ async fn ok_or_error(res: gloo_net::http::Response) -> Result<(), String> {
 // compiling. They never run — the page's data effects only fire after the
 // WASM client mounts.
 
+/// SSR stub — the Users page fetches only after the WASM client mounts.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn list_users() -> Result<Vec<AdminUserRow>, String> {
     Ok(Vec::new())
 }
 
+/// SSR stub; fails loudly, since nothing should reach it during SSR.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn create_user(_req: CreateUserRequest) -> Result<AdminUserRow, String> {
     Err("unavailable".to_string())
 }
 
+/// SSR stub — the Users page mutates only after the WASM client mounts.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn update_permissions(_id: i64, _perms: UserPermissions) -> Result<(), String> {
     Ok(())
 }
 
+/// SSR stub — the Users page mutates only after the WASM client mounts.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn set_password(_id: i64, _password: String) -> Result<(), String> {
     Ok(())
 }
 
+/// SSR stub — the Users page mutates only after the WASM client mounts.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn unlock_user(_id: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// SSR stub — the Users page mutates only after the WASM client mounts.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn delete_user(_id: i64) -> Result<(), String> {
     Ok(())

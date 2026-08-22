@@ -1,9 +1,7 @@
-//! EPUB→KEPUB conversion cache for the "Send to Kobo" download.
-//!
-//! Shells out to `kepubify` (via `$OMNIBUS_KEPUBIFY_PATH` or `$PATH`) to cache a
-//! Kobo-optimized KEPUB at `<cache dir>/<book_id>.kepub.epub`, where the cache
-//! dir is `$OMNIBUS_KEPUB_DIR` (default `$OMNIBUS_DATA_DIR/kepub`). Invalidated
-//! on `books.last_modified` (like thumbs). Absent → plain EPUB.
+//! EPUB→KEPUB conversion cache for the "Send to Kobo" download. Shells out to
+//! `kepubify` (via `$OMNIBUS_KEPUBIFY_PATH` or `$PATH`) to cache a
+//! Kobo-optimized KEPUB at `<cache dir>/<book_id>.kepub.epub`, invalidated on
+//! `books.last_modified` like thumbs. An absent kepubify falls back to plain EPUB.
 
 mod convert;
 mod detect;

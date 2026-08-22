@@ -1,10 +1,8 @@
-//! Genre-cloud read: the global genre list with per-genre book counts.
-//! Genres have no canonical link table (migration `0066`) — a book's genres
-//! live only in `metadata_overrides.overrides -> '$.genres'` — so this is
-//! the override arm of [`super::tags::get_tag_cloud`] on its own, with no
-//! canonical arm to union against. A genre is visible only while at least
-//! one live book's override still names it; a genre with zero books never
-//! renders.
+//! Genre-cloud read: the global genre list with per-genre book counts. Genres
+//! have no canonical link table — a book's genres live only in
+//! `metadata_overrides.overrides -> '$.genres'` — so this is the override arm
+//! of [`super::tags::get_tag_cloud`] on its own. A genre is visible only while
+//! a live book's override still names it; one with zero books never renders.
 
 use omnibus_shared::GenreWeight;
 use sqlx::{Row, SqlitePool};
