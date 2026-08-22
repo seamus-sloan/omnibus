@@ -1,16 +1,20 @@
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { fetchBookIdByTitle, fetchBookUuidByTitle } from "../utils/ebooks";
+import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
-// The "Fetch Summary" button pulls a book blurb from the configured source
-// cascade (Hardcover → Google Books → Open Library) on demand. The generated
-// fixtures ship no descriptions, so every fixture book is "sparse" (< 10 words)
-// — the condition under which the detail-page button appears. The source-plan
-// and fetch endpoints are mocked via `page.route` so CI never touches a live
-// external API.
+// The "Fetch Summary" button on the **book detail page** pulls a blurb from
+// the configured source cascade (Hardcover → Google Books → Open Library) on
+// demand. The generated fixtures ship no descriptions, so every fixture book
+// is "sparse" (< 10 words) — the condition under which the button appears.
+// The source-plan and fetch endpoints are mocked via `page.route` so CI never
+// touches a live external API.
+//
+// The metadata editor no longer carries this button: "Fetch metadata" (see
+// `metadata_edit_search.spec.ts`) is the one fetch-from-outside action on
+// that page, and it fills the description among everything else.
 
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
 
@@ -25,16 +29,6 @@ test.beforeAll(async ({ request }) => {
 
 const SOURCES_URL = "**/api/rpc/ebook/summary/sources";
 const FETCH_URL = "**/api/rpc/ebook/summary/fetch";
-
-/** Await the summary-fetch POST that a button click fires, so DOM assertions
- * don't race the network (per `.claude/rules/04-playwright.md`). */
-function waitForFetch(page: Parameters<typeof gotoReady>[0]) {
-  return page.waitForResponse(
-    (r) =>
-      r.url().includes("/api/rpc/ebook/summary/fetch") &&
-      r.request().method() === "POST",
-  );
-}
 
 /** Mock the ordered source plan the client walks (e.g. `["OpenLibrary"]`). */
 async function mockSources(
@@ -67,66 +61,6 @@ async function mockFetch(
       : route.continue(),
   );
 }
-
-// ---------------------------------------------------------------------------
-// Editor — the button is always present, fills the field, and doesn't save.
-// ---------------------------------------------------------------------------
-
-test("metadata editor always shows the Fetch Summary button", async ({
-  page,
-  request,
-}) => {
-  const id = await fetchBookIdByTitle(request, TARGET.title);
-  await gotoReady(page, `/books/${id}/edit`);
-  await expect(page.getByTestId("fetch-summary")).toBeVisible();
-});
-
-test("Fetch Summary fills the editor Description without saving", async ({
-  page,
-  request,
-}) => {
-  const id = await fetchBookIdByTitle(request, TARGET.title);
-  await gotoReady(page, `/books/${id}/edit`);
-
-  const SUMMARY =
-    "A mocked summary fetched from OpenLibrary for the editor fill test.";
-  await mockSources(page, ["OpenLibrary"]); // no keys → single-source plan
-  await mockFetch(page, SUMMARY);
-
-  const fetched = waitForFetch(page);
-  await page.getByTestId("fetch-summary").click();
-  await fetched;
-
-  // The Description textarea (id `me-description`) is filled with the fetched
-  // text; the editor never auto-saves, so this is staged for the user's Save.
-  await expect(page.locator("#me-description")).toHaveValue(SUMMARY);
-  // Still on the edit form (no navigation-away that a save would trigger).
-  await expect(page.getByTestId("me-save")).toBeVisible();
-});
-
-test("Fetch Summary surfaces an error when neither source has a summary", async ({
-  page,
-  request,
-}) => {
-  const id = await fetchBookIdByTitle(request, TARGET.title);
-  await gotoReady(page, `/books/${id}/edit`);
-
-  await mockSources(page, ["OpenLibrary"]);
-  await mockFetch(page, null); // OpenLibrary miss → Ok(None)
-
-  const fetched = waitForFetch(page);
-  await page.getByTestId("fetch-summary").click();
-  await fetched;
-
-  await expect(page.getByTestId("fetch-summary-error")).toHaveText(
-    "No summary found.",
-  );
-  await expect(page.locator("#me-description")).toHaveValue("");
-});
-
-// ---------------------------------------------------------------------------
-// Detail page — button only when sparse; a fetch saves + refreshes in place.
-// ---------------------------------------------------------------------------
 
 test("detail page fetch saves the summary and hides the button", async ({
   page,

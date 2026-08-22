@@ -78,10 +78,12 @@ pub(crate) fn SelectionPopover(anchor: SelectionAnchor, actions: SelectionAction
                 SelectionActionButtons {
                     cfi: sel_cfi,
                     text: sel_text,
-                    on_note,
-                    on_copy,
-                    on_quote,
-                    on_share,
+                    on_action: EventHandler::new(move |action: SelectionButtonAction| match action {
+                        SelectionButtonAction::Note { cfi, text } => on_note.call((cfi, text)),
+                        SelectionButtonAction::Copy { text } => on_copy.call(text),
+                        SelectionButtonAction::Quote { cfi, text } => on_quote.call((cfi, text)),
+                        SelectionButtonAction::Share { text } => on_share.call(text),
+                    }),
                 }
             }
         }
@@ -130,15 +132,22 @@ fn SelectionSwatches(
     }
 }
 
+/// One of the popover's four non-highlight actions, carrying exactly the
+/// payload the matching handler on [`SelectionActions`] takes.
+#[derive(Clone, PartialEq)]
+enum SelectionButtonAction {
+    Note { cfi: String, text: String },
+    Copy { text: String },
+    Quote { cfi: String, text: String },
+    Share { text: String },
+}
+
 /// The Note / Copy / Quote / Share action buttons.
 #[component]
 fn SelectionActionButtons(
     cfi: String,
     text: String,
-    on_note: EventHandler<(String, String)>,
-    on_copy: EventHandler<String>,
-    on_quote: EventHandler<(String, String)>,
-    on_share: EventHandler<String>,
+    on_action: EventHandler<SelectionButtonAction>,
 ) -> Element {
     rsx! {
         button {
@@ -148,7 +157,7 @@ fn SelectionActionButtons(
             onclick: {
                 let cfi = cfi.clone();
                 let text = text.clone();
-                move |_| on_note.call((cfi.clone(), text.clone()))
+                move |_| on_action.call(SelectionButtonAction::Note { cfi: cfi.clone(), text: text.clone() })
             },
             svg {
                 width: "15", height: "15", view_box: "0 0 24 24",
@@ -164,7 +173,7 @@ fn SelectionActionButtons(
             "data-testid": "selection-copy",
             onclick: {
                 let text = text.clone();
-                move |_| on_copy.call(text.clone())
+                move |_| on_action.call(SelectionButtonAction::Copy { text: text.clone() })
             },
             svg {
                 width: "15", height: "15", view_box: "0 0 24 24",
@@ -184,7 +193,7 @@ fn SelectionActionButtons(
             onclick: {
                 let cfi = cfi.clone();
                 let text = text.clone();
-                move |_| on_quote.call((cfi.clone(), text.clone()))
+                move |_| on_action.call(SelectionButtonAction::Quote { cfi: cfi.clone(), text: text.clone() })
             },
             svg {
                 width: "15", height: "15", view_box: "0 0 24 24",
@@ -199,7 +208,7 @@ fn SelectionActionButtons(
             "data-testid": "selection-share",
             onclick: {
                 let text = text.clone();
-                move |_| on_share.call(text.clone())
+                move |_| on_action.call(SelectionButtonAction::Share { text: text.clone() })
             },
             svg {
                 width: "15", height: "15", view_box: "0 0 24 24",

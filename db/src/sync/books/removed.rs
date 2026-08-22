@@ -28,80 +28,103 @@ pub(super) async fn sync_removed(
     // library_id + 1 bind per uuid; chunk at 500 to stay under SQLite's
     // 999-param cap when a whole library (or any large diff) is removed.
     for chunk in removed_uuids.chunks(500) {
-        let placeholders = std::iter::repeat_n("?", chunk.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-
         // Resolve the affected ids, then batch-drop their file rows and flag
         // the rows missing — keeping each `books` row (and its links/FTS) as a
         // fileless book. Two chunked statements replace the old per-book
         // `mark_book_files_missing` fan-out (which fired 2 DML per removed
         // book).
-        let id_sql =
-            format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
-        let mut q = sqlx::query_scalar::<_, i64>(&id_sql).bind(library_id);
-        for uuid in chunk {
-            q = q.bind(uuid);
-        }
-        let ids = q.fetch_all(&mut **tx).await?;
+        let ids = resolve_removed_book_ids(tx, library_id, chunk).await?;
         missing += ids.len();
         if ids.is_empty() {
             continue;
         }
-
-        let id_placeholders = std::iter::repeat_n("?", ids.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        // One DELETE per chunk: `book_file_parts` + `file_chapters` cascade
-        // off the `book_files` row. Scoped to rows with **no** matching
-        // `merged_uuids` entry — a row that IS recorded there is a
-        // cross-format attachment (a different format's file, still present)
-        // and must survive this book's own file going missing; the
-        // old blanket `book_id IN (...)` delete dropped it too, only for it
-        // to re-attach (and re-mint a `book_files` row) on the next scan.
-        let delete_sql = format!(
-            "DELETE FROM book_files
-              WHERE book_id IN ({id_placeholders})
-                AND NOT EXISTS (
-                  SELECT 1 FROM merged_uuids mu
-                   WHERE mu.book_id = book_files.book_id
-                     AND mu.format = book_files.format
-                     AND mu.scan_key = book_files.scan_key
-                )"
-        );
-        let mut delete_q = sqlx::query(&delete_sql);
-        for id in &ids {
-            delete_q = delete_q.bind(id);
-        }
-        delete_q.execute(&mut **tx).await?;
-
-        // One UPDATE per chunk: set the F10 missing flag + start the retention
-        // clock. The `is_missing_files = 0` guard preserves the original
-        // `missing_files_since` on a re-run; the `is_missing_files_override = 0`
-        // guard leaves intentionally-fileless rows (wishlist) unflagged so
-        // reads keep showing them. The `NOT EXISTS book_files` guard excludes a
-        // book whose cross-format attachment (a different format's file, still
-        // present) survived the delete above — it isn't actually fileless, so
-        // it must not be flagged missing.
-        let update_sql = format!(
-            "UPDATE books
-                SET is_missing_files = 1, missing_files_since = unixepoch()
-              WHERE id IN ({id_placeholders})
-                AND is_missing_files = 0
-                AND is_missing_files_override = 0
-                AND NOT EXISTS (SELECT 1 FROM book_files WHERE book_files.book_id = books.id)"
-        );
-        let mut update_q = sqlx::query(&update_sql);
-        for id in &ids {
-            update_q = update_q.bind(id);
-        }
-        update_q.execute(&mut **tx).await?;
+        delete_removed_book_files(tx, &ids).await?;
+        flag_books_missing(tx, &ids).await?;
     }
     if missing > 0 {
         // These rows are flagged missing (F10); `missing_files::gc_books_missing_files`
         // purges the long-missing, user-data-free ones on a later reindex.
         tracing::info!(missing, "sync: retained removed books as fileless books");
     }
+    Ok(())
+}
+
+/// Resolve one chunk's removed uuids to their `books.id`s within the library.
+async fn resolve_removed_book_ids(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    library_id: i64,
+    chunk: &[String],
+) -> Result<Vec<i64>, sqlx::Error> {
+    let placeholders = std::iter::repeat_n("?", chunk.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let id_sql = format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
+    let mut q = sqlx::query_scalar::<_, i64>(&id_sql).bind(library_id);
+    for uuid in chunk {
+        q = q.bind(uuid);
+    }
+    q.fetch_all(&mut **tx).await
+}
+
+/// One DELETE per chunk: `book_file_parts` + `file_chapters` cascade off the
+/// `book_files` row. Scoped to rows with **no** matching `merged_uuids`
+/// entry — a row that IS recorded there is a cross-format attachment (a
+/// different format's file, still present) and must survive this book's own
+/// file going missing; the old blanket `book_id IN (...)` delete dropped it
+/// too, only for it to re-attach (and re-mint a `book_files` row) on the
+/// next scan.
+async fn delete_removed_book_files(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    ids: &[i64],
+) -> Result<(), sqlx::Error> {
+    let id_placeholders = std::iter::repeat_n("?", ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let delete_sql = format!(
+        "DELETE FROM book_files
+          WHERE book_id IN ({id_placeholders})
+            AND NOT EXISTS (
+              SELECT 1 FROM merged_uuids mu
+               WHERE mu.book_id = book_files.book_id
+                 AND mu.format = book_files.format
+                 AND mu.scan_key = book_files.scan_key
+            )"
+    );
+    let mut delete_q = sqlx::query(&delete_sql);
+    for id in ids {
+        delete_q = delete_q.bind(id);
+    }
+    delete_q.execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// One UPDATE per chunk: set the F10 missing flag + start the retention
+/// clock. The `is_missing_files = 0` guard preserves the original
+/// `missing_files_since` on a re-run; the `is_missing_files_override = 0`
+/// guard leaves intentionally-fileless rows (wishlist) unflagged so reads
+/// keep showing them. The `NOT EXISTS book_files` guard excludes a book
+/// whose cross-format attachment (a different format's file, still present)
+/// survived the delete above — it isn't actually fileless, so it must not
+/// be flagged missing.
+async fn flag_books_missing(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    ids: &[i64],
+) -> Result<(), sqlx::Error> {
+    let id_placeholders = std::iter::repeat_n("?", ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let update_sql = format!(
+        "UPDATE books
+            SET is_missing_files = 1, missing_files_since = unixepoch()
+          WHERE id IN ({id_placeholders})
+            AND is_missing_files = 0
+            AND is_missing_files_override = 0
+            AND NOT EXISTS (SELECT 1 FROM book_files WHERE book_files.book_id = books.id)"
+    );
+    let mut update_q = sqlx::query(&update_sql);
+    for id in ids {
+        update_q = update_q.bind(id);
+    }
+    update_q.execute(&mut **tx).await?;
     Ok(())
 }

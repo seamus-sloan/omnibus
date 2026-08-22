@@ -86,13 +86,13 @@ pub(super) fn web_landing_body(
     } = handlers;
     let hero_points = (sigs.hero_points)();
     let selected_shelf = (sigs.selected_shelf)();
-    let mut edit_shelf = sigs.edit_shelf;
-    let mut shelves_tick = sigs.shelves_tick;
-    let mut bulk_selected = sigs.bulk_selected;
-    let mut bulk_modal_open = sigs.bulk_modal_open;
+    let edit_shelf = sigs.edit_shelf;
+    let shelves_tick = sigs.shelves_tick;
+    let bulk_selected = sigs.bulk_selected;
+    let bulk_modal_open = sigs.bulk_modal_open;
     let bulk = snapshot_bulk_selection(sigs, (sigs.is_admin)(), bulk_modal_open());
-    let mut books_sig = sigs.books;
-    let mut shelf_books_sig = sigs.shelf_books;
+    let books_sig = sigs.books;
+    let shelf_books_sig = sigs.shelf_books;
     // Annotated outside the rsx props — a bare `.into()` there is ambiguous
     // between the dioxus_core and dioxus_stores `SuperInto` impls.
     let author_pool: ReadSignal<Vec<SuggestionItem>> = sigs.pools.authors.into();
@@ -101,105 +101,173 @@ pub(super) fn web_landing_body(
     let all_cover_uuids = derive_all_cover_uuids(sigs);
     rsx! {
         div { class: "landing-col",
-            if !view.is_search && !hero_points.is_empty() {
-                ContinueHero {
-                    points: hero_points,
-                    server_url: server_url.clone(),
-                }
-            }
-            if !view.is_search {
-                ShelfGallery {
-                    shelves: (sigs.shelves)(),
-                    selection: (sigs.selection)(),
-                    all_count: (sigs.total)(),
-                    all_cover_uuids,
-                    server_url: server_url.clone(),
-                    on_select: on_select_shelf,
-                    on_created: on_shelf_created,
-                }
-            }
-            LandingHeader {
-                view: LandingHeaderView {
-                    path_subtitle: view.path_subtitle,
-                    book_count: view.book_count,
-                    hidden_count: view.hidden_count,
-                    path_missing: view.path_missing,
-                    page_error: view.page_error.clone(),
-                    lib_err: view.lib_err.clone(),
-                    section_title: view.section_title,
-                    selected_shelf: selected_shelf.clone(),
+            {render_hero_and_gallery(sigs, view.is_search, hero_points, all_cover_uuids, server_url.clone(), on_select_shelf, on_shelf_created)}
+            {render_header_and_content(sigs, view, prefs(), server_url, selected_shelf.clone(), edit_shelf, bulk_selected, LandingContentHandlers { on_prefs_change: on_prefs_change_content, on_load_more, on_clear_filters }, on_prefs_change_header)}
+            {render_bulk_overlay(bulk, bulk_modal_open, bulk_selected, books_sig, shelf_books_sig, author_pool, tag_pool, genre_pool)}
+            {render_edit_shelf_overlay(edit_shelf, selected_shelf, shelves_tick)}
+        }
+    }
+}
+
+/// Section header + grid/table content for [`web_landing_body`]. See
+/// [`render_bulk_overlay`] for why this is a plain helper, not a component.
+#[cfg(not(feature = "mobile"))]
+#[allow(clippy::too_many_arguments)]
+fn render_header_and_content(
+    sigs: &LandingSignals,
+    view: LandingViewState,
+    prefs: omnibus_shared::ViewPrefs,
+    server_url: String,
+    selected_shelf: Option<omnibus_shared::Shelf>,
+    mut edit_shelf: Signal<bool>,
+    bulk_selected: Signal<BTreeSet<String>>,
+    content_handlers: LandingContentHandlers,
+    on_prefs_change_header: EventHandler<omnibus_shared::ViewPrefs>,
+) -> Element {
+    rsx! {
+        LandingHeader {
+            view: LandingHeaderView {
+                path_subtitle: view.path_subtitle,
+                book_count: view.book_count,
+                hidden_count: view.hidden_count,
+                path_missing: view.path_missing,
+                page_error: view.page_error.clone(),
+                lib_err: view.lib_err.clone(),
+                section_title: view.section_title,
+                selected_shelf,
+            },
+            prefs: prefs.clone(),
+            on_prefs_change: on_prefs_change_header,
+            on_edit_shelf: move |_| edit_shelf.set(true),
+        }
+
+        LandingContent {
+            ..LandingContentProps {
+                books: BooksView {
+                    is_loading: view.is_loading,
+                    visible_books: view.visible_books,
+                    visible_is_empty: view.visible_is_empty,
+                    books_empty: view.books_empty,
+                    lib_err: view.lib_err,
+                    page_error: view.page_error,
+                    has_more: view.has_more,
+                    is_loading_more: view.is_loading_more,
                 },
-                prefs: prefs(),
-                on_prefs_change: on_prefs_change_header,
-                on_edit_shelf: move |_| edit_shelf.set(true),
+                prefs,
+                ctx: BookTableContext {
+                    server_url,
+                    is_admin: (sigs.is_admin)(),
+                    author_suggestions: sigs.pools.authors.into(),
+                    tag_suggestions: sigs.pools.tags.into(),
+                    genre_suggestions: sigs.pools.genres.into(),
+                    selected: bulk_selected,
+                },
+                handlers: content_handlers,
+                sweep_key: view.sweep_key,
             }
+        }
+    }
+}
 
-            LandingContent {
-                ..LandingContentProps {
-                    books: BooksView {
-                        is_loading: view.is_loading,
-                        visible_books: view.visible_books,
-                        visible_is_empty: view.visible_is_empty,
-                        books_empty: view.books_empty,
-                        lib_err: view.lib_err,
-                        page_error: view.page_error,
-                        has_more: view.has_more,
-                        is_loading_more: view.is_loading_more,
-                    },
-                    prefs: prefs(),
-                    ctx: BookTableContext {
-                        server_url,
-                        is_admin: (sigs.is_admin)(),
-                        author_suggestions: sigs.pools.authors.into(),
-                        tag_suggestions: sigs.pools.tags.into(),
-                        genre_suggestions: sigs.pools.genres.into(),
-                        selected: bulk_selected,
-                    },
-                    handlers: LandingContentHandlers {
-                        on_prefs_change: on_prefs_change_content,
-                        on_load_more,
-                        on_clear_filters,
-                    },
-                    sweep_key: view.sweep_key,
-                }
+/// Continue-reading hero + shelf gallery for [`web_landing_body`], hidden
+/// entirely while a search is active. See [`render_bulk_overlay`] for why
+/// this is a plain helper, not a component.
+#[cfg(not(feature = "mobile"))]
+#[allow(clippy::too_many_arguments)]
+fn render_hero_and_gallery(
+    sigs: &LandingSignals,
+    is_search: bool,
+    hero_points: Vec<omnibus_shared::ResumePoint>,
+    all_cover_uuids: Vec<String>,
+    server_url: String,
+    on_select_shelf: EventHandler<crate::shelf_selection::ShelfSelection>,
+    on_shelf_created: EventHandler<()>,
+) -> Element {
+    rsx! {
+        if !is_search && !hero_points.is_empty() {
+            ContinueHero {
+                points: hero_points,
+                server_url: server_url.clone(),
             }
+        }
+        if !is_search {
+            ShelfGallery {
+                shelves: (sigs.shelves)(),
+                selection: (sigs.selection)(),
+                all_count: (sigs.total)(),
+                all_cover_uuids,
+                server_url,
+                on_select: on_select_shelf,
+                on_created: on_shelf_created,
+            }
+        }
+    }
+}
 
-            if bulk.show_bar {
-                bulk_edit::BulkEditBar {
-                    count: bulk.count,
-                    on_edit: move |_| bulk_modal_open.set(true),
-                    on_clear: move |_| bulk_selected.write().clear(),
-                }
+/// Bulk-edit bar + modal overlay for [`web_landing_body`], split out so the
+/// parent's rsx! reads as one page layout rather than page-plus-modals. A
+/// plain `Element`-returning helper (not a `#[component]`) since it shares
+/// `web_landing_body`'s signals directly rather than re-deriving props.
+#[cfg(not(feature = "mobile"))]
+#[allow(clippy::too_many_arguments)]
+fn render_bulk_overlay(
+    bulk: BulkSelectionSnapshot,
+    mut bulk_modal_open: Signal<bool>,
+    mut bulk_selected: Signal<BTreeSet<String>>,
+    mut books_sig: Signal<Vec<EbookMetadata>>,
+    mut shelf_books_sig: Signal<Option<Vec<EbookMetadata>>>,
+    author_pool: ReadSignal<Vec<SuggestionItem>>,
+    tag_pool: ReadSignal<Vec<SuggestionItem>>,
+    genre_pool: ReadSignal<Vec<SuggestionItem>>,
+) -> Element {
+    rsx! {
+        if bulk.show_bar {
+            bulk_edit::BulkEditBar {
+                count: bulk.count,
+                on_edit: move |_| bulk_modal_open.set(true),
+                on_clear: move |_| bulk_selected.write().clear(),
             }
-            if bulk_modal_open() {
-                bulk_edit::BulkEditModal {
-                    uuids: bulk.uuids,
-                    selected_books: bulk.books,
-                    suggestions: bulk_edit::BulkEditSuggestions {
-                        author_suggestions: author_pool,
-                        tag_suggestions: tag_pool,
-                        genre_suggestions: genre_pool,
-                    },
-                    on_close: move |_| bulk_modal_open.set(false),
-                    on_saved: move |updated: Vec<EbookMetadata>| {
-                        install_updated_books(&mut books_sig, &mut shelf_books_sig, &updated);
-                        bulk_selected.write().clear();
-                        bulk_modal_open.set(false);
-                    },
-                }
+        }
+        if bulk_modal_open() {
+            bulk_edit::BulkEditModal {
+                uuids: bulk.uuids,
+                selected_books: bulk.books,
+                suggestions: bulk_edit::BulkEditSuggestions {
+                    author_suggestions: author_pool,
+                    tag_suggestions: tag_pool,
+                    genre_suggestions: genre_pool,
+                },
+                on_close: move |_| bulk_modal_open.set(false),
+                on_saved: move |updated: Vec<EbookMetadata>| {
+                    install_updated_books(&mut books_sig, &mut shelf_books_sig, &updated);
+                    bulk_selected.write().clear();
+                    bulk_modal_open.set(false);
+                },
             }
-            if edit_shelf() {
-                if let Some(shelf) = selected_shelf {
-                    EditShelfModal {
-                        shelf,
-                        on_close: move |_| edit_shelf.set(false),
-                        on_saved: move |_| {
-                            edit_shelf.set(false);
-                            // Refetches the gallery list, the section title,
-                            // and (via `selected_key`) the full shelf.
-                            shelves_tick.with_mut(|n| *n += 1);
-                        },
-                    }
+        }
+    }
+}
+
+/// Edit-shelf modal overlay for [`web_landing_body`] — see
+/// [`render_bulk_overlay`] for why this is a plain helper, not a component.
+#[cfg(not(feature = "mobile"))]
+fn render_edit_shelf_overlay(
+    mut edit_shelf: Signal<bool>,
+    selected_shelf: Option<omnibus_shared::Shelf>,
+    mut shelves_tick: Signal<u32>,
+) -> Element {
+    rsx! {
+        if edit_shelf() {
+            if let Some(shelf) = selected_shelf {
+                EditShelfModal {
+                    shelf,
+                    on_close: move |_| edit_shelf.set(false),
+                    on_saved: move |_| {
+                        edit_shelf.set(false);
+                        // Refetches the gallery list, the section title,
+                        // and (via `selected_key`) the full shelf.
+                        shelves_tick.with_mut(|n| *n += 1);
+                    },
                 }
             }
         }

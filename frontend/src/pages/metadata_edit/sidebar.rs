@@ -18,10 +18,16 @@ pub(super) fn Sidebar(
 ) -> Element {
     let uuid = book.unique_identifier.clone().unwrap_or_default();
     let identifiers = book.identifiers.clone();
-    // Tracks the merged book returned by a cover upload/revert so the
-    // "Override active" card reflects a cover-only change immediately —
-    // `book` itself is the static snapshot the parent loaded once.
+    // Tracks the merged book returned by a cover write, so the "Override
+    // active" card reflects a cover-only change immediately.
+    //
+    // Seeded from `book` and re-seeded when it changes: the write can come
+    // from the sidebar's own `CoverEditor` (through `on_change` below) *or*
+    // from the compare view's cover row on the other side of the page, which
+    // reaches here as a new `book` prop. A seed-once signal would show the
+    // second case a stale card until the next page load.
     let mut live_book = use_signal(|| book.clone());
+    use_effect(use_reactive!(|book| live_book.set(book.clone())));
     let has_override = live_book().has_override;
 
     rsx! {

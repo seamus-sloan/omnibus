@@ -13,6 +13,7 @@ use super::super::fts::upsert_fts;
 use super::shared::{
     insert_book_row, insert_metadata_links, rewrite_book_in_place, try_attach_new_ebook,
 };
+use super::{EntityAliasMaps, SyncError};
 
 /// Insert a batch of New entries: canonical `books` + `book_files` row,
 /// metadata link rows, FTS row. Returns the post-commit cover triples.
@@ -20,14 +21,17 @@ use super::shared::{
 /// `removed_uuids` is this same sync's Removed-bucket output — passed through
 /// to the attach heuristic so it can tell a relocation (the matched target's
 /// own file just vanished this scan) from a genuine cross-format attachment.
+/// `alias_maps` is the whole New+Changed batch's reindex-resurrection guard
+/// lookup (#1985), pre-resolved by `super::collect_entity_alias_maps`.
 pub(super) async fn sync_new(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
     library_path: &str,
     new_books: &[crate::ebook::IndexedBook],
     removed_uuids: &[String],
+    alias_maps: &EntityAliasMaps,
     mut on_book_written: impl FnMut(&str),
-) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
+) -> Result<Vec<(String, String, Vec<u8>)>, SyncError> {
     if new_books.is_empty() {
         return Ok(Vec::new());
     }
@@ -73,16 +77,25 @@ pub(super) async fn sync_new(
         // which would otherwise mis-bind the returning file to the fileless row as
         // an attachment.
         if let Some((book_id, uuid)) = id_map.get(scan_key).map(|(id, u)| (*id, u.clone())) {
-            rewrite_book_in_place(tx, book_id, &uuid, b, &mut new_covers).await?;
+            rewrite_book_in_place(tx, book_id, &uuid, b, alias_maps, &mut new_covers).await?;
             on_book_written(&b.metadata.filename);
             continue;
         }
-        if try_attach_new_ebook(tx, library_path, b, &removed_this_scan, &mut new_covers).await? {
+        if try_attach_new_ebook(
+            tx,
+            library_path,
+            b,
+            &removed_this_scan,
+            alias_maps,
+            &mut new_covers,
+        )
+        .await?
+        {
             on_book_written(&b.metadata.filename);
             continue;
         }
         let inserted = insert_book_row(tx, library_id, library_path, b).await?;
-        insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
+        insert_metadata_links(tx, inserted.book_id, &b.metadata, alias_maps).await?;
         upsert_fts(tx, inserted.book_id).await?;
         super::super::push_cover(&mut new_covers, &inserted.uuid, &b.cover);
         on_book_written(&b.metadata.filename);

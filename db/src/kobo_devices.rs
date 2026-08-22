@@ -7,7 +7,7 @@
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 
-use crate::auth::generate_token;
+use crate::auth::{generate_token, AuthResult};
 
 /// Column list shared by every row-returning query, matched by [`row_to_device`].
 const COLS: &str =
@@ -58,7 +58,18 @@ pub async fn create_device(
     user_id: i64,
     name: &str,
 ) -> Result<KoboDevice, KoboDeviceError> {
-    let token = generate_token().map_err(|e| KoboDeviceError::Token(e.to_string()))?;
+    create_device_with_token(pool, user_id, name, generate_token).await
+}
+
+/// `create_device` with the token generator passed in, so a test can inject a
+/// forced failure without depending on the OS CSPRNG actually erroring.
+async fn create_device_with_token(
+    pool: &SqlitePool,
+    user_id: i64,
+    name: &str,
+    token_fn: impl FnOnce() -> AuthResult<String>,
+) -> Result<KoboDevice, KoboDeviceError> {
+    let token = token_fn().map_err(|e| KoboDeviceError::Token(e.to_string()))?;
     let row = sqlx::query(&format!(
         "INSERT INTO kobo_devices (user_id, token, name)
          VALUES (?, ?, ?)

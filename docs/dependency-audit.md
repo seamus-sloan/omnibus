@@ -1,6 +1,6 @@
 # Dependency Audit — Cargo.lock Duplicate Families
 
-Last updated: 2026-08-09 (issue #1767; previously issues #1710, #1621, #1529, #1530, #1100, #1268, #1147, #643).
+Last updated: 2026-08-20 (issue #2054; previously issues #1767, #1710, #1621, #1529, #1530, #1100, #1268, #1147, #643).
 
 Run `cargo tree -d` and inspect the output any time Dioxus or Axum are bumped.
 The `deny.toml` `[bans]` section has matching `skip` entries for all accepted
@@ -21,7 +21,9 @@ this list.
 | `foldhash` | 0.1.5, 0.2.0 | 0.1.5 via `hashbrown 0.15.5` (sqlx-core/hashlink path); 0.2.0 via `hashbrown 0.16.1` (dioxus-server's `lru`/`metrics-util` path) | **accepted intentionally** | One copy per `hashbrown` minor — both are internal impl details of `hashbrown`, same root cause as the `hashbrown` row above. Classified separately, though: the `deny.toml` skips for both `foldhash` versions are already in place, unlike `hashbrown`'s still-open four-way spread. Already carries a `deny.toml` skip + comment. |
 | `hashlink` | 0.9.1, 0.10.0 | 0.9.1 via `rusqlite 0.32.1` (`omnibus-frontend`'s mobile-offline SQLite store); 0.10.0 via `sqlx-core 0.8.6` | **blocked by upstream** | Downstream instance of the same `rusqlite`/`sqlx` `libsqlite3-sys` coupling already documented for issue #1529 (see Policy section below) — the two crates simply vendor different `hashlink` minors alongside their independent `libsqlite3-sys` pins. Collapses only when that coordinated `rusqlite`/`sqlx` bump happens. |
 | `convert_case` | 0.4.0, 0.8.0, 0.10.0 | 0.4 from `derive_more 0.99.20` (proc-macro path, transitive via Dioxus desktop/mobile shells); 0.8 from Dioxus proc-macro crates (`dioxus-core-macro`, `dioxus-html-internal-macro`, `dioxus-stores-macro`); 0.10 from `derive_more-impl` (pulled by `dioxus-fullstack`) | **blocked by upstream** | Pure proc-macro dependency; not in any runtime binary image. |
-| `rand` | 0.7.3, 0.8.6, 0.9.4 | 0.7 from `phf_generator 0.8.0` (build dep of `ammonia` → `html5ever` chain); 0.8 from a separate `phf_generator` path; 0.9 from `rand_core@0.9` (via tungstenite) | **blocked by upstream** | The 0.7 and 0.8 copies are build-only (`phf_codegen` / `string_cache_codegen`) and never link into the runtime binary. |
+| `rand` | 0.7.3, 0.8.6, 0.9.4 | 0.7 and 0.8 both from `phf_generator` build-dep chains rooted in `kuchikiki` (wry's bundled HTML/CSS engine, on an old html5ever/cssparser lineage) → `wry` — **not** `ammonia`, which is a direct `omnibus-db` dependency but sits on a separate, newer `markup5ever` lineage using `phf_generator 0.13` (fastrand-backed, no `rand` at all); 0.9 from `rand_core@0.9` (via tungstenite) | **blocked by upstream** | Verified with `cargo tree -i rand@0.7.3` / `@0.8.6` and `cargo tree -p omnibus-db` (issue #2054): both build-dep copies terminate at `wry`, confined to the native shell. The 0.7 and 0.8 copies are build-only (`phf_codegen` / `string_cache_codegen`) and never link into the runtime binary. |
+| `libloading` | 0.7.4, 0.8.9 | 0.7.4 via `libappindicator-sys` → `libappindicator` → `tray-icon` (native shell only); 0.8.9 via `subsecond` → `dioxus-core` → `dioxus` directly (default build) | **blocked by upstream** | Not confined to the `wry`/`tao` native-shell subtree — the 0.8.9 copy reaches `omnibus`/`omnibus-frontend` through `dioxus-core` regardless of platform, same shape as the `rustc-hash` row below. Collapses when `tray-icon`'s `libappindicator` pin catches up to `libloading 0.8`. |
+| `png` | 0.17.16, 0.18.1 | 0.17.16 via `muda`/`tray-icon` (native shell only, tray icon rendering); 0.18.1 via `image` → `omnibus-db` directly (default build, cover/thumbnail decoding) | **blocked by upstream** | Same "not confined to wry/tao" shape as `libloading` above. Collapses when `tray-icon`'s `muda` pin catches up to `png 0.18`. |
 | `webpki-roots` | 0.26.11, 1.0.7 | 0.26 from `sqlx-core`; 1.0.7 from `hyper-rustls` (reqwest) | **blocked by upstream** | sqlx-core pins 0.26; reqwest/hyper-rustls have moved to 1.x. Collapses when sqlx bumps its rustls deps. |
 | `axum-extra` | 0.10.3, 0.12.6 | 0.10.3 via `dioxus-fullstack` 0.7.9 (the git-pinned Dioxus tag); 0.12.6 via our own `omnibus` server crate directly | **blocked by upstream** | Mirrors the `tower-http` split below: the Dioxus git pin hasn't caught up to the `axum-extra` version our server crate uses. Collapses on the next Dioxus bump. |
 | `tower-http` | 0.6.11, 0.7.0 | 0.6.11 via `dioxus-fullstack`/`dioxus-server` 0.7.9 and transitively via **both** `reqwest` 0.12.28 and 0.13.4 (each vendors its own `tower-http` dependency); 0.7.0 via our own `omnibus` server crate directly | **blocked by upstream** | Not purely a Dioxus-version-lag issue like `axum-extra` above — `reqwest` 0.13.4 (our own workspace-pinned version, not just the older `dioxus-fullstack` copy) also depends directly on `tower-http 0.6.11` (see `Cargo.lock`'s `reqwest 0.13.4` dependency block). So a Dioxus bump alone won't collapse this: it persists until `reqwest` itself upgrades to `tower-http 0.7`, or our own server crate's direct `tower-http` dep is downgraded to 0.6.11 to match. |
@@ -30,7 +32,8 @@ this list.
 | `gloo-timers` | 0.3.0, 0.4.0 | 0.3.0 via `dioxus-web` 0.7.9 (the git-pinned Dioxus tag); 0.4.0 via `omnibus-frontend`'s own direct pin (`frontend/Cargo.toml`, behind the `web` feature) | **blocked by upstream** | Same root cause as the `gloo-net` row above. Resolves automatically once Dioxus publishes a crates.io release matching the git tag, tracked by #522. |
 | `gloo-utils` | 0.2.0, 0.3.0 | 0.2.0 transitively via `gloo-net 0.6.0`; 0.3.0 transitively via `gloo-net 0.7.0` | **blocked by upstream** | Follows the `gloo-net` split one level down and collapses in lockstep with it. Resolves automatically once Dioxus publishes a crates.io release matching the git tag, tracked by #522. |
 | `digest` | 0.10.7 (×2) | Both consumers are `sha1` (axum/tungstenite) + `blake2`/`sha2` (argon2/sqlx) | N/A — same version | `cargo tree -d` shows two entry paths to the same version (different consumers). No actual duplicate in the lockfile. |
-| `rustc-hash` | 1.1.0, 2.1.2 | 1.1.0 via `sledgehammer_utils` (pulled in by `dioxus-interpreter-js`, which both `dioxus-web` and `dioxus-server` depend on); 2.1.2 as a direct dependency of `dioxus-core` | **blocked by upstream** | Verified with `cargo tree -i rustc-hash@1.1.0` / `@2.1.2` (not assumed): both versions are reachable from the default, non-mobile build via `dioxus-core`/`dioxus-server`/`dioxus-web`, which `omnibus` and `omnibus-frontend` depend on directly — i.e. **inside** the shipped web/WASM bundle, not confined to the `wry`/`tao` mobile native-shell subtree (despite that subtree's skip-tree comment in `deny.toml` also naming `rustc-hash` among its duplicates — the mobile subtree apparently resolves to one of these same two versions rather than introducing a third). Collapses when Dioxus unifies its internal `rustc-hash` pin. |
+| `rustc-hash` | 1.1.0, 2.1.2 | 1.1.0 via `sledgehammer_utils` (pulled in by `dioxus-interpreter-js`, which both `dioxus-web` and `dioxus-server` depend on); 2.1.2 as a direct dependency of `dioxus-core` | **blocked by upstream** | Verified with `cargo tree -i rustc-hash@1.1.0` / `@2.1.2` (not assumed): both versions are reachable from the default, non-mobile build via `dioxus-core`/`dioxus-server`/`dioxus-web`, which `omnibus` and `omnibus-frontend` depend on directly — i.e. **inside** the shipped web/WASM bundle, not confined to the `wry`/`tao` mobile native-shell subtree (despite that subtree's skip-tree comment in `deny.toml` also naming `rustc-hash` among its duplicates — the mobile subtree apparently resolves to one of these same two versions rather than introducing a third). Collapses when Dioxus unifies its internal `rustc-hash` pin. As of issue #2054 this row finally has the matching `deny.toml` `skip` entries the Policy section below promises — a prior gap: the row existed here but `bans` had nothing suppressing it. |
+| `windows-sys` | 0.52.0, 0.59.0, 0.60.2, 0.61.2 | Four independent chains, each straddling both the native shell and the default build (`cfg(windows)`-gated, so `cargo deny`'s all-target resolution surfaces them even though this project ships Linux/container-only): 0.52.0 via `errno`→`rustix` (native shell) **and** `ring`/`rustls-webpki` + `signal-hook-registry`→`tokio` (default build); 0.59.0 via `dirs-sys`/`global-hotkey` (native shell) **and** `nu-ansi-term`→`tracing-subscriber` (default build); 0.60.2 via `muda`/`tray-icon` (native shell) **and** `socket2`→`hyper-util`/`lettre`/`tokio` (default build); 0.61.2 via `rfd`/`schannel`→`native-tls`→`tungstenite` (native shell) **and** `mio`→`tokio` + `rustls-native-certs`→`rustls-platform-verifier`→`reqwest` (default build) | **blocked by upstream** | Not confined to `wry`/`tao` — the default-build paths run through `tokio`/`rustls`/`tracing-subscriber`, core dependencies of the shipped server. Windows target support in those crates is out of this project's control. |
 | `bytes`, `futures-*`, `num-traits`, `tokio`, `manganis-core`, `log`, `fastrand`, `sqlx-sqlite` | (shown ×2 each) | Multiple downstream consumers | N/A — same version | Same pattern as `digest`: one version, multiple reverse-dependency entry points in the `cargo tree -d` output. Not true duplicates. |
 
 ## First-party skew resolved in this PR
@@ -46,6 +49,48 @@ this list.
   `catch_unwind` plus a panicking `Drop` on a cached key during a pop, which
   `dioxus-server`'s internal use does not trigger. `deny.toml` ignores it
   with a matching comment. Revisit when Dioxus bumps `lru` to >= 0.18.2.
+- `glib 0.18.5` — RUSTSEC-2024-0429 (unsound: `VariantStrIter` iterator
+  impls). Reaches the production graph via `wry`/`tao` → `gtk-rs`; patched
+  in glib 0.20, forced to 0.18 by the upstream gtk-rs pin under `wry`.
+  `deny.toml` ignores it with a matching comment.
+- `rand 0.7.3` — RUSTSEC-2026-0097 (unsound: aliased mutable reference when
+  a custom `log` logger calls `rand::rng()`/`thread_rng()` mid-log).
+  Build-dependency only, via `phf_generator 0.8` pulled in by `kuchikiki`
+  (wry's bundled HTML/CSS engine, an old html5ever/cssparser codegen path)
+  — genuinely confined to `wry`, but *not* via `ammonia`: `ammonia` is a
+  direct `omnibus-db` dependency, but sits on a separate, newer
+  `markup5ever` lineage that uses `phf_generator 0.13` (fastrand-backed, no
+  `rand` involved at all). Never links into any runtime binary, and that
+  logger-reseed path isn't exercised in a build script. `deny.toml` ignores
+  it with a matching comment.
+- **`unsound` scope gap (issue #2054):** all three entries above sat as
+  permanently-unmatched `deny.toml` `ignore` entries — `cargo deny check
+  advisories` reported `advisory-not-detected` for every one, not because
+  the crate/version was wrong, but because cargo-deny's own `[advisories]
+  unsound` setting defaults to `Scope::Workspace` (only our own workspace
+  crates), unlike `unmaintained`'s default of `Scope::All`. A transitive
+  `informational = "unsound"` advisory was therefore never evaluated at
+  all. Fixed by setting `unsound = "all"` in `deny.toml`, verified with
+  `cargo deny -L debug check advisories` before/after (see the comment
+  above `unsound = "all"` in `deny.toml` for the exact trace). `cargo
+  audit` was never affected by this gap — it scans the raw `Cargo.lock`
+  directly and always found these three (as warnings, not errors, since
+  none carry a `vulnerability` category).
+- **`rsa 0.9.10` / RUSTSEC-2023-0071 — deliberately not in `deny.toml`**
+  (issue #2054): unlike the three above, this advisory has no `informational`
+  category (it's a true `vulnerability`), so the `unsound`-scope fix above
+  doesn't apply — and there's no configurable scope for vulnerability-class
+  advisories to relax. The actual gap is that cargo-deny's own crate-graph
+  resolution prunes `rsa` as unreachable for any built target before the
+  advisories check ever runs (`cargo deny -L debug check advisories` logs
+  `filtered rsa 0.9.10`; independently confirmed with `cargo tree -i rsa
+  --target all`, empty even with `--workspace`). An `ignore` entry for it in
+  `deny.toml` can therefore never match anything and would sit as permanent
+  `advisory-not-detected` noise, so it was removed rather than kept stale.
+  `rsa` is real, present, and unpatched per `cargo audit` (which does not
+  do this pruning) — its exemption lives on the `--ignore RUSTSEC-2023-0071`
+  flag on the cargo-audit step in `rust.yml`, which is the tool that
+  actually encounters it.
 
 ## Yanked crates
 

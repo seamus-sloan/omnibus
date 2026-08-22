@@ -5,7 +5,7 @@
 //! same neutral shell; a post-mount effect fills in the state.
 
 use dioxus::prelude::*;
-use omnibus_shared::{AlignmentAudioFile, AlignmentView};
+use omnibus_shared::{AlignmentAudioFile, AlignmentLink, AlignmentView};
 
 use crate::components::alignment_modal::{
     fmt_hm, interpolate_pairs, listening_frac, recency, AlignmentModal,
@@ -156,6 +156,89 @@ fn progress_rows(view: &AlignmentView) -> Element {
     }
 }
 
+/// Fetch/refetch the alignment view on mount, on `refresh`'s signal, and on
+/// `epoch` bumps (retry / post-modal-change). Keeps any previously-fetched
+/// state on failure — only flags it when there is nothing better to show,
+/// so the row never vanishes without a way back in (the modal is the retry).
+fn use_fetch_alignment(
+    uuid: String,
+    refresh: Signal<u32>,
+    epoch: Signal<u32>,
+    mut view: Signal<Option<AlignmentView>>,
+    mut fetch_failed: Signal<bool>,
+) {
+    use_effect(move || {
+        let _ = refresh();
+        let _ = epoch();
+        let uuid = uuid.clone();
+        spawn(async move {
+            match data::get_alignment("", &uuid).await {
+                Ok(v) => {
+                    fetch_failed.set(false);
+                    view.set(Some(v));
+                }
+                Err(_) => fetch_failed.set(true),
+            }
+        });
+    });
+}
+
+/// The sync entry row: unlinked nudge / stale re-confirm warning / linked
+/// chip, each opening the alignment modal.
+#[component]
+fn SyncLinkEntry(link: Option<AlignmentLink>, mut open_modal: Signal<bool>) -> Element {
+    match link {
+        None => rsx! {
+            div { class: "al-entry al-entry-unlinked",
+                span { class: "al-entry-glyph",
+                    crate::components::sync_glyph::SyncGlyph { size: 14 }
+                }
+                span { class: "al-entry-copy",
+                    "Positions aren't synced — each format keeps its own spot."
+                }
+                button {
+                    class: "btn sm",
+                    "data-testid": "sync-link-open",
+                    onclick: move |_| open_modal.set(true),
+                    "Link formats…"
+                }
+            }
+        },
+        Some(l) if l.stale => rsx! {
+            div { class: "al-entry al-entry-stale", role: "status",
+                span { class: "al-entry-copy",
+                    "The audiobook files changed since you linked — sync is paused "
+                    "until you re-confirm the alignment."
+                }
+                button {
+                    class: "btn sm",
+                    "data-testid": "sync-link-review",
+                    onclick: move |_| open_modal.set(true),
+                    "Review alignment"
+                }
+            }
+        },
+        Some(l) => rsx! {
+            button {
+                class: "al-entry al-entry-linked",
+                "data-testid": "sync-link-manage",
+                onclick: move |_| open_modal.set(true),
+                span { class: "al-entry-glyph",
+                    crate::components::sync_glyph::SyncGlyph { size: 14 }
+                }
+                span { class: "al-entry-copy",
+                    if l.follow { "Positions synced — following" } else { "Positions synced" }
+                }
+                span { class: "al-entry-meta",
+                    "ebook \u{2194} audiobook \u{b7} confirmed "
+                    {recency(l.confirmed_at)}
+                }
+                span { class: "al-entry-chevron", "\u{203a}" }
+            }
+        },
+    }
+}
+
 /// The "Your progress" block + sync entry row + its modal. Mounted only
 /// for dual-format books (threaded into the hero's title column).
 /// `refresh` re-fetches on the page's own reload signal; `after_merge`
@@ -168,29 +251,11 @@ pub(super) fn BdSyncPanel(
     after_merge: Signal<bool>,
 ) -> Element {
     // None = state unknown (SSR / first paint); Some is the fetched view.
-    let mut view = use_signal(|| None::<AlignmentView>);
-    let mut fetch_failed = use_signal(|| false);
+    let view = use_signal(|| None::<AlignmentView>);
+    let fetch_failed = use_signal(|| false);
     let modal_open = use_signal(|| false);
     let mut epoch = use_signal(|| 0u32);
-
-    let fetch_uuid = uuid.clone();
-    use_effect(move || {
-        let _ = refresh();
-        let _ = epoch();
-        let uuid = fetch_uuid.clone();
-        spawn(async move {
-            match data::get_alignment("", &uuid).await {
-                Ok(v) => {
-                    fetch_failed.set(false);
-                    view.set(Some(v));
-                }
-                // Keep any previously-fetched state; only flag the failure
-                // when there is nothing better to show, so the row never
-                // vanishes without a way back in (the modal is the retry).
-                Err(_) => fetch_failed.set(true),
-            }
-        });
-    });
+    use_fetch_alignment(uuid.clone(), refresh, epoch, view, fetch_failed);
 
     {
         let mut after_merge = after_merge;
@@ -203,7 +268,6 @@ pub(super) fn BdSyncPanel(
         });
     }
 
-    let mut open_modal = modal_open;
     rsx! {
         section { class: "bd-sync-panel", "data-testid": "sync-link-row",
             match view() {
@@ -224,56 +288,7 @@ pub(super) fn BdSyncPanel(
                 Some(v) => rsx! {
                     div { class: "label bd-prog-head", "Your progress" }
                     {progress_rows(&v)}
-                    match v.link {
-                        None => rsx! {
-                            div { class: "al-entry al-entry-unlinked",
-                                span { class: "al-entry-glyph",
-                                    crate::components::sync_glyph::SyncGlyph { size: 14 }
-                                }
-                                span { class: "al-entry-copy",
-                                    "Positions aren't synced — each format keeps its own spot."
-                                }
-                                button {
-                                    class: "btn sm",
-                                    "data-testid": "sync-link-open",
-                                    onclick: move |_| open_modal.set(true),
-                                    "Link formats…"
-                                }
-                            }
-                        },
-                        Some(l) if l.stale => rsx! {
-                            div { class: "al-entry al-entry-stale", role: "status",
-                                span { class: "al-entry-copy",
-                                    "The audiobook files changed since you linked — sync is paused "
-                                    "until you re-confirm the alignment."
-                                }
-                                button {
-                                    class: "btn sm",
-                                    "data-testid": "sync-link-review",
-                                    onclick: move |_| open_modal.set(true),
-                                    "Review alignment"
-                                }
-                            }
-                        },
-                        Some(l) => rsx! {
-                            button {
-                                class: "al-entry al-entry-linked",
-                                "data-testid": "sync-link-manage",
-                                onclick: move |_| open_modal.set(true),
-                                span { class: "al-entry-glyph",
-                                    crate::components::sync_glyph::SyncGlyph { size: 14 }
-                                }
-                                span { class: "al-entry-copy",
-                                    if l.follow { "Positions synced — following" } else { "Positions synced" }
-                                }
-                                span { class: "al-entry-meta",
-                                    "ebook \u{2194} audiobook \u{b7} confirmed "
-                                    {recency(l.confirmed_at)}
-                                }
-                                span { class: "al-entry-chevron", "\u{203a}" }
-                            }
-                        },
-                    }
+                    SyncLinkEntry { link: v.link, open_modal: modal_open }
                 },
             }
             AlignmentModal {

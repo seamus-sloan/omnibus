@@ -44,6 +44,12 @@ pub enum BooksError {
     /// Corrupt JSON in the `metadata_overrides` blob.
     #[error("overrides deserialization failed: {0}")]
     OverridesJson(serde_json::Error),
+    /// A non-database failure surfaced from a dependency of these reads.
+    /// Coarse and message-carrying: no caller branches on the source, and
+    /// folding it into `Db` would make that variant mean "a database error
+    /// occurred" only most of the time.
+    #[error("{0}")]
+    Other(String),
 }
 
 impl From<crate::metadata_overrides::MetadataOverridesError> for BooksError {
@@ -65,7 +71,7 @@ impl From<crate::metadata_overrides::MetadataOverridesError> for BooksError {
             other @ (crate::metadata_overrides::MetadataOverridesError::BookNotFound(_)
             | crate::metadata_overrides::MetadataOverridesError::TooManyValues {
                 ..
-            }) => BooksError::Db(sqlx::Error::Protocol(other.to_string())),
+            }) => BooksError::Other(other.to_string()),
         }
     }
 }

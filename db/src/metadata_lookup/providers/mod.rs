@@ -20,7 +20,7 @@ pub(super) use http::publication_year;
 pub use openlibrary::{enrich as openlibrary_enrich, OlEnrichment};
 
 use omnibus_shared::metadata_lookup::{
-    ExternalBookMeta, MetadataProvider, ProviderCapabilities, ProviderInfo,
+    MetadataProvider, ProviderCapabilities, ProviderEdition, ProviderInfo,
 };
 
 use super::MetadataLookupConfig;
@@ -43,14 +43,20 @@ pub enum Query<'a> {
 
 /// Ask one provider one question.
 ///
-/// Both operations answer with a `Vec` so the ladder needs only one shape: an
+/// Both operations answer with a `Vec` so callers need only one shape: an
 /// ISBN lookup returns at most one entry, and empty means a clean miss either
-/// way.
+/// way. This is the **single** dispatch point — the check-in ladder
+/// ([`super::climb`]) and the editor's fan-out
+/// ([`super::search_all_providers`]) both come through here, so adding a
+/// provider stays one arm rather than two.
+///
+/// [`ProviderEdition`] is the richer shape; the ladder narrows it to
+/// `ExternalBookMeta` on its way out.
 pub async fn run(
     provider: MetadataProvider,
     config: &MetadataLookupConfig,
     query: Query<'_>,
-) -> anyhow::Result<Vec<ExternalBookMeta>> {
+) -> anyhow::Result<Vec<ProviderEdition>> {
     match (provider, query) {
         (MetadataProvider::OpenLibrary, Query::Isbn(isbn)) => {
             Ok(openlibrary::by_isbn(config, isbn)
@@ -124,15 +130,63 @@ pub fn ladder(config: &MetadataLookupConfig) -> Vec<Rung> {
     rungs
 }
 
-/// Every provider a search *can* be run against, `by_isbn`/`by_title`,
-/// carrying a cover image. Common to all three providers today.
-const SEARCH_AND_COVER_CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
+/// What all three providers can do today: both searches, a cover image, and a
+/// genre list — Google Books' `categories`, Open Library's `subjects`, and
+/// Hardcover's `cached_tags`. Ratings are nobody's yet.
+///
+/// One shared constant only holds while the catalog agrees; the moment a
+/// provider differs, give it its own value rather than widening this one.
+const COMMON_CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
     search_by_title: true,
     search_by_isbn: true,
     carries_cover: true,
     carries_ratings: false,
-    carries_genres: false,
+    carries_genres: true,
 };
+
+/// The hosts one provider serves its cover images from.
+///
+/// Part of the catalog, not a detail of whoever fetches a cover: the picker
+/// renders these URLs in the page, so the `img-src` CSP has to name them, and
+/// applying one means the server fetching it, which will need the same list
+/// as an allowlist. Two copies of that list would drift, and the failure mode
+/// is silent — a cover that renders but can't be applied, or the reverse.
+///
+/// The redirect targets are in it for the same reason the origins are, and
+/// they are the surprising part. `covers.openlibrary.org` 302s to
+/// `archive.org`, which 302s again to whichever Internet Archive node holds
+/// the file (`ia800505.us.archive.org`) — and browsers apply `img-src` to
+/// every hop's response, not just the request. The node names rotate, so
+/// that last hop can only be expressed as a wildcard.
+///
+/// An entry beginning `*.` matches any subdomain of the rest, the same
+/// meaning CSP gives it.
+pub fn cover_hosts(provider: MetadataProvider) -> &'static [&'static str] {
+    match provider {
+        MetadataProvider::OpenLibrary => {
+            &["covers.openlibrary.org", "archive.org", "*.archive.org"]
+        }
+        MetadataProvider::GoogleBooks => &["books.google.com", "books.googleusercontent.com"],
+        MetadataProvider::Hardcover => &["assets.hardcover.app"],
+    }
+}
+
+/// Every cover host in the catalog, deduplicated and in catalog order.
+///
+/// Not filtered by `configured`: an unkeyed instance still renders whatever
+/// a keyed one wrote, and a CSP that changed shape when a key was saved
+/// would be a debugging trap.
+pub fn all_cover_hosts() -> Vec<&'static str> {
+    let mut hosts: Vec<&'static str> = Vec::new();
+    for provider in MetadataProvider::ALL.iter().copied() {
+        for host in cover_hosts(provider) {
+            if !hosts.contains(host) {
+                hosts.push(host);
+            }
+        }
+    }
+    hosts
+}
 
 /// The full provider catalog: identity, usability, and capabilities for
 /// every provider this instance knows about — display surface for the
@@ -145,27 +199,24 @@ const SEARCH_AND_COVER_CAPABILITIES: ProviderCapabilities = ProviderCapabilities
 /// keyless too, just not as the ladder's primary rung — see [`ladder`]'s
 /// docs), and Hardcover only when `config.keys.hardcover` is set.
 pub fn catalog(config: &MetadataLookupConfig) -> Vec<ProviderInfo> {
-    vec![
-        ProviderInfo {
-            id: MetadataProvider::OpenLibrary,
-            display_name: MetadataProvider::OpenLibrary.display_name().to_string(),
-            configured: true,
-            requires_key: false,
-            capabilities: SEARCH_AND_COVER_CAPABILITIES,
-        },
-        ProviderInfo {
-            id: MetadataProvider::GoogleBooks,
-            display_name: MetadataProvider::GoogleBooks.display_name().to_string(),
-            configured: true,
-            requires_key: false,
-            capabilities: SEARCH_AND_COVER_CAPABILITIES,
-        },
-        ProviderInfo {
-            id: MetadataProvider::Hardcover,
-            display_name: MetadataProvider::Hardcover.display_name().to_string(),
-            configured: config.keys.hardcover.is_some(),
-            requires_key: true,
-            capabilities: SEARCH_AND_COVER_CAPABILITIES,
-        },
-    ]
+    MetadataProvider::ALL
+        .iter()
+        .copied()
+        .map(|id| {
+            // The roster comes from `ALL`; whether a provider needs a key, and
+            // whether it has one, stays an exhaustive match so a new variant
+            // has to answer both rather than inheriting someone else's answer.
+            let (configured, requires_key) = match id {
+                MetadataProvider::OpenLibrary | MetadataProvider::GoogleBooks => (true, false),
+                MetadataProvider::Hardcover => (config.keys.hardcover.is_some(), true),
+            };
+            ProviderInfo {
+                id,
+                display_name: id.display_name().to_string(),
+                configured,
+                requires_key,
+                capabilities: COMMON_CAPABILITIES,
+            }
+        })
+        .collect()
 }

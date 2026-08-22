@@ -11,7 +11,8 @@ use axum::{
     Json,
 };
 use omnibus_db::{self as db, worker::Task};
-use omnibus_shared::MetadataOverrides;
+use omnibus_shared::{detect_image_format, ExternalBookMeta, MetadataOverrides};
+use serde::Deserialize;
 
 use super::image_upload::extract_validated_image;
 use super::{internal, AppState};
@@ -143,6 +144,148 @@ pub(super) async fn post_ebook_cover(
         Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
         Err(e) => internal("get_book", e),
     }
+}
+
+/// JSON body for [`post_ebook_cover_from_url`]. Inline for the same reason
+/// [`super::author_photos::AuthorPhotoUrlBody`] is: one field, one call site.
+#[derive(Debug, Deserialize)]
+pub(super) struct CoverFromUrlBody {
+    url: String,
+}
+
+/// Apply a provider's cover by URL — the metadata editor's compare view
+/// pressing the arrow on the cover row.
+///
+/// The browser can't fetch a provider's image cross-origin to hand us bytes,
+/// so the server fetches it, which is the one place in this feature with a
+/// real security surface. Every gate lives in
+/// [`db::provider_cover_image_config`] and the fetch it configures: HTTPS
+/// only, hosts limited to the provider catalog's own (the same list the
+/// `img-src` CSP is built from), each redirect hop re-checked against both
+/// rather than trusted because the first hop was allowed, the IP-range guard
+/// before any connect, and a size cap that bounds memory whatever the origin
+/// advertises. The bytes are then sniffed here — an HTML error page served
+/// with an `image/*` content-type must not land on disk as a cover.
+///
+/// **Rate-limited** (mounted in `upload_router`): it carries no upload body,
+/// which is what keeps the other cover routes outside that limiter, but it is
+/// the only override route that spends an *outbound* fetch, and that is the
+/// cost worth bounding per IP.
+///
+/// After the fetch it is the multipart upload's tail unchanged —
+/// `persist_cover`, `has_cover_override`, thumbnail invalidation — so
+/// "revert to scanned cover" works on a provider cover exactly as it does on
+/// an uploaded one.
+pub(super) async fn post_ebook_cover_from_url(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+    Json(body): Json<CoverFromUrlBody>,
+) -> Response {
+    if !user.is_admin && !user.can_edit {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "edit permission required",
+        )
+            .into_response();
+    }
+    let url = body.url.trim();
+    if url.is_empty() {
+        return (axum::http::StatusCode::BAD_REQUEST, "url is required").into_response();
+    }
+    // Capped before the string reaches the fetch pipeline, sharing the cap
+    // `ExternalBookMeta` already applies to a provider `cover_url` — which is
+    // where every URL this route legitimately receives comes from.
+    if url.len() > ExternalBookMeta::COVER_URL_MAX_LEN {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            format!(
+                "url must be {} bytes or fewer",
+                ExternalBookMeta::COVER_URL_MAX_LEN
+            ),
+        )
+            .into_response();
+    }
+
+    let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
+        Err(e) => return internal("resolve_book_id_by_uuid", e),
+    };
+
+    let config = cover_fetch_config(&state);
+    let (advertised_mime, bytes) =
+        match db::author_photos::fetch_remote_image_with(url, &config).await {
+            Ok(pair) => pair,
+            Err(db::author_photos::FetchRemoteImageError::Http(e)) => {
+                // A transport failure against the *provider* is not this server
+                // erroring; 502 says whose fault it was.
+                tracing::warn!(error = ?e, "provider cover fetch failed");
+                return (
+                    axum::http::StatusCode::BAD_GATEWAY,
+                    "could not fetch the cover from that source",
+                )
+                    .into_response();
+            }
+            // Everything else is a refusal we made: bad scheme, host off the
+            // allowlist, blocked address, non-image content-type, too large.
+            Err(e) => return (axum::http::StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        };
+
+    // Magic bytes, not the remote Content-Type: a provider serving an HTML
+    // error page under `image/jpeg` must not be written as `override-<uuid>.jpg`
+    // and served back as a cover.
+    let mime = match detect_image_format(&bytes) {
+        Some(m) => m,
+        None => {
+            tracing::warn!(
+                advertised_mime,
+                "provider cover URL returned image content-type but bytes are not an image"
+            );
+            return (
+                axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "file at URL does not appear to be a valid image",
+            )
+                .into_response();
+        }
+    };
+
+    if let Err(response) = persist_cover(&state, &uuid, user.id, mime, Bytes::from(bytes)).await {
+        return response;
+    }
+    if let Err(e) = tokio::task::spawn_blocking(move || db::thumbs::invalidate_thumbs(id)).await {
+        return internal("spawn_blocking(invalidate_thumbs)", e);
+    }
+    match db::get_book(&state.pool, id).await {
+        Ok(Some(book)) => Json(book).into_response(),
+        Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
+        Err(e) => internal("get_book", e),
+    }
+}
+
+/// The terms [`post_ebook_cover_from_url`]'s fetch runs under.
+///
+/// Production is [`db::provider_cover_image_config`] unchanged: HTTPS only,
+/// hosts limited to the provider catalog's, private address ranges blocked.
+///
+/// **One flag relaxes it, and only for tests.** `AppState`'s injectable
+/// `RemoteImageConfig` (see `AppState::new_with_remote_image_config`) exists
+/// so an integration test can drive a `wiremock` origin bound to
+/// `127.0.0.1`, which is plaintext and private by nature — so the same flag
+/// that permits the address also permits the scheme and adds the loopback
+/// hosts, rather than each being a separate knob a production path could
+/// trip independently. A production `AppState` is built with `Default`, whose
+/// flag is `false`, so none of it applies; `cover_fetch_config_is_strict_by_default`
+/// is what holds that true.
+fn cover_fetch_config(state: &AppState) -> db::author_photos::RemoteImageConfig {
+    let loopback_testing = state.remote_image_config().allow_private_addresses;
+    let mut config = db::provider_cover_image_config(loopback_testing);
+    if loopback_testing {
+        config.require_https = false;
+        config.host_allowlist.push("127.0.0.1".to_string());
+        config.host_allowlist.push("localhost".to_string());
+    }
+    config
 }
 
 /// Revert an overridden cover back to the scanned original, preserving any

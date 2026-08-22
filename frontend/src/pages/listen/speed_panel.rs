@@ -59,113 +59,156 @@ pub(super) fn SpeedPanelBody(
                 }
                 div { class: "lp-speed-value", "{rate_label}" }
             }
+            SpeedPresetGrid { rate, rate_error, user_id, uuid: uuid.clone(), cur }
+            SpeedFineTune {
+                rate,
+                rate_error,
+                user_id,
+                uuid: uuid.clone(),
+                cur,
+                fill_width,
+                thumb_left,
+            }
+            SpeedStepper { rate, rate_error, user_id, uuid, cur, rate_precise }
+    }
+}
 
-            div { class: "lp-speed-grid",
-                for val in PRESETS.iter().copied() {
-                    {
-                        let uuid = uuid.clone();
-                        let is_on = (val - cur).abs() < STEP / 2.0;
-                        let class = if is_on { "lp-speed-btn on" } else { "lp-speed-btn" };
-                        rsx! {
-                            button {
-                                key: "{val}",
-                                class: class,
-                                r#type: "button",
-                                onclick: move |_| {
-                                    apply_rate(&mut rate, rate_error, user_id, &uuid, val);
-                                },
-                                "{val:.1}\u{00d7}"
-                            }
+/// The 0.5–2.0× preset grid — one toggle button per [`PRESETS`] value.
+#[component]
+fn SpeedPresetGrid(
+    mut rate: Signal<f64>,
+    rate_error: Signal<Option<String>>,
+    user_id: Option<i64>,
+    uuid: String,
+    cur: f64,
+) -> Element {
+    rsx! {
+        div { class: "lp-speed-grid",
+            for val in PRESETS.iter().copied() {
+                {
+                    let uuid = uuid.clone();
+                    let is_on = (val - cur).abs() < STEP / 2.0;
+                    let class = if is_on { "lp-speed-btn on" } else { "lp-speed-btn" };
+                    rsx! {
+                        button {
+                            key: "{val}",
+                            class: class,
+                            r#type: "button",
+                            onclick: move |_| {
+                                apply_rate(&mut rate, rate_error, user_id, &uuid, val);
+                            },
+                            "{val:.1}\u{00d7}"
                         }
                     }
                 }
             }
+        }
+    }
+}
 
-            div { class: "lp-speed-fine",
-                div { class: "lp-speed-fine-header",
-                    span { class: "label", "Fine-tune" }
-                    span { class: "label", "0.5\u{00d7} \u{2014} 3.0\u{00d7}" }
-                }
+/// The 0.5–3.0× fine-tune slider: tick marks, fill/thumb positioned from
+/// the caller's pre-derived `fill_width`/`thumb_left`, and the transparent
+/// `<input type=range>` overlaying them.
+#[component]
+fn SpeedFineTune(
+    mut rate: Signal<f64>,
+    rate_error: Signal<Option<String>>,
+    user_id: Option<i64>,
+    uuid: String,
+    cur: f64,
+    fill_width: String,
+    thumb_left: String,
+) -> Element {
+    rsx! {
+        div { class: "lp-speed-fine",
+            div { class: "lp-speed-fine-header",
+                span { class: "label", "Fine-tune" }
+                span { class: "label", "0.5\u{00d7} \u{2014} 3.0\u{00d7}" }
+            }
 
-                div { class: "lp-speed-fine-track",
-                    div { class: "lp-speed-fine-ticks",
-                        for i in 0..11 {
-                            {
-                                let h = if i % 5 == 0 { 12 } else { 7 };
-                                rsx! {
-                                    div {
-                                        key: "{i}",
-                                        class: "lp-speed-fine-tick",
-                                        style: "height: {h}px;",
-                                    }
+            div { class: "lp-speed-fine-track",
+                div { class: "lp-speed-fine-ticks",
+                    for i in 0..11 {
+                        {
+                            let h = if i % 5 == 0 { 12 } else { 7 };
+                            rsx! {
+                                div {
+                                    key: "{i}",
+                                    class: "lp-speed-fine-tick",
+                                    style: "height: {h}px;",
                                 }
                             }
                         }
                     }
-                    div { class: "lp-speed-fine-rail" }
-                    div { class: "lp-speed-fine-fill", style: "width: {fill_width};" }
-                    div { class: "lp-speed-fine-thumb", style: "left: {thumb_left};" }
+                }
+                div { class: "lp-speed-fine-rail" }
+                div { class: "lp-speed-fine-fill", style: "width: {fill_width};" }
+                div { class: "lp-speed-fine-thumb", style: "left: {thumb_left};" }
 
-                    {
-                        let uuid = uuid.clone();
-                        rsx! {
-                            input {
-                                r#type: "range",
-                                class: "lp-scrub-input",
-                                min: "{MIN_RATE}",
-                                max: "{MAX_RATE}",
-                                step: "{STEP}",
-                                value: "{cur}",
-                                "aria-label": "Fine-tune speed",
-                                style: "position:absolute; inset:0; opacity:0; cursor:pointer; width:100%; height:100%;",
-                                oninput: move |evt: Event<FormData>| {
-                                    if let Ok(v) = evt.value().parse::<f64>() {
-                                        apply_rate(&mut rate, rate_error, user_id, &uuid, v);
-                                    }
-                                },
-                            }
+                input {
+                    r#type: "range",
+                    class: "lp-scrub-input",
+                    min: "{MIN_RATE}",
+                    max: "{MAX_RATE}",
+                    step: "{STEP}",
+                    value: "{cur}",
+                    "aria-label": "Fine-tune speed",
+                    style: "position:absolute; inset:0; opacity:0; cursor:pointer; width:100%; height:100%;",
+                    oninput: move |evt: Event<FormData>| {
+                        if let Ok(v) = evt.value().parse::<f64>() {
+                            apply_rate(&mut rate, rate_error, user_id, &uuid, v);
                         }
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// The ±0.05 stepper: decrement/increment buttons flanking the precise
+/// rate readout.
+#[component]
+fn SpeedStepper(
+    mut rate: Signal<f64>,
+    rate_error: Signal<Option<String>>,
+    user_id: Option<i64>,
+    uuid: String,
+    cur: f64,
+    rate_precise: String,
+) -> Element {
+    rsx! {
+        div { class: "lp-speed-stepper",
+            {
+                let uuid = uuid.clone();
+                rsx! {
+                    button {
+                        class: "lp-speed-step-btn",
+                        r#type: "button",
+                        "aria-label": "Decrease speed",
+                        onclick: move |_| {
+                            apply_rate(&mut rate, rate_error, user_id, &uuid, cur - STEP);
+                        },
+                        "\u{2212}"
                     }
                 }
             }
-
-            div { class: "lp-speed-stepper",
-                {
-                    let uuid = uuid.clone();
-                    rsx! {
-                        button {
-                            class: "lp-speed-step-btn",
-                            r#type: "button",
-                            "aria-label": "Decrease speed",
-                            onclick: move |_| {
-                                apply_rate(&mut rate, rate_error, user_id, &uuid, cur - STEP);
-                            },
-                            "\u{2212}"
-                        }
-                    }
+            div { class: "lp-speed-step-value",
+                div { class: "mono", style: "font-size:16px; color:var(--ink-0);",
+                    "{rate_precise}"
                 }
-                div { class: "lp-speed-step-value",
-                    div { class: "mono", style: "font-size:16px; color:var(--ink-0);",
-                        "{rate_precise}"
-                    }
-                    div { class: "label", style: "margin-top:2px;",
-                        "0.05 steps"
-                    }
-                }
-                {
-                    let uuid = uuid.clone();
-                    rsx! {
-                        button {
-                            class: "lp-speed-step-btn",
-                            r#type: "button",
-                            "aria-label": "Increase speed",
-                            onclick: move |_| {
-                                apply_rate(&mut rate, rate_error, user_id, &uuid, cur + STEP);
-                            },
-                            "+"
-                        }
-                    }
+                div { class: "label", style: "margin-top:2px;",
+                    "0.05 steps"
                 }
             }
+            button {
+                class: "lp-speed-step-btn",
+                r#type: "button",
+                "aria-label": "Increase speed",
+                onclick: move |_| {
+                    apply_rate(&mut rate, rate_error, user_id, &uuid, cur + STEP);
+                },
+                "+"
+            }
+        }
     }
 }

@@ -8,11 +8,13 @@ use std::time::Duration;
 
 use anyhow::Context;
 use omnibus_shared::isbn::normalize_isbn;
-use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
+use omnibus_shared::metadata_lookup::{MetadataProvider, ProviderEdition};
 use serde::Deserialize;
 
 use super::super::{MetadataLookupConfig, SEARCH_LIMIT};
-use super::http::{base_url, client, publication_year, strip_url, upgrade_to_https};
+use super::http::{
+    base_url, client, paired_isbn10, publication_year, sanitize_genres, strip_url, upgrade_to_https,
+};
 
 /// Backoff between retries. Length + 1 is the attempt count. Deliberately
 /// short: a check-in scan is waiting on a spinner, and the failures this
@@ -27,6 +29,9 @@ struct GbResponse {
 
 #[derive(Debug, Deserialize)]
 struct GbItem {
+    /// The volume id — the handle a selected candidate is re-fetched by.
+    #[serde(default)]
+    id: Option<String>,
     #[serde(rename = "volumeInfo", default)]
     volume_info: Option<GbVolumeInfo>,
 }
@@ -49,10 +54,17 @@ struct GbVolumeInfo {
     image_links: Option<GbImageLinks>,
     #[serde(rename = "industryIdentifiers", default)]
     industry_identifiers: Vec<GbIndustryId>,
+    /// Google's own subject labels ("Fiction / Fantasy / Epic"), the closest
+    /// thing it publishes to a genre list.
+    #[serde(default)]
+    categories: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct GbIndustryId {
+    /// `ISBN_10`, `ISBN_13`, `ISSN`, or `OTHER`.
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
     #[serde(default)]
     identifier: Option<String>,
 }
@@ -140,7 +152,7 @@ fn volumes_url(config: &MetadataLookupConfig, q: &str) -> String {
 pub async fn by_isbn(
     config: &MetadataLookupConfig,
     isbn13: &str,
-) -> anyhow::Result<Option<ExternalBookMeta>> {
+) -> anyhow::Result<Option<ProviderEdition>> {
     if let Some(meta) = query_one(config, isbn13, &isbn_url(config, isbn13)).await? {
         return Ok(Some(meta));
     }
@@ -183,7 +195,7 @@ async fn query_one(
     config: &MetadataLookupConfig,
     isbn13: &str,
     url: &str,
-) -> anyhow::Result<Option<ExternalBookMeta>> {
+) -> anyhow::Result<Option<ProviderEdition>> {
     let resp = get(config, url).await?;
 
     let body: GbResponse = resp
@@ -191,18 +203,29 @@ async fn query_one(
         .await
         .context("google books response was not valid json")?;
 
-    let Some(info) = body.items.into_iter().find_map(|i| i.volume_info) else {
+    let Some((id, info)) = body.items.into_iter().find_map(volume) else {
         return Ok(None);
     };
-    Ok(map_volume(info, Some(isbn13)))
+    Ok(map_volume(id, info, Some(isbn13)))
 }
 
-/// Map one volume into `ExternalBookMeta`. `isbn13` is the caller's
+/// Split an item into its id and volume info, dropping items that carry no
+/// volume info at all.
+fn volume(item: GbItem) -> Option<(Option<String>, GbVolumeInfo)> {
+    let GbItem { id, volume_info } = item;
+    volume_info.map(|info| (id, info))
+}
+
+/// Map one volume into `ProviderEdition`. `isbn13` is the caller's
 /// authoritative ISBN when it has one (the ISBN-lookup path stores the
 /// *scanned* barcode); title search derives it from the volume's own industry
 /// identifiers instead. A volume without a title, or a search result without a
 /// valid ISBN, maps to `None` — the check-in flow keys on the ISBN downstream.
-fn map_volume(info: GbVolumeInfo, isbn13: Option<&str>) -> Option<ExternalBookMeta> {
+fn map_volume(
+    id: Option<String>,
+    info: GbVolumeInfo,
+    isbn13: Option<&str>,
+) -> Option<ProviderEdition> {
     let title = info.title.filter(|t| !t.trim().is_empty())?;
     let isbn13 = match isbn13 {
         Some(scanned) => scanned.to_string(),
@@ -220,8 +243,26 @@ fn map_volume(info: GbVolumeInfo, isbn13: Option<&str>) -> Option<ExternalBookMe
         .and_then(|l| l.thumbnail.or(l.small_thumbnail))
         .map(|u| upgrade_to_https(&u));
 
-    Some(ExternalBookMeta {
+    // Pair-checked against the ISBN-13 we are answering with: on the ISBN
+    // path that is the *scanned* barcode, and the bare-text fallback can
+    // surface a sibling edition whose ISBN-10 would name a different printing.
+    let isbn10 = paired_isbn10(
+        info.industry_identifiers
+            .iter()
+            .filter(|i| i.kind.as_deref() == Some("ISBN_10"))
+            .filter_map(|i| i.identifier.as_deref()),
+        &isbn13,
+    );
+
+    Some(ProviderEdition {
+        source: MetadataProvider::GoogleBooks,
+        // Google always ids its volumes; the `isbn:` fallback is a guard
+        // against a row that somehow arrives without one.
+        provider_ref: id
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| format!("isbn:{isbn13}")),
         isbn13,
+        isbn10,
         title,
         authors: info.authors,
         year: info.published_date.as_deref().and_then(publication_year),
@@ -232,8 +273,9 @@ fn map_volume(info: GbVolumeInfo, isbn13: Option<&str>) -> Option<ExternalBookMe
         description: info.description,
         cover_url,
         series: None,
+        series_index: None,
         first_publish_year: None,
-        source: MetadataProvider::GoogleBooks,
+        genres: sanitize_genres(info.categories),
     })
 }
 
@@ -267,7 +309,7 @@ pub(in crate::metadata_lookup) fn search_url(
 pub async fn by_title(
     config: &MetadataLookupConfig,
     query: &str,
-) -> anyhow::Result<Vec<ExternalBookMeta>> {
+) -> anyhow::Result<Vec<ProviderEdition>> {
     let url = search_url(config, query)?;
     let resp = get(config, &url).await?;
     let body: GbResponse = resp
@@ -277,7 +319,7 @@ pub async fn by_title(
     Ok(body
         .items
         .into_iter()
-        .filter_map(|i| i.volume_info)
-        .filter_map(|info| map_volume(info, None))
+        .filter_map(volume)
+        .filter_map(|(id, info)| map_volume(id, info, None))
         .collect())
 }

@@ -22,6 +22,9 @@ pub(super) fn ReaderScrim(onclick: EventHandler<MouseEvent>) -> Element {
 /// sections. `extra_class` appends additional drawer classes (the search
 /// panel's `rd-search-drawer`, which lets the phone breakpoint take it
 /// full-screen).
+// Deliberately left at six props: four of them (`head`, `actions`, `children`,
+// `on_close`) are slot/handler idioms a struct can't carry without losing the
+// rsx slot syntax, so grouping would only bundle the two chrome strings.
 #[component]
 pub(super) fn ReaderDrawerShell(
     testid: String,

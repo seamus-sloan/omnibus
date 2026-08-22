@@ -6,9 +6,9 @@ use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
 use super::fields::{label_to_id, MeArea, MeField, MeLabel};
-use super::hardcover_fetch::HardcoverFetchPanel;
+use super::metadata_search::MetadataSearchPanel;
 use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestionItem};
-use crate::components::{FetchSummaryButton, SuggestField, SuggestFieldOptions};
+use crate::components::{SuggestField, SuggestFieldOptions};
 
 /// Per-field editable signals threaded through the form rows from `MetadataEditForm`.
 #[derive(Clone, Copy, PartialEq)]
@@ -48,11 +48,17 @@ pub(super) fn FormGrid(
     fields: FormFields,
     suggestions: FormSuggestions,
     uuid: String,
+    /// The book as the server last reported it — the compare view's cover
+    /// row needs the current cover to show beside the source's.
+    book: EbookMetadata,
+    /// Fires with the merged book after the cover row writes one, so the
+    /// sidebar's preview and its "revert" affordance stay in step without a
+    /// reload.
+    on_cover_applied: EventHandler<EbookMetadata>,
 ) -> Element {
     rsx! {
         div { class: "me-form",
-            HardcoverFetchPanel { uuid: uuid.clone(), fields }
-            FieldGrid { orig, fields, suggestions, uuid }
+            FieldGrid { orig, fields, suggestions, uuid, book, on_cover_applied }
             TagsSection { tags: fields.tags, tag_suggestions: suggestions.tags }
             GenresSection { genres: fields.genres, genre_suggestions: suggestions.genres }
             SeriesSection {
@@ -189,6 +195,8 @@ fn field_grid_authors_and_description(
     fields: FormFields,
     author_suggestions: Signal<Vec<SuggestionItem>>,
     uuid: String,
+    book: EbookMetadata,
+    on_cover_applied: EventHandler<EbookMetadata>,
 ) -> Element {
     let authors = fields.authors;
     let mut description = fields.description;
@@ -230,13 +238,11 @@ fn field_grid_authors_and_description(
             hint: "plain text or HTML",
         }
 
-        // Always-present "Fetch Summary" button that fills the description
-        // above from Hardcover/OpenLibrary; the user still saves.
+        // Sits where "Fetch Summary" did, below the description: the field
+        // it most often fills, and the last thing a reader wants help with
+        // before saving.
         div { class: "me-field-full",
-            FetchSummaryButton {
-                uuid,
-                on_fetched: move |text: String| description.set(text),
-            }
+            MetadataSearchPanel { fields, orig, uuid, book, on_cover_applied }
         }
     }
 }
@@ -249,11 +255,20 @@ fn FieldGrid(
     fields: FormFields,
     suggestions: FormSuggestions,
     uuid: String,
+    book: EbookMetadata,
+    on_cover_applied: EventHandler<EbookMetadata>,
 ) -> Element {
     rsx! {
         div { class: "me-field-grid",
             {field_grid_identity_rows(orig, fields)}
-            {field_grid_authors_and_description(orig, fields, suggestions.authors, uuid)}
+            {field_grid_authors_and_description(
+                orig,
+                fields,
+                suggestions.authors,
+                uuid,
+                book,
+                on_cover_applied,
+            )}
         }
     }
 }

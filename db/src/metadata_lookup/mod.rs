@@ -1,17 +1,24 @@
-//! Server-side book-metadata resolution for scans that miss the library. Two
-//! entry points, one per question a caller can ask —
-//! [`search_provider_by_isbn`] and [`search_provider_by_title`] — each walking
-//! the same provider ladder, so callers never name a provider or know which are
-//! configured. See [`providers`][self::providers] for the per-provider contract.
+//! Server-side book-metadata resolution against the external providers. Two
+//! shapes for two questions: the **ladder** ([`search_provider_by_isbn`] /
+//! [`search_provider_by_title`]) walks providers in order and returns the first
+//! good answer — right for a check-in scan; the **fan-out**
+//! ([`search_all_providers`]) asks every configured provider at once, keeping
+//! answers attributed and un-collapsed — right for the editor's edition picker.
 
 mod config;
+mod cover;
+mod hydrate;
 mod providers;
+mod search;
 
 #[cfg(test)]
 mod tests;
 
 pub use config::{MetadataLookupConfig, ProviderKeys};
-pub use providers::{catalog, openlibrary_enrich, OlEnrichment};
+pub use cover::{provider_cover_image_config, MAX_COVER_REDIRECTS};
+pub use hydrate::hydrate_edition;
+pub use providers::{all_cover_hosts, catalog, cover_hosts, openlibrary_enrich, OlEnrichment};
+pub use search::{search_all_providers, FANOUT_PROVIDER_LIMIT};
 
 use omnibus_shared::isbn::{normalize_isbn, IsbnError};
 use omnibus_shared::metadata_lookup::ExternalBookMeta;
@@ -95,7 +102,13 @@ async fn climb(
 
     for rung in providers::ladder(config) {
         match providers::run(rung.provider, config, query).await {
-            Ok(found) if !found.is_empty() => return Ok(dedupe_by_isbn(found)),
+            // The ladder hands callers the frozen check-in payload, not the
+            // picker's richer candidate.
+            Ok(found) if !found.is_empty() => {
+                return Ok(dedupe_by_isbn(
+                    found.into_iter().map(ExternalBookMeta::from).collect(),
+                ))
+            }
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!("{:?} lookup failed, trying next: {e:#}", rung.provider);

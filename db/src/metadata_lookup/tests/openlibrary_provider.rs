@@ -2,14 +2,17 @@
 //! enrichment lookup (series, first-publish year) that fills the fields no
 //! other provider carries. Ladder-level ordering lives in the parent module.
 
-use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
+use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider, ProviderEdition};
 use serde_json::json;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::super::providers::openlibrary;
 use super::super::*;
-use super::{config_for, gb_hit, mount_gb, mount_ol, ol_hit, ISBN13, OL_PATH};
+use super::{
+    config_for, gb_hit, mount_gb, mount_ol, mount_ol_search, ol_hit, ol_search_hit, ISBN10, ISBN13,
+    OL_PATH, QUERY,
+};
 
 // ── invalid response bodies ──────────────────────────────────────
 
@@ -119,4 +122,112 @@ async fn openlibrary_enrich_drops_a_blank_or_oversized_series() {
     // posted back on the write paths, where `validate` would reject them.
     assert_eq!(enrichment.series.as_deref(), Some("Real Series"));
     assert_eq!(enrichment.first_publish_year, None);
+}
+
+// ── the picker's fields: genres, print pages, ISBN-10 ────────────
+
+#[tokio::test]
+async fn openlibrary_lookup_populates_genres_print_pages_and_isbn10() {
+    let server = MockServer::start().await;
+    mount_ol(&server, ol_hit()).await;
+
+    let edition = openlibrary::by_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the fixture record must resolve");
+    assert_eq!(
+        edition.genres,
+        vec!["Java (Computer program language)", "Programming"]
+    );
+    assert_eq!(edition.pages, Some(416));
+    assert_eq!(edition.isbn10.as_deref(), Some(ISBN10));
+}
+
+#[tokio::test]
+async fn openlibrary_caps_a_long_subject_list_and_keeps_its_order() {
+    // Open Library's subject lists run to dozens of entries — genre, setting,
+    // and character names mixed — and a chip editor handed all of them is
+    // unusable. The cap keeps the head, which is the relevant end.
+    let server = MockServer::start().await;
+    let subjects: Vec<serde_json::Value> = (0..40)
+        .map(|i| json!({ "name": format!("Subject {i}") }))
+        .collect();
+    let mut body = ol_hit();
+    body[format!("ISBN:{ISBN13}")]["subjects"] = json!(subjects);
+    mount_ol(&server, body).await;
+
+    let edition = openlibrary::by_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the fixture record must resolve");
+    assert_eq!(edition.genres.len(), ProviderEdition::MAX_GENRES);
+    assert_eq!(edition.genres[0], "Subject 0");
+    assert_eq!(
+        edition.genres[ProviderEdition::MAX_GENRES - 1],
+        format!("Subject {}", ProviderEdition::MAX_GENRES - 1)
+    );
+}
+
+#[tokio::test]
+async fn openlibrary_leaves_the_new_fields_unset_when_the_record_omits_them() {
+    // A record reporting 0 pages is one whose length Open Library doesn't
+    // know — `None`, never `Some(0)`.
+    let server = MockServer::start().await;
+    mount_ol(
+        &server,
+        json!({ format!("ISBN:{ISBN13}"): {
+            "title": "Effective Java",
+            "number_of_pages": 0,
+        }}),
+    )
+    .await;
+
+    let edition = openlibrary::by_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the fixture record must resolve");
+    assert!(edition.genres.is_empty());
+    assert_eq!(edition.pages, None);
+    assert_eq!(edition.isbn10, None);
+}
+
+#[tokio::test]
+async fn openlibrary_search_pairs_the_isbn10_with_the_edition_it_answered_with() {
+    // `search.json` answers *works*: one `isbn` list spans every edition, so
+    // only the entry that re-derives the returned ISBN-13 is safe to report.
+    let server = MockServer::start().await;
+    mount_ol_search(&server, ol_search_hit()).await;
+
+    let results = openlibrary::by_title(&config_for(&server), QUERY)
+        .await
+        .unwrap();
+    let first = results.first().expect("the fixture doc must map");
+    assert_eq!(first.isbn13, ISBN13);
+    assert_eq!(first.isbn10.as_deref(), Some(ISBN10));
+    assert_eq!(
+        first.genres,
+        vec!["Java (Computer program language)", "Programming"]
+    );
+}
+
+#[tokio::test]
+async fn openlibrary_search_drops_an_isbn10_from_another_edition_of_the_work() {
+    let server = MockServer::start().await;
+    mount_ol_search(
+        &server,
+        json!({ "docs": [{
+            "title": "Effective Java",
+            // The work's other printing only: it pairs with a different
+            // ISBN-13 than the one this candidate is answered with.
+            "isbn": [ISBN13, "0141439513"],
+        }]}),
+    )
+    .await;
+
+    let results = openlibrary::by_title(&config_for(&server), QUERY)
+        .await
+        .unwrap();
+    let first = results.first().expect("the fixture doc must map");
+    assert_eq!(first.isbn13, ISBN13);
+    assert_eq!(first.isbn10, None);
 }

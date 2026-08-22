@@ -36,6 +36,12 @@ pub use progress::{ScanUpdate, PHASE_PARSING, PHASE_SYNCING, PHASE_WALKING};
 pub enum IndexerError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+    /// A non-database failure surfaced from a dependency of these reads.
+    /// Coarse and message-carrying: no caller branches on which dependency
+    /// it came from, and folding it into `Db` would make that variant mean
+    /// "a database error occurred" only most of the time.
+    #[error("{0}")]
+    Other(String),
 }
 
 impl From<crate::settings::SettingsError> for IndexerError {
@@ -44,14 +50,13 @@ impl From<crate::settings::SettingsError> for IndexerError {
             crate::settings::SettingsError::Db(inner) => IndexerError::Db(inner),
             // `Validation`/`Json` are only produced by `set_hardcover_api_key`
             // and the F5.1 metadata-precedence writes, which no indexer path
-            // calls — keep the arms exhaustive but do not widen
-            // `IndexerError`'s surface for cases the caller graph can't reach.
-            crate::settings::SettingsError::Validation(msg) => IndexerError::Db(
-                sqlx::Error::Protocol(format!("unexpected settings validation error: {msg}")),
-            ),
-            crate::settings::SettingsError::Json(inner) => IndexerError::Db(sqlx::Error::Protocol(
-                format!("unexpected settings JSON error: {inner}"),
-            )),
+            // calls.
+            crate::settings::SettingsError::Validation(msg) => {
+                IndexerError::Other(format!("unexpected settings validation error: {msg}"))
+            }
+            crate::settings::SettingsError::Json(inner) => {
+                IndexerError::Other(format!("unexpected settings JSON error: {inner}"))
+            }
         }
     }
 }

@@ -370,3 +370,91 @@ async fn convert_book_propagates_db_error_when_pool_is_closed() {
     let err = convert_book(&pool, 1, "EPUB", "MOBI").await.unwrap_err();
     assert!(matches!(err, ConvertError::Failed(_)), "got {err:?}");
 }
+
+// ---------------------------------------------------------------------------
+// persist: converted output becomes a book_files row
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn convert_book_inserts_a_book_files_row_for_the_converted_format() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let lib = tempfile::tempdir().unwrap();
+    let book_id = seed_epub_book(&pool, lib.path()).await;
+
+    let cache = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let script = bin_dir.path().join("ebook-convert");
+    let counter = bin_dir.path().join("runs");
+    write_fake_ebook_convert(&script, &counter);
+    let _env = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(cache.path().as_os_str()))
+        .also_set_os("OMNIBUS_EBOOK_CONVERT_PATH", Some(script.as_os_str()));
+
+    let out = convert_book(&pool, book_id, "EPUB", "MOBI").await.unwrap();
+
+    let files = crate::books::get_book_files(&pool, book_id).await.unwrap();
+    let mobi = files
+        .iter()
+        .find(|f| f.format.eq_ignore_ascii_case("MOBI"))
+        .expect("converted MOBI row present");
+    assert_eq!(
+        mobi.size_bytes,
+        std::fs::metadata(&out).unwrap().len() as i64
+    );
+
+    // AC2: both formats resolve to the same book identity and are listed
+    // together, and the row's path reconstructs back to the real cache file.
+    assert!(files.iter().any(|f| f.format.eq_ignore_ascii_case("EPUB")));
+    let resolved = crate::book_file_path(&pool, book_id, "MOBI").await.unwrap();
+    assert_eq!(resolved, Some(out));
+}
+
+#[tokio::test]
+async fn reconverting_the_same_format_updates_the_existing_row_instead_of_duplicating() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let lib = tempfile::tempdir().unwrap();
+    let book_id = seed_epub_book(&pool, lib.path()).await;
+
+    let cache = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let script = bin_dir.path().join("ebook-convert");
+    let counter = bin_dir.path().join("runs");
+    write_fake_ebook_convert(&script, &counter);
+    let _env = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(cache.path().as_os_str()))
+        .also_set_os("OMNIBUS_EBOOK_CONVERT_PATH", Some(script.as_os_str()));
+
+    let first_out = convert_book(&pool, book_id, "EPUB", "MOBI").await.unwrap();
+    // Re-run the same conversion; the second run must upsert the same
+    // `book_files` row rather than insert a duplicate (AC3).
+    let second_out = convert_book(&pool, book_id, "EPUB", "MOBI").await.unwrap();
+    assert_eq!(second_out, first_out);
+    assert_eq!(run_count(&counter), 2, "both runs actually re-converted");
+
+    let files = crate::books::get_book_files(&pool, book_id).await.unwrap();
+    let mobi_rows: Vec<_> = files
+        .iter()
+        .filter(|f| f.format.eq_ignore_ascii_case("MOBI"))
+        .collect();
+    assert_eq!(mobi_rows.len(), 1, "got {mobi_rows:?}");
+}
+
+#[tokio::test]
+async fn converting_two_different_target_formats_produces_two_distinct_converted_rows() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let lib = tempfile::tempdir().unwrap();
+    let book_id = seed_epub_book(&pool, lib.path()).await;
+
+    let cache = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let script = bin_dir.path().join("ebook-convert");
+    let counter = bin_dir.path().join("runs");
+    write_fake_ebook_convert(&script, &counter);
+    let _env = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(cache.path().as_os_str()))
+        .also_set_os("OMNIBUS_EBOOK_CONVERT_PATH", Some(script.as_os_str()));
+
+    convert_book(&pool, book_id, "EPUB", "MOBI").await.unwrap();
+    convert_book(&pool, book_id, "EPUB", "AZW3").await.unwrap();
+
+    let files = crate::books::get_book_files(&pool, book_id).await.unwrap();
+    assert!(files.iter().any(|f| f.format.eq_ignore_ascii_case("MOBI")));
+    assert!(files.iter().any(|f| f.format.eq_ignore_ascii_case("AZW3")));
+}

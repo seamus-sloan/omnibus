@@ -195,3 +195,9 @@ test-support = []
 omnibus-db = { path = ".", features = ["test-support"] }
 tempfile.workspace = true
 wiremock = "0.6"
+# Only to hand-build a 3xx `reqwest::Response` for the redirect re-gate
+# tests: `reqwest::Response`'s sole public constructor is
+# `From<http::Response<_>>`, and the per-hop scheme check can't be reached
+# through wiremock, which serves plaintext. Already in the tree via reqwest.
+http = "1"
+

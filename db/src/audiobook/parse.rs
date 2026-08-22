@@ -171,8 +171,13 @@ struct BookLevel {
 
 /// Parse a single [`super::AudiobookGroup`] into an [`IndexedAudiobook`].
 fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> IndexedAudiobook {
+    // Single-file groups (m4b/m4a) carry the file's own relative path as
+    // `group_path`; mp3 folder groups carry their parent directory. The
+    // path-derived metadata fallback needs to know which shape it is
+    // looking at, so the directory offsets line up either way.
+    let single_file = group.parts.len() == 1 && group.parts[0].filename == group.group_path;
     let (parts_work, first_cover) = extract_tags_and_metadata(&group, library_root);
-    let (book_level, parts) = build_parts_list(parts_work, &group.group_path);
+    let (book_level, parts) = build_parts_list(parts_work, &group.group_path, single_file);
     let chapters = apply_chapters(&parts, library_root, &group.format);
 
     let accent = first_cover
@@ -292,6 +297,7 @@ fn extract_tags_and_metadata(
 fn build_parts_list(
     mut parts_work: Vec<PartWork>,
     group_path: &str,
+    single_file: bool,
 ) -> (BookLevel, Vec<AudiobookPart>) {
     parts_work.sort_by(|a, b| {
         a.sort_track
@@ -299,19 +305,19 @@ fn build_parts_list(
             .then_with(|| a.filename.cmp(&b.filename))
     });
 
-    // Derive book-level metadata from the sorted parts. Title falls back
-    // to the album tag, then to the group path's leaf — every m4b/m4a is
-    // one-file-per-group post-fix, so the leaf reads as the file stem
-    // (or for an mp3 folder group, the folder name).
+    // Derive book-level metadata from the sorted parts: album tag first,
+    // artist tag first, then the path-derived fallback for whatever the
+    // tags left empty.
+    let (fallback_title, fallback_creator) = path_fallback(group_path, single_file);
     let title = parts_work
         .iter()
         .find_map(|p| p.meta.album.clone())
-        .unwrap_or_else(|| leaf_name(group_path));
+        .unwrap_or(fallback_title);
 
     let creator_name = parts_work
         .iter()
         .find_map(|p| p.meta.artist.clone())
-        .or_else(|| parent_name(group_path));
+        .or(fallback_creator);
 
     let total_secs: f64 = parts_work.iter().map(|p| p.duration_seconds).sum();
     let description = if total_secs > 0.0 {
@@ -392,6 +398,58 @@ fn offset_chapters(
         .collect()
 }
 
+/// Path-derived `(title, creator)` fallback for groups whose tags carry
+/// neither. An mp3 folder group's `group_path` *is* the title directory, so
+/// leaf = title and parent = creator. A single-file group's `group_path` is
+/// the file itself, one level deeper — under the standard
+/// `<Author>/<Title>/<file>` layout the title is the parent directory and
+/// the creator its grandparent (#2073). Shallower single-file layouts
+/// degrade: `<Author>/<file>` takes parent as creator and the file stem
+/// (minus any duplicated `<creator> - ` prefix) as title; a bare `<file>`
+/// keeps the stem with no creator.
+fn path_fallback(group_path: &str, single_file: bool) -> (String, Option<String>) {
+    if !single_file {
+        return (leaf_name(group_path), parent_name(group_path));
+    }
+    let path = Path::new(group_path);
+    let parent = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty());
+    let grandparent = path
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty());
+    match (parent, grandparent) {
+        (Some(title_dir), Some(author_dir)) => {
+            (title_dir.to_string(), Some(author_dir.to_string()))
+        }
+        (Some(author_dir), None) => {
+            let creator = author_dir.to_string();
+            let title = strip_creator_prefix(&leaf_name(group_path), &creator);
+            (title, Some(creator))
+        }
+        _ => (leaf_name(group_path), None),
+    }
+}
+
+/// Strip a leading `"<creator> - "` from a filename-derived title so
+/// `Author - Title.m4b` shapes don't duplicate the author into the title.
+/// ASCII-case-insensitive on the creator; a title that is *only* the prefix is
+/// left untouched rather than emptied.
+fn strip_creator_prefix(title: &str, creator: &str) -> String {
+    title
+        .get(..creator.len())
+        .filter(|head| head.eq_ignore_ascii_case(creator))
+        .and_then(|_| title.get(creator.len()..))
+        .and_then(|rest| rest.strip_prefix(" - "))
+        .filter(|rest| !rest.trim().is_empty())
+        .map_or_else(|| title.to_string(), |rest| rest.trim_start().to_string())
+}
+
 /// Leaf directory name or file stem from a group path (title fallback).
 fn leaf_name(group_path: &str) -> String {
     PathBuf::from(group_path)
@@ -450,7 +508,7 @@ pub fn parse_audiobook_targets(targets: Vec<AudiobookParseTarget>) -> Vec<super:
 #[cfg(test)]
 mod tests {
     use super::super::chapters::RawChapter;
-    use super::offset_chapters;
+    use super::{offset_chapters, path_fallback, strip_creator_prefix};
 
     #[test]
     fn offset_chapters_shifts_start_and_end_by_offset() {
@@ -473,5 +531,53 @@ mod tests {
         assert_eq!(shifted[0].end_ms, 11_000);
         assert_eq!(shifted[1].start_ms, 11_000);
         assert_eq!(shifted[1].end_ms, 12_500);
+    }
+
+    #[test]
+    fn path_fallback_single_file_reads_title_from_parent_and_creator_from_grandparent() {
+        let (title, creator) = path_fallback(
+            "Logan Karlie/Dream by the Shadows/Logan Karlie - Dream by the Shadows.m4b",
+            true,
+        );
+        assert_eq!(title, "Dream by the Shadows");
+        assert_eq!(creator.as_deref(), Some("Logan Karlie"));
+    }
+
+    #[test]
+    fn path_fallback_single_file_at_depth_two_takes_parent_as_creator_and_strips_prefix() {
+        let (title, creator) = path_fallback("Andy Weir/Andy Weir - Project Hail Mary.m4b", true);
+        assert_eq!(title, "Project Hail Mary");
+        assert_eq!(creator.as_deref(), Some("Andy Weir"));
+    }
+
+    #[test]
+    fn path_fallback_single_file_at_root_keeps_stem_with_no_creator() {
+        let (title, creator) = path_fallback("Dracula Pt1.m4b", true);
+        assert_eq!(title, "Dracula Pt1");
+        assert_eq!(creator, None);
+    }
+
+    #[test]
+    fn path_fallback_folder_group_keeps_leaf_title_and_parent_creator() {
+        let (title, creator) = path_fallback("Bram Stoker/Dracula", false);
+        assert_eq!(title, "Dracula");
+        assert_eq!(creator.as_deref(), Some("Bram Stoker"));
+    }
+
+    #[test]
+    fn strip_creator_prefix_is_case_insensitive_and_keeps_unrelated_titles() {
+        assert_eq!(
+            strip_creator_prefix("andy weir - Project Hail Mary", "Andy Weir"),
+            "Project Hail Mary"
+        );
+        assert_eq!(
+            strip_creator_prefix("Project Hail Mary", "Andy Weir"),
+            "Project Hail Mary"
+        );
+        // A title that is only the prefix is left untouched rather than emptied.
+        assert_eq!(
+            strip_creator_prefix("Andy Weir - ", "Andy Weir"),
+            "Andy Weir - "
+        );
     }
 }

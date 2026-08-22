@@ -21,9 +21,10 @@ mod tests;
 /// minutes of review while keeping the per-card hydration queries bounded.
 pub const REVIEW_QUEUE_MAX: i64 = 50;
 
-/// Errors from the review queue. The first three are internal faults (a DB
-/// failure, or a stored row this build can't decode); the rest are decisions
-/// a caller can render verbatim.
+/// Errors from the review queue. [`Self::Db`], [`Self::Payload`] and
+/// [`Self::UnknownToken`] are internal faults — a DB failure, a stored row this
+/// build can't decode, and a token that names no known suggestion;
+/// [`Self::Refused`] is the sentence a caller renders verbatim.
 #[derive(Debug, thiserror::Error)]
 pub enum CleanupStoreError {
     #[error(transparent)]
@@ -32,14 +33,10 @@ pub enum CleanupStoreError {
     Payload(#[from] serde_json::Error),
     #[error("unrecognized cleanup token: {0}")]
     UnknownToken(String),
-    #[error("decision must be accepted or rejected")]
-    NotADecision,
-    #[error("suggestion not found")]
-    NotFound,
-    #[error("suggestion has already been reviewed")]
-    AlreadyReviewed,
-    #[error("this suggestion cannot be applied automatically")]
-    Unsupported,
+    /// The review action can't proceed and the reason is safe to show. Coarse
+    /// on purpose: no caller branches on which reason, they all render it.
+    #[error("{0}")]
+    Refused(String),
     #[error(transparent)]
     Apply(#[from] CleanupApplyError),
 }
@@ -142,13 +139,17 @@ pub async fn decide_suggestion(
     admin_id: i64,
 ) -> Result<(), CleanupStoreError> {
     if decision == Decision::Pending {
-        return Err(CleanupStoreError::NotADecision);
+        return Err(CleanupStoreError::Refused(
+            "decision must be accepted or rejected".to_string(),
+        ));
     }
     let row = load_suggestion(pool, id)
         .await?
-        .ok_or(CleanupStoreError::NotFound)?;
+        .ok_or_else(|| CleanupStoreError::Refused("suggestion not found".to_string()))?;
     if row.decision != Decision::Pending {
-        return Err(CleanupStoreError::AlreadyReviewed);
+        return Err(CleanupStoreError::Refused(
+            "suggestion has already been reviewed".to_string(),
+        ));
     }
     if decision == Decision::Accepted {
         apply_suggestion(pool, &row, admin_id).await?;
@@ -369,7 +370,11 @@ async fn apply_suggestion(
         (CleanupKind::Author, CleanupAction::Delete, CleanupPayload::Delete { entity_id, .. }) => {
             apply_delete_author(pool, *entity_id, id, by).await?
         }
-        _ => return Err(CleanupStoreError::Unsupported),
+        _ => {
+            return Err(CleanupStoreError::Refused(
+                "this suggestion cannot be applied automatically".to_string(),
+            ))
+        }
     };
     Ok(())
 }

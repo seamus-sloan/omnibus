@@ -4503,6 +4503,7 @@ dependencies = [
  "epub",
  "futures",
  "getrandom 0.3.4",
+ "http",
  "image",
  "lettre",
  "lofty",

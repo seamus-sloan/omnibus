@@ -40,12 +40,11 @@ pub enum CleanupApplyError {
     Overrides(#[from] MetadataOverridesError),
     #[error("entity not found: {0}")]
     NotFound(i64),
-    #[error("merge source and canonical are the same entity: {0}")]
-    CanonicalIsSource(i64),
-    #[error("merge requires at least one source entity")]
-    EmptySources,
-    #[error("tag split requires at least two atoms")]
-    TooFewAtoms,
+    /// A caller's arguments fail a primitive's own precondition. Coarse on
+    /// purpose: no caller branches on *which* precondition, every one of them
+    /// is rendered as this sentence.
+    #[error("{0}")]
+    InvalidRequest(String),
     #[error("cleanup log entry not found: {0}")]
     LogNotFound(i64),
     #[error("cleanup was already undone")]
@@ -136,10 +135,14 @@ async fn apply_merge(
     applied_by: Option<i64>,
 ) -> Result<i64, CleanupApplyError> {
     if source_ids.is_empty() {
-        return Err(CleanupApplyError::EmptySources);
+        return Err(CleanupApplyError::InvalidRequest(
+            "merge requires at least one source entity".to_string(),
+        ));
     }
     if source_ids.contains(&canonical_id) {
-        return Err(CleanupApplyError::CanonicalIsSource(canonical_id));
+        return Err(CleanupApplyError::InvalidRequest(format!(
+            "merge source and canonical are the same entity: {canonical_id}"
+        )));
     }
 
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
@@ -381,7 +384,9 @@ pub async fn apply_tag_split(
     applied_by: Option<i64>,
 ) -> Result<i64, CleanupApplyError> {
     if atoms.len() < 2 {
-        return Err(CleanupApplyError::TooFewAtoms);
+        return Err(CleanupApplyError::InvalidRequest(
+            "tag split requires at least two atoms".to_string(),
+        ));
     }
 
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;

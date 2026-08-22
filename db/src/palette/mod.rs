@@ -40,6 +40,12 @@ use tags::{count_tags, search_tags};
 pub enum PaletteError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+    /// A non-database failure surfaced from a dependency of these reads.
+    /// Coarse and message-carrying: no caller branches on the source, and
+    /// folding it into `Db` would make that variant mean "a database error
+    /// occurred" only most of the time.
+    #[error("{0}")]
+    Other(String),
 }
 
 impl From<crate::metadata_overrides::MetadataOverridesError> for PaletteError {
@@ -58,7 +64,7 @@ impl From<crate::metadata_overrides::MetadataOverridesError> for PaletteError {
             other @ (crate::metadata_overrides::MetadataOverridesError::BookNotFound(_)
             | crate::metadata_overrides::MetadataOverridesError::TooManyValues {
                 ..
-            }) => PaletteError::Db(sqlx::Error::Protocol(other.to_string())),
+            }) => PaletteError::Other(other.to_string()),
         }
     }
 }

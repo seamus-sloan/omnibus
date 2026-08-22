@@ -132,10 +132,12 @@ pub mod search_palette;
 #[cfg(not(feature = "mobile"))]
 pub mod worker_status;
 
-// Play / open-book / headphones marks shared by the two web "continue
-// reading" surfaces (user-menu resume row, landing hero CTA) and the
-// book-detail "Your progress" rows.
-#[cfg(not(feature = "mobile"))]
+// Inline SVG marks shared across surfaces: the play / open-book / headphones
+// "continue reading" glyphs (user-menu resume row, landing hero CTA,
+// book-detail "Your progress"), and the sparkle both fetch-from-outside
+// actions draw. Ungated — it is rsx and path data with no platform
+// dependency, and `FetchSummaryButton` reaches it from the mobile
+// book-detail screen.
 pub mod glyphs;
 
 #[cfg(not(feature = "mobile"))]

@@ -1258,6 +1258,16 @@ async fn get_shelf_propagates_db_error_when_pool_is_closed() {
     assert!(matches!(err, ShelfError::Sqlx(_)));
 }
 
+#[tokio::test]
+async fn create_shelf_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = create_shelf(&pool, 1, &manual_req("Closed", vec![]))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ShelfError::Sqlx(_)));
+}
+
 // -----------------------------------------------------------------
 // Built-in Wishlist system shelf (#1187)
 // -----------------------------------------------------------------

@@ -51,6 +51,7 @@ pub(crate) async fn fixture_loopback_remote_image() -> (Router, AppState, sqlx::
         pool.clone(),
         db::author_photos::RemoteImageConfig {
             allow_private_addresses: true,
+            ..db::author_photos::RemoteImageConfig::default()
         },
     );
     let app = rest_router(state.clone());

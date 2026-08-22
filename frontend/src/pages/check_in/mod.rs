@@ -27,7 +27,8 @@ use link::LinkExistingScreen;
 use lookup::LookupScreen;
 use scan::ScanScreen;
 use screens::{
-    ChooseScreen, CloseMatchScreen, ConfirmScreen, ResolvingScreen, SuccessScreen, UnresolvedScreen,
+    ChooseAction, ChooseScreen, CloseMatchScreen, ConfirmScreen, ResolvingScreen, SuccessScreen,
+    UnresolvedScreen,
 };
 
 /// Whether the check-in overlay is open. Provided at [`crate::App`] scope so
@@ -501,14 +502,19 @@ fn choose_stage(
         online: online.clone(),
     };
     let isbn = online.isbn13.clone();
+    let on_own_it = handlers.on_own_it;
+    let on_wishlist = handlers.on_wishlist;
+    let on_link = go_to_link(state, isbn, origin);
     rsx! {
         ChooseScreen {
             online,
             state,
-            on_own_it: handlers.on_own_it,
-            on_wishlist: handlers.on_wishlist,
-            on_link: go_to_link(state, isbn, origin),
-            on_restart,
+            on_action: EventHandler::new(move |action: ChooseAction| match action {
+                ChooseAction::OwnIt(meta) => on_own_it.call(meta),
+                ChooseAction::Wishlist(req) => on_wishlist.call(req),
+                ChooseAction::Link => on_link.call(()),
+                ChooseAction::Restart => on_restart.call(()),
+            }),
         }
     }
 }
