@@ -53,7 +53,6 @@ jobs:
               - "flake.nix"
               - "scripts/fetch-fixtures.sh"
               - ".github/workflows/e2e.yml"
-              - ".github/actions/ci-gate/action.yml"
               - ".github/actions/publish-playwright-report/**"
   # Compile the fullstack web bundle (native server binary + WASM client)
   # in release mode once and stash it in the GHA cache. Release mode strips
@@ -380,7 +379,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/ci-gate
+      - uses: seamus-sloan/gh-actions/ci-gate@v1
         with:
           needs: ${{ toJSON(needs) }}

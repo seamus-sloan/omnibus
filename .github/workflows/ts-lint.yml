@@ -48,7 +48,6 @@ jobs:
             ts:
               - "ui_tests/playwright/**"
               - ".github/workflows/ts-lint.yml"
-              - ".github/actions/ci-gate/action.yml"
               - "flake.nix"
               - "flake.lock"
 
@@ -114,7 +113,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/ci-gate
+      - uses: seamus-sloan/gh-actions/ci-gate@v1
         with:
           needs: ${{ toJSON(needs) }}
