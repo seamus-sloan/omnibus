@@ -50,7 +50,6 @@ jobs:
               - "flake.lock"
               - "rust-toolchain*"
               - ".github/workflows/rust.yml"
-              - ".github/actions/ci-gate/action.yml"
               - "deny.toml"
 
   fmt:
@@ -446,8 +445,7 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/ci-gate
+      - uses: seamus-sloan/gh-actions/ci-gate@v1
         with:
           needs: ${{ toJSON(needs) }}
 
@@ -457,8 +455,7 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/ci-gate
+      - uses: seamus-sloan/gh-actions/ci-gate@v1
         with:
           needs: ${{ toJSON(needs) }}
 
@@ -468,8 +465,7 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/ci-gate
+      - uses: seamus-sloan/gh-actions/ci-gate@v1
         with:
           needs: ${{ toJSON(needs) }}
 
@@ -479,7 +475,6 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/ci-gate
+      - uses: seamus-sloan/gh-actions/ci-gate@v1
         with:
           needs: ${{ toJSON(needs) }}
