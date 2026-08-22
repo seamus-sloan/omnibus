@@ -1,9 +1,7 @@
-//! Admin "last errors" data access.
-//!
-//! Web/SSR-only: the Server Health section is not a mobile surface, so
-//! there is no `reqwest`/REST counterpart — the whole module is gated off
-//! the mobile build and calls the `rpc_get_last_errors` server function
-//! directly.
+//! Admin "last errors" data access. Web/SSR-only: the Server Health section is
+//! not a mobile surface, so there is no `reqwest`/REST counterpart — the whole
+//! module is gated off the mobile build and calls the `rpc_get_last_errors`
+//! server function directly.
 #![cfg(not(feature = "mobile"))]
 
 use omnibus_shared::error_ring::CapturedError;

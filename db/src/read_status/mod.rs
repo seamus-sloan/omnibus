@@ -9,6 +9,7 @@ use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use crate::{resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec};
 
+/// Failure space for the read-status reads and writes.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadStatusError {
     #[error("book not found")]

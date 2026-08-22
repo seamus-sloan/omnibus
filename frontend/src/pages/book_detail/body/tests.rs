@@ -2,7 +2,7 @@
 //! identifiers must stay unique across same-scheme, schemeless, and
 //! delimiter-containing values so React/Dioxus keying never collides. Also
 //! covers `bd_insight_values`/`bd_duration_label`, the Insights card's
-//! em-dash-vs-real-value formatting (#1904).
+//! em-dash-vs-real-value formatting.
 
 use omnibus_shared::BookInsights;
 

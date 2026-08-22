@@ -1,4 +1,4 @@
-//! Admin device & session management REST handlers (F5.4). Every route is
+//! Admin device & session management REST handlers. Every route is
 //! `AdminUser`-gated (403 for non-admins): list a target user's sessions and
 //! devices, and revoke a specific session or device. Companion to
 //! `server::auth::handlers`, which owns the self-service equivalents under

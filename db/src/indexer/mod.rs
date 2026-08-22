@@ -81,11 +81,11 @@ pub const MASS_MISSING_FRACTION: f64 = 0.20;
 /// percentage guard.
 pub const MASS_MISSING_MIN_ABSOLUTE: usize = 10;
 
-/// Warn threshold: below [`MASS_MISSING_FRACTION`] (the #819 abort guard)
-/// but still large enough that a dropped mount or partial sync shouldn't
+/// Warn threshold: below [`MASS_MISSING_FRACTION`] (the abort guard) but
+/// still large enough that a dropped mount or partial sync shouldn't
 /// ghost books silently. Half the abort fraction — a scan in this band
 /// still proceeds (unlike the abort guard) but its `Done` state carries a
-/// dismissible warning (issue #1057).
+/// dismissible warning.
 pub const MASS_MISSING_WARN_FRACTION: f64 = 0.10;
 
 /// Error raised when the removal pass would flag an implausible share of the
@@ -412,7 +412,7 @@ fn classify_arrivals<'a>(
 /// The removal pass runs only on a fully-trusted enumeration. On a partial
 /// scan (unreadable subdir, or a once-populated root now reading empty) this
 /// returns nothing, so no book is flagged missing and no `merged_uuids` row
-/// is eroded (issue #819). An already-fileless book is left untouched.
+/// is eroded. An already-fileless book is left untouched.
 fn collect_departures<'a>(
     db: &'a [books::IndexedRow],
     disk_by_key: &std::collections::HashMap<&str, &ebook::StatEntry>,

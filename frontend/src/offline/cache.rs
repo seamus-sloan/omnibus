@@ -1,16 +1,8 @@
 //! Typed access to the replica cache plus the cache-first read policy.
-//!
-//! `read_through` is the single read policy for the mobile data layer:
-//! serve the cached copy immediately (local-first — offline or slow
-//! networks never block a paint), and when the row is stale, revalidate
-//! against the server in the background, bumping [`subscribe`]'s
-//! generation channel when the payload actually changed so rendered pages
-//! re-read. A cache miss falls back to a foreground fetch — or fails fast
-//! with [`DataError::Offline`] while known-offline. Server answers are
-//! never masked: HTTP errors, 401s, and decode failures on the foreground
-//! path propagate untouched, and a failed revalidation writes nothing.
-//! `read_through_network_first` remains for the few reads where acting on
-//! a stale answer would be a correctness bug (identity, progress LWW).
+//! [`read_through`] serves the cached copy immediately and revalidates stale
+//! rows in the background, bumping [`subscribe`]'s generation channel only when
+//! the payload actually changed. Server answers are never masked, and a failed
+//! revalidation writes nothing. Identity and progress use network-first.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};

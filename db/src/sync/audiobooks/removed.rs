@@ -1,11 +1,8 @@
-//! Removed bucket: mirrors `sync::books::removed` — retain each removed
-//! audiobook's `books` row (metadata, links, FTS, soft-ref user data) and
-//! drop only its own native `book_files` row(s) (parts/chapters cascade) —
-//! a row still recorded in `merged_uuids` is a cross-format attachment and
-//! survives — flagging it missing, unless that surviving attachment means
-//! it isn't actually fileless, so the grid/facets hide it via their
-//! `EXISTS book_files` filter. A returning group re-attaches via the
-//! Changed bucket, preserving the uuid.
+//! Removed bucket for audiobooks, mirroring `sync::books::removed`: retain each
+//! removed group's `books` row (metadata, links, FTS, soft-ref user data), drop
+//! only its own native `book_files` rows, and flag it missing unless a
+//! surviving `merged_uuids` cross-format attachment means it isn't fileless. A
+//! returning group re-attaches via the Changed bucket, preserving the uuid.
 
 use sqlx::Transaction;
 

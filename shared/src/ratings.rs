@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// Inclusive bounds for a star rating (half-star steps).
 pub const MIN_STARS: f32 = 0.5;
+/// Upper bound of a star rating.
 pub const MAX_STARS: f32 = 5.0;
 
 /// Convert a stored half-star count (`1..=10`) to a `0.5..=5.0` star value.

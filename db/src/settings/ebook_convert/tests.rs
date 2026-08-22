@@ -1,3 +1,7 @@
+//! Unit tests for the `ebook_convert_path` settings row: the get/set pair and
+//! `effective_ebook_convert_path`'s settings → env → bare-name resolution
+//! order, with the env var pinned via `EnvVarGuard`.
+
 use crate::pool::init_db;
 use crate::test_support::EnvVarGuard;
 

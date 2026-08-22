@@ -1,3 +1,7 @@
+//! Unit tests for `convert`: binary resolution (`ebook_convert_bin`,
+//! `is_runnable`, `ebook_convert_available`), the cache-path layout and its
+//! traversal guard, and the execute path's success, failure, and timeout arms.
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 

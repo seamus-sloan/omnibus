@@ -1,10 +1,8 @@
-//! Self-service "Your sessions" card (web Account section, F5.4 #910).
-//!
-//! Lists the caller's own live sessions with a per-row Revoke action; the
-//! currently-active session (the one authenticating this page) has no
-//! Revoke button — the server refuses that revoke anyway (AC2), so the
-//! control is hidden rather than offered and rejected. Signals start empty
-//! so SSR and the first WASM paint agree (rule 07).
+//! Self-service "Your sessions" card in the web Account section. Lists the
+//! caller's own live sessions with a per-row Revoke action; the session
+//! authenticating this page has no Revoke button — the server refuses that
+//! revoke anyway, so the control is hidden rather than offered and rejected.
+//! Signals start empty so SSR and the first WASM paint agree.
 
 use dioxus::prelude::*;
 use omnibus_shared::SessionView;

@@ -1,3 +1,7 @@
+//! Unit tests for the app-wide contexts: page-title formatting, the cover
+//! cache-bust URL helpers and their shared signal, and the non-web fallback
+//! defaults of the `use_*` accessor hooks.
+
 use std::collections::HashMap;
 
 use dioxus::prelude::*;

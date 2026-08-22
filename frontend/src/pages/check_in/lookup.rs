@@ -1,10 +1,8 @@
 //! The lookup screen — the check-in flow's front door everywhere the camera
-//! isn't the point.
-//!
-//! Both ways in sit on one screen: the ISBN off the back cover, and a title
-//! search for the editions no ISBN index carries. The scanner is one explicit
-//! button away, so opening check-in never lights up a webcam. Visible text
-//! here is the E2E selector contract — keep it stable (rule 04).
+//! isn't the point. Both ways in sit on one screen: the ISBN off the back
+//! cover, and a title search for editions no ISBN index carries. The scanner is
+//! one explicit button away, so opening check-in never lights up a webcam.
+//! Visible text here is the E2E selector contract — keep it stable.
 
 use dioxus::prelude::*;
 use omnibus_shared::ExternalBookMeta;

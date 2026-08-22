@@ -1,12 +1,8 @@
-//! Account screen (`/account`).
-//!
-//! Web/SSR renders the self-service account cards (password today); the
-//! Kindle delivery address and Kobo devices live in their own Settings
-//! sections, built from [`KindleEmailCard`] and [`kobo::KoboDevicesCard`].
-//! The native shell renders the mobile "You" tab (identity, now-reading,
-//! quick links, account rows, theme, server/app version). Signals start
-//! empty so SSR and the first WASM paint agree (rule 07); the load effects
-//! fill them after mount.
+//! Account screen (`/account`). Web/SSR renders the self-service account cards
+//! (password today), with Kindle delivery and Kobo devices living in their own
+//! Settings sections. The native shell renders the mobile "You" tab: identity,
+//! now-reading, quick links, account rows, theme, and versions. Signals start
+//! empty so SSR and the first WASM paint agree; load effects fill them after.
 
 use dioxus::prelude::*;
 

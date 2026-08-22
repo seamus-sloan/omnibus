@@ -43,6 +43,7 @@ pub(crate) enum ImageFormat {
 }
 
 impl ImageFormat {
+    /// The MIME type this format is served as.
     pub(crate) fn to_mime(self) -> &'static str {
         match self {
             ImageFormat::Jpeg => "image/jpeg",
@@ -54,6 +55,7 @@ impl ImageFormat {
         }
     }
 
+    /// The on-disk filename extension for this format.
     pub(crate) fn to_ext(self) -> &'static str {
         match self {
             ImageFormat::Jpeg => "jpg",
@@ -65,6 +67,7 @@ impl ImageFormat {
         }
     }
 
+    /// Classify a MIME type, falling back to [`Self::Bin`] for anything unknown.
     pub(crate) fn from_mime(mime: &str) -> Self {
         match mime.to_ascii_lowercase().as_str() {
             "image/jpeg" | "image/jpg" => ImageFormat::Jpeg,
@@ -89,6 +92,8 @@ impl ImageFormat {
         }
     }
 
+    /// Classify a filename extension, falling back to [`Self::Bin`] for anything
+    /// unknown.
     pub(crate) fn from_ext(ext: &str) -> Self {
         match ext.to_ascii_lowercase().as_str() {
             "jpg" | "jpeg" => ImageFormat::Jpeg,
@@ -113,10 +118,13 @@ impl ImageFormat {
     ];
 }
 
+/// Where a book's cover with extension `ext` lives under the covers dir.
 pub(crate) fn cover_path_for(uuid: &str, ext: &str) -> PathBuf {
     covers_dir().join(format!("{uuid}.{ext}"))
 }
 
+/// Write cover bytes for `uuid`, choosing the extension by sniffing the bytes
+/// rather than trusting `mime`.
 pub(crate) fn write_cover_file(uuid: &str, mime: &str, bytes: &[u8]) -> std::io::Result<()> {
     let dir = covers_dir();
     std::fs::create_dir_all(&dir)?;
@@ -131,6 +139,8 @@ pub(crate) fn write_cover_file(uuid: &str, mime: &str, bytes: &[u8]) -> std::io:
     std::fs::write(cover_path_for(uuid, fmt.to_ext()), bytes)
 }
 
+/// Read a book's cover, returning `(mime, bytes)`. Probes the common
+/// extensions first, then falls back to scanning for `<uuid>.*`.
 pub(crate) fn find_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> {
     // Try common extensions in the order covers are most likely to be
     // written. Fall back to a directory scan for `<uuid>.*` if none match,
@@ -162,6 +172,7 @@ pub(crate) fn find_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> {
     None
 }
 
+/// Best-effort removal of every cover file belonging to these uuids.
 pub(crate) fn delete_cover_files_for(uuids: &[String]) {
     for uuid in uuids {
         for fmt in ImageFormat::PROBE_ORDER {

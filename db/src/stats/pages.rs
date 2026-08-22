@@ -1,10 +1,8 @@
 //! Estimated-pages aggregation for the stats page's Pages tile. The per-book
-//! word count is persisted on `books.word_count` at index time (see
-//! [`crate::ebook::estimate_word_count`] and migration `0049`), so this is a
+//! word count is persisted on `books.word_count` at index time, so this is a
 //! single `SUM` over the books finished in the window — no EPUB is opened at
-//! query time. The word total converts to pages via [`WORDS_PER_PAGE`].
-//! Degrades to `None` (the tile's em-dash state) when no finished book in the
-//! window has a stored word count.
+//! query time — converted via [`WORDS_PER_PAGE`]. Degrades to `None` when no
+//! finished book in the window has a stored word count.
 
 use sqlx::SqlitePool;
 

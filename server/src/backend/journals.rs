@@ -1,13 +1,8 @@
 //! Public per-book journal REST handlers for the mobile client
-//! (`/api/journals*`).
-//!
-//! Create/list/edit/delete free-form markdown journal entries on a book.
-//! Entries are public — `GET /api/journals/book/{uuid}` returns every user's
-//! entries — but edit/delete are owner-scoped (404 for a non-owner, same as a
-//! missing row). The body is validated at the boundary (non-empty, size cap,
-//! progress range); markdown is rendered to sanitized HTML server-side. Web
-//! clients use the `/api/rpc/journals/*` server functions in
-//! `omnibus_frontend::rpc`.
+//! (`/api/journals*`): create, list, edit, and delete free-form markdown notes
+//! on a book. Entries are public, but edit/delete are owner-scoped (404 for a
+//! non-owner, same as a missing row). Bodies are validated at the boundary and
+//! rendered to sanitized HTML; web clients use the `/api/rpc/journals/*` RPCs.
 
 use axum::{
     extract::{Path, State},

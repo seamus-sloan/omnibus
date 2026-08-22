@@ -1,19 +1,8 @@
-//! The provider clients and the single point that dispatches to them.
-//!
-//! **Every provider module implements the same pair**, and nothing else:
-//!
-//! ```ignore
-//! pub async fn by_isbn(&MetadataLookupConfig, isbn13: &str)
-//!     -> anyhow::Result<Option<ProviderEdition>>;
-//! pub async fn by_title(&MetadataLookupConfig, query: &str)
-//!     -> anyhow::Result<Vec<ProviderEdition>>;
-//! ```
-//!
-//! A clean miss is an empty answer (`None` / `vec![]`); an `Err` means the
-//! provider could not be asked, which is a different thing and is what lets
-//! the ladder in [`super`] tell "this book isn't out there" apart from "we
-//! never got an answer". Adding a provider is: a module implementing the pair,
-//! a [`MetadataProvider`] variant, and an arm in [`run`].
+//! The provider clients and the single point that dispatches to them. Every
+//! provider module implements `by_isbn` / `by_title` and nothing else: a clean
+//! miss is an empty answer (`None` / `vec![]`), while an `Err` means the
+//! provider could not be asked — the distinction [`super`]'s ladder relies on.
+//! Adding one is a module, a [`MetadataProvider`] variant, and an arm in [`run`].
 
 // `pub(super)` rather than private so the sibling test module can drive one
 // provider in isolation — the bare-text fallback, the key-leak guard, and the

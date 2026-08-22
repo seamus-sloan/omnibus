@@ -1,9 +1,8 @@
 //! CBZ comic-archive metadata extraction (server-only). Sibling to
 //! [`crate::ebook`]'s EPUB parser: opens the zip, lists image pages in
-//! natural-sort order, parses `ComicInfo.xml` when present, and produces
-//! the same [`IndexedBook`] shape the sync writer consumes. Also the read
-//! surface's page source: [`read_page`] hands the page endpoint one
-//! decompressed entry at a time.
+//! natural-sort order, parses `ComicInfo.xml` when present, and produces the
+//! [`IndexedBook`] shape the sync writer consumes. [`read_page`] also backs the
+//! read surface, handing the page endpoint one decompressed entry at a time.
 
 use std::cmp::Ordering;
 use std::fs::File;

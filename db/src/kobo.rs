@@ -69,6 +69,8 @@ pub struct KoboBookRow {
     pub has_epub: bool,
 }
 
+/// Failure space for the wireless-sync reads: a shelf-membership resolution
+/// that no longer parses, or the underlying SQL.
 #[derive(Debug, thiserror::Error)]
 pub enum KoboError {
     /// Resolving the opted-in shelf membership failed for a non-DB reason —

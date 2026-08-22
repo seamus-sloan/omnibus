@@ -1,18 +1,8 @@
-//! Keyset-paginated, server-side-sorted, server-side-filtered landing read
-//! path. [`list_books_page`] returns one page of the configured
-//! library ordered by any of the five [`SortKey`] axes, filtered by the
-//! sidebar [`ViewFilters`], positioned by an opaque [`PageCursor`].
-//!
-//! The cursor encodes the last row's `(sort-value, series-index, id)` for the
-//! active axis; the keyset predicate seeks strictly past it under the same
-//! `ORDER BY` the index provides, so paging never re-scans earlier rows and
-//! never uses `OFFSET`. NULL sort values follow SQLite's natural ordering
-//! (first under ASC, last under DESC) so each axis stays a pure index range
-//! scan over the `(library_id, <col>, …, id)` composites from migration 0028.
-//!
-//! Like every read path here the books are decoded via `BOOK_COLUMNS` /
-//! `row_to_ebook`, then `metadata_overrides` are merged and creator ids
-//! backfilled — but only over the page, not the whole library.
+//! Keyset-paginated, server-sorted, server-filtered landing read path.
+//! [`list_books_page`] returns one page ordered by any [`SortKey`] axis,
+//! filtered by the sidebar [`ViewFilters`] and positioned by an opaque
+//! [`PageCursor`] encoding the last row's `(sort-value, series-index, id)` — so
+//! each axis stays a pure index range scan and paging never uses `OFFSET`.
 
 use base64::engine::{general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use omnibus_shared::{EbookMetadata, SortDir, SortKey, ViewFilters};

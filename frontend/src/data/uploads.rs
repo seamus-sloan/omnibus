@@ -1,10 +1,8 @@
-//! "Add your own books" upload helpers.
-//!
-//! Like the author-photo upload, these bypass the server-function transport
-//! (which can't carry binary payloads) and post multipart bodies straight to
-//! the REST endpoints: `gloo-net` + `FormData` on web, `reqwest::multipart` on
-//! mobile. The two-step shape — `inspect_ebook` then `upload_ebook` — lets the
-//! UI show an editable confirm step before the file is filed.
+//! "Add your own books" upload helpers. Like the author-photo upload, these
+//! bypass the server-function transport (which can't carry binary payloads) and
+//! post multipart bodies straight to the REST endpoints: `gloo-net` +
+//! `FormData` on web, `reqwest::multipart` on mobile. The two-step shape —
+//! `inspect_ebook` then `upload_ebook` — lets the UI show a confirm step.
 
 use omnibus_shared::{AudiobookInspection, UploadCommitResult, UploadInspection};
 

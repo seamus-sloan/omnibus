@@ -11,6 +11,7 @@ use std::cmp::Ordering;
 
 use omnibus_shared::{Contributor, EbookMetadata, SortDir, SortKey};
 
+/// Join contributor names into one comma-separated display string.
 pub(crate) fn contributor_names(list: &[Contributor]) -> String {
     let mut out = String::new();
     for (i, c) in list.iter().enumerate() {
@@ -120,6 +121,8 @@ fn cmp_with_missing_last<K: Ord>(a: Option<&K>, b: Option<&K>, dir: SortDir) -> 
     }
 }
 
+/// Sort a page by `key` in `dir`, with missing values last regardless of
+/// direction and a never-reversed id tiebreak so equal keys stay stable.
 pub(crate) fn sort_books(
     books: Vec<EbookMetadata>,
     key: SortKey,
@@ -139,6 +142,7 @@ pub(crate) fn sort_books(
     keyed.into_iter().map(|(_, b)| b).collect()
 }
 
+/// The opposite of `d` — what the toolbar's direction button lands on.
 pub(crate) fn toggle_dir(d: SortDir) -> SortDir {
     match d {
         SortDir::Asc => SortDir::Desc,
@@ -146,6 +150,8 @@ pub(crate) fn toggle_dir(d: SortDir) -> SortDir {
     }
 }
 
+/// The direction a freshly-picked sort key starts in — descending for the
+/// two recency keys, ascending otherwise.
 pub(crate) fn default_dir_for(key: SortKey) -> SortDir {
     // "Newest Added" / "Last Updated" feel natural with newest first.
     match key {
@@ -154,6 +160,7 @@ pub(crate) fn default_dir_for(key: SortKey) -> SortDir {
     }
 }
 
+/// The sort axes the toolbar dropdown offers, in display order.
 pub(crate) const SORT_KEYS: [SortKey; 5] = [
     SortKey::Title,
     SortKey::Author,
@@ -162,12 +169,15 @@ pub(crate) const SORT_KEYS: [SortKey; 5] = [
     SortKey::NewestAdded,
 ];
 
+/// The key's wire token, as used by the dropdown, the REST query, and the
+/// page cursor.
 pub(crate) fn sort_key_value(key: SortKey) -> &'static str {
     // Delegate to the shared wire vocabulary so the dropdown, the REST query,
     // and the cursor axis can't drift.
     key.as_wire()
 }
 
+/// The key's human-readable dropdown label.
 pub(crate) fn sort_key_label(key: SortKey) -> &'static str {
     match key {
         SortKey::Title => "Title",
@@ -178,6 +188,7 @@ pub(crate) fn sort_key_label(key: SortKey) -> &'static str {
     }
 }
 
+/// Parse a wire token back into a sort key; `None` for anything unknown.
 pub(crate) fn sort_key_from_value(value: &str) -> Option<SortKey> {
     SortKey::from_wire(value)
 }

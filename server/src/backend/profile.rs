@@ -1,10 +1,8 @@
-//! `/api/account/profile`, `/api/account/avatar`, `/api/users/{id}/avatar` —
-//! the caller's own display name and profile picture.
-//!
-//! Writes are scoped to the authenticated caller ([`AuthUser`]) and never take
-//! a user id, so there is no path for one user to edit another's profile.
-//! Reads are [`MediaAuthUser`]-gated and *are* id-keyed: a journal byline or a
-//! ratings row renders any user's avatar.
+//! `/api/account/profile`, `/api/account/avatar`, and `/api/users/{id}/avatar` —
+//! the caller's own display name and profile picture. Writes are scoped to the
+//! authenticated caller ([`AuthUser`]) and never take a user id, so no user can
+//! edit another's profile. Reads are [`MediaAuthUser`]-gated and *are* id-keyed:
+//! a journal byline or a ratings row renders any user's avatar.
 
 use axum::{
     extract::{Path, State},

@@ -1,4 +1,4 @@
-//! Shelf-scoped feed visibility (#932): a book confined to a manual shelf
+//! Shelf-scoped feed visibility: a book confined to a manual shelf
 //! the viewer cannot see must not surface in a browse/search/new/nav feed,
 //! or the byte-serving delegate routes, for anyone but the shelf's owner,
 //! a public-shelf viewer, or an admin — in both catalogs.

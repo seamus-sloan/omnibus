@@ -194,8 +194,8 @@ fn select_parse_groups(
 /// event before the walk, per-group parse events during the tag read, and
 /// per-book sync events inside `sync_audiobooks` — parse and sync events
 /// carry the diff's [`omnibus_shared::ScanTallies`] and the current
-/// group's display path. Returns the scan's ghost-count tallies (issue
-/// #1057) so the caller can decide whether to attach a warning.
+/// group's display path. Returns the scan's ghost-count tallies so the
+/// caller can decide whether to attach a warning.
 pub async fn reindex_audiobooks_with_progress(
     pool: &SqlitePool,
     library_path: &str,

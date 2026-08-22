@@ -1,9 +1,7 @@
-//! Admin "last errors" server function (`/api/rpc/errors`).
-//!
-//! Web-only surface: reads the in-memory error ring buffer via
-//! `db::error_ring` and returns its full contents, newest first.
-//! Admin-gated by the `AdminUser` extractor, so a non-admin session is
-//! rejected before the buffer is touched (AC4).
+//! Admin "last errors" server function (`/api/rpc/errors`). Web-only: reads the
+//! in-memory error ring buffer via `db::error_ring` and returns its full
+//! contents, newest first. Admin-gated by the `AdminUser` extractor, so a
+//! non-admin session is rejected before the buffer is touched.
 
 use dioxus::fullstack::get;
 use dioxus::prelude::*;

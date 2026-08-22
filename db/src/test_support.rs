@@ -1,10 +1,8 @@
-//! Shared test-only helpers for the `omnibus-db` crate.
-//!
-//! Gated behind `#[cfg(any(test, feature = "test-support"))]` so non-test
-//! consumers don't pay the compile cost. This is the single source of
-//! truth for cross-cutting helpers — temp-dir builders, in-memory pool
-//! seeders, env-var guards, and the `IndexedBook` factories. Module-local
-//! ones (e.g. ebook fixture loaders) stay next to their callers.
+//! Shared test-only helpers for the `omnibus-db` crate, gated behind
+//! `#[cfg(any(test, feature = "test-support"))]` so non-test consumers don't
+//! pay the compile cost. The single source of truth for cross-cutting helpers —
+//! temp-dir builders, in-memory pool seeders, env-var guards, and the
+//! `IndexedBook` factories. Module-local helpers stay next to their callers.
 
 #![cfg(any(test, feature = "test-support"))]
 
@@ -342,6 +340,8 @@ pub struct CoversTempDir {
 }
 
 impl CoversTempDir {
+    /// Point `$OMNIBUS_COVERS_DIR` at a fresh `tag`-named temp dir, holding the
+    /// process-wide env lock until the guard drops.
     pub fn new(tag: &str) -> Self {
         let guard = ENV_LOCK
             .lock()

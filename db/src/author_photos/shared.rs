@@ -1,10 +1,7 @@
-//! Shared HTTP client for the Open Library cascade in `author_photos`. A
-//! single process-wide `reqwest::Client` is built once and cloned so cascade
-//! resolutions share one connection pool and TLS session cache.
-//!
-//! The admin "paste URL" path (`remote.rs`) deliberately builds a per-call
-//! client — it pins `reqwest` to pre-validated addresses for SSRF protection
-//! and cannot reuse a shared handle.
+//! Shared process-wide `reqwest::Client` for the Open Library cascade in
+//! `author_photos`, built once and cloned so resolutions share one connection
+//! pool and TLS session cache. The admin "paste URL" path (`remote.rs`) opts
+//! out — it pins `reqwest` to pre-validated addresses for SSRF protection.
 
 use std::sync::OnceLock;
 

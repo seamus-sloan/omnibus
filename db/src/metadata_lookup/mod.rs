@@ -1,11 +1,9 @@
-//! Server-side book-metadata resolution against the external providers.
-//!
-//! Two shapes, for two different questions. The **ladder**
-//! ([`search_provider_by_isbn`], [`search_provider_by_title`]) walks providers
-//! in order and returns the first good answer — right for a check-in scan
-//! resolving one physical book. The **fan-out** ([`search_all_providers`])
-//! asks every configured provider at once and keeps the answers attributed and
-//! un-collapsed — right for the metadata editor's edition picker.
+//! Server-side book-metadata resolution against the external providers. Two
+//! shapes for two questions: the **ladder** ([`search_provider_by_isbn`] /
+//! [`search_provider_by_title`]) walks providers in order and returns the first
+//! good answer — right for a check-in scan; the **fan-out**
+//! ([`search_all_providers`]) asks every configured provider at once, keeping
+//! answers attributed and un-collapsed — right for the editor's edition picker.
 
 mod config;
 mod cover;

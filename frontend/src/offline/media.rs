@@ -1,14 +1,8 @@
 //! Loopback media server for offline playback: a tiny axum server on
-//! `127.0.0.1:{random port}` that serves downloaded book files (with Range
-//! support, so `<audio>` can seek) and an offline image cache that proxies
-//! covers/thumbs from the real server while online. Guarded by a per-boot
-//! random `?token=` — the same query-token pattern the real server's media
-//! routes use, since WebView subresource fetches can't carry a bearer
-//! header. Every response carries `Access-Control-Allow-Origin: *` because
-//! the WebView origin is wry's custom scheme (`dioxus://` on iOS), exactly
-//! mirroring the server's own `/api/ebooks/{uuid}/file` CORS behavior.
-//! Background ETag revalidation of the cached images lives in
-//! [`revalidate`].
+//! `127.0.0.1:{random port}` serving downloaded book files with Range support,
+//! plus an offline image cache that proxies covers/thumbs while online. Guarded
+//! by a per-boot random `?token=`, since WebView subresource fetches carry no
+//! bearer header. Background ETag revalidation lives in [`revalidate`].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

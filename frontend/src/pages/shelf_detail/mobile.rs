@@ -1,11 +1,8 @@
-//! Mobile shelf-detail surface — the phone counterpart to the web rail +
-//! header + grid, matching the imported design. Mirrors `landing::mobile`: a
-//! persistent "Omnibus" + search header, a title block with an eyebrow + facet
-//! row (kind / visibility / rule chips), the shared Shelves entry card, a
-//! three-column cover grid, and a ⋯ actions menu (edit shelf / delete, + Add
-//! books on manual). Reuses `shelf_facets::rule_text` and
-//! `landing::mobile_cover_cell`; the parent resolves the shelf before rendering
-//! this, so it takes a loaded [`Shelf`].
+//! Mobile shelf-detail surface — the phone counterpart to the web rail, header,
+//! and grid. Mirrors `landing::mobile`: a persistent header, a title block with
+//! eyebrow and facet row (kind / visibility / rule chips), the shared Shelves
+//! entry card, a three-column cover grid, and a ⋯ actions menu. The parent
+//! resolves the shelf first, so this takes a loaded [`Shelf`].
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};

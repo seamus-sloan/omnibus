@@ -1,10 +1,8 @@
-//! Wire types for the in-memory "last errors" ring buffer.
-//!
-//! Populated by the tracing `Layer` installed in `server::logging::init_tracing`
-//! from ERROR-level events; read by the admin-gated `rpc_get_last_errors`
-//! server function that feeds the Settings → Server Health "Last errors"
-//! section. A fast, bounded, in-memory companion to the durable JSON log
-//! sink (`omnibus_shared::logs`) — not a replacement for it.
+//! Wire types for the in-memory "last errors" ring buffer. Populated by the
+//! tracing `Layer` in `server::logging::init_tracing` from ERROR-level events
+//! and read by the admin-gated `rpc_get_last_errors`, which feeds the
+//! Settings → Server Health "Last errors" section. A fast, bounded companion to
+//! the durable JSON log sink ([`crate::logs`]) — not a replacement.
 
 use serde::{Deserialize, Serialize};
 

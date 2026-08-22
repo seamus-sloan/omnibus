@@ -1,10 +1,8 @@
-//! Tag-cloud read: the global tag list with per-tag book counts. Counts
-//! use the merged (override-aware) subject set so user-edited subjects on
-//! a book are reflected here; a tag is visible only while at least one
-//! book effectively carries it — via a canonical `books_tags_link` row or
-//! an override membership (the override write path materializes a `tags`
-//! row for every override subject). A tag with zero effective books never
-//! renders.
+//! Tag-cloud read: the global tag list with per-tag book counts, over the
+//! merged (override-aware) subject set so user-edited subjects are reflected
+//! here. A tag is visible only while at least one book effectively carries it,
+//! via a canonical `books_tags_link` row or an override membership; a tag with
+//! zero effective books never renders.
 
 use omnibus_shared::TagWeight;
 use sqlx::{Row, SqlitePool};

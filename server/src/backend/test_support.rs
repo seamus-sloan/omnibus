@@ -204,6 +204,8 @@ pub(crate) struct CoversDirGuard {
 }
 
 impl CoversDirGuard {
+    /// Point `$OMNIBUS_COVERS_DIR` at a fresh `tag`-named temp dir for the
+    /// duration of the test.
     pub(crate) fn new(tag: &str) -> Self {
         assert_current_thread_test_runtime();
         let guard = COVER_DIR_ENV_LOCK
@@ -252,6 +254,8 @@ pub(crate) struct ThumbsDirGuard {
 }
 
 impl ThumbsDirGuard {
+    /// Point `$OMNIBUS_THUMBS_DIR` at a fresh `tag`-named temp dir for the
+    /// duration of the test.
     pub(crate) fn new(tag: &str) -> Self {
         assert_current_thread_test_runtime();
         let guard = THUMBS_DIR_ENV_LOCK
@@ -302,6 +306,8 @@ pub(crate) struct DataDirGuard {
 }
 
 impl DataDirGuard {
+    /// Point `$OMNIBUS_DATA_DIR` at a fresh `tag`-named temp dir for the
+    /// duration of the test.
     pub(crate) fn new(tag: &str) -> Self {
         assert_current_thread_test_runtime();
         let guard = DATA_DIR_ENV_LOCK
@@ -347,6 +353,8 @@ pub(crate) async fn revoke_can_download(pool: &sqlx::SqlitePool, user_id: i64) {
         .expect("revoke can_download");
 }
 
+/// Insert an author named `name` (sorting under the same string) and return
+/// its row id.
 pub(crate) async fn seed_author(pool: &sqlx::SqlitePool, name: &str) -> i64 {
     sqlx::query_scalar::<_, i64>("INSERT INTO authors (name, sort) VALUES (?, ?) RETURNING id")
         .bind(name)

@@ -1,10 +1,8 @@
-//! Author profile photo data layer plus the admin `delete_author`
-//! primitive. `author_photos` holds at most one row per author (PK =
-//! author_id) with a `source` of `'manual'`, `'openlibrary'`, or
-//! `'letter'` (negative-cache marker — NULL bytes/mime so `get_author_photo`
-//! returns `None` and the letter avatar stays in place). Admin DELETE
-//! clears the row to force re-resolution. The OL resolver itself lives in
-//! [`crate::author_photos`]; this file owns just the row CRUD.
+//! Row CRUD for `author_photos` (at most one row per author) plus the admin
+//! `delete_author` primitive. A `'letter'` source is the negative-cache marker:
+//! NULL bytes/mime, so `get_author_photo` returns `None` and the letter avatar
+//! stays in place. The Open Library resolver itself lives in
+//! [`crate::author_photos`].
 
 use std::collections::HashMap;
 

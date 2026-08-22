@@ -4,6 +4,7 @@
 //! line spacing, margins); the reader page reads them on mount and writes
 //! them on every change.
 
+/// Reader body typeface choice.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Typeface {
     Editorial,
@@ -14,6 +15,7 @@ pub(crate) enum Typeface {
 // Unused only in plain SSR builds (no web, no mobile) — both interactive targets convert.
 #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl Typeface {
+    /// The `font-family` stack applied to the section iframe.
     pub(crate) fn to_css(self) -> &'static str {
         // Georgia sits ahead of the generic `serif` so a webfont that fails to
         // load in the section iframe degrades to a real book serif, not Times.
@@ -24,6 +26,7 @@ impl Typeface {
         }
     }
 
+    /// The localStorage token for this value.
     pub(crate) fn to_storage(self) -> &'static str {
         match self {
             Self::Editorial => "editorial",
@@ -32,6 +35,7 @@ impl Typeface {
         }
     }
 
+    /// Parse a stored token; `None` for anything unrecognized.
     pub(crate) fn from_storage(s: &str) -> Option<Self> {
         match s {
             "editorial" => Some(Self::Editorial),
@@ -42,6 +46,7 @@ impl Typeface {
     }
 }
 
+/// Reader line-height choice.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum LineSpacing {
     Tight,
@@ -51,6 +56,7 @@ pub(crate) enum LineSpacing {
 
 #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl LineSpacing {
+    /// The `line-height` applied to the section iframe.
     pub(crate) fn to_css(self) -> &'static str {
         match self {
             Self::Tight => "1.4",
@@ -59,6 +65,7 @@ impl LineSpacing {
         }
     }
 
+    /// The localStorage token for this value.
     pub(crate) fn to_storage(self) -> &'static str {
         match self {
             Self::Tight => "tight",
@@ -67,6 +74,7 @@ impl LineSpacing {
         }
     }
 
+    /// Parse a stored token; `None` for anything unrecognized.
     pub(crate) fn from_storage(s: &str) -> Option<Self> {
         match s {
             "tight" => Some(Self::Tight),
@@ -77,6 +85,7 @@ impl LineSpacing {
     }
 }
 
+/// Reader text-column width choice.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Margins {
     Narrow,
@@ -95,6 +104,7 @@ impl Margins {
         }
     }
 
+    /// The localStorage token for this value.
     pub(crate) fn to_storage(self) -> &'static str {
         match self {
             Self::Narrow => "narrow",
@@ -103,6 +113,7 @@ impl Margins {
         }
     }
 
+    /// Parse a stored token; `None` for anything unrecognized.
     pub(crate) fn from_storage(s: &str) -> Option<Self> {
         match s {
             "narrow" => Some(Self::Narrow),
@@ -124,6 +135,7 @@ pub(crate) enum Spread {
 
 #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl Spread {
+    /// The epub.js `spread` mode this value maps to.
     pub(crate) fn to_css(self) -> &'static str {
         match self {
             Self::Single => "none",
@@ -131,6 +143,7 @@ impl Spread {
         }
     }
 
+    /// The localStorage token for this value.
     pub(crate) fn to_storage(self) -> &'static str {
         match self {
             Self::Single => "single",
@@ -138,6 +151,7 @@ impl Spread {
         }
     }
 
+    /// Parse a stored token; `None` for anything unrecognized.
     pub(crate) fn from_storage(s: &str) -> Option<Self> {
         match s {
             "single" => Some(Self::Single),

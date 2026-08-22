@@ -1,9 +1,8 @@
-//! Self-service session management client wrappers (F5.4, #910). Web hits
-//! the `/api/auth/sessions*` REST routes via `gloo-net` (same-origin cookie
+//! Self-service session management client wrappers. Web hits the
+//! `/api/auth/sessions*` REST routes via `gloo-net` (same-origin cookie
 //! session); SSR builds get no-op stubs so the Account page compiles and
-//! hydrates with identical markup. Mobile has no self-service surface yet
-//! for this card (its "You" tab predates this feature; see #910's PR body),
-//! so this module is not compiled there.
+//! hydrates with identical markup. Mobile has no self-service surface for this
+//! card yet, so this module is not compiled there.
 
 use omnibus_shared::SessionView;
 
@@ -57,11 +56,13 @@ async fn status_error(res: gloo_net::http::Response) -> String {
 
 // ── SSR stubs (server feature, no web) ───────────────────────────
 
+/// SSR stub — the Account card fetches only after the WASM client mounts.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn list_my_sessions() -> Result<Vec<SessionView>, String> {
     Ok(Vec::new())
 }
 
+/// SSR stub — the Account card mutates only after the WASM client mounts.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn revoke_my_session(_session_id: i64) -> Result<(), String> {
     Ok(())

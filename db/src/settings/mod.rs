@@ -1,10 +1,8 @@
-//! Settings KV CRUD, scan-root row upserts, and orphan-scan-root pruning.
-//! `settings` KV keys (`ebook_library_path` / `audiobook_library_path`) are
-//! read by the UI and translated into `scan_roots` rows by the indexer; saving
-//! settings prunes any orphan root and its books, FTS rows, and on-disk
-//! covers. Also owns per-library metadata-source precedence, a
-//! `scan_roots.metadata_precedence` column keyed by `path` via a dedicated
-//! get/set pair kept out of `set_settings`'s reconciliation.
+//! Settings KV CRUD, scan-root row upserts, and orphan-scan-root pruning. The
+//! `ebook_library_path` / `audiobook_library_path` keys are read by the UI and
+//! translated into `scan_roots` rows by the indexer; saving settings prunes any
+//! orphan root and its books, FTS rows, and on-disk covers. Also owns
+//! per-library metadata-source precedence, keyed by `path` on `scan_roots`.
 
 use std::collections::HashMap;
 use std::path::Path;

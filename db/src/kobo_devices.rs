@@ -40,6 +40,7 @@ pub struct ResolvedKoboDevice {
     pub user_id: i64,
 }
 
+/// Failure space for Kobo device registration and lookup.
 #[derive(Debug, thiserror::Error)]
 pub enum KoboDeviceError {
     #[error("kobo device not found")]

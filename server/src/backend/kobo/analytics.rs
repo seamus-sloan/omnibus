@@ -56,6 +56,8 @@ pub struct AnalyticsEvent {
     pub attributes: Attributes,
 }
 
+/// The measured half of an analytics event: seconds read, and a star rating
+/// when the device sends one.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Metrics {
@@ -66,6 +68,7 @@ pub struct Metrics {
     pub stars: Option<f64>,
 }
 
+/// The subject half of an analytics event — which book it is about.
 #[derive(Debug, Default, Deserialize)]
 pub struct Attributes {
     /// The book uuid, in the device's lowercase key.

@@ -1,10 +1,8 @@
-//! `/api/covers/*` and `/api/thumbs/*` handlers.
-//!
-//! Session-gated reads that resolve a book uuid through the db layer and
-//! stream the cached cover or WebP thumbnail bytes back to the client.
-//! Authenticated via [`MediaAuthUser`] (cookie / bearer / `?token=` query),
-//! the last so the mobile WebView's `<img>` fetches can carry the session.
-//! Mounted on the mobile REST router in [`super::rest_router`].
+//! `/api/covers/*` and `/api/thumbs/*` handlers: session-gated reads that
+//! resolve a book uuid through the db layer and stream the cached cover or WebP
+//! thumbnail bytes back. Authenticated via [`MediaAuthUser`] (cookie / bearer /
+//! `?token=` query, the last so the mobile WebView's `<img>` fetches can carry
+//! the session). Mounted on the mobile REST router in [`super::rest_router`].
 
 use axum::{
     extract::{Path, State},

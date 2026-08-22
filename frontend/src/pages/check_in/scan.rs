@@ -1,9 +1,7 @@
-//! The scanner screen — the check-in flow's front door on the mobile shell,
-//! and one explicit button away everywhere else.
-//!
-//! Thin chrome around the reusable [`BarcodeScanner`]: the flow owns what a
-//! decode means, the component owns the camera. Visible text here is the
-//! E2E selector contract — keep it stable (rule 04).
+//! The scanner screen — the check-in flow's front door on the mobile shell, and
+//! one explicit button away everywhere else. Thin chrome around the reusable
+//! [`BarcodeScanner`]: the flow owns what a decode means, the component owns the
+//! camera. Visible text here is the E2E selector contract — keep it stable.
 
 use dioxus::prelude::*;
 

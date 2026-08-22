@@ -1,12 +1,8 @@
-//! Posting and awaiting tasks: `Worker::post`, `await_completion`, and
-//! the RAII guards that keep the `completions` / `progress` maps bounded
-//! even when a spawned future unwinds. `post` also writes the durable
-//! `background_tasks` history row (issue #941) — insert on start, update
-//! on terminal outcome — via `crate::background_tasks`.
-//!
-//! `prune_resource_lock` lives here too because it's the
-//! map-bookkeeping companion to the keyed-mutex acquire in
-//! [`super::exec`].
+//! Posting and awaiting tasks: `Worker::post`, `await_completion`, and the RAII
+//! guards that keep the `completions` / `progress` maps bounded even when a
+//! spawned future unwinds. `post` also writes the durable `background_tasks`
+//! history row. `prune_resource_lock` lives here as the map-bookkeeping
+//! companion to the keyed-mutex acquire in [`super::exec`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex as StdMutex};

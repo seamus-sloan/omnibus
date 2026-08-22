@@ -1,9 +1,8 @@
-//! Parsed ebook metadata + user-supplied override layer.
-//!
+//! Parsed ebook metadata plus the user-supplied override layer.
 //! `Contributor` / `Identifier` / `EbookMetadata` are the wire shape for a
-//! single book row. `MetadataOverrides` is the JSON-serialized override
-//! layer persisted in `metadata_overrides.overrides` and merged on read.
-//! Re-exports flatten so callers keep `omnibus_shared::EbookMetadata` etc.
+//! single book row; `MetadataOverrides` is the JSON-serialized layer persisted
+//! in `metadata_overrides.overrides` and merged on read. Re-exports flatten so
+//! callers keep `omnibus_shared::EbookMetadata`.
 
 mod metadata;
 mod overrides;

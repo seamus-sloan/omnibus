@@ -1,10 +1,8 @@
 //! Frosted-glass speed controls shared by the listen page and the mini-dock.
-//!
 //! [`SpeedPanelBody`] renders the content — a preset grid (0.5–2.0×), a
-//! fine-tune slider (0.5–3.0×), and a ±0.05 stepper; [`SpeedPanel`] wraps it
-//! in the full player's scrim + panel chrome, while the mini-dock hosts the
-//! same body inside its upward popover. Rate changes are persisted per-book
-//! via [`crate::audiobook_progress`] and forwarded to the JS audio shim.
+//! fine-tune slider (0.5–3.0×), and a ±0.05 stepper — while [`SpeedPanel`]
+//! wraps it in the full player's scrim and panel chrome. Rate changes persist
+//! per-book via [`crate::audiobook_progress`] and forward to the JS audio shim.
 
 #![cfg(not(feature = "mobile"))]
 

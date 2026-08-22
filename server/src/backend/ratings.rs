@@ -1,8 +1,7 @@
-//! Star-rating REST handlers for the mobile client (`/api/ratings*`).
-//!
-//! Set/get/clear a half-star rating (`0.5..=5.0`) per `(user, book)`. Writes are
-//! last-write-wins; the range + half-step are validated at the boundary so an
-//! invalid value returns 400. Web clients use the `/api/rpc/ratings*` server
+//! Star-rating REST handlers for the mobile client (`/api/ratings*`): set, get,
+//! and clear a half-star rating (`0.5..=5.0`) per `(user, book)`. Writes are
+//! last-write-wins, with the range and half-step validated at the boundary so
+//! an invalid value returns 400. Web clients use the `/api/rpc/ratings*` server
 //! functions in `omnibus_frontend::rpc`.
 
 use axum::{

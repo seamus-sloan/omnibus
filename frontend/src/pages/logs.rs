@@ -1,11 +1,8 @@
-//! Admin-only log viewer — the Logs section of `/settings` (`/logs` redirects
-//! here).
-//!
-//! Paginated, newest-first view over the on-disk JSON logs with
-//! level/module/time-range filters. Web/SSR-only — not a mobile surface — and
-//! the real authorization boundary is the `AdminUser` extractor on
-//! `rpc_get_logs`; the in-page `use_is_admin` gate just keeps the chrome off a
-//! non-admin screen.
+//! Admin-only log viewer — the Logs section of `/settings`, which `/logs`
+//! redirects to. A paginated, newest-first view over the on-disk JSON logs with
+//! level/module/time-range filters. Web/SSR-only. The real authorization
+//! boundary is the `AdminUser` extractor on `rpc_get_logs`; the in-page
+//! `use_is_admin` gate just keeps the chrome off a non-admin screen.
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;

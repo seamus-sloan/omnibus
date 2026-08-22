@@ -1,9 +1,7 @@
-//! Low-level, entity-agnostic CRUD used by both [`super::apply`] and
-//! [`super::undo`]: link-row read/write parameterized over [`MergeEntity`],
-//! the `entity_aliases` door, and the `author_photos` row shape. Split out
-//! of `apply.rs` once it crossed the file-shape soft cap — none of this
-//! encodes cleanup policy (priority order, what gets snapshotted); it's
-//! just the SQL both directions of a merge/split/delete replay.
+//! Low-level, entity-agnostic CRUD shared by [`super::apply`] and
+//! [`super::undo`]: link-row read/write parameterized over [`MergeEntity`], the
+//! `entity_aliases` door, and the `author_photos` row shape. Encodes no cleanup
+//! policy — just the SQL both directions of a merge/split/delete replay.
 
 use omnibus_shared::CleanupKind;
 use sqlx::{Sqlite, Transaction};

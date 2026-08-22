@@ -15,6 +15,7 @@ use crate::resolve_canonical_book_uuid;
 /// the cap on `bookmarks::LIST_BOOKMARKS_LIMIT`.
 pub const LIST_OTHER_RATINGS_LIMIT: i64 = 1_000;
 
+/// Failure space for the rating reads and writes.
 #[derive(Debug, thiserror::Error)]
 pub enum RatingError {
     #[error("book not found")]

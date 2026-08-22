@@ -1,9 +1,8 @@
 //! Admin-only "Delete files…" dialog mounted by the book detail page. Step 1
 //! lists every deletable *item* (each `book_files` row and physical copy) with
-//! a checkbox; step 2 confirms, with copy branching on partial vs total. Its
+//! a checkbox; step 2 confirms, with copy branching on partial vs total. The
 //! manifest is fetched on mount rather than read off the page's
-//! `EbookMetadata`'s own `book_files`, so the dialog stays correct whatever
-//! that projection happens to carry.
+//! `EbookMetadata`, so the dialog stays correct whatever that projection holds.
 
 use std::collections::BTreeSet;
 

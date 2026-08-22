@@ -1,9 +1,8 @@
 //! Search palette: grouped command-palette results across books, authors,
-//! series, and tags. Books go through the FTS5 MATCH path (with
-//! override-aware overlays applied after hydration); taxonomy categories
-//! use scoped `LIKE` substring matches against the name columns. Bounded
-//! per category, and scoped to the books `helpers::visible_book_sql` admits
-//! — under a configured library path, or holding a physical copy.
+//! series, and tags. Books go through the FTS5 MATCH path with override-aware
+//! overlays applied after hydration; taxonomy categories use scoped `LIKE`
+//! substring matches against the name columns. Bounded per category, and scoped
+//! to the books `helpers::visible_book_sql` admits.
 
 use omnibus_shared::PaletteResults;
 use sqlx::SqlitePool;

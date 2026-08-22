@@ -1,10 +1,8 @@
-//! App-scoped sleep-timer state machine for audiobook playback.
-//!
-//! Owns the countdown signal and the self-re-arming 1 s tick, plus pure
-//! helpers (preset table, countdown formatting, end-of-chapter math). The
-//! controller is installed once at App root (so the countdown survives
-//! leaving `/listen`) and consumed via [`use_sleep`] by both the full
-//! player and the mini-dock. Session-only — not persisted across page loads.
+//! App-scoped sleep-timer state machine for audiobook playback. Owns the
+//! countdown signal and the self-re-arming 1 s tick, plus pure helpers (preset
+//! table, countdown formatting, end-of-chapter math). Installed once at App
+//! root so the countdown survives leaving `/listen`, and consumed via
+//! [`use_sleep`] by both the full player and the mini-dock. Session-only.
 
 #![cfg(not(feature = "mobile"))]
 

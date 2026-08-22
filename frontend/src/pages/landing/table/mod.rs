@@ -1,10 +1,7 @@
-//! Power-user table view for the landing page.
-//!
-//! Dense `<table>` with inline-editable title / series / authors / tags /
-//! genres for
-//! admins, used by [`super::LandingPage`] when the view-mode toggle is set to
-//! table.
-//! Row plumbing in [`row`]; per-cell rendering in [`cells`].
+//! Power-user table view for the landing page: a dense `<table>` with
+//! inline-editable title / series / authors / tags / genres for admins, used by
+//! [`super::LandingPage`] when the view-mode toggle is set to table. Row
+//! plumbing lives in [`row`], per-cell rendering in [`cells`].
 
 mod cells;
 mod row;

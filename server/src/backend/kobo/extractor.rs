@@ -1,9 +1,8 @@
-//! `KoboAuthUser` — path-token extractor for the wireless Kobo routes.
-//!
-//! Kobo devices carry their credential in the URL path (`/kobo/<TOKEN>/v1/…`),
-//! a channel none of the `/api/*` extractors read. The token is a persistent,
-//! per-device `kobo_devices` credential (not a session token), resolved via
-//! [`db::kobo_devices::resolve_device_by_token`].
+//! `KoboAuthUser` — path-token extractor for the wireless Kobo routes. Kobo
+//! devices carry their credential in the URL path (`/kobo/<TOKEN>/v1/…`), a
+//! channel none of the `/api/*` extractors read. The token is a persistent,
+//! per-device `kobo_devices` credential rather than a session token, resolved
+//! via [`db::kobo_devices::resolve_device_by_token`].
 
 use axum::{
     extract::FromRequestParts,
