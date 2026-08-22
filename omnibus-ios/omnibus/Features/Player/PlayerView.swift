@@ -25,8 +25,6 @@ struct PlayerView: View {
     @State private var syncedHere = false
     @State private var showCarMode = false
 
-    private static let rates: [Double] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
-
     /// Share of the band between the two insets the artwork may take.
     ///
     /// It tapers on a short screen. The transport's height is fixed, so on a
@@ -92,21 +90,8 @@ struct PlayerView: View {
         .sheet(isPresented: $showChapters) { ChapterSheet() }
         .sheet(isPresented: $showBookmarks) { BookmarksSheet(book: book, isAudio: true) }
         .fullScreenCover(isPresented: $showCarMode) { CarModeView(book: book) }
-        .confirmationDialog("Playback speed", isPresented: $showSpeed, titleVisibility: .visible) {
-            ForEach(Self.rates, id: \.self) { value in
-                Button(Self.rateLabel(value)) { player.rate = value }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-        .confirmationDialog("Sleep timer", isPresented: $showSleepTimer, titleVisibility: .visible) {
-            ForEach([5, 10, 15, 30, 45, 60], id: \.self) { minutes in
-                Button("\(minutes) minutes") { player.startSleepTimer(minutes: minutes) }
-            }
-            if player.sleepMinutesRemaining != nil {
-                Button("Turn off", role: .destructive) { player.cancelSleepTimer() }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
+        .sheet(isPresented: $showSpeed) { SpeedSheet() }
+        .sheet(isPresented: $showSleepTimer) { SleepSheet() }
     }
 
     /// A blurred, saturated wash of the cover behind the controls.
@@ -188,8 +173,11 @@ struct PlayerView: View {
 
             Spacer()
 
-            if let minutes = player.sleepMinutesRemaining {
-                Label("\(minutes)m", systemImage: "moon.zzz.fill")
+            // Countdown only while time actually remains, mirroring the web
+            // pill — an end-of-chapter timer armed at the boundary shows
+            // nothing rather than a frozen 0:00.
+            if let remaining = player.sleepRemainingSeconds, remaining > 0 {
+                Label(Format.duration(Double(remaining)), systemImage: "moon.zzz.fill")
                     .font(.ui(12, weight: .medium))
                     .foregroundStyle(palette.accentColor)
                     .padding(.horizontal, 10)
@@ -390,8 +378,8 @@ struct PlayerView: View {
     }
 
     /// Speed · Car Mode · Sleep · Bookmark. Every entry is a plain `Button`
-    /// driving a confirmation dialog or a cover — a `Menu` here silently dropped
-    /// out of the row.
+    /// driving a sheet or a cover — a `Menu` here silently dropped out of
+    /// the row.
     private var utilityRow: some View {
         HStack(spacing: 0) {
             utilityCell("Speed") { showSpeed = true } glyph: {

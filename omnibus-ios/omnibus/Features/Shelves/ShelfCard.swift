@@ -130,6 +130,8 @@ struct ShelfCard: View {
             }
         }
         .frame(width: width)
+        // Fill the tap gaps between mosaic and caption; see BookGridCell.
+        .contentShape(Rectangle())
     }
 
     /// Only non-default states get a badge: an unmarked tile is a plain private

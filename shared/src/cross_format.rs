@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::progress::ProgressFormat;
 
+#[cfg(test)]
+mod tests;
+
 /// How a book's multiple audio files relate — declared by the user when
 /// confirming a link, never guessed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

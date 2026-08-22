@@ -349,7 +349,89 @@ pub async fn rewrite_all_epubs_with_progress(
         return Ok(summary);
     }
 
-    let id_map = crate::books::resolve_book_ids_bulk(pool, &uuids).await?;
+    let ctx = load_rewrite_context(pool, &uuids).await?;
+
+    let total = u32::try_from(uuids.len()).unwrap_or(u32::MAX);
+    let mut processed = 0u32;
+    for uuid in uuids {
+        processed = processed.saturating_add(1);
+        on_progress(processed, total, ctx.progress_label(&uuid));
+        ctx.rewrite_one(uuid, &mut summary).await;
+    }
+    Ok(summary)
+}
+
+/// The bulk-loaded lookups a whole-library rewrite pass needs, fetched once
+/// up front (see the doc comment above [`rewrite_all_epubs_with_overrides`])
+/// rather than per book inside the loop.
+struct RewriteContext {
+    id_map: HashMap<String, i64>,
+    source_paths: HashMap<i64, PathBuf>,
+    last_modified_map: HashMap<i64, i64>,
+    books_by_id: HashMap<i64, EbookMetadata>,
+}
+
+impl RewriteContext {
+    /// The progress label for one uuid: its (possibly overridden) title,
+    /// falling back to the filename — an empty title (possible in both the
+    /// DB column and an override) must fall through like a missing one, or
+    /// the UI names the book "".
+    fn progress_label(&self, uuid: &str) -> Option<&str> {
+        self.id_map
+            .get(uuid)
+            .and_then(|book_id| self.books_by_id.get(book_id))
+            .map(|b| {
+                b.title
+                    .as_deref()
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or(&b.filename)
+            })
+    }
+
+    /// Rewrite (or skip) one overridden book, folding the outcome into
+    /// `summary`. Every lookup miss here is a book that legitimately
+    /// vanished between the listing query and this pass (ghosted, reformat,
+    /// or a concurrent delete) — not an error.
+    async fn rewrite_one(&self, uuid: String, summary: &mut BulkRewriteSummary) {
+        // Ghosted: the override row outlived its book (source file removed
+        // by a scan, or the book deleted concurrently between the listing
+        // query above and this pass).
+        let Some(&book_id) = self.id_map.get(&uuid) else {
+            summary.skipped += 1;
+            return;
+        };
+        // No EPUB to bake into — an audiobook-only or comic-only book.
+        let Some(source) = self.source_paths.get(&book_id) else {
+            summary.skipped += 1;
+            return;
+        };
+        // The book itself vanished between resolving its id and this bulk
+        // fetch (a concurrent delete) — no longer this pass's problem.
+        let Some(book) = self.books_by_id.get(&book_id) else {
+            summary.skipped += 1;
+            return;
+        };
+        let last_modified = self.last_modified_map.get(&book_id).copied().unwrap_or(0);
+        match rewrite_or_reuse_cache(book_id, source, book, last_modified).await {
+            Ok(Some(_)) => summary.rewritten += 1,
+            // The override cleared between the listing query above and this
+            // call (a concurrent delete) — no longer this pass's problem.
+            Ok(None) => summary.skipped += 1,
+            Err(e) => summary.errors.push(BulkRewriteError {
+                book_uuid: uuid,
+                message: e.to_string(),
+            }),
+        }
+    }
+}
+
+/// Load the bulk lookups [`RewriteContext`] carries: resolved book ids,
+/// each's EPUB source path, `last_modified`, and merged metadata.
+async fn load_rewrite_context(
+    pool: &SqlitePool,
+    uuids: &[String],
+) -> anyhow::Result<RewriteContext> {
+    let id_map = crate::books::resolve_book_ids_bulk(pool, uuids).await?;
     let mut ids: Vec<i64> = id_map.values().copied().collect();
     ids.sort_unstable();
     ids.dedup();
@@ -364,56 +446,12 @@ pub async fn rewrite_all_epubs_with_progress(
         .map(|b| (b.id, b))
         .collect();
 
-    let total = u32::try_from(uuids.len()).unwrap_or(u32::MAX);
-    let mut processed = 0u32;
-    for uuid in uuids {
-        processed = processed.saturating_add(1);
-        {
-            let current = id_map
-                .get(&uuid)
-                .and_then(|book_id| books_by_id.get(book_id))
-                // An empty title (possible in both the DB column and an
-                // override) must fall through to the filename like a
-                // missing one, or the UI names the book "".
-                .map(|b| {
-                    b.title
-                        .as_deref()
-                        .filter(|t| !t.is_empty())
-                        .unwrap_or(&b.filename)
-                });
-            on_progress(processed, total, current);
-        }
-        // Ghosted: the override row outlived its book (source file removed
-        // by a scan, or the book deleted concurrently between the listing
-        // query above and this pass).
-        let Some(&book_id) = id_map.get(&uuid) else {
-            summary.skipped += 1;
-            continue;
-        };
-        // No EPUB to bake into — an audiobook-only or comic-only book.
-        let Some(source) = source_paths.get(&book_id) else {
-            summary.skipped += 1;
-            continue;
-        };
-        // The book itself vanished between resolving its id and this bulk
-        // fetch (a concurrent delete) — no longer this pass's problem.
-        let Some(book) = books_by_id.get(&book_id) else {
-            summary.skipped += 1;
-            continue;
-        };
-        let last_modified = last_modified_map.get(&book_id).copied().unwrap_or(0);
-        match rewrite_or_reuse_cache(book_id, source, book, last_modified).await {
-            Ok(Some(_)) => summary.rewritten += 1,
-            // The override cleared between the listing query above and this
-            // call (a concurrent delete) — no longer this pass's problem.
-            Ok(None) => summary.skipped += 1,
-            Err(e) => summary.errors.push(BulkRewriteError {
-                book_uuid: uuid,
-                message: e.to_string(),
-            }),
-        }
-    }
-    Ok(summary)
+    Ok(RewriteContext {
+        id_map,
+        source_paths,
+        last_modified_map,
+        books_by_id,
+    })
 }
 
 /// A zip entry name from an in-archive path: `to_string_lossy` with backslashes

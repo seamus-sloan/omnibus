@@ -1435,3 +1435,45 @@ async fn retyping_an_audiobook_extension_reindexes_with_the_new_format_and_keeps
         "no row is left claiming the old extension"
     );
 }
+
+/// Audiobook twin of the ebook attach-promotion test: attaching an M4B to a
+/// fileless wishlist book must move it off the `physical://local` pseudo-root
+/// so the path-scoped reads surface it.
+#[tokio::test]
+async fn try_attach_new_audiobook_promotes_a_wishlist_target_off_the_physical_root() {
+    let _covers = CoversTempDir::new("ab_attach_promotes_wishlist");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let wishlist_uuid = crate::physical::create_fileless_book(
+        &pool,
+        crate::physical::FilelessBook {
+            title: "Seeded".into(),
+            authors: vec!["Seed Author".into()],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap();
+    let lib_id = seed_scan_root(&pool).await;
+
+    let b = indexed_audiobook("Seed Author/Seeded.m4b", "Seeded", Some("Seed Author"));
+    let mut covers = Vec::new();
+    let mut tx = pool.begin().await.unwrap();
+    let attached = try_attach_new_audiobook(&mut tx, "/lib", &b, &HashSet::new(), &mut covers)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert!(attached, "the group must attach to the wishlist book");
+    let library_id: i64 = sqlx::query_scalar("SELECT library_id FROM books WHERE uuid = ?")
+        .bind(&wishlist_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        library_id, lib_id,
+        "attach must promote off the pseudo-root"
+    );
+}

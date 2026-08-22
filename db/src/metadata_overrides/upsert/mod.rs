@@ -20,7 +20,7 @@ mod cover;
 mod merge;
 
 pub(crate) use cover::apply_overrides;
-pub use cover::{clear_cover_override, delete_override_cover, get_book_uuid, write_override_cover};
+pub use cover::{clear_cover_override, delete_override_cover, write_override_cover};
 pub use merge::{bulk_merge_metadata_overrides, merge_metadata_overrides};
 
 /// Errors returned by the metadata overrides data layer.
@@ -54,6 +54,11 @@ impl From<crate::books::BooksError> for MetadataOverridesError {
             crate::books::BooksError::Db(inner) => MetadataOverridesError::Db(inner),
             crate::books::BooksError::OverridesJson(inner) => {
                 MetadataOverridesError::Serialization(inner)
+            }
+            // A `BooksError` this module can receive never carries one: the
+            // variant exists for the overrides *read* path's fold-through.
+            crate::books::BooksError::Other(msg) => {
+                MetadataOverridesError::Db(sqlx::Error::Decode(msg.into()))
             }
         }
     }
@@ -299,11 +304,26 @@ pub async fn get_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,
 ) -> Result<Option<(MetadataOverrides, bool)>, MetadataOverridesError> {
+    get_metadata_overrides_exec(pool, book_uuid).await
+}
+
+/// Executor-generic body of [`get_metadata_overrides`], so a caller that
+/// already holds an open transaction (e.g. [`crate::cleanup::apply::apply_book_title_override`])
+/// can read the current overrides through that same transaction instead of
+/// racing it against a separate pool-level read taken before the
+/// transaction started.
+pub(crate) async fn get_metadata_overrides_exec<'e, E>(
+    executor: E,
+    book_uuid: &str,
+) -> Result<Option<(MetadataOverrides, bool)>, MetadataOverridesError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let row: Option<(String, i64)> = sqlx::query_as(
         "SELECT overrides, has_cover_override FROM metadata_overrides WHERE book_uuid = ?",
     )
     .bind(book_uuid)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     match row {

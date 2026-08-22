@@ -138,6 +138,10 @@ async fn run_cleanup_detection(
 }
 
 impl Worker {
+    /// Dispatch a queued [`Task`] to its owning handler. Each arm either
+    /// delegates straight to a small `handle_*`/report helper below or (for
+    /// the handful of one-liners with no shared shape — FTS rebuild, cleanup
+    /// detection) inlines its single call directly.
     pub(super) async fn execute(self: &Arc<Self>, task: Task, id: TaskId) -> TaskOutcome {
         match task {
             Task::Scan { library_path } => self.handle_scan(library_path, id).await,
@@ -150,122 +154,51 @@ impl Worker {
                 library_path,
                 profile,
             } => {
-                self.report_book_detail(id, book_id).await;
-                anyhow_outcome(
-                    "HLS transcode",
-                    crate::hls::transcode_book(
-                        &self.pool,
-                        book_id,
-                        book_file_id,
-                        &library_path,
-                        &profile,
-                    )
-                    .await,
-                )
+                self.handle_hls_transcode(book_id, book_file_id, library_path, profile, id)
+                    .await
             }
             Task::ResolveAuthorPhoto { author_id } => {
-                self.report_author_detail(id, author_id).await;
-                anyhow_outcome(
-                    "author photo lookup",
-                    crate::author_photos::resolve(&self.pool, author_id).await,
-                )
+                self.handle_resolve_author_photo(author_id, id).await
             }
             Task::RefetchAuthorPhotos => self.handle_refetch_author_photos(id).await,
-            Task::BackfillChapters { library_path } => anyhow_outcome(
-                "chapter backfill",
-                crate::indexer::backfill_chapters(
-                    &self.pool,
-                    &library_path,
-                    |processed, total, item| {
-                        self.report_item_progress(id, processed, total, item);
-                    },
-                )
-                .await,
-            ),
-            Task::BackfillWordCounts { library_path } => anyhow_outcome(
-                "word-count backfill",
-                crate::indexer::backfill_word_counts(
-                    &self.pool,
-                    &library_path,
-                    |processed, total, item| {
-                        self.report_item_progress(id, processed, total, item);
-                    },
-                )
-                .await,
-            ),
-            Task::BackfillPageCounts { library_path } => anyhow_outcome(
-                "page-count backfill",
-                crate::indexer::backfill_page_counts(
-                    &self.pool,
-                    &library_path,
-                    |processed, total, item| {
-                        self.report_item_progress(id, processed, total, item);
-                    },
-                )
-                .await,
-            ),
-            Task::BackfillEpubStructure { library_path } => anyhow_outcome(
-                "epub structure backfill",
-                crate::indexer::backfill_epub_structure(
-                    &self.pool,
-                    &library_path,
-                    |processed, total, item| {
-                        self.report_item_progress(id, processed, total, item);
-                    },
-                )
-                .await,
-            ),
-            Task::BackfillThumbs { library_path } => anyhow_outcome(
-                "thumbnail backfill",
-                crate::indexer::backfill_thumbs(
-                    &self.pool,
-                    &library_path,
-                    |processed, total, item| {
-                        self.report_item_progress(id, processed, total, item);
-                    },
-                )
-                .await,
-            ),
+            Task::BackfillChapters { library_path } => {
+                self.handle_backfill_chapters(library_path, id).await
+            }
+            Task::BackfillWordCounts { library_path } => {
+                self.handle_backfill_word_counts(library_path, id).await
+            }
+            Task::BackfillPageCounts { library_path } => {
+                self.handle_backfill_page_counts(library_path, id).await
+            }
+            Task::BackfillEpubStructure { library_path } => {
+                self.handle_backfill_epub_structure(library_path, id).await
+            }
+            Task::BackfillThumbs { library_path } => {
+                self.handle_backfill_thumbs(library_path, id).await
+            }
             Task::RebuildFtsIndex => anyhow_outcome(
                 "FTS rebuild",
                 crate::sync::rebuild_all_fts(&self.pool).await,
             ),
             Task::ResolveSuggestions { book_uuid } => {
-                self.report_book_detail_by_uuid(id, &book_uuid).await;
-                anyhow_outcome(
-                    "suggestions lookup",
-                    crate::suggestions::resolve(&self.pool, &book_uuid).await,
-                )
+                self.handle_resolve_suggestions(book_uuid, id).await
             }
-            Task::KepubConvert { book_id } => {
-                self.report_book_detail(id, book_id).await;
-                self.handle_kepub_convert(book_id).await
-            }
+            Task::KepubConvert { book_id } => self.handle_kepub_convert(book_id, id).await,
             Task::ConvertFormat {
                 book_id,
                 source_format,
                 target_format,
             } => {
-                self.report_book_detail(id, book_id).await;
-                convert_outcome(
-                    crate::convert::convert_book(
-                        &self.pool,
-                        book_id,
-                        &source_format,
-                        &target_format,
-                    )
-                    .await,
-                )
+                self.handle_convert_format(book_id, source_format, target_format, id)
+                    .await
             }
             Task::SendToKindle {
                 book_id,
                 book_file_id,
                 recipient_email,
             } => {
-                self.report_book_detail(id, book_id).await;
-                kindle_outcome(
-                    crate::kindle::send(&self.pool, book_id, book_file_id, &recipient_email).await,
-                )
+                self.handle_send_to_kindle(book_id, book_file_id, recipient_email, id)
+                    .await
             }
             Task::RewriteAllEpubs => self.handle_rewrite_all_epubs(id).await,
             Task::DetectCleanup { kind } => anyhow_outcome(
@@ -276,8 +209,7 @@ impl Worker {
                 book_id,
                 last_modified_epoch,
             } => {
-                self.report_book_detail(id, book_id).await;
-                self.handle_generate_thumbs(book_id, last_modified_epoch)
+                self.handle_generate_thumbs(book_id, last_modified_epoch, id)
                     .await
             }
             #[cfg(test)]
@@ -289,6 +221,172 @@ impl Worker {
                 ..
             } => handle_test_task(latency_ms, on_run, on_done).await,
         }
+    }
+
+    /// `Task::HlsTranscode`: transcode one audiobook file to HLS at `profile`.
+    async fn handle_hls_transcode(
+        self: &Arc<Self>,
+        book_id: i64,
+        book_file_id: i64,
+        library_path: String,
+        profile: String,
+        id: TaskId,
+    ) -> TaskOutcome {
+        self.report_book_detail(id, book_id).await;
+        anyhow_outcome(
+            "HLS transcode",
+            crate::hls::transcode_book(&self.pool, book_id, book_file_id, &library_path, &profile)
+                .await,
+        )
+    }
+
+    /// `Task::ResolveAuthorPhoto`: look up and cache one author's photo.
+    async fn handle_resolve_author_photo(
+        self: &Arc<Self>,
+        author_id: i64,
+        id: TaskId,
+    ) -> TaskOutcome {
+        self.report_author_detail(id, author_id).await;
+        anyhow_outcome(
+            "author photo lookup",
+            crate::author_photos::resolve(&self.pool, author_id).await,
+        )
+    }
+
+    /// `Task::BackfillChapters`: synthesize chapters for audiobooks that
+    /// scanned before chapter extraction shipped.
+    async fn handle_backfill_chapters(
+        self: &Arc<Self>,
+        library_path: String,
+        id: TaskId,
+    ) -> TaskOutcome {
+        anyhow_outcome(
+            "chapter backfill",
+            crate::indexer::backfill_chapters(
+                &self.pool,
+                &library_path,
+                |processed, total, item| {
+                    self.report_item_progress(id, processed, total, item);
+                },
+            )
+            .await,
+        )
+    }
+
+    /// `Task::BackfillWordCounts`: fill missing ebook word-count estimates.
+    async fn handle_backfill_word_counts(
+        self: &Arc<Self>,
+        library_path: String,
+        id: TaskId,
+    ) -> TaskOutcome {
+        anyhow_outcome(
+            "word-count backfill",
+            crate::indexer::backfill_word_counts(
+                &self.pool,
+                &library_path,
+                |processed, total, item| {
+                    self.report_item_progress(id, processed, total, item);
+                },
+            )
+            .await,
+        )
+    }
+
+    /// `Task::BackfillPageCounts`: fill missing comic page-count estimates.
+    async fn handle_backfill_page_counts(
+        self: &Arc<Self>,
+        library_path: String,
+        id: TaskId,
+    ) -> TaskOutcome {
+        anyhow_outcome(
+            "page-count backfill",
+            crate::indexer::backfill_page_counts(
+                &self.pool,
+                &library_path,
+                |processed, total, item| {
+                    self.report_item_progress(id, processed, total, item);
+                },
+            )
+            .await,
+        )
+    }
+
+    /// `Task::BackfillEpubStructure`: extract TOC/spine structure for EPUBs
+    /// that scanned before structure extraction shipped.
+    async fn handle_backfill_epub_structure(
+        self: &Arc<Self>,
+        library_path: String,
+        id: TaskId,
+    ) -> TaskOutcome {
+        anyhow_outcome(
+            "epub structure backfill",
+            crate::indexer::backfill_epub_structure(
+                &self.pool,
+                &library_path,
+                |processed, total, item| {
+                    self.report_item_progress(id, processed, total, item);
+                },
+            )
+            .await,
+        )
+    }
+
+    /// `Task::BackfillThumbs`: warm the thumbnail cache for stale covers.
+    async fn handle_backfill_thumbs(
+        self: &Arc<Self>,
+        library_path: String,
+        id: TaskId,
+    ) -> TaskOutcome {
+        anyhow_outcome(
+            "thumbnail backfill",
+            crate::indexer::backfill_thumbs(&self.pool, &library_path, |processed, total, item| {
+                self.report_item_progress(id, processed, total, item);
+            })
+            .await,
+        )
+    }
+
+    /// `Task::ResolveSuggestions`: resolve "readers also enjoyed" for one book.
+    async fn handle_resolve_suggestions(
+        self: &Arc<Self>,
+        book_uuid: String,
+        id: TaskId,
+    ) -> TaskOutcome {
+        self.report_book_detail_by_uuid(id, &book_uuid).await;
+        anyhow_outcome(
+            "suggestions lookup",
+            crate::suggestions::resolve(&self.pool, &book_uuid).await,
+        )
+    }
+
+    /// `Task::ConvertFormat`: convert one book's file to `target_format` via
+    /// Calibre's `ebook-convert`.
+    async fn handle_convert_format(
+        self: &Arc<Self>,
+        book_id: i64,
+        source_format: String,
+        target_format: String,
+        id: TaskId,
+    ) -> TaskOutcome {
+        self.report_book_detail(id, book_id).await;
+        convert_outcome(
+            crate::convert::convert_book(&self.pool, book_id, &source_format, &target_format).await,
+        )
+    }
+
+    /// `Task::SendToKindle`: email one book file to the reader's Kindle
+    /// address over the configured SMTP relay.
+    async fn handle_send_to_kindle(
+        self: &Arc<Self>,
+        book_id: i64,
+        book_file_id: Option<i64>,
+        recipient_email: String,
+        id: TaskId,
+    ) -> TaskOutcome {
+        self.report_book_detail(id, book_id).await;
+        kindle_outcome(
+            crate::kindle::send(&self.pool, book_id, book_file_id, &recipient_email).await,
+        )
     }
 
     /// Best-effort current-item report: the book's display title. A lookup
@@ -356,7 +454,8 @@ impl Worker {
     /// next boot, because an unmaterialized row never moves the wire
     /// fingerprint that `checkforchanges` uses to invite a re-pull.
     /// Non-fatal — the conversion itself is the task's contract.
-    async fn handle_kepub_convert(self: &Arc<Self>, book_id: i64) -> TaskOutcome {
+    async fn handle_kepub_convert(self: &Arc<Self>, book_id: i64, id: TaskId) -> TaskOutcome {
+        self.report_book_detail(id, book_id).await;
         let outcome = kepub_outcome(crate::kepub::convert_book(&self.pool, book_id).await);
         if matches!(outcome, TaskOutcome::Ok(_)) {
             if let Err(e) =
@@ -503,7 +602,9 @@ impl Worker {
         self: &Arc<Self>,
         book_id: i64,
         last_modified_epoch: i64,
+        id: TaskId,
     ) -> TaskOutcome {
+        self.report_book_detail(id, book_id).await;
         let pool = self.pool.clone();
         let cover = match crate::covers::get_cover(&pool, book_id).await {
             Ok(Some((_mime, bytes))) => bytes,

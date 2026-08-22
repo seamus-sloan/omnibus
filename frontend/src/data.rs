@@ -23,12 +23,15 @@ mod authors;
 mod background_tasks;
 mod bookmarks;
 mod books;
+// Admin library-cleanup review (#966). Web/SSR call the server functions;
+// mobile posts the same `/api/rpc/cleanup/*` routes, so the wrappers compile
+// under both gates even though no mobile UI ships yet.
+mod cleanup;
 // Admin "last errors" ring buffer read (#954) — web (server-fn) + SSR stubs;
 // not a mobile surface, same shape as `logs`.
 #[cfg(not(feature = "mobile"))]
 mod errors;
 mod genres;
-mod hardcover_fetch;
 mod highlights;
 // Per-book Started/Time-read/Sessions insights (#1904) — the book-detail
 // rail section that renders them doesn't compile on mobile, so there's no
@@ -44,6 +47,7 @@ mod cross_format;
 mod kobo;
 #[cfg(not(feature = "mobile"))]
 mod logs;
+mod metadata_search;
 mod physical;
 mod profile;
 mod progress;
@@ -84,11 +88,11 @@ pub use authors::*;
 pub use background_tasks::*;
 pub use bookmarks::*;
 pub use books::*;
+pub use cleanup::*;
 pub use cross_format::*;
 #[cfg(not(feature = "mobile"))]
 pub use errors::*;
 pub use genres::*;
-pub use hardcover_fetch::*;
 pub use highlights::*;
 #[cfg(not(feature = "mobile"))]
 pub use insights::*;
@@ -98,6 +102,7 @@ pub use kindle::*;
 pub use kobo::*;
 #[cfg(not(feature = "mobile"))]
 pub use logs::*;
+pub use metadata_search::*;
 pub use physical::*;
 pub use profile::*;
 pub use progress::*;

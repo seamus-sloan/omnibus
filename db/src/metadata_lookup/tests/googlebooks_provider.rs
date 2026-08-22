@@ -10,7 +10,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::super::providers::{googlebooks, publication_year};
 use super::super::*;
 use super::{
-    config_for, gb_hit, keyed_config_for, mount_gb, mount_ol, offline_config, GB_PATH, ISBN13,
+    config_for, gb_hit, keyed_config_for, mount_gb, mount_ol, offline_config, GB_PATH, ISBN10,
+    ISBN13,
 };
 
 #[tokio::test]
@@ -311,4 +312,68 @@ async fn googlebooks_drops_a_zero_page_count_and_trims_the_year() {
         .unwrap();
     assert_eq!(meta.year.as_deref(), Some("2025"));
     assert_eq!(meta.pages, None, "0 pages means unknown, not zero-length");
+}
+
+// ── the picker's fields: genres, print pages, ISBN-10 ────────────
+
+#[tokio::test]
+async fn googlebooks_lookup_populates_genres_print_pages_and_isbn10() {
+    let server = MockServer::start().await;
+    mount_gb(&server, gb_hit()).await;
+
+    let edition = googlebooks::by_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the fixture volume must resolve");
+    assert_eq!(edition.genres, vec!["Computers", "Java"]);
+    assert_eq!(edition.pages, Some(416));
+    assert_eq!(edition.isbn10.as_deref(), Some(ISBN10));
+}
+
+#[tokio::test]
+async fn googlebooks_leaves_the_new_fields_unset_when_the_volume_omits_them() {
+    // A zero `pageCount` is Google's "unknown", and staging that over a real
+    // count is the failure this guards: it must be `None`, not `Some(0)`.
+    let server = MockServer::start().await;
+    mount_gb(
+        &server,
+        json!({ "items": [{ "volumeInfo": {
+            "title": "Effective Java",
+            "pageCount": 0,
+            "industryIdentifiers": [{ "type": "ISBN_13", "identifier": ISBN13 }],
+        }}]}),
+    )
+    .await;
+
+    let edition = googlebooks::by_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the fixture volume must resolve");
+    assert!(edition.genres.is_empty());
+    assert_eq!(edition.pages, None);
+    assert_eq!(edition.isbn10, None);
+}
+
+#[tokio::test]
+async fn googlebooks_drops_an_isbn10_that_names_a_different_printing() {
+    // The bare-text fallback can surface a sibling edition, whose ISBN-10
+    // would pair with an ISBN-13 that isn't the one being answered with.
+    let server = MockServer::start().await;
+    mount_gb(
+        &server,
+        json!({ "items": [{ "volumeInfo": {
+            "title": "Effective Java",
+            // 0141439513 is Pride and Prejudice's — a valid ISBN-10 for a
+            // different book entirely.
+            "industryIdentifiers": [{ "type": "ISBN_10", "identifier": "0141439513" }],
+        }}]}),
+    )
+    .await;
+
+    let edition = googlebooks::by_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the fixture volume must resolve");
+    assert_eq!(edition.isbn13, ISBN13);
+    assert_eq!(edition.isbn10, None);
 }

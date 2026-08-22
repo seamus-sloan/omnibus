@@ -4,16 +4,10 @@
 
 use sqlx::{SqlitePool, Transaction};
 
-use super::PhysicalError;
+use super::{PhysicalError, PHYSICAL_LIBRARY_PATH};
 use crate::covers::write_cover_file;
 use crate::helpers::mint_uuid;
 use crate::normalize::{normalize_author, normalize_title};
-
-/// Sentinel scan-root path that owns every fileless (physical-only) book. It is
-/// never a scan target, so ebook/audiobook reindex diffs never touch these
-/// rows; the never-prune guard keeps the row alive while any physical book
-/// references it.
-const PHYSICAL_LIBRARY_PATH: &str = "physical://local";
 
 /// A cover image for a fileless book: the source `mime` plus raw bytes.
 pub struct FilelessCover {

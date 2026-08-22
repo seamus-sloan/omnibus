@@ -635,3 +635,14 @@ async fn reading_state_for_returns_empty_for_no_uuids() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn kobo_error_from_metadata_overrides_error_returns_other_for_bulk_write_variants() {
+    let err = KoboError::from(
+        crate::metadata_overrides::MetadataOverridesError::BookNotFound("abc".into()),
+    );
+    assert!(
+        matches!(&err, KoboError::Other(msg) if msg.contains("abc")),
+        "expected Other carrying the source message, got {err:?}"
+    );
+}

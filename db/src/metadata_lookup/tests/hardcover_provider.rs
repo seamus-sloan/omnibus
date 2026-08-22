@@ -8,9 +8,10 @@ use serde_json::json;
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use super::super::providers::hardcover;
 use super::super::*;
 use super::{
-    config_for, mount_gb, mount_gb_search, mount_ol, mount_ol_search, ol_hit, ISBN13, QUERY,
+    config_for, mount_gb, mount_gb_search, mount_ol, mount_ol_search, ol_hit, ISBN10, ISBN13, QUERY,
 };
 
 // ── Hardcover rung ───────────────────────────────────────────────
@@ -59,7 +60,7 @@ fn hc_book() -> serde_json::Value {
         "title": "Effective Java",
         "description": "  The definitive guide.  ",
         "contributions": [{ "author": { "name": "Joshua Bloch" } }],
-        "book_series": [{ "series": { "name": "The Java Series" } }],
+        "book_series": [{ "position": 3, "series": { "name": "The Java Series" } }],
         "image": { "url": "https://hc.test/cover.jpg" },
         "editions": [{ "isbn_13": ISBN13 }],
     })
@@ -201,4 +202,150 @@ async fn hardcover_title_search_skips_a_row_with_no_isbn() {
         .await
         .unwrap();
     assert!(results.is_empty());
+}
+
+// ── the picker's fields: genres, print pages, ISBN-10 ────────────
+
+/// [`hc_book`] plus the picker's fields — the `Genre` bucket of `cached_tags`
+/// and the representative edition's `isbn_10` / `pages`.
+fn hc_book_with_picker_fields() -> serde_json::Value {
+    let mut book = hc_book();
+    book["cached_tags"] = json!({
+        "Genre": [{ "tag": "Programming", "count": 900 }, { "tag": "Reference", "count": 12 }],
+        "Mood": [{ "tag": "informative" }],
+    });
+    book["editions"] = json!([{ "isbn_13": ISBN13, "isbn_10": ISBN10, "pages": 416 }]);
+    book
+}
+
+#[tokio::test]
+async fn hardcover_title_search_populates_genres_print_pages_and_isbn10() {
+    let server = MockServer::start().await;
+    mount_hc_books(
+        &server,
+        TITLE_QUERY_MARKER,
+        json!([hc_book_with_picker_fields()]),
+    )
+    .await;
+
+    let results = hardcover::by_title(&hardcover_config_for(&server), QUERY)
+        .await
+        .unwrap();
+    let first = results.first().expect("the fixture row must map");
+    // Only the `Genre` bucket of `cached_tags` — moods aren't genres.
+    assert_eq!(first.genres, vec!["Programming", "Reference"]);
+    assert_eq!(first.pages, Some(416));
+    assert_eq!(first.isbn10.as_deref(), Some(ISBN10));
+}
+
+#[tokio::test]
+async fn hardcover_leaves_the_new_fields_unset_when_the_row_omits_them() {
+    let server = MockServer::start().await;
+    mount_hc_books(&server, TITLE_QUERY_MARKER, json!([hc_book()])).await;
+
+    let results = hardcover::by_title(&hardcover_config_for(&server), QUERY)
+        .await
+        .unwrap();
+    let first = results.first().expect("the fixture row must map");
+    assert!(first.genres.is_empty());
+    assert_eq!(first.pages, None);
+    assert_eq!(first.isbn10, None);
+}
+
+#[tokio::test]
+async fn hardcover_isbn_lookup_drops_edition_fields_from_a_different_printing() {
+    // Hardcover resolves to a *work* and hands back its most-read edition,
+    // which is often not the printing that was scanned — so that edition's
+    // page count and ISBN-10 describe a different book.
+    let server = MockServer::start().await;
+    mount_hc_edition(&server, Some(42)).await;
+    let mut other_printing = hc_book_with_picker_fields();
+    other_printing["editions"] =
+        json!([{ "isbn_13": "9780141439518", "isbn_10": "0141439513", "pages": 480 }]);
+    mount_hc_books(&server, ID_QUERY_MARKER, json!([other_printing])).await;
+
+    let edition = hardcover::by_isbn(&hardcover_config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("hardcover should resolve the scanned isbn");
+    assert_eq!(edition.isbn13, ISBN13);
+    assert_eq!(edition.pages, None);
+    assert_eq!(edition.isbn10, None);
+    // Work-level fields are unaffected — they were never edition-scoped.
+    assert_eq!(edition.genres, vec!["Programming", "Reference"]);
+}
+
+// ── Series position (the field the retired Hardcover panel could apply) ──
+
+#[tokio::test]
+async fn hardcover_carries_the_series_position_as_a_book_number() {
+    // The one provider that models a position. Without it the picker cannot
+    // offer "Book #", which the panel this replaced could.
+    let server = MockServer::start().await;
+    mount_hc_edition(&server, Some(42)).await;
+    mount_hc_books(&server, "books(where", json!([hc_book()])).await;
+
+    let found = hardcover::by_isbn(&hardcover_config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the fixture resolves");
+    assert_eq!(found.series.as_deref(), Some("The Java Series"));
+    assert_eq!(found.series_index.as_deref(), Some("3"));
+}
+
+#[tokio::test]
+async fn hardcover_formats_a_half_position_for_a_novella() {
+    // Positions are floats because a novella sits at 2.5; a bare `{v}` would
+    // render the whole numbers as "3" and this as "2.5", so both go through
+    // the shared formatter.
+    let server = MockServer::start().await;
+    mount_hc_edition(&server, Some(42)).await;
+    let mut book = hc_book();
+    book["book_series"] = json!([{ "position": 2.5, "series": { "name": "The Java Series" } }]);
+    mount_hc_books(&server, "books(where", json!([book])).await;
+
+    let found = hardcover::by_isbn(&hardcover_config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the fixture resolves");
+    assert_eq!(found.series_index.as_deref(), Some("2.5"));
+}
+
+#[tokio::test]
+async fn hardcover_takes_the_name_and_the_position_from_one_series_row() {
+    // A book can sit in more than one series. Reading the name off whichever
+    // row has one and the position off whichever row has that would file the
+    // book under one series at another's number.
+    let server = MockServer::start().await;
+    mount_hc_edition(&server, Some(42)).await;
+    let mut book = hc_book();
+    book["book_series"] = json!([
+        { "position": 7, "series": serde_json::Value::Null },
+        { "position": 1, "series": { "name": "The Java Series" } },
+    ]);
+    mount_hc_books(&server, "books(where", json!([book])).await;
+
+    let found = hardcover::by_isbn(&hardcover_config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the fixture resolves");
+    assert_eq!(found.series.as_deref(), Some("The Java Series"));
+    // 1, from the row that named the series — not 7 from the unnamed one.
+    assert_eq!(found.series_index.as_deref(), Some("1"));
+}
+
+#[tokio::test]
+async fn hardcover_reports_no_book_number_when_the_series_has_no_position() {
+    let server = MockServer::start().await;
+    mount_hc_edition(&server, Some(42)).await;
+    let mut book = hc_book();
+    book["book_series"] = json!([{ "series": { "name": "The Java Series" } }]);
+    mount_hc_books(&server, "books(where", json!([book])).await;
+
+    let found = hardcover::by_isbn(&hardcover_config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the fixture resolves");
+    assert_eq!(found.series.as_deref(), Some("The Java Series"));
+    assert_eq!(found.series_index, None);
 }

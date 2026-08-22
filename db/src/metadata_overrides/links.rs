@@ -5,8 +5,37 @@
 //! author override path replaces its m2m list at read time via
 //! `apply_overrides` and doesn't need a helper here.
 
+use std::collections::HashSet;
+
 use omnibus_shared::MetadataOverrides;
-use sqlx::SqliteConnection;
+use sqlx::{QueryBuilder, SqliteConnection};
+
+/// Names bound per batched insert. SQLite's default bound-parameter cap is
+/// 999 (32766 on newer builds) and a subjects/genres list is user-supplied,
+/// so the batch is chunked rather than trusted to stay small — same size and
+/// reason as `resolve_entity_aliases` in `crate::entity_alias`.
+const INSERT_CHUNK: usize = 500;
+
+/// The single-column vocabulary tables an override materializes rows in.
+///
+/// A closed enum rather than a `&str` so the table name — the one part of
+/// [`insert_vocabulary_rows`]'s statement that can't be a bind — is chosen
+/// from this file at compile time and can't be routed in from a call site.
+#[derive(Clone, Copy)]
+enum VocabularyTable {
+    Tags,
+    Genres,
+}
+
+impl VocabularyTable {
+    /// The SQL identifier this variant names.
+    fn as_sql(self) -> &'static str {
+        match self {
+            Self::Tags => "tags",
+            Self::Genres => "genres",
+        }
+    }
+}
 
 /// When an override sets a series name, ensure a `series` row and
 /// `books_series_link` exist so the browse index and detail-page breadcrumb
@@ -60,13 +89,7 @@ pub(super) async fn materialize_tag_rows(
     let Some(subjects) = overrides.subjects.as_ref() else {
         return Ok(());
     };
-    for tag in subjects.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        sqlx::query("INSERT OR IGNORE INTO tags (name) VALUES (?)")
-            .bind(tag)
-            .execute(&mut *conn)
-            .await?;
-    }
-    Ok(())
+    insert_vocabulary_rows(conn, VocabularyTable::Tags, subjects).await
 }
 
 /// When an override sets a genres list, ensure a `genres` row exists for
@@ -87,11 +110,41 @@ pub(super) async fn materialize_genre_rows(
     let Some(genres) = overrides.genres.as_ref() else {
         return Ok(());
     };
-    for genre in genres.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        sqlx::query("INSERT OR IGNORE INTO genres (name) VALUES (?)")
-            .bind(genre)
-            .execute(&mut *conn)
-            .await?;
+    insert_vocabulary_rows(conn, VocabularyTable::Genres, genres).await
+}
+
+/// `INSERT OR IGNORE` every name in `names` into a single-column vocabulary
+/// table (`tags` / `genres`), one multi-row statement per
+/// [`INSERT_CHUNK`]-sized chunk instead of one statement per name.
+///
+/// `table` is a [`VocabularyTable`], not a string — the one part of the
+/// statement that isn't a bind therefore can't carry user input. Names are
+/// trimmed, blanks
+/// dropped, and duplicates collapsed case-insensitively to match the
+/// `UNIQUE COLLATE NOCASE` column the insert lands on, so a list naming the
+/// same tag twice stays one row (as it did per-statement) and can't make a
+/// single batch conflict with itself.
+async fn insert_vocabulary_rows(
+    conn: &mut SqliteConnection,
+    table: VocabularyTable,
+    names: &[String],
+) -> Result<(), sqlx::Error> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let names: Vec<&str> = names
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .filter(|s| seen.insert(s.to_ascii_lowercase()))
+        .collect();
+
+    for chunk in names.chunks(INSERT_CHUNK) {
+        let mut qb = QueryBuilder::new("INSERT OR IGNORE INTO ");
+        qb.push(table.as_sql());
+        qb.push(" (name) ");
+        qb.push_values(chunk, |mut b, name| {
+            b.push_bind(*name);
+        });
+        qb.build().execute(&mut *conn).await?;
     }
     Ok(())
 }

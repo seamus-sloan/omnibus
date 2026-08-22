@@ -136,94 +136,156 @@ impl SecretKeyKind {
     }
 }
 
-/// Admin field to set/clear one server-wide secret key. Loads the masked status
-/// on mount; the raw key is never read back to the client.
-#[component]
-pub fn SecretKeyField(kind: SecretKeyKind) -> Element {
-    let server_url = use_server_url();
-    let mut status: Signal<Option<KeyStatus>> = use_signal(|| None);
-    let mut key_input = use_signal(String::new);
-    let mut msg = use_signal(|| None::<String>);
-    let mut msg_is_error = use_signal(|| false);
-    let mut in_flight = use_signal(|| false);
+/// The five signals [`SecretKeyField`] threads through its load/save/clear
+/// handlers, bundled so each helper below takes one named argument instead
+/// of five positional `Signal`s.
+#[derive(Clone, Copy)]
+struct SecretKeyFieldSignals {
+    status: Signal<Option<KeyStatus>>,
+    key_input: Signal<String>,
+    msg: Signal<Option<String>>,
+    msg_is_error: Signal<bool>,
+    in_flight: Signal<bool>,
+}
 
-    let load_url = server_url.clone();
+/// Apply a save/clear outcome to the signals: on success, install the new
+/// status, clear the input, and report success; on failure, report it
+/// without touching the stored status. Always clears `in_flight` last.
+/// `verb_infinitive` ("save"/"clear") and `verb_past` ("saved"/"cleared")
+/// are both needed — reusing the past-tense form in the failure message
+/// produces "Failed to saved the key".
+fn apply_key_write_outcome(
+    mut sigs: SecretKeyFieldSignals,
+    kind: SecretKeyKind,
+    verb_infinitive: &str,
+    verb_past: &str,
+    result: Result<KeyStatus, DataError>,
+) {
+    match result {
+        Ok(s) => {
+            sigs.status.set(Some(s));
+            sigs.key_input.set(String::new());
+            sigs.msg
+                .set(Some(format!("{} key {verb_past}.", kind.noun())));
+            sigs.msg_is_error.set(false);
+        }
+        Err(_) => {
+            sigs.msg.set(Some(format!(
+                "Failed to {verb_infinitive} {} key.",
+                kind.noun()
+            )));
+            sigs.msg_is_error.set(true);
+        }
+    }
+    sigs.in_flight.set(false);
+}
+
+/// Save handler body: empty input is a no-op with a hint — clearing is the
+/// "Clear" button's job, so this never silently wipes the key and reports
+/// "saved".
+async fn save_key(kind: SecretKeyKind, url: String, mut sigs: SecretKeyFieldSignals) {
+    let value = (sigs.key_input)().trim().to_string();
+    if value.is_empty() {
+        sigs.msg
+            .set(Some(format!("Enter a {} key to save.", kind.noun())));
+        sigs.msg_is_error.set(true);
+        return;
+    }
+    sigs.in_flight.set(true);
+    let result = kind.save(&url, Some(value)).await;
+    apply_key_write_outcome(sigs, kind, "save", "saved", result);
+}
+
+/// Clear handler body.
+async fn clear_key(kind: SecretKeyKind, url: String, mut sigs: SecretKeyFieldSignals) {
+    sigs.in_flight.set(true);
+    let result = kind.save(&url, None).await;
+    apply_key_write_outcome(sigs, kind, "clear", "cleared", result);
+}
+
+/// Display-ready fields derived from the loaded [`KeyStatus`] (or its
+/// absence before the mount-time fetch resolves).
+struct SecretKeyFieldView {
+    configured: bool,
+    placeholder: String,
+    detail: String,
+}
+
+impl SecretKeyFieldView {
+    fn from_status(st: &Option<KeyStatus>, kind: SecretKeyKind) -> Self {
+        let configured = st.as_ref().map(|s| s.configured).unwrap_or(false);
+        let placeholder = st
+            .as_ref()
+            .and_then(|s| s.masked.clone())
+            .unwrap_or_else(|| kind.placeholder_default().to_string());
+        let detail = st
+            .as_ref()
+            .map(|s| {
+                format!(
+                    "Connected \u{00b7} {} \u{00b7} {}",
+                    s.source,
+                    s.masked.clone().unwrap_or_default()
+                )
+            })
+            .unwrap_or_default();
+        Self {
+            configured,
+            placeholder,
+            detail,
+        }
+    }
+}
+
+/// Load the masked key status on mount; the raw key is never read back to
+/// the client.
+fn use_load_key_status(
+    kind: SecretKeyKind,
+    server_url: String,
+    mut status: Signal<Option<KeyStatus>>,
+) {
     use_effect(move || {
-        let url = load_url.clone();
+        let url = server_url.clone();
         spawn(async move {
             if let Ok(s) = kind.fetch(&url).await {
                 status.set(Some(s));
             }
         });
     });
+}
+
+/// Admin field to set/clear one server-wide secret key. Loads the masked status
+/// on mount; the raw key is never read back to the client.
+#[component]
+pub fn SecretKeyField(kind: SecretKeyKind) -> Element {
+    let server_url = use_server_url();
+    let sigs = SecretKeyFieldSignals {
+        status: use_signal(|| None),
+        key_input: use_signal(String::new),
+        msg: use_signal(|| None::<String>),
+        msg_is_error: use_signal(|| false),
+        in_flight: use_signal(|| false),
+    };
+    let mut key_input = sigs.key_input;
+    use_load_key_status(kind, server_url.clone(), sigs.status);
 
     let save_url = server_url.clone();
     let on_save = move |_| {
-        let value = key_input().trim().to_string();
-        // Empty Save is a no-op with a hint — clearing is the "Clear" button's
-        // job, so we never silently wipe the key and report "saved".
-        if value.is_empty() {
-            msg.set(Some(format!("Enter a {} key to save.", kind.noun())));
-            msg_is_error.set(true);
-            return;
-        }
-        let url = save_url.clone();
-        in_flight.set(true);
-        spawn(async move {
-            match kind.save(&url, Some(value)).await {
-                Ok(s) => {
-                    status.set(Some(s));
-                    key_input.set(String::new());
-                    msg.set(Some(format!("{} key saved.", kind.noun())));
-                    msg_is_error.set(false);
-                }
-                Err(_) => {
-                    msg.set(Some(format!("Failed to save {} key.", kind.noun())));
-                    msg_is_error.set(true);
-                }
-            }
-            in_flight.set(false);
-        });
+        spawn(save_key(kind, save_url.clone(), sigs));
     };
-
     let clear_url = server_url.clone();
     let on_clear = move |_| {
-        let url = clear_url.clone();
-        in_flight.set(true);
-        spawn(async move {
-            match kind.save(&url, None).await {
-                Ok(s) => {
-                    status.set(Some(s));
-                    key_input.set(String::new());
-                    msg.set(Some(format!("{} key cleared.", kind.noun())));
-                    msg_is_error.set(false);
-                }
-                Err(_) => {
-                    msg.set(Some(format!("Failed to clear {} key.", kind.noun())));
-                    msg_is_error.set(true);
-                }
-            }
-            in_flight.set(false);
-        });
+        spawn(clear_key(kind, clear_url.clone(), sigs));
     };
 
-    let st = status();
-    let configured = st.as_ref().map(|s| s.configured).unwrap_or(false);
-    let placeholder = st
-        .as_ref()
-        .and_then(|s| s.masked.clone())
-        .unwrap_or_else(|| kind.placeholder_default().to_string());
+    let SecretKeyFieldView {
+        configured,
+        placeholder,
+        detail,
+    } = SecretKeyFieldView::from_status(&(sigs.status)(), kind);
     let testid = kind.testid();
-    let detail = st
-        .as_ref()
-        .map(|s| {
-            format!(
-                "Connected \u{00b7} {} \u{00b7} {}",
-                s.source,
-                s.masked.clone().unwrap_or_default()
-            )
-        })
-        .unwrap_or_default();
+    let msg = sigs.msg;
+    let msg_is_error = sigs.msg_is_error;
+    let in_flight = sigs.in_flight;
 
     rsx! {
         section { class: "card", "data-testid": "{testid}-key-card",

@@ -30,6 +30,13 @@ pub enum MergeError {
     Db(#[from] sqlx::Error),
     #[error("merge snapshot encode/decode failed: {0}")]
     Snapshot(#[from] serde_json::Error),
+    #[error(transparent)]
+    Physical(#[from] crate::physical::PhysicalError),
+    /// A non-database failure surfaced from a dependency of the merge/undo
+    /// path. Coarse and message-carrying: the UI treats it as an opaque
+    /// internal failure, so no caller branches on the source.
+    #[error("{0}")]
+    Other(String),
 }
 
 /// What [`merge_books`] hands back to the caller: the audit-log id (the

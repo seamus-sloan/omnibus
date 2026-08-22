@@ -54,16 +54,34 @@ pub async fn library_sync(
         Ok(d) => d,
         Err(e) => return internal("kobo sync_delta", e),
     };
-    let base = origin_from_headers(&headers);
-    let pool = state.pool().clone();
-    let device_id = auth.device_id;
-
     let mut changes = delta.changes;
     let has_more = changes.len() > SYNC_PAGE_SIZE;
     changes.truncate(SYNC_PAGE_SIZE);
 
-    // Load the per-user reading state for this page only — the emit needs real
-    // status/position per book, and a removal has no state to report.
+    let states = match load_sync_page_states(&state, auth.user_id, &changes).await {
+        Ok(s) => s,
+        Err(res) => return res,
+    };
+
+    build_sync_response(
+        changes,
+        origin_from_headers(&headers),
+        auth.token,
+        states,
+        state.pool().clone(),
+        auth.device_id,
+        has_more,
+    )
+}
+
+/// Load the per-user reading state for one sync page and enrich it with
+/// derived KoboSpans ([`enrich_states_with_derived_spans`]) — the emit needs
+/// real status/position per book, and a removal has no state to report.
+async fn load_sync_page_states(
+    state: &AppState,
+    user_id: i64,
+    changes: &[db::kobo::SyncChange],
+) -> Result<HashMap<String, db::kobo::KoboBookState>, Response> {
     let page_uuids: Vec<String> = changes
         .iter()
         .filter_map(|c| match c {
@@ -73,25 +91,33 @@ pub async fn library_sync(
             db::kobo::SyncChange::Removed { .. } => None,
         })
         .collect();
-    let mut states =
-        match db::kobo::reading_state_for(state.pool(), auth.user_id, &page_uuids).await {
-            Ok(s) => s,
-            Err(e) => return internal("kobo reading_state_for", e),
-        };
-    enrich_states_with_derived_spans(&state, auth.user_id, &changes, &mut states).await;
-    let states = states;
-    let delta = db::kobo::SyncDelta { changes };
+    let mut states = db::kobo::reading_state_for(state.pool(), user_id, &page_uuids)
+        .await
+        .map_err(|e| internal("kobo reading_state_for", e))?;
+    enrich_states_with_derived_spans(state, user_id, changes, &mut states).await;
+    Ok(states)
+}
 
-    // Serialize each item lazily as the device drains the body — no second
-    // buffer of the whole payload. Each poll dispatches to the step function
-    // for the current `SyncPhase` (below); the dispatcher itself stays a
-    // one-line match so the phase logic reads as ordinary functions rather
-    // than a nested `move async` closure.
+/// Serialize one sync page as the lazily-streamed JSON-array response body,
+/// setting `x-kobo-sync: continue` when more pages remain. No second buffer
+/// of the whole payload — each poll dispatches to the step function for the
+/// current `SyncPhase` (below); the dispatcher itself stays a one-line match
+/// so the phase logic reads as ordinary functions rather than a nested
+/// `move async` closure.
+fn build_sync_response(
+    changes: Vec<db::kobo::SyncChange>,
+    base: String,
+    token: String,
+    states: HashMap<String, db::kobo::KoboBookState>,
+    pool: sqlx::SqlitePool,
+    device_id: i64,
+    has_more: bool,
+) -> Response {
     let stream = stream::unfold(
         SyncStreamState {
-            changes: delta.changes,
+            changes,
             base,
-            token: auth.token,
+            token,
             states,
             phase: SyncPhase::Open,
         },
@@ -155,86 +181,122 @@ async fn enrich_states_with_derived_spans(
             | db::kobo::SyncChange::StateChanged(b) => b,
             db::kobo::SyncChange::Removed { .. } => continue,
         };
-        let Some(s) = states.get(&book.uuid) else {
+        if !states.contains_key(&book.uuid) {
             continue;
-        };
-        // Follow-mode lane: when the audiobook holds the freshest position
-        // on a follow link, serve the mapped spot instead of the reader's
-        // older CFI. Response-only — the progress row keeps its real
-        // provenance; the device's own PUT makes the position real once
-        // the reader picks it up there.
-        //
-        // Cheap pre-filter before the multi-query mapping composition:
-        // most changed books have no follow link, and one indexed
-        // `get_link` read skips the timeline/progress/structure reads for
-        // all of them (a large first sync touches every book). Falls
-        // through to the normal derivation lane below either way.
-        let follow_linked = matches!(
-            db::cross_format::get_link(state.pool(), user_id, &book.uuid).await,
-            Ok(Some(link)) if link.follow
-        );
-        let resume = if follow_linked {
-            db::cross_format::resume_candidate(
-                state.pool(),
-                user_id,
-                &book.uuid,
-                omnibus_shared::ProgressFormat::Epub,
-            )
-            .await
-            .ok()
-        } else {
-            None
-        };
-        if let Some(resume) = resume {
-            if resume.follow
-                && resume.state == omnibus_shared::cross_format::CrossFormatResumeState::Candidate
-            {
-                if let Some(c) = &resume.candidate {
-                    if let Some(frac) = c.fraction {
-                        budget -= 1;
-                        let loc = derive_span_for_fraction(state, book.id, &book.uuid, frac).await;
-                        if let Some(s) = states.get_mut(&book.uuid) {
-                            if let Some(loc) = loc {
-                                s.kobo_location = Some(loc);
-                            }
-                            s.percent = c.percent.or(s.percent);
-                        }
-                        continue;
-                    }
-                }
-            }
         }
-        let Some(cfi) = (s.kobo_location.is_none())
-            .then(|| s.epub_cfi.clone())
-            .flatten()
-        else {
+        if apply_follow_link_span(state, user_id, book, states).await {
+            budget -= 1;
+            continue;
+        }
+        let Some(cfi) = pending_web_cfi(states, &book.uuid) else {
             continue;
         };
         budget -= 1;
-        let Some(derived) = derive_span_for_cfi(state, book.id, &book.uuid, &cfi).await else {
-            continue;
-        };
-        if let (Some(loc), Some(s)) = (&derived.location_json, states.get_mut(&book.uuid)) {
-            let attach = db::progress::attach_derived_kobo_location(
-                state.pool(),
-                user_id,
-                &book.uuid,
-                loc,
-                derived.percent,
-                s.progress_updated_at,
-            )
-            .await;
-            if let Err(e) = attach {
-                tracing::warn!(uuid = %book.uuid, error = %e, "derived span write-back failed");
-            }
-            s.kobo_location = Some(loc.clone());
-            s.percent = s.percent.or(derived.percent);
-        } else if let Some(s) = states.get_mut(&book.uuid) {
-            // Kepub half unavailable: a truthful percent still beats an
-            // empty bookmark. Not persisted — the row keeps meaning "no
-            // span known" so a later sync retries the full derivation.
-            s.percent = s.percent.or(derived.percent);
+        apply_cfi_derived_span(state, user_id, book, &cfi, states).await;
+    }
+}
+
+/// Follow-mode lane: when the audiobook holds the freshest position on a
+/// follow link, serve the mapped spot instead of the reader's older CFI.
+/// Response-only — the progress row keeps its real provenance; the
+/// device's own PUT makes the position real once the reader picks it up
+/// there. Returns `true` (a budget unit consumed) once a follow-linked
+/// resume candidate with a fraction is found — even when
+/// `derive_span_for_fraction` comes back `None`, since `percent` may still
+/// be updated from the candidate. `false` only means this lane was skipped
+/// entirely (not follow-linked, no eligible candidate, or no fraction).
+///
+/// Cheap pre-filter before the multi-query mapping composition: most
+/// changed books have no follow link, and one indexed `get_link` read
+/// skips the timeline/progress/structure reads for all of them (a large
+/// first sync touches every book).
+async fn apply_follow_link_span(
+    state: &AppState,
+    user_id: i64,
+    book: &db::kobo::KoboBookRow,
+    states: &mut HashMap<String, db::kobo::KoboBookState>,
+) -> bool {
+    let follow_linked = matches!(
+        db::cross_format::get_link(state.pool(), user_id, &book.uuid).await,
+        Ok(Some(link)) if link.follow
+    );
+    if !follow_linked {
+        return false;
+    }
+    let Ok(resume) = db::cross_format::resume_candidate(
+        state.pool(),
+        user_id,
+        &book.uuid,
+        omnibus_shared::ProgressFormat::Epub,
+    )
+    .await
+    else {
+        return false;
+    };
+    if !(resume.follow
+        && resume.state == omnibus_shared::cross_format::CrossFormatResumeState::Candidate)
+    {
+        return false;
+    }
+    let Some(frac) = resume.candidate.as_ref().and_then(|c| c.fraction) else {
+        return false;
+    };
+    let loc = derive_span_for_fraction(state, book.id, &book.uuid, frac).await;
+    if let Some(s) = states.get_mut(&book.uuid) {
+        if let Some(loc) = loc {
+            s.kobo_location = Some(loc);
         }
+        s.percent = resume.candidate.and_then(|c| c.percent).or(s.percent);
+    }
+    true
+}
+
+/// The web CFI a state is still owed a derived span for — `None` once a
+/// span already exists or no CFI was ever recorded.
+fn pending_web_cfi(
+    states: &HashMap<String, db::kobo::KoboBookState>,
+    uuid: &str,
+) -> Option<String> {
+    let s = states.get(uuid)?;
+    (s.kobo_location.is_none())
+        .then(|| s.epub_cfi.clone())
+        .flatten()
+}
+
+/// Derive a KoboSpan + percent from a web CFI, persist the derived halves
+/// clock-neutrally so later syncs skip the work, and update `states` in
+/// place. A failed write-back is logged and non-fatal — the device still
+/// sees the freshly-derived state this sync, just not a persisted one.
+async fn apply_cfi_derived_span(
+    state: &AppState,
+    user_id: i64,
+    book: &db::kobo::KoboBookRow,
+    cfi: &str,
+    states: &mut HashMap<String, db::kobo::KoboBookState>,
+) {
+    let Some(derived) = derive_span_for_cfi(state, book.id, &book.uuid, cfi).await else {
+        return;
+    };
+    if let (Some(loc), Some(s)) = (&derived.location_json, states.get_mut(&book.uuid)) {
+        let attach = db::progress::attach_derived_kobo_location(
+            state.pool(),
+            user_id,
+            &book.uuid,
+            loc,
+            derived.percent,
+            s.progress_updated_at,
+        )
+        .await;
+        if let Err(e) = attach {
+            tracing::warn!(uuid = %book.uuid, error = %e, "derived span write-back failed");
+        }
+        s.kobo_location = Some(loc.clone());
+        s.percent = s.percent.or(derived.percent);
+    } else if let Some(s) = states.get_mut(&book.uuid) {
+        // Kepub half unavailable: a truthful percent still beats an empty
+        // bookmark. Not persisted — the row keeps meaning "no span known"
+        // so a later sync retries the full derivation.
+        s.percent = s.percent.or(derived.percent);
     }
 }
 

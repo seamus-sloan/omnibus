@@ -49,6 +49,7 @@ Full crate descriptions, per-crate module maps, request flow diagrams, and mobil
 
 This repo is developed with [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/) over the Git backend, and changes land as GitHub pull requests — one PR per change, conventional-commit titles (`feat:` / `fix:` / `chore:` / `docs:`).
 
+- User-facing changes worth calling out get a line in [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog format) under `[Unreleased]`, alongside the PR that makes them — curated separately from, and more sparingly than, the automated per-merge release tags `release.yml` cuts.
 - **Never amend or rewrite an already-pushed commit.** `jj` auto-snapshots the working copy into the current change on every command, so editing files while `@` sits on a pushed bookmark silently rewrites published history into a force-push. Run `jj new <bookmark>` to start a fresh change *before* editing — even when the working copy is clean.
 - Routine flow: `jj git fetch` to sync; `jj bookmark create <name>` for a branch; `jj describe -m "…"` to set the message; `jj bookmark move <name> --to @` then `jj git push`.
 - The dev tooling assumes `jj` — `scripts/dev-server-up.sh` identity-checks the workspace root so sibling `jj` workspaces don't collide on a port.

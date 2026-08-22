@@ -11,7 +11,6 @@
 // leaf-submodule-private precedent in `db/src/discovery/mod.rs`; only
 // the named items are re-exported below.
 mod fts;
-mod hardcover_fetch;
 mod links;
 mod upsert;
 
@@ -19,14 +18,13 @@ mod upsert;
 mod tests;
 
 pub(crate) use upsert::{
-    apply_overrides, backfill_override_norm_columns, delete_one_in_tx, load_overrides_bulk,
-    upsert_one_in_tx,
+    apply_overrides, backfill_override_norm_columns, delete_one_in_tx, get_metadata_overrides_exec,
+    load_overrides_bulk, upsert_one_in_tx,
 };
 pub use upsert::{
     bulk_merge_metadata_overrides, clear_cover_override, delete_metadata_overrides,
-    delete_override_cover, get_book_uuid, get_metadata_overrides, merge_metadata_overrides,
+    delete_override_cover, get_metadata_overrides, merge_metadata_overrides,
     upsert_metadata_overrides, write_override_cover, MetadataOverridesError,
 };
 
 pub(crate) use fts::{rebuild_fts_for_book, rebuild_fts_for_books_batch};
-pub use hardcover_fetch::{fetch_hardcover_metadata, fetch_hardcover_metadata_with};

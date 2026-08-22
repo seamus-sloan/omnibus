@@ -156,11 +156,24 @@ fn dom_reset_js() -> &'static str {
     el.preload = 'auto';"#
 }
 
-/// `absTime()` helper and the audio-element event listeners
-/// (loadedmetadata / timeupdate / play / pause / ended). Pure JS with no
-/// Rust interpolation, so it lives as a raw `&'static str` (literal
-/// braces, no escaping).
-fn listeners_js() -> &'static str {
+/// The audio-element listeners, concatenated into an owned `String` from
+/// the four per-concern segments below. Each segment is pure JS with no
+/// Rust interpolation, so each stays a raw `&'static str` (literal braces,
+/// no escaping); in order they are byte-for-byte the block this used to be
+/// one string of.
+fn listeners_js() -> String {
+    format!(
+        "{}{}{}{}",
+        absolute_time_js(),
+        position_listeners_js(),
+        ended_listener_js(),
+        stall_watchdog_js(),
+    )
+}
+
+/// The `absTime()` cross-part helper and the `loadedmetadata` listener,
+/// which reports the book-level duration and re-applies the tracked rate.
+fn absolute_time_js() -> &'static str {
     r#"
     // Helper: absolute seconds across the whole book. For direct mode
     // this adds the current part's cumulative offset; for HLS the audio
@@ -192,7 +205,14 @@ fn listeners_js() -> &'static str {
           : (el.duration || 0);
         window.__omnibusOnAudioDuration(d);
       }
-    });
+    });"#
+}
+
+/// The position listeners behind the seed gate: `timeupdate`, `pagehide`,
+/// `play`, and `pause` — the four that can persist a position, and the
+/// teardown artifacts each must refuse.
+fn position_listeners_js() -> &'static str {
+    r#"
     // The seed gate: until the boot's initial position has actually been
     // applied to the element (or the user seeks/plays for real), the
     // element sits at 0 — and a pause fired by a load()/src swap in that
@@ -256,7 +276,13 @@ fn listeners_js() -> &'static str {
       if (window.__omnibusOnAudioPause) {
         window.__omnibusOnAudioPause(t, !!oa._userActed);
       }
-    });
+    });"#
+}
+
+/// The `ended` listener: advance to the next part in direct mode, else
+/// report the book as played through.
+fn ended_listener_js() -> &'static str {
+    r#"
     // Cross-part advance — direct mode only. HLS treats the whole
     // book as one continuous stream so `ended` only fires at the
     // actual end (which we leave as-is so the UI naturally stops).
@@ -277,7 +303,13 @@ fn listeners_js() -> &'static str {
         window.__omnibusOnAudioEnded(absTime());
       }
     });
+"#
+}
 
+/// The buffering / stall watchdog: polls `readyState`, reports buffering,
+/// and surfaces a real error when forward progress stops.
+fn stall_watchdog_js() -> &'static str {
+    r#"
     // Buffering / stall watchdog. Polls `readyState` so the UI can show a
     // buffering indicator instead of a playing clock frozen at 0:00, and
     // surfaces a real error if no forward progress arrives for too long

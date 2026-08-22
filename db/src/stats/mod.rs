@@ -47,12 +47,15 @@ impl From<crate::books::BooksError> for StatsError {
         match e {
             crate::books::BooksError::Db(inner) => StatsError::Sqlx(inner),
             // `resolve_canonical_book_uuid` (the only `BooksError`-returning
-            // call this module makes) never decodes JSON, so this variant is
-            // unreachable here in practice — folded into a generic decode
+            // call this module makes) never reads overrides, so these variants
+            // are unreachable here in practice — folded into a generic decode
             // error rather than panicking, mirroring `db::progress`'s same
             // mapping.
             crate::books::BooksError::OverridesJson(inner) => {
                 StatsError::Sqlx(sqlx::Error::Decode(Box::new(inner)))
+            }
+            crate::books::BooksError::Other(msg) => {
+                StatsError::Sqlx(sqlx::Error::Decode(msg.into()))
             }
         }
     }

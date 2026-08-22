@@ -27,6 +27,12 @@ pub use tags::get_tag_cloud;
 pub enum DiscoveryError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+    /// A non-database failure surfaced from a dependency of these reads.
+    /// Coarse and message-carrying: no caller branches on the source, and
+    /// folding it into `Db` would make that variant mean "a database error
+    /// occurred" only most of the time.
+    #[error("{0}")]
+    Other(String),
 }
 
 impl From<crate::metadata_overrides::MetadataOverridesError> for DiscoveryError {
@@ -47,7 +53,7 @@ impl From<crate::metadata_overrides::MetadataOverridesError> for DiscoveryError 
             other @ (crate::metadata_overrides::MetadataOverridesError::BookNotFound(_)
             | crate::metadata_overrides::MetadataOverridesError::TooManyValues {
                 ..
-            }) => DiscoveryError::Db(sqlx::Error::Protocol(other.to_string())),
+            }) => DiscoveryError::Other(other.to_string()),
         }
     }
 }

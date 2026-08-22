@@ -13,6 +13,10 @@
 // `health`'s "Last errors" panel.
 #[cfg(not(feature = "mobile"))]
 mod background_tasks;
+// Web/server only: the Library cleanup section calls the web-only
+// `data::get_cleanup_counts`/`run_cleanup_detection` (no mobile surface).
+#[cfg(not(feature = "mobile"))]
+mod cleanup;
 // Web/server only: the format-conversion card calls the web-only
 // `data::get_ebook_convert`/`save_ebook_convert` (no mobile RPC route yet).
 #[cfg(not(feature = "mobile"))]
@@ -38,6 +42,8 @@ use dioxus::prelude::*;
 
 #[cfg(not(feature = "mobile"))]
 use background_tasks::BackgroundTasksSection;
+#[cfg(not(feature = "mobile"))]
+use cleanup::CleanupSection;
 #[cfg(not(feature = "mobile"))]
 use ebook_convert::EbookConvertField;
 #[cfg(not(feature = "mobile"))]
@@ -106,6 +112,7 @@ enum SettingsSection {
     Logs,
     Health,
     BackgroundTasks,
+    Cleanup,
 }
 
 #[cfg(not(feature = "mobile"))]
@@ -123,6 +130,7 @@ impl SettingsSection {
             SettingsSection::Logs => "logs",
             SettingsSection::Health => "health",
             SettingsSection::BackgroundTasks => "background-tasks",
+            SettingsSection::Cleanup => "cleanup",
         }
     }
 
@@ -149,6 +157,7 @@ fn parse_section(raw: Option<&str>, is_admin: bool) -> SettingsSection {
         Some("logs") => SettingsSection::Logs,
         Some("health") => SettingsSection::Health,
         Some("background-tasks") => SettingsSection::BackgroundTasks,
+        Some("cleanup") => SettingsSection::Cleanup,
         _ => SettingsSection::Account,
     };
     if requested.requires_admin() && !is_admin {
@@ -180,6 +189,7 @@ fn section_content(active: SettingsSection) -> Element {
         SettingsSection::Logs => rsx! { super::LogsPage {} },
         SettingsSection::Health => rsx! { LastErrorsSection {} },
         SettingsSection::BackgroundTasks => rsx! { BackgroundTasksSection {} },
+        SettingsSection::Cleanup => rsx! { CleanupSection {} },
     }
 }
 
@@ -211,6 +221,7 @@ fn SettingsSidebar(active: SettingsSection, is_admin: bool) -> Element {
                     SettingsNavItem { section: SettingsSection::Library, active, label: "Library Location", icon: "≡" }
                     SettingsNavItem { section: SettingsSection::Metadata, active, label: "Metadata Lookup", icon: "◆" }
                     SettingsNavItem { section: SettingsSection::Email, active, label: "Email delivery", icon: "✉" }
+                    SettingsNavItem { section: SettingsSection::Cleanup, active, label: "Library cleanup", icon: "✦" }
                 }
                 SettingsNavGroup { label: "Administration",
                     SettingsNavItem { section: SettingsSection::Users, active, label: "Users", icon: "☰" }
@@ -305,6 +316,10 @@ mod tests {
             parse_section(Some("background-tasks"), true),
             SettingsSection::BackgroundTasks
         ));
+        assert!(matches!(
+            parse_section(Some("cleanup"), true),
+            SettingsSection::Cleanup
+        ));
     }
 
     #[test]
@@ -343,6 +358,10 @@ mod tests {
         ));
         assert!(matches!(
             parse_section(Some("background-tasks"), false),
+            SettingsSection::Account
+        ));
+        assert!(matches!(
+            parse_section(Some("cleanup"), false),
             SettingsSection::Account
         ));
     }

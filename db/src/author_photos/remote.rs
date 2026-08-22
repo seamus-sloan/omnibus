@@ -1,7 +1,13 @@
-//! SSRF-guarded remote image fetch for admin "paste URL" uploads. Resolves
-//! the target host, blocks private/loopback/cloud-metadata address ranges
-//! before any TCP connect, then pins `reqwest` to the validated addresses so
-//! DNS rebinding cannot substitute a blocked IP after the check.
+//! The SSRF-guarded remote image fetch — the **only** one in this workspace.
+//! Resolves the target host, blocks private/loopback/cloud-metadata address
+//! ranges before any TCP connect, then pins `reqwest` to the validated
+//! addresses so DNS rebinding cannot substitute a blocked IP after the check.
+//!
+//! Two callers with different terms, one implementation: the admin "paste
+//! URL" photo upload takes it as-is, and the provider-cover apply tightens it
+//! through [`RemoteImageConfig`] (host allowlist, HTTPS-only, a bounded
+//! redirect follow). A second fetcher for the second caller is the thing this
+//! module exists to prevent.
 
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
@@ -37,6 +43,12 @@ pub enum FetchRemoteImageError {
     /// internal-network surface area.
     #[error("URL host is not allowed: {0}")]
     BlockedAddress(String),
+    /// The host is publicly routable but not on the caller's allowlist. A
+    /// distinct variant from [`Self::BlockedAddress`] because the two are
+    /// different refusals: one is "that address is inside our network", the
+    /// other is "we only fetch covers from the sources we know".
+    #[error("host is not an allowed source: {0}")]
+    HostNotAllowed(String),
     #[error(transparent)]
     Http(#[from] reqwest::Error),
 }
@@ -57,17 +69,65 @@ fn too_large() -> FetchRemoteImageError {
 }
 
 /// Knobs for [`fetch_remote_image_with`]. Production code constructs
-/// [`RemoteImageConfig::default`] (strict: only public IPs are allowed). The
-/// `allow_private_addresses` escape hatch exists exclusively for integration
-/// tests that need to hit a local `wiremock` server bound to `127.0.0.1` —
-/// the production HTTP handlers must never construct a `RemoteImageConfig`
-/// with this flag set.
+/// [`RemoteImageConfig::default`] (strict: only public IPs are allowed) or
+/// derives from it. The `allow_private_addresses` escape hatch exists
+/// exclusively for integration tests that need to hit a local `wiremock`
+/// server bound to `127.0.0.1` — the production HTTP handlers must never
+/// construct a `RemoteImageConfig` with this flag set.
+///
+/// The remaining three fields tighten the default rather than relaxing it,
+/// and exist so the provider-cover fetch can share this one SSRF
+/// implementation instead of growing a second: `Default` reproduces the
+/// admin paste-a-URL behaviour exactly (any host, `http` allowed, redirects
+/// refused), and the cover path opts into a host allowlist, HTTPS-only, and
+/// a bounded follow.
 #[derive(Debug, Clone, Default)]
 pub struct RemoteImageConfig {
     /// When `true`, [`fetch_remote_image_with`] skips the IP-range check
     /// entirely. Default `false` (derived `Default`). Test-only override —
     /// see the doc comment on this struct.
     pub allow_private_addresses: bool,
+    /// When non-empty, the URL's host — **and every redirect hop's host** —
+    /// must match one of these entries. An entry beginning `*.` matches any
+    /// subdomain of the rest; everything else is an exact, case-insensitive
+    /// match. Empty (the default) means no host restriction.
+    pub host_allowlist: Vec<String>,
+    /// When `true`, only `https` is accepted, at the original URL and at
+    /// every redirect hop. Default `false`, which still accepts `http`.
+    pub require_https: bool,
+    /// How many redirects to follow. Default `0` — refuse them outright,
+    /// which is what the author-photo path wants. Following is only safe
+    /// because every hop is re-validated against the same gates as the
+    /// original URL; never raise this without keeping that true.
+    pub max_redirects: u8,
+}
+
+impl RemoteImageConfig {
+    /// Whether `host` is allowed under this config. An empty allowlist
+    /// allows everything, matching the pre-allowlist behaviour.
+    ///
+    /// The wildcard deliberately does **not** match the bare parent domain:
+    /// `*.archive.org` matches `ia1.us.archive.org` but not `archive.org`,
+    /// which must be listed on its own. A single-label suffix (`*.com`) is
+    /// refused outright rather than treated as a wildcard over a whole TLD.
+    pub(super) fn host_allowed(&self, host: &str) -> bool {
+        if self.host_allowlist.is_empty() {
+            return true;
+        }
+        let host = host.trim_end_matches('.').to_ascii_lowercase();
+        self.host_allowlist.iter().any(|entry| {
+            let entry = entry.to_ascii_lowercase();
+            match entry.strip_prefix("*.") {
+                Some(suffix) => {
+                    suffix.contains('.')
+                        && host.len() > suffix.len() + 1
+                        && host.ends_with(suffix)
+                        && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+                }
+                None => host == entry,
+            }
+        })
+    }
 }
 
 /// SSRF guard. Returns `true` if `addr` falls into any range we refuse to
@@ -145,19 +205,18 @@ pub(super) fn is_blocked_address(addr: IpAddr) -> bool {
 /// [`fetch_remote_image_with`] so the subsequent `reqwest` call is locked to
 /// the validated set (defeats DNS rebinding between our check and reqwest's
 /// own resolution).
-async fn validated_resolve(url: &str) -> Result<(String, Vec<SocketAddr>), FetchRemoteImageError> {
-    let parsed = reqwest::Url::parse(url).map_err(|_| invalid_url())?;
-    let scheme = parsed.scheme();
-    if scheme != "http" && scheme != "https" {
-        return Err(bad_scheme());
-    }
+async fn validated_resolve(
+    url: &reqwest::Url,
+    config: &RemoteImageConfig,
+) -> Result<(String, Vec<SocketAddr>), FetchRemoteImageError> {
+    let parsed = url;
     let host = parsed.host_str().ok_or_else(invalid_url)?.to_string();
     let port = parsed.port_or_known_default().ok_or_else(invalid_url)?;
 
     // Fast path: the host is already a literal IP — `lookup_host` would still
     // work, but skipping it avoids spurious DNS lookups on IP-literal URLs.
     if let Ok(literal) = host.parse::<IpAddr>() {
-        if is_blocked_address(literal) {
+        if !config.allow_private_addresses && is_blocked_address(literal) {
             return Err(FetchRemoteImageError::BlockedAddress(literal.to_string()));
         }
         return Ok((host, vec![SocketAddr::new(literal, port)]));
@@ -168,7 +227,7 @@ async fn validated_resolve(url: &str) -> Result<(String, Vec<SocketAddr>), Fetch
         .await
         .map_err(|_| FetchRemoteImageError::BlockedAddress(host.clone()))?;
     for sa in resolved {
-        if is_blocked_address(sa.ip()) {
+        if !config.allow_private_addresses && is_blocked_address(sa.ip()) {
             // Reject the *whole* hostname if any A/AAAA record points
             // somewhere private — partial allowlisting would still let a
             // hostile DNS server smuggle a private IP into the resolved set.
@@ -200,43 +259,131 @@ pub async fn fetch_remote_image(url: &str) -> Result<(String, Vec<u8>), FetchRem
 /// [`fetch_remote_image`] with an injectable config. Integration tests that
 /// need to hit a `127.0.0.1`-bound `wiremock` server flip
 /// `allow_private_addresses` on; everything else (RPC handler, REST
-/// handler, follow-up code paths) MUST keep the default.
+/// handler, follow-up code paths) MUST keep it off.
+///
+/// The gates run in this order, and the order matters: scheme, then host
+/// allowlist, then IP range — **for the original URL and independently for
+/// every redirect hop**. Redirects are only followed at all when
+/// [`RemoteImageConfig::max_redirects`] says so, and a hop that fails any
+/// gate ends the fetch rather than being followed and checked afterwards.
 pub async fn fetch_remote_image_with(
     url: &str,
     config: &RemoteImageConfig,
 ) -> Result<(String, Vec<u8>), FetchRemoteImageError> {
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err(bad_scheme());
-    }
+    let mut current = parse_and_gate(url, config)?;
 
+    // Follow at most `max_redirects` hops, re-running every gate on each one.
+    // `Policy::none()` on the client is what makes that possible: reqwest
+    // hands back the 3xx instead of chasing it through its own resolver,
+    // which would bypass the IP-range guard entirely.
+    for _ in 0..=config.max_redirects {
+        let resp = send_one(&current, config).await?;
+        let status = resp.status();
+        if status.is_redirection() {
+            if config.max_redirects == 0 {
+                return Err(FetchRemoteImageError::Validation(format!(
+                    "remote server returned {}",
+                    status.as_u16()
+                )));
+            }
+            current = next_hop(&current, &resp, config)?;
+            continue;
+        }
+        if !status.is_success() {
+            return Err(FetchRemoteImageError::Validation(format!(
+                "remote server returned {}",
+                status.as_u16()
+            )));
+        }
+        return read_image_body(resp).await;
+    }
+    Err(FetchRemoteImageError::Validation(format!(
+        "too many redirects (limit {})",
+        config.max_redirects
+    )))
+}
+
+/// Parse a URL and run the pre-connect gates: scheme, then host allowlist.
+///
+/// Applied to the original URL **and** to every redirect target, which is the
+/// whole point — trusting the first hop and following the rest is how an
+/// allowlisted host becomes an open redirect into the server's own network.
+fn parse_and_gate(
+    url: &str,
+    config: &RemoteImageConfig,
+) -> Result<reqwest::Url, FetchRemoteImageError> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| invalid_url())?;
+    match parsed.scheme() {
+        "https" => {}
+        "http" if !config.require_https => {}
+        "http" => {
+            return Err(FetchRemoteImageError::Validation(
+                "URL must start with https://".into(),
+            ))
+        }
+        _ => return Err(bad_scheme()),
+    }
+    let host = parsed.host_str().ok_or_else(invalid_url)?;
+    if !config.host_allowed(host) {
+        return Err(FetchRemoteImageError::HostNotAllowed(host.to_string()));
+    }
+    Ok(parsed)
+}
+
+/// Resolve, pin, and GET one hop.
+async fn send_one(
+    url: &reqwest::Url,
+    config: &RemoteImageConfig,
+) -> Result<reqwest::Response, FetchRemoteImageError> {
     // Strict mode (the default): resolve host → validate IPs → pin the
     // reqwest client to that set so DNS rebinding can't swap in a private
     // IP between our check and reqwest's own DNS resolution. In test mode
     // (`allow_private_addresses`) we skip the IP-range check but still
-    // build a per-call client. Redirects are disabled in BOTH modes: a
-    // 3xx pointing at a new host (e.g. `http://169.254.169.254/`) would
-    // force reqwest to re-resolve through its default resolver, bypassing
-    // the IP-range guard that only applies to the original host. An admin
-    // could otherwise host `attacker.com` (passes the guard) and serve a
-    // 302 to IMDS to exfiltrate cloud creds. Author-photo URLs are direct
-    // image fetches; legitimate sources don't need cross-host redirects.
+    // build a per-call client.
     let mut builder = reqwest::Client::builder()
         .user_agent(default_user_agent())
         .redirect(reqwest::redirect::Policy::none());
     if !config.allow_private_addresses {
-        let (host, addrs) = validated_resolve(url).await?;
+        let (host, addrs) = validated_resolve(url, config).await?;
         builder = builder.resolve_to_addrs(&host, &addrs);
     }
-    let client = builder.build()?;
+    Ok(builder
+        .build()?
+        .get(url.clone())
+        .timeout(REMOTE_IMAGE_TIMEOUT)
+        .send()
+        .await?)
+}
 
-    let resp = client.get(url).timeout(REMOTE_IMAGE_TIMEOUT).send().await?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(FetchRemoteImageError::Validation(format!(
-            "remote server returned {}",
-            status.as_u16()
-        )));
-    }
+/// The next URL to fetch, from a 3xx response — re-parsed, re-gated, and
+/// resolved relative to the hop it came from.
+///
+/// `pub(super)` so the sibling test module can drive it directly: the per-hop
+/// scheme recheck cannot be reached end-to-end from a `wiremock` origin,
+/// which is plaintext, so hop 1 would be refused before hop 2 existed.
+pub(super) fn next_hop(
+    from: &reqwest::Url,
+    resp: &reqwest::Response,
+    config: &RemoteImageConfig,
+) -> Result<reqwest::Url, FetchRemoteImageError> {
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            FetchRemoteImageError::Validation("redirect carried no usable Location".into())
+        })?;
+    // Relative Locations are legal and common, so join rather than parse —
+    // then gate the *result*, which is the URL actually about to be fetched.
+    let joined = from.join(location).map_err(|_| invalid_url())?;
+    parse_and_gate(joined.as_str(), config)
+}
+
+/// Read a success response as image bytes, applying the content-type, SVG,
+/// and size gates.
+async fn read_image_body(
+    resp: reqwest::Response,
+) -> Result<(String, Vec<u8>), FetchRemoteImageError> {
     let content_type = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)

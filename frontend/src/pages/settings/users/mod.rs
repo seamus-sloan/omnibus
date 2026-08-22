@@ -25,6 +25,17 @@ enum Modal {
     Sessions(AdminUserRow),
 }
 
+/// One user-row action, unified so `UserRow`/`UsersTable` carry a single
+/// `on_action` handler instead of five separate `EventHandler`s each.
+#[derive(Clone, PartialEq)]
+enum UserRowAction {
+    Edit(AdminUserRow),
+    Delete(AdminUserRow),
+    Sessions(AdminUserRow),
+    Unlocked,
+    Error(String),
+}
+
 /// The Users section: header + table, with a reload counter the mutations bump.
 #[component]
 pub fn UsersSection() -> Element {
@@ -58,11 +69,16 @@ pub fn UsersSection() -> Element {
             UsersTable {
                 users: users(),
                 current_id,
-                on_edit: move |row| modal.set(Modal::Edit(row)),
-                on_delete: move |row| modal.set(Modal::Delete(row)),
-                on_sessions: move |row| modal.set(Modal::Sessions(row)),
-                on_unlocked: move |_| { action_error.set(None); reload.with_mut(|n| *n += 1); },
-                on_row_error: move |msg| action_error.set(Some(msg)),
+                on_action: move |action| match action {
+                    UserRowAction::Edit(row) => modal.set(Modal::Edit(row)),
+                    UserRowAction::Delete(row) => modal.set(Modal::Delete(row)),
+                    UserRowAction::Sessions(row) => modal.set(Modal::Sessions(row)),
+                    UserRowAction::Unlocked => {
+                        action_error.set(None);
+                        reload.with_mut(|n| *n += 1);
+                    }
+                    UserRowAction::Error(msg) => action_error.set(Some(msg)),
+                },
             }
         }
 
@@ -116,11 +132,7 @@ fn UsersHeader(on_new: EventHandler<MouseEvent>) -> Element {
 fn UsersTable(
     users: Vec<AdminUserRow>,
     current_id: Option<i64>,
-    on_edit: EventHandler<AdminUserRow>,
-    on_delete: EventHandler<AdminUserRow>,
-    on_sessions: EventHandler<AdminUserRow>,
-    on_unlocked: EventHandler<()>,
-    on_row_error: EventHandler<String>,
+    on_action: EventHandler<UserRowAction>,
 ) -> Element {
     rsx! {
         table { class: "users-table", "data-testid": "users-table",
@@ -143,11 +155,7 @@ fn UsersTable(
                                 key: "{id}",
                                 user: u,
                                 is_self: Some(id) == current_id,
-                                on_edit,
-                                on_delete,
-                                on_sessions,
-                                on_unlocked,
-                                on_error: on_row_error,
+                                on_action,
                             }
                         }
                     }
@@ -211,15 +219,7 @@ fn users_modals(
 /// One table row: identity, permission chips, Kindle, created date, lock
 /// status (with inline Unlock), and Edit / Delete / Sessions actions.
 #[component]
-fn UserRow(
-    user: AdminUserRow,
-    is_self: bool,
-    on_edit: EventHandler<AdminUserRow>,
-    on_delete: EventHandler<AdminUserRow>,
-    on_sessions: EventHandler<AdminUserRow>,
-    on_unlocked: EventHandler<()>,
-    on_error: EventHandler<String>,
-) -> Element {
+fn UserRow(user: AdminUserRow, is_self: bool, on_action: EventHandler<UserRowAction>) -> Element {
     let mut unlocking = use_signal(|| false);
     let uid = user.id;
     let kindle = user
@@ -237,8 +237,8 @@ fn UserRow(
             // banner instead of being swallowed (an admin must be able to tell
             // a still-locked account from a successful unlock).
             match data::unlock_user(uid).await {
-                Ok(()) => on_unlocked.call(()),
-                Err(e) => on_error.call(e),
+                Ok(()) => on_action.call(UserRowAction::Unlocked),
+                Err(e) => on_action.call(UserRowAction::Error(e)),
             }
             unlocking.set(false);
         });
@@ -277,21 +277,21 @@ fn UserRow(
                     r#type: "button",
                     class: "btn ghost sm",
                     "data-testid": "user-edit-{uid}",
-                    onclick: move |_| on_edit.call(edit_row.clone()),
+                    onclick: move |_| on_action.call(UserRowAction::Edit(edit_row.clone())),
                     "Edit"
                 }
                 button {
                     r#type: "button",
                     class: "btn ghost sm",
                     "data-testid": "user-sessions-{uid}",
-                    onclick: move |_| on_sessions.call(sessions_row.clone()),
+                    onclick: move |_| on_action.call(UserRowAction::Sessions(sessions_row.clone())),
                     "Sessions"
                 }
                 button {
                     r#type: "button",
                     class: "btn ghost sm users-danger",
                     "data-testid": "user-delete-{uid}",
-                    onclick: move |_| on_delete.call(delete_row.clone()),
+                    onclick: move |_| on_action.call(UserRowAction::Delete(delete_row.clone())),
                     "Delete"
                 }
             }

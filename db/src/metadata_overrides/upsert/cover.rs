@@ -73,18 +73,6 @@ pub async fn clear_cover_override(
     Ok(())
 }
 
-/// Look up the UUID for a given `books.id`. Used by the override-save
-/// endpoints to bridge the id-based API with the uuid-keyed overrides table.
-pub async fn get_book_uuid(
-    pool: &SqlitePool,
-    book_id: i64,
-) -> Result<Option<String>, MetadataOverridesError> {
-    Ok(sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
-        .bind(book_id)
-        .fetch_optional(pool)
-        .await?)
-}
-
 /// Apply a `MetadataOverrides` to an `EbookMetadata`, mutating it in place,
 /// gated by whether `precedence` (the owning scan root's configured
 /// metadata-source order) ranks `OmnibusOverrides` above

@@ -151,6 +151,99 @@ async fn api_cross_format_resume_500s_when_the_db_is_gone() {
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+/// Authed user + dual-format book with `cross_format_links` dropped, so every
+/// cross-format query fails at the DB layer.
+async fn fixture_with_no_link_table() -> (axum::Router, String, String) {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (book_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Dual").await;
+    attach_audio(&pool, book_id).await;
+    sqlx::query("DROP TABLE cross_format_links")
+        .execute(&pool)
+        .await
+        .unwrap();
+    (app, token, uuid)
+}
+
+#[tokio::test]
+async fn api_get_alignment_500s_when_the_db_is_gone() {
+    let (app, token, uuid) = fixture_with_no_link_table().await;
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/books/{uuid}/alignment"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn api_post_cross_format_link_500s_when_the_db_is_gone() {
+    let (app, token, uuid) = fixture_with_no_link_table().await;
+    // A body that clears `validate()` — the DB is only reached past it.
+    let res = app
+        .oneshot(post_json_with_bearer(
+            &format!("/api/books/{uuid}/cross-format-link"),
+            &token,
+            &serde_json::json!({ "book_uuid": "ignored", "mode": "sequence" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn api_delete_cross_format_link_500s_when_the_db_is_gone() {
+    let (app, token, uuid) = fixture_with_no_link_table().await;
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!("/api/books/{uuid}/cross-format-link"))
+                .method("DELETE")
+                .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn api_post_sync_point_500s_when_the_db_is_gone() {
+    let (app, token, uuid) = fixture_with_no_link_table().await;
+    // Audio-with-seconds clears `validate()`, so this reaches the link read.
+    let res = app
+        .oneshot(post_json_with_bearer(
+            &format!("/api/books/{uuid}/sync-point"),
+            &token,
+            &serde_json::json!({
+                "book_uuid": "ignored",
+                "format": "audio",
+                "audio_seconds": 300.0,
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn api_post_cross_format_follow_500s_when_the_db_is_gone() {
+    let (app, token, uuid) = fixture_with_no_link_table().await;
+    let res = app
+        .oneshot(post_json_with_bearer(
+            &format!("/api/books/{uuid}/cross-format-follow"),
+            &token,
+            &serde_json::json!({ "enabled": true }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 #[tokio::test]
 async fn api_alignment_and_link_lifecycle_round_trips() {
     let (app, _state, pool) = fixture().await;

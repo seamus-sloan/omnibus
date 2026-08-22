@@ -29,6 +29,16 @@ struct JournalEntryEditState {
     delete_confirm: Signal<bool>,
 }
 
+/// The identifying + editable fields of one entry — grouped so
+/// [`BdJournalEntryActions`] stays under the 5-prop threshold.
+#[derive(Clone, PartialEq)]
+struct JournalEntryContent {
+    server_url: String,
+    entry_id: i64,
+    body_for_edit: String,
+    entry_progress: Option<u8>,
+}
+
 /// Presentational fields for a journal entry card header (author identity,
 /// meta line, and the data an owner's Edit action needs to seed the form).
 #[derive(Clone, PartialEq)]
@@ -121,10 +131,12 @@ fn BdJournalEntryHeader(view: JournalEntryHeaderView, edit: JournalEntryEditStat
             BdJournalEntryByline { author_name, is_owner, is_draft, meta_line }
             if is_owner && !editing() {
                 BdJournalEntryActions {
-                    server_url,
-                    entry_id,
-                    body_for_edit,
-                    entry_progress,
+                    content: JournalEntryContent {
+                        server_url,
+                        entry_id,
+                        body_for_edit,
+                        entry_progress,
+                    },
                     is_draft,
                     edit,
                 }
@@ -168,13 +180,16 @@ fn BdJournalEntryByline(
 /// RPC only fires from the modal's own confirm button.
 #[component]
 fn BdJournalEntryActions(
-    server_url: String,
-    entry_id: i64,
-    body_for_edit: String,
-    entry_progress: Option<u8>,
+    content: JournalEntryContent,
     is_draft: bool,
     edit: JournalEntryEditState,
 ) -> Element {
+    let JournalEntryContent {
+        server_url,
+        entry_id,
+        body_for_edit,
+        entry_progress,
+    } = content;
     let JournalEntryEditState {
         mut editing,
         mut edit_body,
@@ -591,10 +606,12 @@ mod render_tests {
     fn ActionsHarness(delete_confirm: bool) -> Element {
         rsx! {
             BdJournalEntryActions {
-                server_url: "http://localhost".to_string(),
-                entry_id: 1,
-                body_for_edit: "body".to_string(),
-                entry_progress: None,
+                content: JournalEntryContent {
+                    server_url: "http://localhost".to_string(),
+                    entry_id: 1,
+                    body_for_edit: "body".to_string(),
+                    entry_progress: None,
+                },
                 is_draft: false,
                 edit: actions_state(delete_confirm),
             }

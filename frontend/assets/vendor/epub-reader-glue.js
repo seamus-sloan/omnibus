@@ -18,7 +18,7 @@
  * Public surface: window.OmnibusReader
  *   init(elementId, fileUrl, opts)  opts = { cfi?, fontSize?, theme?,
  *                                           fontFamily?, lineHeight?,
- *                                           maxWidth?, justify?,
+ *                                           maxWidth?, justify?, spread?,
  *                                           allowScriptedContent?,
  *                                           locationsKey? }
  *   next()                          queued/coalesced — see the paging-turn
@@ -33,6 +33,9 @@
  *   setLineHeight(value)
  *   setMargins(maxWidth)
  *   setJustify(on)
+ *   setSpread(mode)                 "none" (single column) or "auto"
+ *                                   (epub.js pairs columns once the stage
+ *                                   crosses its minSpreadWidth)
  *   addAnnotation(cfiRange, color)
  *   removeAnnotation(cfiRange)
  *   clearAnnotations()
@@ -93,6 +96,19 @@
   // emission re-states the restored position and is tagged `echo` so the
   // host renders it without persisting it (see emitRelocate).
   var restoreEchoPending = false;
+  // True from the first resize-driven "resized" event of a rotation/resize
+  // burst until the corrected redisplay that follows it has been reported —
+  // mutes every relocate in between (issue #2081, finding 1 & 2). A
+  // rotation re-paginates but is not reading movement: epub.js's own
+  // window-resize handler and installStageResizeWatch's ResizeObserver
+  // each re-display the pre-resize CFI through a plain, uncorrected
+  // `rendition.display()`, so left unmuted the host would see one or two
+  // relocates that both land off the actual page (no nudgeToTarget
+  // correction) and both look like real movement (no echo tag).
+  var resizeSettling = false;
+  var resizeCorrectionTimer = null;
+  var resizeCorrectionTarget = null;
+  var RESIZE_CORRECTION_DEBOUNCE_MS = 200;
   var tocFlat = [];
   var currentTheme = "dark";
   // Whether the section iframe runs scripts. Only then can we await the
@@ -145,6 +161,12 @@
       clearTimeout(stageResizeTimer);
       stageResizeTimer = null;
     }
+    if (resizeCorrectionTimer) {
+      clearTimeout(resizeCorrectionTimer);
+      resizeCorrectionTimer = null;
+    }
+    resizeSettling = false;
+    resizeCorrectionTarget = null;
     if (annotationRepaintTimer) {
       clearTimeout(annotationRepaintTimer);
       annotationRepaintTimer = null;
@@ -596,6 +618,20 @@
       }, 400);
     });
 
+    // epub.js's Rendition.onResized emits this, then immediately issues its
+    // own plain, uncorrected `display(e || this.location.start.cfi)` — the
+    // pre-resize position, at the moment this fires, since `location` isn't
+    // re-measured until that display resolves. Anchor the correction on the
+    // same fallback so it targets the same pre-resize page epub.js does.
+    rendition.on("resized", function (size, cfiOverride) {
+      var target =
+        cfiOverride ||
+        (rendition && rendition.location && rendition.location.start
+          ? rendition.location.start.cfi
+          : null);
+      scheduleResizeCorrection(target);
+    });
+
     rendition.on("selected", function (cfiRange, contents) {
       if (typeof window.__omnibusOnSelection !== "function") return;
       if (!contents || !contents.window) return;
@@ -653,7 +689,7 @@
   // when it arrives through the debounced relocated handler, so the flag
   // is consumed here rather than trusted to the call sites.
   function emitRelocate(location, isEcho) {
-    if (!restoreSettled) return;
+    if (!restoreSettled || resizeSettling) return;
     var echo = !!isEcho;
     if (restoreEchoPending) {
       restoreEchoPending = false;
@@ -732,6 +768,7 @@
     pendingJumpCfi = null;
     restoreEchoPending = false;
     displayToken++;
+    cancelResizeCorrection();
     if (turnInFlight) {
       turnPendingDir = dir;
       return;
@@ -836,6 +873,7 @@
     if (!rendition || !rendition.manager) return false;
     var manager = rendition.manager;
     if (!hasAdjacentSection(manager, dir)) return false;
+    cancelResizeCorrection();
     var release = beginSectionTurn();
     var runTurn = function () {
       return dir > 0 ? manager.next() : manager.prev();
@@ -1937,6 +1975,105 @@
       /* CFI compare is best effort */
     }
     return Promise.resolve();
+  }
+
+  // Drop any pending or in-flight resize correction and resume relocates
+  // immediately. A user-initiated turn (queueTurn, a swipe across a
+  // section) mid-burst is real reading movement: muting through the
+  // correction — or worse, letting a correction already in flight land
+  // afterward and stomp the turn's own relocate with a stale echo of the
+  // pre-resize target — leaves the page indicator, restore anchor, and
+  // persist trigger out of step with where the reader actually turned to
+  // (review finding on #2081). Bumping displayToken is what lets a
+  // correction chain already past this point (mid `display()`/settle,
+  // inside `current()`) notice it's stale and skip its landing.
+  function cancelResizeCorrection() {
+    displayToken++;
+    if (resizeCorrectionTimer) {
+      clearTimeout(resizeCorrectionTimer);
+      resizeCorrectionTimer = null;
+    }
+    resizeSettling = false;
+    resizeCorrectionTarget = null;
+  }
+
+  // The corrected, echo-tagged counterpart to epub.js's own resize-driven
+  // re-display (issue #2081, findings 1 & 2). `resizeSettling` mutes every
+  // relocate — including the raw, uncorrected ones epub.js's own onResized
+  // fires straight through `rendition.display()` — from the first "resized"
+  // event of a burst until this fires once, reporting the settled, nudged
+  // landing as a single echo. A rotation re-paginates but is not reading
+  // movement: `!data.echo` is what already keeps `build_relocate_callback`
+  // (frontend/src/pages/reader/interop.rs) from persisting it.
+  function finishResizeCorrection(r, current) {
+    // Superseded by a user turn (cancelResizeCorrection) or a newer resize
+    // burst — that path already resumed relocates (or will report its own
+    // landing); this one has nothing current to say.
+    if (current && !current()) return;
+    resizeSettling = false;
+    if (rendition !== r) return;
+    var loc = null;
+    try {
+      loc = rendition.currentLocation();
+    } catch (e) {
+      /* not ready */
+    }
+    if (loc && loc.start) {
+      emitRelocate(loc, true);
+    } else if (rendition.location) {
+      emitRelocate(rendition.location, true);
+    }
+  }
+
+  // Re-display the pre-resize target through the same settle-then-redisplay
+  // and nudgeToTarget correction the boot restore gets, rather than trusting
+  // epub.js's own plain `display()`. Mirrors the boot-restore chain in
+  // init() rather than calling displaySettled(), which does not nudge.
+  function runResizeCorrection() {
+    resizeCorrectionTimer = null;
+    var target = resizeCorrectionTarget;
+    resizeCorrectionTarget = null;
+    var r = rendition;
+    if (!target || !r) {
+      resizeSettling = false;
+      return;
+    }
+    displayToken++;
+    var myToken = displayToken;
+    var current = function () {
+      return displayToken === myToken;
+    };
+    var reveal = beginSettleFade();
+    r.display(target)
+      .then(function () {
+        return redisplayWhenSettled(target, current);
+      })
+      .then(function () {
+        if (current()) return nudgeToTarget(target);
+      })
+      .catch(function () {
+        /* keep whatever landed */
+      })
+      .then(function () {
+        reveal();
+        finishResizeCorrection(r, current);
+      });
+  }
+
+  // Coalesce the two racing resize paths (epub.js's own window-resize
+  // listener and installStageResizeWatch's container ResizeObserver) into
+  // one corrected redisplay per burst (AC4). Anchored to the FIRST target
+  // seen — not whichever raw, uncorrected redisplay happens to land last —
+  // so a mid-burst measurement can't walk the anchor away from the page the
+  // reader was actually on, and repeated rotations can't accumulate drift.
+  function scheduleResizeCorrection(target) {
+    if (!target || !rendition) return;
+    if (!resizeSettling) {
+      resizeSettling = true;
+      resizeCorrectionTarget = target;
+    }
+    if (resizeCorrectionTimer) clearTimeout(resizeCorrectionTimer);
+    resizeCorrectionTimer = setTimeout(runResizeCorrection, RESIZE_CORRECTION_DEBOUNCE_MS);
   }
 
   function display(target) {
