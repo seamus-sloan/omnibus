@@ -258,7 +258,8 @@ struct AccountView: View {
                         text: $kindleEmail,
                         isFirst: true,
                         hint: "Optional",
-                        keyboard: .emailAddress
+                        keyboard: .emailAddress,
+                        identifier: "kindle-email"
                     )
                 }
 

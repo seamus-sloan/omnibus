@@ -117,6 +117,9 @@ recent releases are recorded below; everything earlier is available via the
   through is refused before a byte is sent rather than after. Picking several
   MP3s from one folder adds a single audiobook with all its parts, instead of
   one book per file (#2100)
+- Raising the keyboard on iOS no longer drags the tab bar up with it: the
+  keyboard now covers the bar instead of stacking on top of it, while fields
+  inside a tab keep their keyboard avoidance (#2102)
 
 ## [0.22.10] - 2026-08-18
 
