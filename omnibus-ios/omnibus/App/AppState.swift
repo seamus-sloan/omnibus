@@ -28,6 +28,19 @@ final class AppState {
 
     private static let themeKey = "omnibus.theme"
 
+    #if DEBUG
+    /// Launch argument that boots straight to the signed-in shell, offline.
+    /// `MainTabView` is otherwise unreachable without a live server, which
+    /// would leave the shell's own chrome (the tab bar) untestable.
+    static let uiTestShellArgument = "--uitest-shell"
+    /// Discard port — refused immediately rather than hanging the launch.
+    private static let uiTestShellServer = "http://127.0.0.1:9"
+    private static let uiTestShellUser = UserSummary(
+        id: 1, username: "uitest", isAdmin: true,
+        canUpload: true, canEdit: true, canDownload: true
+    )
+    #endif
+
     init() {
         // Hermetic hook for omnibusUITests: the suite launches with this
         // argument so a simulator that already holds a server + session still
@@ -40,6 +53,15 @@ final class AppState {
         if ProcessInfo.processInfo.arguments.contains("--uitest-reset") {
             ServerURLStore.clear()
             TokenStore.clear()
+        }
+        // Second hermetic hook: seed a server and token so the suite reaches
+        // the signed-in shell without one. The address is a closed port, so
+        // the confirm-behind request fails fast and `confirmIdentity` leaves
+        // the cached identity in place. Pair it with `--uitest-reset` to be
+        // independent of whatever the simulator already held.
+        if ProcessInfo.processInfo.arguments.contains(Self.uiTestShellArgument) {
+            ServerURLStore.save(Self.uiTestShellServer)
+            TokenStore.save("uitest")
         }
         #endif
         serverURL = ServerURLStore.load()
@@ -69,6 +91,15 @@ final class AppState {
 
     func bootstrap() async {
         await OfflineStore.shared.open()
+
+        #if DEBUG
+        // The cached identity half of `--uitest-shell`, which has to wait for
+        // the store to open. `bootstrap` paints from `localMe()`, so this is
+        // what carries the launch to `.ready`.
+        if ProcessInfo.processInfo.arguments.contains(Self.uiTestShellArgument) {
+            await Cache.write(CacheKey.me, Self.uiTestShellUser)
+        }
+        #endif
         await DownloadManager.shared.hydrate()
         await Connectivity.shared.refreshPendingCount()
 
