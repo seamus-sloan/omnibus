@@ -40,7 +40,9 @@ fn QueryField(
                 // The ISBN starts empty on purpose (see `seed_from`), so its
                 // placeholder says what it is for rather than naming the field
                 // a second time.
-                placeholder: if slug == "isbn" { "narrow to one edition" } else { label },
+                // The ISBN's placeholder says what filling it *does*, since
+                // it is the one field that changes the shape of the answer.
+                placeholder: if slug == "isbn" { "one exact edition" } else { label },
                 // The overlay opens having already searched, so focus lands on
                 // the field a reader is most likely to correct.
                 onmounted: move |e| {
@@ -103,6 +105,13 @@ pub(super) fn ResultsScreen(
                 }
             }
             {match stage {
+                // Opened but not yet asked. Not the empty-results note, which
+                // would claim a search had happened and found nothing.
+                Stage::Ready => rsx! {
+                    p { class: "mes-note", "data-testid": "mes-ready",
+                        "Check the fields, then search. An ISBN narrows every source to that one edition."
+                    }
+                },
                 Stage::Searching => rsx! {
                     p { class: "mes-note", role: "status", "data-testid": "mes-searching",
                         "Asking every configured source\u{2026}"

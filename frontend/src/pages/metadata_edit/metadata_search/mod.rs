@@ -42,8 +42,12 @@ pub(super) const EMPTY: &str = "\u{2014}";
 /// filling in a wizard rather than picking a book.
 #[derive(Clone, PartialEq)]
 pub(super) enum Stage {
-    /// A search is in flight. The opening state — the query is already known,
-    /// so the overlay searches on open rather than asking first.
+    /// Opened, nothing asked yet. The fields are filled in from the book but
+    /// no request has gone out, so the reader can see exactly what is about to
+    /// be searched — and drop the ISBN if they want the wider list — before
+    /// anything is spent on it.
+    Ready,
+    /// A search is in flight.
     Searching,
     /// Candidates are on screen.
     Results,
@@ -95,23 +99,19 @@ fn field_slug(label: &str) -> String {
         .collect()
 }
 
-/// What a freshly-opened overlay searches with: the book's own title and
-/// primary author — the query the reader wanted in the overwhelmingly common
-/// case.
+/// What the overlay's fields are filled in with when it opens: the book's own
+/// title, primary author, and ISBN.
 ///
-/// **The ISBN field is deliberately left empty.** An ISBN routes every provider
-/// to its exact-identifier lookup, and a rung that answers suppresses the
-/// widened ones — so seeding it collapsed the picker to one row per source,
-/// each describing the printing the book already claims. That is the opposite
-/// of what a picker is for, and it bit hardest on the books carrying the most
-/// metadata. The field stays available as something the reader *asks* for,
-/// which is when narrowing to a single edition is the point.
+/// The ISBN is seeded like the rest, because it is what the book says. It does
+/// narrow the search hard — every provider goes to its exact-identifier lookup
+/// — but that is the honest answer to the question the fields are asking, and
+/// the reader can see it sitting there and clear it before pressing Search.
 fn seed_from(fields: FormFields) -> (String, String, String) {
     let author = fields.authors.peek().first().cloned().unwrap_or_default();
     (
         fields.title.peek().trim().to_string(),
         author.trim().to_string(),
-        String::new(),
+        fields.isbn13.peek().trim().to_string(),
     )
 }
 
@@ -188,7 +188,7 @@ fn SearchOverlay(
     let server_url = use_server_url();
     let (title, author, isbn) = seed_from(fields);
     let state = PickerState {
-        stage: use_signal(|| Stage::Searching),
+        stage: use_signal(|| Stage::Ready),
         title: use_signal(|| title.clone()),
         author: use_signal(|| author.clone()),
         isbn: use_signal(|| isbn.clone()),
@@ -199,9 +199,11 @@ fn SearchOverlay(
     let run_search = search_handler(state, server_url.clone());
     let on_select = select_handler(state, server_url);
 
-    // The query is already known, so the overlay opens searching rather than
-    // asking the reader to press a button to ask the question they just asked.
-    use_hook(|| run_search.call(()));
+    // Deliberately no search on open. The fields are seeded from the book,
+    // including its ISBN — and an ISBN narrows every provider to one exact
+    // edition, which is the right answer to that question and the wrong
+    // default for a reader who wanted to browse. Searching only on click puts
+    // that choice in front of them first, where clearing the ISBN is obvious.
 
     rsx! {
         div {

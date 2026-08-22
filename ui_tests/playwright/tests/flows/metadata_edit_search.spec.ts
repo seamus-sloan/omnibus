@@ -238,14 +238,24 @@ async function mockHydrate(page: Page, body: unknown = null): Promise<void> {
 }
 
 /** Open the overlay and wait out the search it fires on open. */
+/** Opens the overlay. It does NOT search on open — the fields are seeded from
+ * the book and the reader presses Search, so that an ISBN sitting in the box
+ * (which narrows every source to one edition) is visible before it is spent. */
 async function openPicker(page: Page, uuid: string): Promise<void> {
   await gotoReady(page, `/books/${uuid}/edit`);
+  await page.getByTestId("metadata-search-btn").click();
+  await expect(page.getByTestId("metadata-search")).toBeVisible();
+}
+
+/** Opens the overlay and presses Search, waiting for the response. */
+async function searchFromPicker(page: Page, uuid: string): Promise<void> {
+  await openPicker(page, uuid);
   const searched = page.waitForResponse(
     (r) =>
       r.url().includes("/api/rpc/metadata/editions/search") &&
       r.request().method() === "POST",
   );
-  await page.getByTestId("metadata-search-btn").click();
+  await page.getByTestId("mes-search").click();
   await searched;
 }
 
@@ -254,7 +264,7 @@ async function openResults(page: Page, uuid: string): Promise<void> {
   await mockProviders(page, ALL_CONFIGURED);
   await mockHydrate(page);
   await mockSearch(page, FOUND);
-  await openPicker(page, uuid);
+  await searchFromPicker(page, uuid);
   await expect(page.getByTestId("mes-candidates")).toBeVisible();
 }
 
@@ -274,7 +284,7 @@ test.describe
     // Layout — the trigger, and an overlay that arrives at answers
     // -------------------------------------------------------------------------
 
-    test("opens an overlay that has already searched for this book", async ({
+    test("opens an overlay seeded from the book, without searching yet", async ({
       page,
       request,
     }) => {
@@ -288,29 +298,71 @@ test.describe
       await expect(trigger).toBeVisible();
       await expect(page.getByTestId("metadata-search")).toHaveCount(0);
 
-      const searched = page.waitForResponse(
-        (r) =>
-          r.url().includes("/api/rpc/metadata/editions/search") &&
-          r.request().method() === "POST",
-      );
+      let searched = false;
+      page.on("request", (r) => {
+        if (r.url().includes("/api/rpc/metadata/editions/search"))
+          searched = true;
+      });
       await trigger.click();
-      await searched;
-
-      // Prefilled from the book, and already run — the reader lands on results,
-      // not on a form asking the question they just asked.
       await expect(page.getByTestId("metadata-search")).toBeVisible();
-      // Three fields, each seeded from the book — not one phrase that would
-      // have to be split back apart to be useful.
+
+      // Three fields, each seeded from the book — including the ISBN, which
+      // narrows every source to that one edition. Nothing is searched until
+      // the reader presses Search, so they can see that and clear it first.
       await expect(page.getByTestId("mes-query-title")).toHaveValue(
         TARGET.title,
       );
       await expect(page.getByTestId("mes-query-author")).toHaveValue(
         TARGET.authors[0]!,
       );
-      // Left empty on purpose: a seeded ISBN routes every provider to its
-      // exact lookup and collapses the picker to one row per source.
-      await expect(page.getByTestId("mes-query-isbn")).toHaveValue("");
+      await expect(page.getByTestId("mes-ready")).toBeVisible();
+      await expect(page.getByTestId("mes-candidates")).toHaveCount(0);
+      expect(searched, "the overlay must not search on open").toBe(false);
+
+      // ...and does search when asked.
+      await page.getByTestId("mes-search").click();
       await expect(page.getByTestId("mes-candidates")).toBeVisible();
+    });
+
+    test("seeds the ISBN from the book, and clearing it widens the search", async ({
+      page,
+      request,
+    }) => {
+      // The narrowing is the point of filling it in: an ISBN is the exact
+      // question. Clearing it is how the reader asks the broader one.
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await mockProviders(page, ALL_CONFIGURED);
+      await mockHydrate(page);
+      await mockSearch(page, FOUND);
+      await gotoReady(page, `/books/${uuid}/edit`);
+      // The fixture book carries no ISBN, so put one in the form first — that
+      // is the field the picker seeds from, and typing it here exercises the
+      // real path without writing an override other specs would see.
+      await page.locator("#me-isbn-13").fill("9781234567897");
+      await page.getByTestId("metadata-search-btn").click();
+
+      const isbn = page.getByTestId("mes-query-isbn");
+      await expect(isbn).toHaveValue("9781234567897");
+
+      const withIsbn = page.waitForRequest(
+        (r) =>
+          r.url().includes("/api/rpc/metadata/editions/search") &&
+          r.method() === "POST",
+      );
+      await page.getByTestId("mes-search").click();
+      const sentWith = JSON.parse((await withIsbn).postData() ?? "{}");
+      expect((sentWith.req ?? sentWith).isbn).toBeTruthy();
+
+      await isbn.fill("");
+      const without = page.waitForRequest(
+        (r) =>
+          r.url().includes("/api/rpc/metadata/editions/search") &&
+          r.method() === "POST",
+      );
+      await page.getByTestId("mes-search").click();
+      const sentWithout = JSON.parse((await without).postData() ?? "{}");
+      expect((sentWithout.req ?? sentWithout).isbn ?? null).toBeNull();
+      expect((sentWithout.req ?? sentWithout).title).toBe(TARGET.title);
     });
 
     test("sends each query field as itself, however the reader edits them", async ({
@@ -472,7 +524,7 @@ test.describe
           },
         ],
       });
-      await openPicker(page, uuid);
+      await searchFromPicker(page, uuid);
 
       // Four outcomes, four distinct reads — a short list has several causes
       // and they are not interchangeable.
@@ -510,7 +562,7 @@ test.describe
           },
         ],
       });
-      await openPicker(page, uuid);
+      await searchFromPicker(page, uuid);
 
       const throttled = page.getByTestId("mes-source-hardcover");
       await expect(throttled).toHaveText(
@@ -543,7 +595,7 @@ test.describe
         ],
         sources: SOURCES,
       });
-      await openPicker(page, uuid);
+      await searchFromPicker(page, uuid);
 
       await expect(page.getByTestId("mes-candidate-0-title")).toHaveText(
         OL_CANDIDATE.title,
@@ -571,7 +623,7 @@ test.describe
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
       await mockProviders(page, ALL_CONFIGURED);
       await failSearch(page);
-      await openPicker(page, uuid);
+      await searchFromPicker(page, uuid);
 
       await expect(page.getByTestId("mes-error")).toBeVisible();
       await expect(page.getByTestId("mes-candidates")).toHaveCount(0);
@@ -720,7 +772,7 @@ test.describe
       await mockProviders(page, HC_CONFIGURED);
       await mockSearch(page, HC_FOUND);
       await mockHydrate(page);
-      await openPicker(page, uuid);
+      await searchFromPicker(page, uuid);
 
       // Hardcover is a source in its own right, not a "not set up" row.
       await expect(page.getByTestId("mes-source-hardcover")).toHaveText(
@@ -896,7 +948,7 @@ test.describe
         });
       });
 
-      await openPicker(page, uuid);
+      await searchFromPicker(page, uuid);
       await page.getByTestId("mes-candidate-0").click();
 
       // In flight: a placeholder in the table's shape, and no field rows at
@@ -963,7 +1015,7 @@ test.describe
         ...FOUND,
         editions: [{ ...OL_CANDIDATE, cover_url: null }],
       });
-      await openPicker(page, uuid);
+      await searchFromPicker(page, uuid);
       await page.getByTestId("mes-candidate-0").click();
 
       await expect(page.getByTestId("mes-row-cover")).toHaveCount(0);
