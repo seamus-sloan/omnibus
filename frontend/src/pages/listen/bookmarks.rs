@@ -1,9 +1,7 @@
-//! Bookmark state for the listen page.
-//!
-//! Owns the loaded list, the freshly-created id (for the accent ring), and
-//! the confirmation toast. Pure helpers derive the chapter label and toast
-//! text from a bookmark's stored position. `ready_player` drives creation;
-//! `bookmarks_drawer` renders the list.
+//! Bookmark state for the listen page: the loaded list, the freshly-created id
+//! (for the accent ring), and the confirmation toast. Pure helpers derive the
+//! chapter label and toast text from a bookmark's stored position.
+//! `ready_player` drives creation; `bookmarks_drawer` renders the list.
 
 #![cfg(not(feature = "mobile"))]
 

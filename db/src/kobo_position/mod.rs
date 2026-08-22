@@ -1,11 +1,8 @@
-//! Bidirectional translation between the two reading-position languages:
-//! Kobo `KoboSpan` bookmarks (`kobo.N.M` ids kepubify injects into the
-//! cached KEPUB) and the EPUB CFIs the web/iOS readers speak. The cached
-//! KEPUB is the Rosetta stone: both variants carry the same visible text,
-//! so a position in one maps to the other by aligned text offset. Callers
-//! are the Kobo sync handlers in `server::backend::kobo`; every failure
-//! degrades to "no derived position", never a wrong one — a mandatory
-//! snippet-equality check between the two walks enforces that.
+//! Bidirectional translation between Kobo `KoboSpan` bookmarks (the `kobo.N.M`
+//! ids kepubify injects) and the EPUB CFIs the web and iOS readers speak. The
+//! cached KEPUB is the Rosetta stone: both variants carry the same visible
+//! text, so a position maps by aligned text offset. Called by the Kobo sync
+//! handlers; every failure degrades to "no derived position", never a wrong one.
 
 mod book;
 mod cfi;

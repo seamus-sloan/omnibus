@@ -1,22 +1,9 @@
-//! Hardcover provider: the `by_isbn` / `by_title` pair every provider in this
-//! directory implements, over the same GraphQL API the suggestions ranking
-//! path uses.
-//!
-//! **Key-gated.** Hardcover authenticates every request, so without a
-//! configured key this provider is not a reachable rung at all and the ladder
-//! skips it.
-//!
-//! It sits *last* on the ladder because a lookup here costs two round trips
-//! where the catalogs cost one, so it earns its place answering what the big
-//! catalogs could not rather than slowing down the common case. In exchange it
-//! is the one provider that carries a series statement natively.
-//!
-//! Its **title search goes through Hardcover's `search` API**, not the
-//! `books(where: {title: {_eq: …}})` filter this module used to send. `_ilike`
-//! is blocked server-side, so that filter matched only a title typed
-//! character-for-character — which meant a query carrying the author (the
-//! picker seeds "title author") matched nothing at all, ever. `search` is
-//! Hardcover's own full-text endpoint and takes the phrase happily.
+//! Hardcover provider: the `by_isbn` / `by_text` / `by_ref` trio every provider
+//! here implements, over the GraphQL API the suggestions path also uses.
+//! Key-gated — no key, no rung — and last on the ladder, a lookup costing two
+//! round trips; in exchange it alone carries a series statement. Text search
+//! goes through its `search` endpoint: the `_eq` title filter it used to send
+//! matched nothing at all once a query carried an author (see `by_text`).
 
 use omnibus_shared::isbn::normalize_isbn;
 use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider, ProviderEdition};

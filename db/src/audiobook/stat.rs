@@ -1,9 +1,7 @@
-//! Phase A walk for audiobook libraries — `stat` every accepted file
-//! (`m4b` / `m4a` / `mp3`) without reading container tags. Mirrors
-//! [`crate::ebook::stat`] one-to-one; consolidating into a single generic
-//! walker would help here, but keeping the two side by side avoids
-//! threading an extension list through the ebook path until a third
-//! library type lands.
+//! Phase A walk for audiobook libraries: `stat` every accepted file (`m4b` /
+//! `m4a` / `mp3`) without reading container tags. Mirrors
+//! [`crate::ebook::stat`] one-to-one; the two stay side by side rather than
+//! merging into a generic walker until a third library type lands.
 
 use std::path::{Path, PathBuf};
 

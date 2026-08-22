@@ -1,9 +1,7 @@
-//! User-supplied metadata overrides + length validation + merge semantics.
-//!
-//! Persisted as JSON in `metadata_overrides.overrides`. `validate` runs at
-//! the handler boundary so over-long inputs return 400 instead of failing
-//! deeper; `merge` lets a second edit preserve prior-override fields it
-//! doesn't touch.
+//! User-supplied metadata overrides, length validation, and merge semantics.
+//! Persisted as JSON in `metadata_overrides.overrides`. `validate` runs at the
+//! handler boundary so over-long inputs return 400 instead of failing deeper;
+//! `merge` lets a second edit preserve prior-override fields it doesn't touch.
 
 use serde::{Deserialize, Serialize};
 

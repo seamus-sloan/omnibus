@@ -1,21 +1,8 @@
-//! Moved bucket: repoint the path columns of rows that already exist,
-//! for files the pure diff matched on their `(size_bytes, mtime_epoch)`
-//! pair. No parse, no insert, no delete — a relocation touches only
-//! `books.(scan_key, path)`, `book_files.(filename, scan_key, path)`,
-//! `book_file_parts.filename`, and the `merged_uuids` ledger. `books_fts`
-//! indexes no path column, so it needs no refresh either.
-//!
-//! `book_files.format` is deliberately **not** in that list, and the
-//! classifier is what makes that safe: `match_moved_files` keys on the
-//! format alongside the stat pair, so a file whose extension changed never
-//! reaches this writer. Rewriting `format` here instead would be worse than
-//! the bug it papers over — it would claim a Phase-B re-parse happened when
-//! none did, and `format` is exactly what `books::book_file_path` rebuilds
-//! the on-disk path from.
-//!
-//! Shared by both pipelines: `sync_audiobooks` calls the same writer,
-//! because a relocated group differs from a relocated ebook only in
-//! having `book_file_parts` rows to carry along.
+//! Moved bucket: repoint the path columns of rows that already exist, for files
+//! the pure diff matched on their `(size_bytes, mtime_epoch)` pair. No parse,
+//! insert, or delete. `book_files.format` is deliberately not repointed — the
+//! classifier keys on it, so a file whose extension changed never reaches this
+//! writer. Shared by both pipelines; `sync_audiobooks` calls the same one.
 
 use sqlx::Transaction;
 

@@ -1,9 +1,8 @@
-//! Materialize the side tables an override touches so downstream reads
-//! still resolve. The series-name override gets a canonical row + link; the
-//! subjects (tags) and genres overrides get a vocabulary row only — their
-//! memberships stay override-JSON-side (see [`materialize_tag_rows`]). The
-//! author override path replaces its m2m list at read time via
-//! `apply_overrides` and doesn't need a helper here.
+//! Materialize the side tables an override touches so downstream reads still
+//! resolve: a series-name override gets a canonical row plus link, while
+//! subjects (tags) and genres get a vocabulary row only — their memberships
+//! stay override-JSON-side (see [`materialize_tag_rows`]). The author override
+//! path replaces its m2m list at read time and needs no helper here.
 
 use std::collections::HashSet;
 

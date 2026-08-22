@@ -1,12 +1,8 @@
-//! Server-side markdown rendering for journal entries.
-//!
-//! User-authored markdown is rendered to HTML and then sanitized with a strict
-//! `ammonia` allowlist — never trust the raw output. A custom `||spoiler||`
-//! pass runs over the source first, wrapping spoiler regions in a native
-//! `<button class="spoiler" type="button" aria-expanded="false">` — a real
-//! button is focusable and Enter/Space-actionable for free, so keyboard and
-//! screen-reader users get the same reveal affordance as mouse users. The
-//! book-detail page blurs it until clicked.
+//! Server-side markdown rendering for journal entries. Rendered HTML is
+//! sanitized with a strict `ammonia` allowlist — never trust the raw output. A
+//! custom `||spoiler||` pass runs over the source first, wrapping spoiler
+//! regions in a native `<button class="spoiler">` so keyboard and screen-reader
+//! users get the same reveal affordance as mouse users.
 
 use pulldown_cmark::{html, Options, Parser};
 

@@ -359,6 +359,8 @@ fn sanitize_fts_tokens(tokens: &[&str]) -> Option<String> {
     Some(parts.join(" "))
 }
 
+/// Render a series index for display: whole numbers lose the decimal tail,
+/// everything else keeps it. Non-finite input passes through verbatim.
 pub(crate) fn format_series_index(v: f64) -> String {
     if !v.is_finite() {
         return format!("{v}");

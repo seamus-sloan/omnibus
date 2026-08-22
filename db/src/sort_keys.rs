@@ -1,14 +1,8 @@
-//! Denormalized sort-key columns carried on `books` for the keyset
-//! landing path. Today that is `series_sort` (the primary series name),
-//! computed at index time by the sync writers via [`series_sort_value`] and
-//! backfilled once at boot by [`backfill_series_sort`] for rows indexed
-//! before migration 0028. Mirrors the `author_sort` precedent — a sort key
-//! denormalized onto the row so a `(library_id, series_sort, series_index,
-//! id)` keyset seek replaces a join-and-temp-sort.
-//!
-//! Like `normalize`, this denormalizes **scanned** metadata only;
-//! `metadata_overrides` is a read layer and is deliberately ignored, so a
-//! book's sort position tracks its scanned series, not an override.
+//! Denormalized sort-key columns carried on `books` for the keyset landing
+//! path — today just `series_sort`, computed at index time by the sync writers
+//! via [`series_sort_value`] and backfilled once at boot by
+//! [`backfill_series_sort`]. Like `normalize`, this denormalizes **scanned**
+//! metadata only; `metadata_overrides` is a read layer and is ignored here.
 
 use omnibus_shared::EbookMetadata;
 use sqlx::SqlitePool;

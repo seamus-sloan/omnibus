@@ -1,11 +1,8 @@
-//! Render-smoke coverage for [`UmStat`] and [`UmSessionRows`] (#1913): a
-//! stubbed row/tile must render as a plain, non-interactive element with no
-//! `href` at all, and no row — linked or not — may ever emit `href="#"`.
-//! The `to: Some(route)` tile's `Link` needs a live `RouterContext`, which
-//! (like `shelves_rail`'s "All books" row, see its `tests.rs`) this harness
-//! doesn't mount; Dioxus catches that per-component, so the surrounding
-//! grid still renders and the `href="#"` regression check still holds
-//! across every tile/row.
+//! Render-smoke coverage for [`UmStat`] and [`UmSessionRows`]: a stubbed
+//! row/tile must render as a plain, non-interactive element with no `href` at
+//! all, and no row may ever emit `href="#"`. The `to: Some(route)` tile's
+//! `Link` needs a live `RouterContext` this harness doesn't mount; Dioxus
+//! catches that per-component, so the surrounding grid still renders.
 
 use super::*;
 use crate::test_support::render_in_vdom;

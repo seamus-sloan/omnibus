@@ -1,5 +1,5 @@
-//! Integration tests for the admin device & session management REST surface
-//! (F5.4, #910): AdminUser gating (401 anon / 403 non-admin), list sessions
+//! Integration tests for the admin device & session management REST
+//! surface: AdminUser gating (401 anon / 403 non-admin), list sessions
 //! / devices for a target user, and revoke a session / device (with the
 //! matching credential invalidation and 404 on an unknown id).
 

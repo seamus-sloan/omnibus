@@ -1,10 +1,8 @@
-//! Physical Check-In scan REST handlers for the mobile client (`/api/scan/*`).
-//!
-//! Resolve a scanned/typed ISBN down the matching ladder, then check in a
-//! physical copy, add a physical-only book, or wishlist a book. Any
-//! authenticated user may act — physical ownership is library-wide. Web clients
-//! use the analogous `/api/rpc/scan/*` server functions in
-//! `omnibus_frontend::rpc`.
+//! Physical Check-In scan REST handlers for the mobile client (`/api/scan/*`):
+//! resolve a scanned or typed ISBN down the matching ladder, then check in a
+//! physical copy, add a physical-only book, or wishlist one. Any authenticated
+//! user may act — physical ownership is library-wide. Web clients use the
+//! analogous `/api/rpc/scan/*` server functions.
 
 use axum::{
     extract::State,

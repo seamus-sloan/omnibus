@@ -1,10 +1,8 @@
-//! "Fetch Summary" button + inline status. Fetches the server's ordered source
-//! plan (Hardcover → Google Books → Open Library, trimmed to the configured
-//! providers), then drives it from the client (so it can show a per-source
-//! "Searching…" message) and hands the resolved text to `on_fetched` — the
-//! caller decides whether to fill an editor field or save-and-refresh. SSR and
-//! first WASM paint render the same idle markup; the network work runs only in
-//! the click handler.
+//! "Fetch Summary" button plus inline status. Fetches the server's ordered
+//! source plan, drives it from the client so it can show a per-source
+//! "Searching…" message, and hands the resolved text to `on_fetched` — the
+//! caller decides whether to fill an editor field or save and refresh. SSR and
+//! first WASM paint render the same idle markup; network work runs on click.
 
 use dioxus::prelude::*;
 use omnibus_shared::summary::SummarySource;

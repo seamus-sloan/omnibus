@@ -176,8 +176,8 @@ async fn repair_ghosted_audiobook_attachments(pool: &SqlitePool) -> Result<(), s
     Ok(())
 }
 
-/// Repair multi-part audiobook merges damaged before the per-file attach fix
-/// (#1126). Two idempotent steps, both `WHERE`-guarded no-ops once healthy:
+/// Repair multi-part audiobook merges damaged before the per-file attach fix.
+/// Two idempotent steps, both `WHERE`-guarded no-ops once healthy:
 ///
 /// 1. Plant a `merged_uuids` guard for every attached audiobook `book_files`
 ///    row missing one — the state the old `(book, format)` single-occupancy

@@ -43,12 +43,12 @@ pub enum ProgressState {
     Done {
         processed: u32,
         /// Set when a scan ghosted a large-but-sub-abort-threshold number of
-        /// books (issue #1057) — the UI renders a dismissible warning row
+        /// books — the UI renders a dismissible warning row
         /// instead of the ordinary success row.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ghost_warning: Option<GhostFilesWarning>,
-        /// `book_uuid`s that failed a fleet-wide EPUB override bake (#1718,
-        /// #1739) — `Some` only for a `RewriteAllEpubs` run that left at
+        /// `book_uuid`s that failed a fleet-wide EPUB override bake — `Some`
+        /// only for a `RewriteAllEpubs` run that left at
         /// least one book unbaked; every other task kind, and a bake with
         /// zero failures, reports `None`. Mutually exclusive with
         /// `ghost_warning` (each task kind produces at most one of the two).
@@ -66,10 +66,9 @@ pub enum ProgressState {
     },
 }
 
-/// Ghost-count tally attached to a scan's `Done` state (issue #1057): `removed`
-/// books lost their backing file this scan out of `total` file-backed books in
-/// the library, clearing the warn threshold but staying under the #819 abort
-/// guard.
+/// Ghost-count tally attached to a scan's `Done` state: `removed` books lost
+/// their backing file this scan out of `total` file-backed books in the
+/// library, clearing the warn threshold but staying under the abort guard.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GhostFilesWarning {
     pub removed: u32,
@@ -154,7 +153,7 @@ pub struct WorkerStatus {
     pub recent_complete: Vec<TaskProgress>,
 }
 
-/// Lifecycle status of a persisted [`BackgroundTaskRecord`] (issue #941).
+/// Lifecycle status of a persisted [`BackgroundTaskRecord`].
 /// `Running` covers a task that started but has no terminal write yet —
 /// including one an ungraceful shutdown left stuck, which is itself a
 /// useful signal on the admin dashboard rather than something to hide.
@@ -191,7 +190,7 @@ impl std::str::FromStr for BackgroundTaskStatus {
     }
 }
 
-/// One durable row of `background_tasks` history (issue #941): a worker task
+/// One durable row of `background_tasks` history: a worker task
 /// run's kind, lifecycle status, and timing. Read-only from the wire's
 /// perspective — the admin dashboard only ever fetches these, never writes
 /// them (the worker is the sole writer, via `omnibus_db::background_tasks`).

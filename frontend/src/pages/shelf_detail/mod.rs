@@ -1,9 +1,8 @@
-//! Shelf detail page (`/shelves/:id`).
-//!
-//! Renders the shelf rail alongside a main column showing one shelf's header
-//! (title + edit pencil, kind/visibility facets with rule chips, actions) and
-//! its member books. Smart shelves show an auto-sorted grid; manual shelves
-//! show a position-ordered grid with an "Add books" affordance.
+//! Shelf detail page (`/shelves/:id`). Renders the shelf rail alongside a main
+//! column showing one shelf's header (title and edit pencil, kind/visibility
+//! facets with rule chips, actions) and its member books. Smart shelves show an
+//! auto-sorted grid; manual shelves show a position-ordered grid with an
+//! "Add books" affordance.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;

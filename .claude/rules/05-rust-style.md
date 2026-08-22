@@ -56,7 +56,8 @@ covered by [04-playwright.md](04-playwright.md).
   (`anyhow::bail!("scan of {path} failed: {msg}")`). The right fit when
   the source is a foreign system (filesystem, parser, network) and the
   caller just propagates. Example: `reindex` in
-  [db/src/indexer/ebooks.rs](../../db/src/indexer/ebooks.rs).
+  [db/src/indexer/ebooks.rs](../../db/src/indexer/ebooks.rs) (now split into
+  `indexer/{mod,ebooks,audiobooks,backfill,progress,tests}.rs`).
 - **Coarse variants.** Group by failure mode and let the
   `#[error("...")]` message carry the detail. One
   `PasswordInvalid(String)` beats `PasswordTooShort` /

@@ -1,9 +1,8 @@
 //! Shared Dioxus components for `omnibus` (web) and `omnibus-mobile` (native).
-//!
-//! Platform-specific behavior (nav variant, data-fetching transport) is
-//! gated behind the `web` and `mobile` features. Components themselves stay
-//! platform-agnostic — they use `use_signal` + `use_effect`, and the `data`
-//! module provides a feature-gated transport layer.
+//! Platform-specific behavior (nav variant, data-fetching transport) is gated
+//! behind the `web` and `mobile` features; components themselves stay
+//! platform-agnostic, using `use_signal` + `use_effect` over the feature-gated
+//! transport layer the [`data`] module provides.
 
 use dioxus::prelude::*;
 

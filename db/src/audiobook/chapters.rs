@@ -1,9 +1,6 @@
-//! Chapter extraction from audiobook containers.
-//!
-//! M4B/M4A: extracts Nero `chpl` atoms (`moov/udta/chpl`).
-//! MP3: extracts ID3v2 CHAP frames (v2.3 big-endian and v2.4 syncsafe sizes).
-//! Returns [`RawChapter`] entries that the sync layer converts to
-//! absolute-timeline `file_chapters` rows.
+//! Chapter extraction from audiobook containers: Nero `chpl` atoms for
+//! M4B/M4A, ID3v2 CHAP frames for MP3. Returns [`RawChapter`] entries the
+//! sync layer converts to absolute-timeline `file_chapters` rows.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;

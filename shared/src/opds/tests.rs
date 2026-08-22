@@ -1,3 +1,7 @@
+//! Serde tests for the OPDS 2.0 wire types: `Link` builder population,
+//! omission of empty optional fields on publication metadata, and feed
+//! navigation/publication serialization plus its JSON round trip.
+
 use super::*;
 
 #[test]

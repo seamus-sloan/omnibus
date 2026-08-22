@@ -1,10 +1,8 @@
-//! Admin background-task history server function (`/api/rpc/background-tasks`).
-//!
-//! Web-only surface: reads the durable `background_tasks` table (migration
-//! `0072`, issue #941) via `db::background_tasks::recent_tasks` and returns
-//! the most recent rows, newest first. Admin-gated by the `AdminUser`
-//! extractor, so a non-admin session is rejected before the table is
-//! touched — mirrors `rpc_get_last_errors`'s shape exactly.
+//! Admin background-task history server function
+//! (`/api/rpc/background-tasks`). Web-only: reads the durable
+//! `background_tasks` table via `db::background_tasks::recent_tasks` and returns
+//! the most recent rows, newest first. Admin-gated by the `AdminUser` extractor,
+//! so a non-admin session is rejected before the table is touched.
 
 use dioxus::fullstack::get;
 use dioxus::prelude::*;

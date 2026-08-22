@@ -1,16 +1,7 @@
-//! Audiobook tag extraction via `lofty`.
-//!
-//! Opens each file's primary tag and lifts the small set of fields the
-//! basic player cares about: title, primary artist (one author — the
-//! basic player has no UI for narrator vs. author roles), album, and
-//! duration in seconds. Failures roll up as `anyhow::Error` so the
-//! indexer surfaces the per-file error in the same shape the EPUB path
-//! uses — a foreign-system (codec/I/O) failure space with no caller
-//! branching on the specific cause (rule 02).
-//!
-//! Phase B for multi-file audiobooks is handled by [`parse_groups`], which
-//! reads ID3 tags for every part, sorts by (track, filename), and assembles
-//! an [`IndexedAudiobook`] ready for [`crate::sync::sync_audiobooks`].
+//! Audiobook tag extraction via `lofty`: title, primary artist, album, and
+//! duration per file. [`parse_groups`] assembles multi-file books into an
+//! [`IndexedAudiobook`] for [`crate::sync::sync_audiobooks`]. Failures roll up
+//! as `anyhow::Error`, matching the EPUB path's foreign-system failure shape.
 
 use std::path::{Path, PathBuf};
 

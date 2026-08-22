@@ -82,6 +82,8 @@ mod mobile_store {
         }
     }
 
+    /// Drop every cached position — test-only, so one test's writes can't leak
+    /// into the next.
     #[cfg(test)]
     pub fn clear() {
         if let Ok(mut g) = map().write() {

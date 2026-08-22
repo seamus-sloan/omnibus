@@ -1,33 +1,8 @@
-//! Background-worker primitive.
-//!
-//! Single-process queue with two fairness knobs:
-//! - `scan_concurrency` caps how many `Task::Scan` / `Task::ScanAudiobooks`
-//!   jobs run concurrently (acquired from a per-Worker scan [`Semaphore`]).
-//! - `hls_concurrency` caps concurrent `Task::HlsTranscode` jobs (acquired
-//!   from a separate HLS [`Semaphore`]).
-//! - `convert_concurrency` caps concurrent `Task::ConvertFormat` jobs
-//!   (acquired from a separate convert [`Semaphore`]).
-//! - A per-resource keyed mutex map serializes any tasks that share the
-//!   same resource key, so e.g. two scans of the same library path queue
-//!   behind each other while different paths run in parallel.
-//!
-//! Split across focused sub-modules:
-//!
-//! * [`types`] — `Task` / `TaskOutcome` / `WorkerConfig` / `Worker` struct
-//!   and shared helpers (`lock_unpoison`, `wall_clock_ms`).
-//! * [`queue`] — `Worker::post` / `await_completion` + RAII map-cleanup
-//!   guards. `post` also writes the durable `background_tasks` history row
-//!   (issue #941) via `crate::background_tasks`.
-//! * [`exec`] — `Worker::run` dispatch loop: resource lock + scan
-//!   semaphore + terminal-state projection.
-//! * [`handlers`] — `Worker::execute` per-task-kind handlers.
-//! * [`progress`] — `progress_snapshot` + retention/eviction +
-//!   `report_progress_update`/`report_detail` + the terminal-state writer.
-//! * [`metrics`] — `Worker::metrics`: per-task-type queue depth and a
-//!   bounded recent-completions window, for a future admin health page.
-//! * [`periodic_scan`] — the testable "read settings, decide, post" step
-//!   behind the configurable periodic library rescan; the timer loop that
-//!   drives it lives in `server::main`.
+//! Background-worker primitive: a single-process queue with per-kind
+//! concurrency semaphores (library scan, HLS transcode, format convert) and a
+//! per-resource keyed mutex map that serializes tasks sharing a resource key,
+//! so two scans of one library path queue behind each other while different
+//! paths run in parallel. Split across the sub-modules declared below.
 
 mod exec;
 mod handlers;

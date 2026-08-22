@@ -1,9 +1,8 @@
 //! Title search — the way in for a copy whose ISBN is unknown, unreadable, or
-//! in no provider's index. A query input over a provider-candidate list; a
-//! pick goes back to the flow, which resolves it against the library without a
-//! second provider round trip. Mounted on the lookup screen beside ISBN entry,
-//! which the scanner, the keypad, and the unresolved screen all open. Visible
-//! text is the E2E selector contract (rule 04).
+//! in no provider's index. A query input over a provider-candidate list; a pick
+//! goes back to the flow, which resolves it against the library without a second
+//! provider round trip. Mounted on the lookup screen beside ISBN entry. Visible
+//! text is the E2E selector contract.
 
 use dioxus::prelude::*;
 use omnibus_shared::{ExternalBookMeta, ScanSearchRequest};

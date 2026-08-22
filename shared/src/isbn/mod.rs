@@ -1,10 +1,8 @@
 //! ISBN normalization: strip separators, validate the check digit, and fold
-//! every valid input to a canonical 13-digit ISBN-13 (the form both providers
-//! are queried with). Pure + typed — the caller branches on the failure.
-//!
-//! Shared because both sides need the same verdict: the server before it
-//! spends a provider round-trip, and the check-in scanner/keypad before it
-//! sends a barcode decode or a typed ISBN over the wire.
+//! every valid input to a canonical 13-digit ISBN-13 — the form both providers
+//! are queried with. Pure and typed, so the caller branches on the failure.
+//! Shared because the server needs the verdict before spending a provider round
+//! trip, and the check-in scanner/keypad needs it before sending a decode.
 
 #[cfg(test)]
 mod tests;

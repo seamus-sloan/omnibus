@@ -13,6 +13,7 @@ use dioxus::prelude::*;
 pub struct StrengthScore(u8);
 
 impl StrengthScore {
+    /// Highest score the meter can show; [`Self::new`] saturates to it.
     pub const MAX: u8 = 4;
 
     /// Build a clamped score from any `u8`. Values above [`Self::MAX`]

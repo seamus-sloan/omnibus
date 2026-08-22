@@ -1,9 +1,8 @@
 //! Durable mutation outbox: every user write that fails with a
-//! connectivity-class error (or is attempted while already offline) is
-//! queued here, applied optimistically to the replica cache, and replayed
-//! in enqueue order by the sync drain. Conflict stance is last-write-wins
-//! offline-created rows carry
-//! negative client temp ids that remap to server ids on drain.
+//! connectivity-class error (or is attempted while already offline) is queued
+//! here, applied optimistically to the replica cache, and replayed in enqueue
+//! order by the sync drain. Conflict stance is last-write-wins; offline-created
+//! rows carry negative client temp ids that remap to server ids on drain.
 
 use omnibus_shared::{
     AudiobookPlaybackRateRecord, AudiobookPlaybackRateUpdate, Bookmark, CreateBookmark,

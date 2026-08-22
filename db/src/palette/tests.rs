@@ -1939,3 +1939,14 @@ async fn search_palette_hides_a_wishlist_only_book_in_every_arm() {
     assert!(results.series.is_empty(), "series arm: {results:?}");
     assert!(results.tags.is_empty(), "tags arm: {results:?}");
 }
+
+#[test]
+fn palette_error_from_metadata_overrides_error_returns_other_for_bulk_write_variants() {
+    let err = PaletteError::from(
+        crate::metadata_overrides::MetadataOverridesError::BookNotFound("abc".into()),
+    );
+    assert!(
+        matches!(&err, PaletteError::Other(msg) if msg.contains("abc")),
+        "expected Other carrying the source message, got {err:?}"
+    );
+}

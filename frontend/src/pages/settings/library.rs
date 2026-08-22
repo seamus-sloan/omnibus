@@ -1,9 +1,8 @@
-//! Library Location settings section — library-path form + live file summaries.
-//!
-//! The card an admin uses to point Omnibus at ebook / audiobook directories,
-//! set the automatic-rescan interval, and kick off one-off maintenance jobs.
-//! Recursive per-extension counts from the scanner let path changes be
-//! eyeballed before saving.
+//! Library Location settings section — the library-path form plus live file
+//! summaries. The card an admin uses to point Omnibus at ebook and audiobook
+//! directories, set the automatic-rescan interval, and kick off one-off
+//! maintenance jobs. Recursive per-extension counts from the scanner let path
+//! changes be eyeballed before saving.
 
 use dioxus::prelude::*;
 use omnibus_shared::{LibraryContents, LibrarySection, Settings, SCAN_INTERVAL_MIN_HOURS};

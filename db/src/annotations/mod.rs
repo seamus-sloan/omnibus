@@ -24,6 +24,8 @@ pub use downsync::{
 /// produce an unbounded REST response.
 pub const LIST_HIGHLIGHTS_LIMIT: i64 = 1_000;
 
+/// Failure space for highlight CRUD: unknown book, missing (or non-owned)
+/// highlight, or the underlying SQL.
 #[derive(Debug, thiserror::Error)]
 pub enum HighlightError {
     #[error("book not found")]
@@ -41,6 +43,7 @@ impl From<crate::books::BooksError> for HighlightError {
             crate::books::BooksError::OverridesJson(inner) => {
                 Self::Sqlx(sqlx::Error::Decode(Box::new(inner)))
             }
+            crate::books::BooksError::Other(msg) => Self::Sqlx(sqlx::Error::Decode(msg.into())),
         }
     }
 }

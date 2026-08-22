@@ -1,5 +1,5 @@
-//! Unit tests for [`insert_author_links`]'s reindex-resurrection guard
-//! (#964): an aliased name resolves straight to its canonical id without
+//! Unit tests for [`insert_author_links`]'s reindex-resurrection guard: an
+//! aliased name resolves straight to its canonical id without
 //! minting a new `authors` row, while an unaliased name still goes through
 //! the normal upsert-and-join path unchanged.
 

@@ -499,3 +499,26 @@ fn books_error_maps_overrides_serialization_to_overrides_json_variant() {
         "got {err}"
     );
 }
+
+#[test]
+fn books_error_from_metadata_overrides_error_returns_other_for_bulk_write_variants() {
+    let not_found = BooksError::from(
+        crate::metadata_overrides::MetadataOverridesError::BookNotFound("abc".into()),
+    );
+    assert!(
+        matches!(&not_found, BooksError::Other(msg) if msg.contains("abc")),
+        "expected Other carrying the source message, got {not_found:?}"
+    );
+
+    let too_many = BooksError::from(
+        crate::metadata_overrides::MetadataOverridesError::TooManyValues {
+            uuid: "abc".into(),
+            field: "tag",
+            max: 3,
+        },
+    );
+    assert!(
+        matches!(&too_many, BooksError::Other(msg) if msg.contains("tag")),
+        "expected Other carrying the source message, got {too_many:?}"
+    );
+}

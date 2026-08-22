@@ -84,8 +84,11 @@ impl From<argon2::password_hash::Error> for AuthError {
     }
 }
 
+/// Result alias for every fallible operation in this module.
 pub type AuthResult<T> = Result<T, AuthError>;
 
+/// An authenticated account: identity, per-feature permissions, and the
+/// presentation fields other users see.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
     pub id: i64,
@@ -107,6 +110,8 @@ pub struct User {
     pub hidden_formats: Vec<String>,
 }
 
+/// One live login. `device_id` is set only for bearer sessions minted by a
+/// registered mobile device.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     pub id: i64,
@@ -118,6 +123,8 @@ pub struct Session {
     pub expires_at: i64,
 }
 
+/// How a session's credential travels: a browser cookie, a mobile bearer
+/// token, or per-request HTTP Basic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
     Cookie,
@@ -139,6 +146,7 @@ impl SessionKind {
     }
 }
 
+/// A registered mobile client, the parent of the bearer sessions it mints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Device {
     pub id: i64,
@@ -198,6 +206,7 @@ pub(crate) mod test_support {
     use crate::pool::init_db;
     use sqlx::SqlitePool;
 
+    /// A migrated in-memory pool for the tests in this module.
     pub async fn pool() -> SqlitePool {
         init_db("sqlite::memory:").await.expect("pool init")
     }

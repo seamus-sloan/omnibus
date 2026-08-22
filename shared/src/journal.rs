@@ -1,10 +1,8 @@
-//! Public per-book journal wire types shared between web and mobile clients.
-//!
-//! A journal entry is a free-form markdown note on a book. Entries are public:
-//! every authenticated user sees every user's entries for a book (a shared
-//! reading log), attributed by `author_name`. Only the owner may edit or delete
-//! their own entries. The markdown body is rendered to sanitized HTML
-//! server-side; the raw source rides along so the owner can edit it.
+//! Public per-book journal wire types shared between web and mobile clients. A
+//! journal entry is a free-form markdown note on a book; entries are public, so
+//! every authenticated user sees every user's entries for a book, attributed by
+//! `author_name`, and only the owner may edit or delete. The body renders to
+//! sanitized HTML server-side, with the raw source riding along for editing.
 
 use serde::{Deserialize, Serialize};
 

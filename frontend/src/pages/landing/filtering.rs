@@ -53,6 +53,8 @@ fn matches_filters(book: &EbookMetadata, filters: &ViewFilters) -> bool {
     true
 }
 
+/// Keep only the books matching every active sidebar facet. An empty filter
+/// set clones the input through unchanged.
 pub(crate) fn apply_filters(books: &[EbookMetadata], filters: &ViewFilters) -> Vec<EbookMetadata> {
     if filters.is_empty() {
         return books.to_vec();

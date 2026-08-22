@@ -87,7 +87,7 @@ pub enum Task {
     /// (light per-file IO, mirrors [`Task::BackfillChapters`]).
     BackfillWordCounts { library_path: String },
     /// Backfill `books.page_count` for CBZ books indexed before the
-    /// page-count column existed (migration `0063`, #1593). Posted by the
+    /// page-count column existed (migration `0063`). Posted by the
     /// [`Task::Scan`] handler on success so it always runs after the ebook
     /// scan completes. Keyed on `library_path` (mutual exclusion with the
     /// scan on the same library); does not consume the scan semaphore
@@ -101,7 +101,7 @@ pub enum Task {
     /// `library_path`; does not consume the scan semaphore.
     BackfillEpubStructure { library_path: String },
     /// Pre-generate WebP thumbnails (all three sizes) for every covered book
-    /// under `library_path` (#1752). Posted by the [`Task::Scan`] handler on
+    /// under `library_path`. Posted by the [`Task::Scan`] handler on
     /// success, alongside [`Task::BackfillWordCounts`] /
     /// [`Task::BackfillPageCounts`], so the landing grid's first post-scan
     /// load serves cached thumbnails instead of falling through the lazy
@@ -129,7 +129,7 @@ pub enum Task {
     /// semaphore (light single-file work).
     KepubConvert { book_id: i64 },
     /// Convert one book's `source_format` file to `target_format` via
-    /// Calibre's `ebook-convert` (#948). Acquires the convert semaphore
+    /// Calibre's `ebook-convert`. Acquires the convert semaphore
     /// (capped at [`WorkerConfig::convert_concurrency`]) and the
     /// per-`(book_id, source_format, target_format)` keyed mutex, so a
     /// duplicate request for the same pair serializes behind an in-flight one
@@ -150,14 +150,14 @@ pub enum Task {
         recipient_email: String,
     },
     /// Bake every book's active metadata/cover override into its EPUB
-    /// container in one pass (#959, #1718), dispatched off the request
+    /// container in one pass, dispatched off the request
     /// thread so the admin's "Bake Overrides Into EPUBs" action returns as
     /// soon as the run is queued instead of awaiting it inline. Keyed on a
     /// fixed resource so concurrent clicks serialize; does not consume the
     /// scan semaphore (its DB work is a handful of bulk-fetched queries, not
     /// per-book round trips).
     RewriteAllEpubs,
-    /// Run the library-cleanup dedup detectors (#960/#965) and persist any
+    /// Run the library-cleanup dedup detectors and persist any
     /// newly-found suggestions into `dedup_suggestions` (migration `0069`).
     /// `kind = None` runs every detector via `cleanup::detect_all`; `Some(k)`
     /// scopes to just that domain — the admin-triggered "run detection now"
@@ -255,8 +255,8 @@ impl Task {
         matches!(self, Task::ConvertFormat { .. })
     }
 
-    /// Free-text label persisted to the `background_tasks` table (issue
-    /// #941, migration `0072`). Deliberately finer-grained than
+    /// Free-text label persisted to the `background_tasks` table (migration
+    /// `0072`). Deliberately finer-grained than
     /// [`Task::kind`]'s wire-facing [`TaskKind`] — several `Task` variants
     /// share one `TaskKind` for the live progress UI (see that method's
     /// per-arm comments), but the admin history view wants to tell e.g. a
@@ -350,9 +350,9 @@ pub type TaskId = u64;
 /// which is why [`TaskOutcome::Ok`] wraps this in an `Option`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TaskSuccessDetail {
-    /// A scan whose ghost count cleared the warn threshold (issue #1057).
+    /// A scan whose ghost count cleared the warn threshold.
     GhostFiles(omnibus_shared::GhostFilesWarning),
-    /// A fleet-wide EPUB override bake's failed `book_uuid`s (#1718, #1739).
+    /// A fleet-wide EPUB override bake's failed `book_uuid`s.
     /// Only attached when non-empty — a bake where every book succeeded
     /// reports `None` like any other task. Deliberately just the uuids, not
     /// the per-book error text (which can carry a server filesystem path) —
@@ -392,8 +392,8 @@ pub struct WorkerConfig {
     pub hls_concurrency: usize,
     /// Maximum number of concurrent [`Task::ConvertFormat`] jobs. Each
     /// conversion drives one `ebook-convert` process; same
-    /// `max(1, num_cpus / 2)` default and rationale as [`Self::hls_concurrency`]
-    /// (#948).
+    /// `max(1, num_cpus / 2)` default and rationale as
+    /// [`Self::hls_concurrency`].
     pub convert_concurrency: usize,
 }
 
@@ -442,7 +442,7 @@ pub struct Worker {
     pub(super) hls_sem: Arc<Semaphore>,
     /// Semaphore capping concurrent `Task::ConvertFormat` runs. Separate from
     /// `scan_sem`/`hls_sem` so format conversions don't compete with scans or
-    /// HLS transcodes for permits (#948).
+    /// HLS transcodes for permits.
     pub(super) convert_sem: Arc<Semaphore>,
     pub(super) resource_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     pub(super) completions: Arc<StdMutex<HashMap<TaskId, watch::Receiver<Option<TaskOutcome>>>>>,

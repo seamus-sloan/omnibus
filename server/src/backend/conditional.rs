@@ -1,19 +1,8 @@
-//! Conditional-request handling for the endpoints that serve bytes off disk.
-//!
-//! This module is the **single** place those endpoints evaluate
-//! preconditions and honour `Range`. It exists for one guarantee: a resumed
-//! download must never splice the tail of a new file onto the head of an old
-//! one. Two things are load-bearing for that, and both are easy to lose:
-//!
-//! - The validator and the bytes come from **one open file handle**, opened
-//!   once. Deriving a validator from a path and then letting something else
-//!   re-open that path leaves a window in which an atomic replace slips
-//!   between them — an `If-Range` that matched the old file, served from the
-//!   new one. On Unix an open handle keeps pointing at the inode it was
-//!   opened on, so a `rename` over the path cannot move underneath us.
-//! - Every precondition is settled **here**, in RFC 9110 §13.2.2 order.
-//!   Delegating any of them to a service with its own differently-derived
-//!   validator produces answers that disagree with the one we published.
+//! Conditional-request handling for the endpoints that serve bytes off disk —
+//! the **single** place they evaluate preconditions and honour `Range`. It
+//! exists for one guarantee: a resumed download must never splice the tail of a
+//! new file onto the head of an old one. Validator and bytes come from one open
+//! handle, and all five preconditions settle here in RFC 9110 §13.2.2 order.
 
 use std::path::Path;
 use std::time::SystemTime;

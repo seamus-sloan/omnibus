@@ -1,9 +1,8 @@
-//! App-level "you're offline" sheet (mobile). When a reader/player route is
-//! opened for a book with no completed local download, the page bounces back
-//! to where the user came from and raises this sheet via [`block`] — instead
-//! of stranding them inside a surface that can never load. State rides a
-//! static `tokio::sync::watch` channel (the `token_store` subscriber house
-//! pattern) so the setter needs no Dioxus context.
+//! App-level "you're offline" sheet (mobile). When a reader or player route is
+//! opened for a book with no completed local download, the page bounces back to
+//! where the user came from and raises this sheet via [`block`], rather than
+//! stranding them in a surface that can never load. State rides a static
+//! `tokio::sync::watch` channel, so the setter needs no Dioxus context.
 
 use std::sync::OnceLock;
 

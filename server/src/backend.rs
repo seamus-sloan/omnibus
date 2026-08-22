@@ -1,9 +1,7 @@
-//! Hand-written `/api/*` REST routes for the mobile client.
-//!
-//! Web uses Dioxus server functions (see `omnibus_frontend::rpc`), mounted
-//! automatically by `dioxus::server::router(App)`. These REST routes are
-//! merged alongside them in `main.rs` so mobile's existing `reqwest` paths
-//! keep working unchanged.
+//! Hand-written `/api/*` REST routes for the mobile client. Web uses Dioxus
+//! server functions (see `omnibus_frontend::rpc`), mounted automatically by
+//! `dioxus::server::router(App)`; these REST routes are merged alongside them
+//! in `main.rs` so mobile's existing `reqwest` paths keep working unchanged.
 
 use std::sync::Arc;
 

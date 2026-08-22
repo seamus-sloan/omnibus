@@ -1,10 +1,8 @@
-//! Mobile counterpart of `typography::save_reader_pref` /
-//! `load_reader_pref`. The wry WebView has a real `window.localStorage`, so
-//! we drive it through the same `dioxus::document::eval` seam
-//! `mobile::interop` uses for the reader glue, rather than the web build's
-//! `web_sys` API (native, not WASM — `web_sys` isn't available here). Writes
-//! are fire-and-forget like `reader_call`; reads are necessarily async
-//! (`Eval::recv`), unlike the synchronous `web_sys::Storage` path.
+//! Mobile counterpart of `typography::save_reader_pref` / `load_reader_pref`.
+//! The wry WebView has a real `window.localStorage`, driven through the same
+//! `dioxus::document::eval` seam `mobile::interop` uses rather than the web
+//! build's `web_sys` API (native, not WASM). Writes are fire-and-forget; reads
+//! are necessarily async, unlike the synchronous `web_sys::Storage` path.
 
 use std::time::Duration;
 

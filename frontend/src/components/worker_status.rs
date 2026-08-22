@@ -259,8 +259,8 @@ fn DoneRow(
     }
 }
 
-/// A scan that ghosted a large-but-sub-abort-threshold number of books
-/// (issue #1057) — distinct from both the green [`DoneRow`] and the red
+/// A scan that ghosted a large-but-sub-abort-threshold number of books —
+/// distinct from both the green [`DoneRow`] and the red
 /// [`FailedRow`]: the scan still succeeded (files really are gone from the
 /// index), but the count is large enough that a dropped mount or partial
 /// sync is the more likely explanation.
@@ -292,12 +292,12 @@ fn WarnRow(
     }
 }
 
-/// A fleet-wide EPUB override bake (#959, #1718) that left one or more
+/// A fleet-wide EPUB override bake that left one or more
 /// books unbaked — distinct from both [`WarnRow`] and the red
 /// [`FailedRow`]: the run itself succeeded (every book was attempted, and
 /// the ones that could be baked were), but the admin who kicked it off from
 /// "Bake Overrides Into EPUBs" needs to know which books still need
-/// attention (#1739). Doesn't route through `kind_label` — `RewriteAllEpubs`
+/// attention. Doesn't route through `kind_label` — `RewriteAllEpubs`
 /// reuses `TaskKind::Scan` for its wire kind (no dedicated progress
 /// widget), so this row names the job directly instead of rendering the
 /// misleading "Library scan" label. `errors` is just the failed
@@ -355,7 +355,7 @@ fn FailedRow(kind: TaskKind, message: String, on_dismiss: EventHandler<MouseEven
 /// naturally in both the in-flight and terminal contexts. New `TaskKind`
 /// variants add one match arm here and inherit the same active/done/failed
 /// rendering for free. `pub(crate)` so `pages::admin_health`'s worker-queue
-/// section can reuse the same labels instead of a second mapping (#952).
+/// section can reuse the same labels instead of a second mapping.
 pub(crate) fn kind_label(kind: TaskKind, running: bool) -> &'static str {
     match (kind, running) {
         (TaskKind::Scan, true) => "Scanning library",
@@ -423,7 +423,7 @@ fn ghost_warning_message(warning: &GhostFilesWarning) -> String {
 const BAKE_ERRORS_INLINE_CAP: usize = 5;
 
 /// Render a fleet-wide EPUB bake's failed `book_uuid`s into the
-/// [`BakeErrorsRow`] message text (#1739) — factored out of the component
+/// [`BakeErrorsRow`] message text — factored out of the component
 /// body so the wording (count + the failed book uuids) is unit testable,
 /// mirroring [`ghost_warning_message`].
 fn bake_errors_message(errors: &[String]) -> String {

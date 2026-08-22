@@ -1,9 +1,8 @@
-//! SQLite-backed durable store for the offline layer: replica cache rows,
-//! the mutation outbox, the download registry, and small metadata — one
-//! `offline.db` under the app data dir. The connection is owned by a
-//! dedicated worker thread fed closures over an `mpsc` channel (mirroring
-//! `data::token_store`'s persistence worker) so callers never block on disk
-//! I/O and writes can't race each other.
+//! SQLite-backed durable store for the offline layer: replica cache rows, the
+//! mutation outbox, the download registry, and small metadata, all in one
+//! `offline.db` under the app data dir. The connection is owned by a dedicated
+//! worker thread fed closures over an `mpsc` channel, so callers never block on
+//! disk I/O and writes can't race each other.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;

@@ -1,10 +1,8 @@
-//! Tests for post-download integrity checking.
-//!
-//! Splice fixtures cut at one absolute offset across both files, because
-//! that is what a resume produces: `resumed` bytes of the file that used to
-//! be here, then the replacement's from that offset on. Equal-length pairs
-//! are the hard case — nothing about the size gives them away — and each
-//! format's test says which of the two it is.
+//! Tests for post-download integrity checking. Splice fixtures cut at one
+//! absolute offset across both files, because that is what a resume produces:
+//! `resumed` bytes of the file that used to be here, then the replacement's
+//! from that offset on. Equal-length pairs are the hard case — nothing about
+//! the size gives them away — and each format's test says which it is.
 
 use super::*;
 use crate::offline::test_support::{zip_one, zip_one_body_offset};

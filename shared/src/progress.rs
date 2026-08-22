@@ -1,9 +1,8 @@
-//! Reading / listening progress wire types.
-//!
-//! Used by `POST /api/progress`, `GET /api/progress/{uuid}`, and
-//! `POST /api/progress/sessions`. The `ProgressFormat` discriminator selects
-//! which position field is meaningful so a single endpoint covers both
-//! reading (EPUB CFI) and listening (audio seconds) positions.
+//! Reading and listening progress wire types, used by `POST /api/progress`,
+//! `GET /api/progress/{uuid}`, and `POST /api/progress/sessions`. The
+//! `ProgressFormat` discriminator selects which position field is meaningful,
+//! so one endpoint covers both reading (EPUB CFI) and listening (audio seconds)
+//! positions.
 
 use serde::{Deserialize, Serialize};
 

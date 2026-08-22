@@ -1,9 +1,7 @@
 //! Google Books provider: the `by_isbn` / `by_title` pair every provider in
-//! this directory implements.
-//!
-//! Reachable without a key, but only just — keyless requests share Google's
-//! anonymous daily quota, which a self-hosted instance exhausts almost
-//! immediately (HTTP 429). A configured key is what makes it the ladder's
+//! this directory implements. Reachable without a key, but only just — keyless
+//! requests share Google's anonymous daily quota, which a self-hosted instance
+//! exhausts almost immediately. A configured key is what makes it the ladder's
 //! primary rung.
 
 use std::time::Duration;

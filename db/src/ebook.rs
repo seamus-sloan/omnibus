@@ -1,9 +1,8 @@
 //! Ebook metadata extraction (server-only). Walks the configured library
 //! directory, parses the OPF for each `.epub` (CBZ archives dispatch to
-//! [`crate::comic`]), and produces an [`IndexedBook`] per file — metadata
-//! plus the raw cover bytes. Parse failures surface as a per-book error
-//! rather than hiding the rest of the library. Consumed by
-//! [`crate::indexer`], which writes the output to the DB.
+//! [`crate::comic`]), and produces an [`IndexedBook`] per file — metadata plus
+//! raw cover bytes. Parse failures surface per-book rather than hiding the rest
+//! of the library. Consumed by [`crate::indexer`], which writes the output.
 
 use std::path::Path;
 

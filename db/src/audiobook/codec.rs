@@ -1,11 +1,8 @@
-//! Codec classification for audiobook playback.
-//!
-//! Decides whether each book can be streamed directly to the browser
-//! / native player (m4b / m4a / mp3 / aac) or has to go through the
-//! HLS transcode pipeline (flac / ac3 / eac3 / anything else). Used
-//! by the `/api/audiobooks/{uuid}/manifest` handler to pick the
-//! response variant. The HLS code itself stays unchanged — this is
-//! the gate that decides whether to invoke it at all.
+//! Codec classification for audiobook playback: decides whether a book can
+//! stream directly to the browser / native player (m4b / m4a / mp3 / aac) or
+//! has to go through the HLS transcode pipeline (flac / ac3 / eac3, anything
+//! else). Used by the `/api/audiobooks/{uuid}/manifest` handler to pick the
+//! response variant.
 
 /// Playback path for an audiobook. Returned by [`classify_filenames`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

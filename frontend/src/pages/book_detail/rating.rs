@@ -1,9 +1,8 @@
-//! Interactive half-star rating widget for the book-detail hero card.
-//!
-//! Five stars with left/right half-click targets plus a status line. The first
-//! paint matches SSR (no fill, "Not rated yet"); a post-mount effect loads the
+//! Interactive half-star rating widget for the book-detail hero card: five
+//! stars with left/right half-click targets plus a status line. The first paint
+//! matches SSR (no fill, "Not rated yet") and a post-mount effect loads the
 //! saved rating and reconciles, keeping hydration stable. Clicking the active
-//! value clears it (un-rate).
+//! value clears it.
 
 use dioxus::prelude::*;
 use omnibus_shared::{AttributedRating, RatingRecord, RatingUpdate};

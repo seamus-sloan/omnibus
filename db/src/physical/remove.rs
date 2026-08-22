@@ -64,12 +64,12 @@ pub async fn delete_fileless_book(pool: &SqlitePool, book_uuid: &str) -> Result<
 
 /// Fold a `deletion::DeleteError` from the shared purge into `PhysicalError`.
 /// `purge_book` only ever emits `Sqlx` here (the book is already resolved and
-/// fileless), so the other variants collapse defensively onto `Sqlx`.
-fn map_delete_error(e: crate::deletion::DeleteError) -> PhysicalError {
+/// fileless), so the remaining variants collapse defensively onto `Other`.
+pub(super) fn map_delete_error(e: crate::deletion::DeleteError) -> PhysicalError {
     match e {
         crate::deletion::DeleteError::Sqlx(inner) => PhysicalError::Sqlx(inner),
         crate::deletion::DeleteError::Physical(inner) => inner,
         crate::deletion::DeleteError::Books(inner) => PhysicalError::Books(inner),
-        other => PhysicalError::Sqlx(sqlx::Error::Protocol(other.to_string())),
+        other => PhysicalError::Other(other.to_string()),
     }
 }

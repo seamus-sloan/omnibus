@@ -1,9 +1,8 @@
 //! Check-in flow (`/check-in`) — resolve an ISBN and land it on the right
-//! branch of the physical-ownership decision tree. The lookup screen (ISBN
-//! and title search together) is the front door, with the camera scanner
-//! behind an explicit button; the mobile shell inverts that. All of them feed
-//! the same [`Stage`] machine. Every screen is plain rsx with no target
-//! gating, so SSR and the first WASM paint agree (rule 07).
+//! branch of the physical-ownership decision tree. The lookup screen (ISBN and
+//! title search together) is the front door, with the camera scanner behind an
+//! explicit button; the mobile shell inverts that. All feed the same [`Stage`]
+//! machine, in plain rsx with no target gating, so SSR and first paint agree.
 
 mod entry;
 mod link;

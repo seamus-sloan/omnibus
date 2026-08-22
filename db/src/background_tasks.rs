@@ -1,10 +1,8 @@
-//! Durable history of background worker task runs (issue #941).
+//! Durable history of background worker task runs.
 //!
-//! The `background_tasks` table (migration `0072`) is the on-disk companion
-//! to `worker::types::Worker`'s in-memory `progress` map: `start_task` is
-//! called once a task begins, `finish_task` once it reaches a terminal
-//! state, and `recent_tasks` backs the admin dashboard. Mirrors how
-//! `error_ring` (fast, in-memory) pairs with the durable `logs` sink.
+//! The `background_tasks` table is the on-disk companion to the worker's
+//! in-memory progress map: `start_task` once a task begins, `finish_task` once
+//! it reaches a terminal state, and `recent_tasks` backing the admin dashboard.
 
 use sqlx::{Row, SqlitePool};
 

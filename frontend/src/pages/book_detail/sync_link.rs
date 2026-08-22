@@ -1,9 +1,8 @@
-//! "Your progress" block + cross-format sync entry panel on the book
-//! detail page (web): per-format progress bars (or the single newest-format
-//! bar once linked), then the unlinked nudge / linked chip / stale
-//! re-confirm warning — each opening the alignment modal. SSR and the
-//! first WASM paint render the same neutral shell; a post-mount effect
-//! fills the state (rule 07).
+//! "Your progress" block and cross-format sync entry panel on the web book
+//! detail page: per-format progress bars (or the single newest-format bar once
+//! linked), then the unlinked nudge, linked chip, or stale re-confirm warning —
+//! each opening the alignment modal. SSR and the first WASM paint render the
+//! same neutral shell; a post-mount effect fills in the state.
 
 use dioxus::prelude::*;
 use omnibus_shared::{AlignmentAudioFile, AlignmentLink, AlignmentView};

@@ -1,9 +1,8 @@
-//! Immersive CBZ comic pager (`/comic/:uuid`). Pure `<img>` rendering
-//! against `/api/ebooks/{uuid}/pages/{n}` — no epub.js, no JS reader
-//! library; the browser's image decoder does the work and this module owns
-//! the state: current page, n±1 prefetch, fit modes, reading-session
-//! capture, and progress mapped onto the Epub-format record via
-//! `omnibus_shared::comic_page_anchor`.
+//! Immersive CBZ comic pager (`/comic/:uuid`). Pure `<img>` rendering against
+//! `/api/ebooks/{uuid}/pages/{n}` — no epub.js, no JS reader library; the
+//! browser's image decoder does the work and this module owns the state:
+//! current page, n±1 prefetch, fit modes, reading-session capture, and progress
+//! mapped onto the Epub-format record via `omnibus_shared::comic_page_anchor`.
 
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;

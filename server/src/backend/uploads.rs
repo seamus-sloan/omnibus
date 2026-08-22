@@ -1,11 +1,8 @@
-//! "Add your own books" upload handlers (web-facing REST).
-//!
-//! Two-step ingest shared by ebooks and audiobooks: `inspect` parses the
-//! upload and returns its embedded metadata for an editable confirm step; the
-//! commit endpoint files the file(s) into the canonical library folder,
-//! reindexes so the indexer owns the insert, then layers the user's edits as
-//! metadata overrides. Audiobooks accept a single `.m4a`/`.m4b` container or a
-//! set of `.mp3` parts filed together into one folder.
+//! "Add your own books" upload handlers (web-facing REST). Two-step ingest
+//! shared by ebooks and audiobooks: `inspect` parses the upload and returns its
+//! embedded metadata for an editable confirm step; commit files the bytes into
+//! the canonical library folder, reindexes so the indexer owns the insert, then
+//! layers the user's edits as metadata overrides.
 
 use std::path::{Path, PathBuf};
 

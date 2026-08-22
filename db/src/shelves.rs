@@ -1,10 +1,8 @@
-//! Shelves data layer: CRUD for smart/manual library shelves, the smart-rule
-//! → SQL membership translation, and visibility-scoped listing.
-//!
+//! Shelves data layer: CRUD for smart and manual library shelves, the
+//! smart-rule to SQL membership translation, and visibility-scoped listing.
 //! Membership is uuid-soft-referenced (`shelf_books.book_uuid`) so a reindex or
-//! scan-root repoint keeps hand-picked shelves intact. Smart membership is
-//! computed on read from the `shelf_rules` conditions; owner-scoped fields
-//! (rating) resolve against the shelf's `owner_user_id`.
+//! scan-root repoint keeps hand-picked shelves intact; smart membership is
+//! computed on read from the `shelf_rules` conditions.
 
 use crate::books::BooksError;
 
@@ -49,8 +47,9 @@ impl From<BooksError> for ShelfError {
         match e {
             BooksError::Db(inner) => Self::Sqlx(inner),
             // The only `BooksError`-returning call here is the uuid resolver,
-            // which never decodes overrides JSON — fold defensively.
+            // which never reads overrides — fold defensively.
             BooksError::OverridesJson(inner) => Self::Sqlx(sqlx::Error::Decode(Box::new(inner))),
+            BooksError::Other(msg) => Self::Sqlx(sqlx::Error::Decode(msg.into())),
         }
     }
 }

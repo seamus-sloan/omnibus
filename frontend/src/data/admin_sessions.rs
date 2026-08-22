@@ -1,4 +1,4 @@
-//! Admin device & session management client wrappers (F5.4, #910). Web hits
+//! Admin device & session management client wrappers. Web hits
 //! the AdminUser-gated `/api/admin/*` REST routes via `gloo-net` (same-origin
 //! cookie session, mirroring `data::users`); SSR builds get no-op stubs so
 //! the Users settings page compiles and hydrates with identical markup.
@@ -92,21 +92,25 @@ async fn ok_or_error(res: gloo_net::http::Response) -> Result<(), String> {
 // keep it compiling. They never run — the modal's data effects only fire
 // after the WASM client mounts.
 
+/// SSR stub — the modal fetches only after the WASM client mounts.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn list_user_sessions(_user_id: i64) -> Result<Vec<SessionView>, String> {
     Ok(Vec::new())
 }
 
+/// SSR stub — the modal fetches only after the WASM client mounts.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn list_user_devices(_user_id: i64) -> Result<Vec<DeviceView>, String> {
     Ok(Vec::new())
 }
 
+/// SSR stub — the modal mutates only after the WASM client mounts.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn revoke_user_session(_session_id: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// SSR stub — the modal mutates only after the WASM client mounts.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn revoke_user_device(_device_id: i64) -> Result<(), String> {
     Ok(())

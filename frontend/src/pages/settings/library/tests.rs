@@ -1,10 +1,8 @@
 //! Tests for the pure library-summary formatter, the settings-save
 //! rescan-interval guard, and the "Scan Library" maintenance handler. The
-//! latter two run inside a `VirtualDom::new(...).rebuild_in_place()` (the
-//! pattern in `frontend/src/pages/reader/prefs/tests.rs`) so `Signal::new`
-//! has a runtime, driven by a synthetic `FormEvent`/`MouseEvent` built from
-//! `SerializedFormData`/`SerializedMouseData` — the futures they spawn are
-//! never polled, so no network call actually fires.
+//! latter two run inside a `VirtualDom::new(...).rebuild_in_place()` so
+//! `Signal::new` has a runtime, driven by synthetic form and mouse events; the
+//! futures they spawn are never polled, so no network call actually fires.
 
 use std::rc::Rc;
 

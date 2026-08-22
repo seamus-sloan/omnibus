@@ -1,13 +1,8 @@
-//! Removed bucket: every uuid whose file disappeared keeps its `books` row.
-//! One chunked DELETE drops only the book's own (native) `book_files` rows —
-//! a row still backed by a `merged_uuids` entry is a cross-format attachment
-//! and survives — and one chunked UPDATE flags each book missing for
-//! `missing_files::gc_books_missing_files`. Metadata, taxonomy links, and the
-//! FTS row stay, so the book remains in browse/search; the grid and facets
-//! hide it via their own `EXISTS book_files` filter. Idempotent — a re-run on
-//! an already-fileless row deletes zero `book_files` and the flag UPDATE
-//! no-ops (the `is_missing_files = 0` guard preserves the original
-//! `missing_files_since`).
+//! Removed bucket: every uuid whose file disappeared keeps its `books` row. One
+//! chunked DELETE drops only the book's own native `book_files` rows — a row
+//! still backed by a `merged_uuids` entry is a cross-format attachment and
+//! survives — and one chunked UPDATE flags each book missing. Idempotent: a
+//! re-run on an already-fileless row deletes nothing and the flag UPDATE no-ops.
 
 use sqlx::Transaction;
 
