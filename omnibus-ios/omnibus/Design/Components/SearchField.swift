@@ -13,6 +13,11 @@ struct SearchField: View {
     @Binding var text: String
     var prompt: String
     var onSubmit: () -> Void = {}
+    /// Applied to the inner `TextField`, so a UI test can address it directly.
+    /// Resolving one by identifier is a keyed lookup; `textFields.firstMatch`
+    /// walks the whole hierarchy, which on a screen this dense is slow enough
+    /// on a loaded runner to be the thing that times out.
+    var identifier: String?
 
     @Environment(\.palette) private var palette
     @FocusState private var focused: Bool
@@ -51,6 +56,7 @@ struct SearchField: View {
                 .submitLabel(.search)
                 .focused($focused)
                 .onSubmit(onSubmit)
+                .accessibilityIdentifier(identifier ?? "")
 
             if !text.isEmpty {
                 Button {

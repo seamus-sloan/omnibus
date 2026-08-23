@@ -15,7 +15,14 @@ import XCTest
 
 final class ShellChromeTests: XCTestCase {
     /// One render's worth of patience on the slowest machine this runs on.
-    private let renderTimeout: TimeInterval = 60
+    ///
+    /// This was 60s, which is below what a *passing* run of these tests costs
+    /// on CI: the green attempts measured 67.7s and 131.2s end to end, against
+    /// 10–15s locally. A per-step cap under the whole-test duration trips
+    /// whenever any one step lands on the slow side of that spread, which is
+    /// what made both tests fail roughly two runs in three on CI while never
+    /// failing here — including under a synthetic load average of 67.
+    private let renderTimeout: TimeInterval = 180
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -58,7 +65,11 @@ final class ShellChromeTests: XCTestCase {
         let app = launchToShell()
         XCTAssertTrue(switchTab(app, to: "Search", expecting: "Browse"), "search tab should render")
 
-        let field = app.textFields.firstMatch
+        // Addressed by identifier for the same reason the Kindle field below
+        // is: `textFields.firstMatch` resolves by walking the hierarchy, and
+        // the Search screen is dense enough for that to be a real cost on a
+        // slow runner.
+        let field = app.textFields["search-query"]
         XCTAssertTrue(field.waitForExistence(timeout: renderTimeout), "search field should render")
         let restingTop = tabBarTop(app)
 
