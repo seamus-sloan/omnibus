@@ -179,10 +179,10 @@ const OVERRIDE_COVER_JPEG_QUALITY: u8 = 85;
 pub(crate) fn normalize_override_cover(mime: &str, bytes: &[u8]) -> (String, Vec<u8>) {
     let passthrough = || (mime.to_owned(), bytes.to_vec());
 
-    let Some(source) = image::guess_format(bytes)
-        .ok()
-        .and_then(ImageFormat::from_guessed)
-    else {
+    let Ok(guessed) = image::guess_format(bytes) else {
+        return passthrough();
+    };
+    let Some(source) = ImageFormat::from_guessed(guessed) else {
         return passthrough();
     };
     // GIF is neither transcoded nor resized: `image` decodes only the first
@@ -196,13 +196,30 @@ pub(crate) fn normalize_override_cover(mime: &str, bytes: &[u8]) -> (String, Vec
         other => other,
     };
 
+    // Fast path for the common upload: a cover already in its target format
+    // is only ever rejected for being too tall, and the header carries its
+    // height. Decoding the pixels to learn that would allocate ~96 MB for a
+    // 24 MP JPEG purely to conclude there is nothing to do.
+    //
+    // A header we can't parse falls through to the full decode rather than
+    // passing through here, so a file whose dimensions are unreadable but
+    // whose pixels aren't still gets normalized.
+    if target == source
+        && image::ImageReader::with_format(std::io::Cursor::new(bytes), guessed)
+            .into_dimensions()
+            .is_ok_and(|(_, height)| height <= MAX_OVERRIDE_COVER_HEIGHT)
+    {
+        return passthrough();
+    }
+
     let Ok(decoded) = image::load_from_memory(bytes) else {
         return passthrough();
     };
     let oversized = decoded.height() > MAX_OVERRIDE_COVER_HEIGHT;
 
-    // Re-encoding a correctly-sized image in its own format would only cost
-    // it a generation of quality for no gain.
+    // Reachable only when the header probe above couldn't read dimensions.
+    // Re-encoding a correctly-sized image in its own format would cost it a
+    // generation of quality for no gain.
     if target == source && !oversized {
         return passthrough();
     }

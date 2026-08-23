@@ -400,3 +400,35 @@ fn normalize_override_cover_passes_through_undecodable_bytes() {
     assert_eq!(mime, "image/jpeg");
     assert_eq!(bytes, b"not an image at all");
 }
+
+#[test]
+fn normalize_override_cover_passes_through_a_within_cap_image_whose_pixels_are_truncated() {
+    // Pins the header-only fast path: a correctly-sized cover is decided on
+    // its dimensions alone, without a full pixel decode. The fixture is
+    // chosen so the two are distinguishable — its header parses, its pixels
+    // don't — and the assertions below prove it sits on that boundary.
+    // PNG rather than JPEG: `IHDR` carries the dimensions up front and each
+    // `IDAT` chunk is CRC-checked, so a truncation reliably splits the two.
+    // A truncated JPEG decodes fine — its entropy-coded scan simply ends.
+    let full = raster(400, 600, image::ImageFormat::Png);
+    let truncated = full[..full.len() / 2].to_vec();
+
+    assert!(
+        image::ImageReader::with_format(std::io::Cursor::new(&truncated), image::ImageFormat::Png,)
+            .into_dimensions()
+            .is_ok(),
+        "fixture must still have a readable header"
+    );
+    assert!(
+        image::load_from_memory(&truncated).is_err(),
+        "fixture must not survive a full decode"
+    );
+
+    let (mime, bytes) = normalize_override_cover("image/png", &truncated);
+
+    assert_eq!(mime, "image/png");
+    assert_eq!(
+        bytes, truncated,
+        "a cover that needs no work must be stored untouched, decode or not"
+    );
+}
