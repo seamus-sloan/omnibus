@@ -328,15 +328,20 @@ pub(super) fn format_hms(seconds: f64) -> String {
     }
 }
 
-/// Rate-adjusted "time left" for a real (1x) `remaining` duration; falls back
-/// to `remaining` unscaled when `rate` is non-finite or non-positive. Shared
-/// by the web and mobile players and the landing resume hero so every
-/// remaining-time readout scales the same way.
-pub(crate) fn remaining_at_rate(remaining: f64, rate: f64) -> f64 {
+/// Wall-clock seconds a listener at `rate` experiences for a real (1x)
+/// book-time span — remaining, elapsed, or a whole duration; falls back to
+/// `seconds` unscaled when `rate` is non-finite or non-positive. Shared by
+/// the web and mobile players and the landing resume hero so every readout
+/// on a row shares one basis: a 1x elapsed or total label beside a
+/// rate-adjusted remaining label disagrees with its own row the moment the
+/// speed leaves 1x (#2108). Positions that *name a place* in the book —
+/// bookmark timestamps, chapter start times, chapter-list lengths — stay 1x
+/// book-time; only elapsed/remaining/total rows scale.
+pub(crate) fn remaining_at_rate(seconds: f64, rate: f64) -> f64 {
     if !rate.is_finite() || rate <= 0.0 {
-        return remaining;
+        return seconds;
     }
-    remaining / rate
+    seconds / rate
 }
 
 /// Fire-and-forget POST `/api/rpc/progress` with the audio update.
