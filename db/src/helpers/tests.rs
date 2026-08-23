@@ -204,9 +204,11 @@ fn build_fts_match_returns_none_for_empty_input() {
 
 #[test]
 fn build_fts_match_returns_none_when_only_empty_facets() {
-    // `author:` / `series:` / `tag:` with no value are dropped silently.
+    // `author:` / `series:` / `tag:` / `genre:` with no value are dropped
+    // silently.
     assert!(build_fts_match("author:").is_none());
     assert!(build_fts_match("series:   tag:").is_none());
+    assert!(build_fts_match("genre:").is_none());
 }
 
 #[test]
@@ -248,6 +250,25 @@ fn build_fts_match_emits_series_and_tag_facets() {
     assert_eq!(
         build_fts_match("tag:fiction").as_deref(),
         Some("{tags} : (\"fiction\"*)")
+    );
+}
+
+#[test]
+fn build_fts_match_emits_genre_facet() {
+    assert_eq!(
+        build_fts_match("genre:horror").as_deref(),
+        Some("{genres} : (\"horror\"*)")
+    );
+}
+
+#[test]
+fn build_fts_match_keeps_genre_and_tag_facets_in_separate_clauses() {
+    // The two vocabularies index into different columns, so a query naming
+    // both must not collapse into one filter — a book tagged "horror" but
+    // not genred "horror" has to fall out.
+    assert_eq!(
+        build_fts_match("genre:horror tag:classic").as_deref(),
+        Some("{tags} : (\"classic\"*) AND {genres} : (\"horror\"*)")
     );
 }
 

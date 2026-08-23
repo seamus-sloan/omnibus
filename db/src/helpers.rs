@@ -252,21 +252,34 @@ pub(crate) fn join_names<'a, I: IntoIterator<Item = &'a str>>(iter: I) -> String
     out
 }
 
+/// The bm25 ranking expression shared by the two FTS5 MATCH scans — the
+/// `/search` read path (`books::search`) and the palette's books arm. One
+/// weight per `books_fts` column in declaration order (title, authors,
+/// series, tags, description, isbn, genres): title dominates, then authors
+/// and series. The rest stay neutral because [`build_fts_match`]'s column
+/// filters keep them from contributing to a free-text score.
+///
+/// Hoisted to one constant because a *short* tuple is silent — fts5 defaults
+/// the missing weights to 1.0 — so a column added to the index could leave
+/// one scan ranking on a stale tuple with nothing to signal it.
+pub(crate) const FTS_BM25_RANK: &str = "bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0, 1.0)";
+
 /// Parse a user-typed query into a single FTS5 MATCH expression.
 ///
-/// Recognises `author:foo`, `series:foo`, `tag:foo` (case-insensitive on
-/// the prefix) and emits column-scoped clauses. Everything else falls
-/// through to the default `{title authors series}` filter as free-text
-/// terms, preserving the existing scope and prefix-on-last semantics from
-/// [`sanitize_fts_query`].
+/// Recognises `author:foo`, `series:foo`, `tag:foo`, `genre:foo`
+/// (case-insensitive on the prefix) and emits column-scoped clauses.
+/// Everything else falls through to the default `{title authors series}`
+/// filter as free-text terms, preserving the existing scope and
+/// prefix-on-last semantics from [`sanitize_fts_query`].
 ///
 /// Returns `None` when nothing usable remains (empty input, or only empty
-/// `author:` / `series:` / `tag:` tokens) so callers can short-circuit
-/// instead of submitting an empty `MATCH`.
+/// `author:` / `series:` / `tag:` / `genre:` tokens) so callers can
+/// short-circuit instead of submitting an empty `MATCH`.
 pub fn build_fts_match(raw: &str) -> Option<String> {
     let mut author_tokens: Vec<&str> = Vec::new();
     let mut series_tokens: Vec<&str> = Vec::new();
     let mut tag_tokens: Vec<&str> = Vec::new();
+    let mut genre_tokens: Vec<&str> = Vec::new();
     let mut free_tokens: Vec<&str> = Vec::new();
 
     for token in raw.split_whitespace() {
@@ -275,7 +288,7 @@ pub fn build_fts_match(raw: &str) -> Option<String> {
             if value.is_empty() {
                 // `author:` with no value — drop silently rather than
                 // treating it as free-text or erroring.
-                if matches!(lower.as_str(), "author" | "series" | "tag") {
+                if matches!(lower.as_str(), "author" | "series" | "tag" | "genre") {
                     continue;
                 }
             }
@@ -290,6 +303,10 @@ pub fn build_fts_match(raw: &str) -> Option<String> {
                 }
                 "tag" => {
                     tag_tokens.push(value);
+                    continue;
+                }
+                "genre" => {
+                    genre_tokens.push(value);
                     continue;
                 }
                 _ => {}
@@ -308,9 +325,12 @@ pub fn build_fts_match(raw: &str) -> Option<String> {
     if let Some(s) = sanitize_fts_tokens(&tag_tokens) {
         clauses.push(format!("{{tags}} : ({s})"));
     }
+    if let Some(s) = sanitize_fts_tokens(&genre_tokens) {
+        clauses.push(format!("{{genres}} : ({s})"));
+    }
     if let Some(s) = sanitize_fts_tokens(&free_tokens) {
         // Default scope: title/authors/series (matches F0.4 design — keeps
-        // short prefix queries from dragging in generic tag/description
+        // short prefix queries from dragging in generic tag/genre/description
         // values).
         clauses.push(format!("{{title authors series}} : ({s})"));
     }
