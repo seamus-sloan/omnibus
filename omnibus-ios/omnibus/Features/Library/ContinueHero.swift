@@ -171,20 +171,31 @@ private struct HeroCard: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Opens book details")
+                // The card's height is fixed, so a stack with nothing left to
+                // give takes it from the title — a two-line one silently became
+                // one truncated line the moment anything below asked for space.
+                .layoutPriority(1)
 
                 Text(book.authorDisplay)
                     .font(.ui(12.5))
                     .foregroundStyle(palette.ink2Color)
                     .lineLimit(1)
 
-                Spacer(minLength: 4)
+                // The stack's own 5pt already separates the author from the
+                // bar; this only pushes the bottom block down when there's
+                // room, so it must be free to yield all of it when there isn't.
+                Spacer(minLength: 0)
 
                 // A CFI-only EPUB resume point has no honest percentage,
                 // so there is no bar to draw for one. The band the bar
                 // would occupy goes to when you left off instead of sitting
                 // empty — which is what made the card read as underfilled.
                 if let fraction {
+                    // A bare rule carries no leading of its own, so the stack's
+                    // spacing alone left it sitting on the Read pill's cap. The
+                    // text branch below needs none — its line box is the gap.
                     ProgressBar(fraction: fraction, tint: rule)
+                        .padding(.bottom, 5)
                 } else {
                     // Sentence case, quietly: the eyebrow above is already
                     // set in caps, and two shouting lines in one card read
