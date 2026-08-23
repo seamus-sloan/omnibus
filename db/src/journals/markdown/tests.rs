@@ -61,6 +61,36 @@ fn render_leaves_unterminated_spoiler_marker_literal() {
 }
 
 #[test]
+fn render_emits_ordered_lists_and_keeps_nested_lists_nested() {
+    let html = render("1. first\n2. second\n\n- parent\n  - child");
+    assert!(html.contains("<ol>"), "ordered list survives: {html}");
+    assert!(html.contains("<li>first</li>"), "got: {html}");
+    assert!(
+        html.contains("<li>parent\n<ul>\n<li>child</li>"),
+        "nested list stays inside its parent item: {html}"
+    );
+}
+
+#[test]
+fn render_promotes_single_newlines_to_hard_breaks() {
+    // The live editor shows one visual line per source line; a CommonMark
+    // soft break would collapse that newline to a space on publish.
+    let html = render("line one\nline two");
+    assert!(html.contains("<br"), "single newline becomes <br>: {html}");
+}
+
+#[test]
+fn render_keeps_lazy_blockquote_continuation_lines_on_their_own_rows() {
+    let html = render("> quoted one\nquoted two\nquoted three");
+    assert!(html.contains("<blockquote>"), "got: {html}");
+    let quote_has_breaks = html
+        .split("<blockquote>")
+        .nth(1)
+        .is_some_and(|q| q.matches("<br").count() >= 2);
+    assert!(quote_has_breaks, "each quoted line keeps its row: {html}");
+}
+
+#[test]
 fn render_emits_task_list_checkboxes() {
     let html = render("- [x] done\n- [ ] todo");
     // A checked + an unchecked disabled checkbox survive sanitization.

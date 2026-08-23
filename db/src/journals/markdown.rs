@@ -4,7 +4,7 @@
 //! regions in a native `<button class="spoiler">` so keyboard and screen-reader
 //! users get the same reveal affordance as mouse users.
 
-use pulldown_cmark::{html, Options, Parser};
+use pulldown_cmark::{html, Event, Options, Parser};
 
 /// Path prefix every embedded journal image must be served from. The
 /// sanitizer drops any `<img>` whose `src` points elsewhere, so entries can't
@@ -21,7 +21,14 @@ pub fn render(md: &str) -> String {
     // render as a disabled `<input type="checkbox">` which the sanitizer keeps
     // in a tightly constrained form (see `sanitize`).
     opts.insert(Options::ENABLE_TASKLISTS);
-    let parser = Parser::new_ext(&with_spoilers, opts);
+    // The live editor shows one visual line per source line, so a single
+    // newline the author can see must survive publishing. CommonMark's soft
+    // break would collapse it to a space — promote it to a hard `<br>` so a
+    // multi-line quote (or paragraph) keeps its line structure.
+    let parser = Parser::new_ext(&with_spoilers, opts).map(|ev| match ev {
+        Event::SoftBreak => Event::HardBreak,
+        ev => ev,
+    });
     let mut raw_html = String::new();
     html::push_html(&mut raw_html, parser);
     wrap_figures(&sanitize(&raw_html))

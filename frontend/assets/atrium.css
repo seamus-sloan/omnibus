@@ -1427,8 +1427,10 @@ html, body { overscroll-behavior: none; }
   line-height: 1.7;
   color: var(--ink-1);
 }
-.bd-journal-entry-body :first-child { margin-top: 0; }
-.bd-journal-entry-body :last-child { margin-bottom: 0; }
+.bd-journal-preview > :first-child,
+.bd-journal-entry-body > :first-child { margin-top: 0; }
+.bd-journal-preview > :last-child,
+.bd-journal-entry-body > :last-child { margin-bottom: 0; }
 .bd-journal-preview h1,
 .bd-journal-entry-body h1,
 .bd-journal-preview h2,
@@ -1450,10 +1452,55 @@ html, body { overscroll-behavior: none; }
   line-height: 1.35;
   margin: 0 0 10px;
 }
+/* h3–h6 too — the renderer emits every heading depth, and an unstyled one
+   falls through to the `.atrium h3` display-serif rule, which reads as a
+   different typeface entirely inside an entry. */
+.bd-journal-preview h3,
+.bd-journal-entry-body h3,
+.bd-journal-preview h4,
+.bd-journal-entry-body h4,
+.bd-journal-preview h5,
+.bd-journal-entry-body h5,
+.bd-journal-preview h6,
+.bd-journal-entry-body h6 {
+  font-family: var(--sans);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink-0);
+  font-size: 1.1em;
+  line-height: 1.4;
+  margin: 0 0 10px;
+}
+/* Block spacing — shared by the published body and the composer's preview
+   tab so the preview is an honest rehearsal of the published entry. 14px
+   (~1em) so a blank line in the source reads as a visible gap, not a
+   line-wrap. */
+.bd-journal-preview p,
 .bd-journal-entry-body p,
+.bd-journal-preview ul,
 .bd-journal-entry-body ul,
+.bd-journal-preview ol,
 .bd-journal-entry-body ol,
-.bd-journal-entry-body blockquote { margin: 0 0 10px; }
+.bd-journal-preview blockquote,
+.bd-journal-entry-body blockquote { margin: 0 0 14px; }
+/* The global `* { padding: 0 }` reset strips the UA's list indent, which
+   pushes `outside` markers into (and past) the card gutter and renders
+   nested lists flush with their parents — restore it here. */
+.bd-journal-preview ul,
+.bd-journal-entry-body ul,
+.bd-journal-preview ol,
+.bd-journal-entry-body ol { padding-left: 1.4em; }
+.bd-journal-preview li > ul,
+.bd-journal-entry-body li > ul,
+.bd-journal-preview li > ol,
+.bd-journal-entry-body li > ol { margin-bottom: 0; }
+.bd-journal-preview blockquote,
+.bd-journal-entry-body blockquote {
+  /* Mirrors the editor's `.cm-quote` treatment. */
+  border-left: 3px solid var(--accent);
+  padding-left: 8px;
+  font-style: italic;
+}
 .bd-journal-entry-body-collapsed {
   max-height: 230px;
   overflow: hidden;
