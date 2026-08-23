@@ -24,6 +24,8 @@ mod interop;
 mod mini;
 mod sheets;
 mod state;
+#[cfg(test)]
+mod tests;
 mod view;
 
 use bookmarks_sheet::{use_mobile_bookmarks, BookmarksSheet, MobileBookmarks};

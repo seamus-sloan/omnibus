@@ -122,8 +122,8 @@ pub(super) struct ChapterMapProps {
     pub duration: f64,
     /// Seconds remaining in the whole book.
     pub remaining: f64,
-    /// Current playback rate — the remaining readout divides by it so "time
-    /// left" is wall-clock listening time, not book time.
+    /// Current playback rate — every time readout (elapsed, remaining, total)
+    /// divides by it so the row is wall-clock listening time, not book time.
     pub rate: f64,
     /// Index of the currently-playing chapter.
     pub current_chapter_index: usize,
@@ -349,5 +349,66 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
                 }
             }
         }
+    }
+}
+
+// SSR render-smoke coverage of the time row's one-basis contract — separate
+// module because it needs the `server` feature (`dioxus::ssr`). The drag
+// bubble can't be exercised here (it renders only mid-scrub, behind a
+// signal), but it shares the elapsed label's exact expression.
+#[cfg(all(test, feature = "server"))]
+mod render_tests {
+    use super::*;
+    use crate::test_support::render;
+
+    #[component]
+    fn MapHarness(rate: f64) -> Element {
+        // Two 30-minute chapters, 20 book-minutes in: at 2x the row must
+        // read 10:00 elapsed / 20:00 remaining / 30:00 total.
+        rsx! {
+            ChapterMap {
+                chapters: vec![
+                    ChapterInfo {
+                        ordinal: 1,
+                        title: "One".into(),
+                        start_seconds: 0.0,
+                        duration_seconds: 1800.0,
+                    },
+                    ChapterInfo {
+                        ordinal: 2,
+                        title: "Two".into(),
+                        start_seconds: 1800.0,
+                        duration_seconds: 1800.0,
+                    },
+                ],
+                elapsed: 1200.0,
+                duration: 3600.0,
+                remaining: 2400.0,
+                rate,
+                current_chapter_index: 0,
+                on_seek: EventHandler::new(|_| {}),
+                buffering: false,
+            }
+        }
+    }
+
+    #[test]
+    fn chapter_map_renders_every_time_label_on_the_rate_adjusted_basis() {
+        let html = render(rsx! { MapHarness { rate: 2.0 } });
+        assert!(html.contains("10:00"), "{html}");
+        assert!(html.contains("20:00 remaining"), "{html}");
+        assert!(html.contains("30:00"), "{html}");
+        // The seek range stays in 1x book-time — it's a coordinate, not a
+        // readout.
+        assert!(html.contains("value=\"1200\""), "{html}");
+        assert!(html.contains("max=\"3600\""), "{html}");
+    }
+
+    #[test]
+    fn chapter_map_renders_unchanged_labels_at_1x() {
+        let html = render(rsx! { MapHarness { rate: 1.0 } });
+        assert!(html.contains("20:00"), "{html}");
+        assert!(html.contains("40:00 remaining"), "{html}");
+        assert!(html.contains("1:00:00"), "{html}");
     }
 }
