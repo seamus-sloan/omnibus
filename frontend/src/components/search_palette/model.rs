@@ -1,7 +1,7 @@
 //! Flat-list item model + small helpers shared between the overlay, the
 //! keyboard handler, and the results list. The overlay builds a flat
 //! `Vec<FlatItem>` from grouped `PaletteResults` so arrow-key navigation
-//! has a single index space across Book / Author / Series / Tag rows.
+//! has a single index space across Book / Author / Series / Tag / Genre rows.
 
 use omnibus_shared::PaletteResults;
 
@@ -9,12 +9,16 @@ use omnibus_shared::PaletteResults;
 /// Books carry the stable `uuid` so the palette can build `/books/:uuid`
 /// URLs without a second round-trip — [`omnibus_shared::PaletteBookHit`]
 /// now includes the uuid alongside `id`.
+///
+/// `Genre` is keyed on its name alone: genres have no row to navigate to, so
+/// [`omnibus_shared::PaletteGenreHit`] carries no id (migration `0066`).
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum FlatItem {
     Book { uuid: String, title: String },
     Author { id: i64, name: String },
     Series { id: i64, name: String },
     Tag { id: i64, name: String },
+    Genre { name: String },
 }
 
 /// Build a flat ordered list of all selectable items from the results.
@@ -45,6 +49,11 @@ pub(super) fn build_flat_items(results: &Option<PaletteResults>) -> Vec<FlatItem
         items.push(FlatItem::Tag {
             id: t.id,
             name: t.name.clone(),
+        });
+    }
+    for g in &r.genres {
+        items.push(FlatItem::Genre {
+            name: g.name.clone(),
         });
     }
     items

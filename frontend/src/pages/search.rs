@@ -1,13 +1,14 @@
 //! Search results page — the full page reached from the command palette.
 //! Reuses the `data::search_palette` RPC and groups hits by type (Books,
-//! Authors, Series, Tags) with the matched term highlighted, an "On this
-//! page" jump rail, and a tags-first ordering when the query matches tag
+//! Authors, Series, Tags, Genres) with the matched term highlighted, an "On
+//! this page" jump rail, and a tags-first ordering when the query matches tag
 //! names.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::{
-    PaletteAuthorHit, PaletteBookHit, PaletteResults, PaletteSeriesHit, PaletteTagHit,
+    PaletteAuthorHit, PaletteBookHit, PaletteGenreHit, PaletteResults, PaletteSeriesHit,
+    PaletteTagHit,
 };
 
 use crate::format::plural;
@@ -92,6 +93,7 @@ enum Section {
     Authors,
     Series,
     Tags,
+    Genres,
 }
 
 impl Section {
@@ -101,6 +103,7 @@ impl Section {
             Section::Authors => "Authors",
             Section::Series => "Series",
             Section::Tags => "Tags",
+            Section::Genres => "Genres",
         }
     }
 
@@ -111,6 +114,7 @@ impl Section {
             Section::Authors => "results-authors",
             Section::Series => "results-series",
             Section::Tags => "results-tags",
+            Section::Genres => "results-genres",
         }
     }
 
@@ -120,6 +124,7 @@ impl Section {
             Section::Authors => r.author_total,
             Section::Series => r.series_total,
             Section::Tags => r.tag_total,
+            Section::Genres => r.genre_total,
         }
     }
 }
@@ -210,12 +215,14 @@ fn section_order(r: &PaletteResults, q: &str) -> (Vec<Section>, bool) {
         Section::Authors,
         Section::Series,
         Section::Tags,
+        Section::Genres,
     ];
     let tags_first = [
         Section::Tags,
         Section::Books,
         Section::Authors,
         Section::Series,
+        Section::Genres,
     ];
     let order: Vec<Section> = if tag_match { tags_first } else { canonical }
         .into_iter()
@@ -239,6 +246,7 @@ fn section_node(
         Section::Authors => authors_group(r, q),
         Section::Series => series_group(r, q),
         Section::Tags => tags_group(r, q, tag_match),
+        Section::Genres => genres_group(r, q),
     }
 }
 
@@ -401,6 +409,42 @@ fn tag_chip(tag: &PaletteTagHit, q: &str, q_lower: &str) -> Element {
     }
 }
 
+fn genres_group(r: &PaletteResults, q: &str) -> Element {
+    let q_lower = q.to_lowercase();
+    rsx! {
+        section { id: "{Section::Genres.anchor()}", class: "search-section",
+            {section_head(Section::Genres, r.genre_total, Some("matched in genre name"))}
+            div { class: "search-tags",
+                for genre in r.genres.iter().cloned() {
+                    {genre_chip(&genre, q, &q_lower)}
+                }
+            }
+        }
+    }
+}
+
+/// A genre chip. Unlike [`tag_chip`] there is no detail route to offer — a
+/// genre has no navigable row (migration `0066`) — so the only destination is
+/// a `genre:`-refined search, which is also the chip's whole purpose.
+fn genre_chip(genre: &PaletteGenreHit, q: &str, q_lower: &str) -> Element {
+    let matched = genre.name.to_lowercase().contains(q_lower);
+    let class = if matched {
+        "chip search-tag search-tag-matched"
+    } else {
+        "chip search-tag"
+    };
+    rsx! {
+        Link {
+            key: "{genre.name}",
+            to: Route::Search { query: format!("genre:{}", genre.name) },
+            class: "{class}",
+            "data-testid": "search-genre-row",
+            {highlight(&genre.name, q)}
+            span { class: "search-tag-count", " \u{00b7} {genre.book_count}" }
+        }
+    }
+}
+
 /// Right-rail "On this page" jump list plus a context card. A tag-name match
 /// offers the tag cloud; everything else just lists the sections.
 fn on_this_page(order: &[Section], r: &PaletteResults, tag_match: bool, q: &str) -> Element {
@@ -538,6 +582,9 @@ fn summary_line(r: &PaletteResults) -> String {
     if r.tag_total > 0 {
         parts.push(format!("{} tag{}", r.tag_total, plural(r.tag_total)));
     }
+    if r.genre_total > 0 {
+        parts.push(format!("{} genre{}", r.genre_total, plural(r.genre_total)));
+    }
     parts.push("fts5".to_string());
     parts.push(format!("{}ms", r.duration_ms));
     parts.join(" \u{00b7} ")
@@ -562,8 +609,10 @@ mod tests {
             author_total: 2,
             series_total: 0,
             tag_total: 3,
+            genre_total: 1,
+            ..Default::default()
         };
-        assert_eq!(r.total_count(), 45);
+        assert_eq!(r.total_count(), 46);
     }
 
     #[test]
@@ -575,12 +624,24 @@ mod tests {
             author_total: 2,
             series_total: 2,
             tag_total: 4,
+            genre_total: 3,
             ..Default::default()
         };
         assert_eq!(
             summary_line(&r),
-            "2 titles \u{00b7} 2 authors \u{00b7} 2 series \u{00b7} 4 tags \u{00b7} fts5 \u{00b7} 24ms"
+            "2 titles \u{00b7} 2 authors \u{00b7} 2 series \u{00b7} 4 tags \u{00b7} 3 genres \u{00b7} fts5 \u{00b7} 24ms"
         );
+    }
+
+    #[test]
+    fn summary_line_singularizes_a_lone_genre() {
+        let r = PaletteResults {
+            query: "noir".into(),
+            duration_ms: 5,
+            genre_total: 1,
+            ..Default::default()
+        };
+        assert_eq!(summary_line(&r), "1 genre \u{00b7} fts5 \u{00b7} 5ms");
     }
 
     #[test]

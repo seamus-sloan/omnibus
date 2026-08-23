@@ -25,6 +25,16 @@ test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
+/** Assign `genres` to the target book, bypassing the UI. Setup only — the
+ *  edit-page and table-cell tests below cover the assign flows themselves. */
+async function assignGenres(request: APIRequestContext, genres: string[]) {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  const resp = await request.post("/api/rpc/ebook/overrides", {
+    data: { uuid, overrides: { genres } },
+  });
+  expect(resp.status(), "genre seed must succeed").toBe(200);
+}
+
 /** Drop every override on the target so each test starts genre-free. */
 async function clearOverrides(request: APIRequestContext) {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
@@ -172,6 +182,94 @@ test("assigns a genre inline from the table and reflects it in the cell", async 
   await expect(cell).toContainText("Techno-Thriller");
   await chipInput.press("Escape");
   await expect(cell).toContainText("Techno-Thriller");
+});
+
+// ── Search ───────────────────────────────────────────────────────────
+//
+// Genres reach `books_fts` on the override save itself, so a genre is
+// searchable with no reindex in between. The palette is the only web entry
+// point to `/search/:query`, so these drive it rather than deep-linking.
+
+/** Open the command palette and type `query` into its input. */
+async function openPaletteAndType(
+  page: import("@playwright/test").Page,
+  query: string,
+) {
+  await page.getByTestId("search-trigger").click();
+  const input = page.getByTestId("sp-input");
+  await expect(input).toBeVisible();
+  await input.fill(query);
+}
+
+test("groups an assigned genre in the palette and refines the query to it", async ({
+  page,
+  request,
+}) => {
+  // A name no fixture title, author, series, or tag carries, so the only
+  // thing that can match it is the genre itself.
+  const GENRE = "Solarpunk";
+  await assignGenres(request, [GENRE]);
+
+  await gotoReady(page, "/");
+  await openPaletteAndType(page, GENRE);
+
+  const row = page.getByTestId("sp-genre-row");
+  await expect.poll(async () => row.count()).toBe(1);
+  await expect(row).toContainText(GENRE);
+  await expect(row).toContainText("1 book");
+
+  // Selecting the row refines to the `genre:` facet and lands on the
+  // full-page results, where the book itself is the hit.
+  await row.click();
+  await expect(page).toHaveURL(new RegExp(`/search/genre:${GENRE}$`));
+  await expect(page.getByTestId("search-book-row")).toContainText(TARGET.title);
+});
+
+test("keeps a genre name out of free-text results", async ({
+  page,
+  request,
+}) => {
+  // Free text stays scoped to {title authors series}: a genre-only match
+  // must not surface the book as a *book* hit, the same way a tag-only
+  // match doesn't. The Genres group still offers it as a refinement.
+  const GENRE = "Solarpunk";
+  await assignGenres(request, [GENRE]);
+
+  await gotoReady(page, "/");
+  await openPaletteAndType(page, GENRE);
+  await expect
+    .poll(async () => page.getByTestId("sp-genre-row").count())
+    .toBe(1);
+
+  const bookRows = page.getByTestId("sp-book-row");
+  await expect
+    .poll(async () => {
+      const texts = await bookRows.allInnerTexts();
+      return texts.filter((t) => t.includes(TARGET.title)).length;
+    })
+    .toBe(0);
+});
+
+test("drops a book from genre-scoped results once its genres are cleared", async ({
+  page,
+  request,
+}) => {
+  const GENRE = "Solarpunk";
+  await assignGenres(request, [GENRE]);
+  await gotoReady(page, "/");
+  await openPaletteAndType(page, GENRE);
+  await expect
+    .poll(async () => page.getByTestId("sp-genre-row").count())
+    .toBe(1);
+
+  // An empty list is the clear-all override; the index has to follow it.
+  await assignGenres(request, []);
+
+  await gotoReady(page, "/");
+  await openPaletteAndType(page, GENRE);
+  await expect
+    .poll(async () => page.getByTestId("sp-genre-row").count())
+    .toBe(0);
 });
 
 test("surfaces a failed genre save by leaving the cell unchanged", async ({

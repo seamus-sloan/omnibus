@@ -85,8 +85,8 @@ fn move_selection(
 }
 
 /// Handle Enter: open the highlighted row once the user has engaged keyboard
-/// nav (Books/Authors/Series to their detail pages; Tags fall through to
-/// `/search`), else route to the full-page `/search/:query` view.
+/// nav (Books/Authors/Series to their detail pages; Tags and Genres fall
+/// through to `/search`), else route to the full-page `/search/:query` view.
 fn handle_enter(
     mut open: PaletteOpen,
     selected: Signal<usize>,
@@ -111,6 +111,11 @@ fn handle_enter(
                 FlatItem::Tag { name, .. } => {
                     nav.push(Route::Search {
                         query: facet_query("tag", name),
+                    });
+                }
+                FlatItem::Genre { name } => {
+                    nav.push(Route::Search {
+                        query: facet_query("genre", name),
                     });
                 }
             }

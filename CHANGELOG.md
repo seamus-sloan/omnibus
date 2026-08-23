@@ -31,6 +31,10 @@ recent releases are recorded below; everything earlier is available via the
   on save, with no reindex in between. Typing a bare word still searches only
   titles, authors, and series, so a book whose only match is a genre name
   doesn't crowd out the ones you meant (#2099)
+- The command palette and the `/search` page now carry a **Genres** group
+  alongside Tags, and picking one narrows the search to that genre. A library
+  holding both "sci-fi" and "Sci-Fi" shows a single row covering every book,
+  matching the genre cloud rather than splitting the count in two (#2099)
 - **Fetch metadata** on the metadata edit page: one button opens a search
   that has already asked every configured provider for this book, and lists
   what each returned — cover, title, authors, year, publisher, and which
