@@ -6,9 +6,10 @@ use omnibus_shared::physical::{PhysicalCopy, WishlistSource};
 use omnibus_shared::scan::{ScanBook, ScanOutcome};
 use sqlx::{Row, SqlitePool};
 
-use crate::author_photos::fetch_remote_image;
+use crate::author_photos::{fetch_remote_image_with, RemoteImageConfig};
 use crate::metadata_lookup::{
-    openlibrary_enrich, search_provider_by_isbn, MetadataLookupConfig, MetadataLookupError,
+    openlibrary_enrich, provider_cover_image_config, search_provider_by_isbn, MetadataLookupConfig,
+    MetadataLookupError,
 };
 use crate::normalize::{normalize_author, normalize_title};
 use crate::physical::{
@@ -175,7 +176,29 @@ pub async fn add_physical_only(
     note: Option<&str>,
     added_by_user_id: Option<i64>,
 ) -> Result<String, ScanError> {
-    let uuid = create_fileless_from_meta(pool, meta).await?;
+    add_physical_only_with(
+        pool,
+        meta,
+        note,
+        added_by_user_id,
+        &provider_cover_image_config(false),
+    )
+    .await
+}
+
+/// [`add_physical_only`] with an injectable cover-fetch config.
+///
+/// `pub(crate)` deliberately: the only reason to pass anything other than
+/// [`provider_cover_image_config`] is a test pointing the fetch at a loopback
+/// `wiremock` origin, and that config relaxes the SSRF address gate.
+pub(crate) async fn add_physical_only_with(
+    pool: &SqlitePool,
+    meta: &ExternalBookMeta,
+    note: Option<&str>,
+    added_by_user_id: Option<i64>,
+    image_config: &RemoteImageConfig,
+) -> Result<String, ScanError> {
+    let uuid = create_fileless_from_meta(pool, meta, image_config).await?;
     // Store the canonical ISBN per copy (meta arrives over the wire — untrusted).
     let isbn = canonical_isbn(meta);
     add_physical_copy(pool, &uuid, isbn.as_deref(), added_by_user_id, note).await?;
@@ -192,9 +215,30 @@ pub async fn wishlist_add(
     meta: Option<&ExternalBookMeta>,
     source: WishlistSource,
 ) -> Result<String, ScanError> {
+    wishlist_add_with(
+        pool,
+        user_id,
+        book_uuid,
+        meta,
+        source,
+        &provider_cover_image_config(false),
+    )
+    .await
+}
+
+/// [`wishlist_add`] with an injectable cover-fetch config — `pub(crate)` on the
+/// same terms as [`add_physical_only_with`].
+pub(crate) async fn wishlist_add_with(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: Option<&str>,
+    meta: Option<&ExternalBookMeta>,
+    source: WishlistSource,
+    image_config: &RemoteImageConfig,
+) -> Result<String, ScanError> {
     let uuid = match (book_uuid, meta) {
         (Some(uuid), _) => uuid.to_string(),
-        (None, Some(meta)) => create_fileless_from_meta(pool, meta).await?,
+        (None, Some(meta)) => create_fileless_from_meta(pool, meta, image_config).await?,
         (None, None) => return Err(ScanError::MissingWishlistTarget),
     };
     let entry = add_wishlist_entry(pool, user_id, &uuid, source).await?;
@@ -204,18 +248,29 @@ pub async fn wishlist_add(
 /// Mint a fileless book from external metadata, fetching its cover now.
 ///
 /// `meta` crosses the HTTP boundary (`AddPhysicalOnly`/`WishlistAdd` bodies), so
-/// its `cover_url` is client-controlled: the cover fetch goes through the
-/// SSRF-guarded [`fetch_remote_image`] (strict — public IPs only, size-capped)
-/// rather than a raw request, and the ISBN is re-canonicalized before storage.
+/// its `cover_url` is client-controlled. The fetch therefore runs under
+/// [`provider_cover_image_config`] — the same terms the metadata editor's
+/// cover-apply uses: HTTPS only, hosts limited to the provider catalog's, the
+/// SSRF address gate before any connect, a size cap, and a bounded redirect
+/// follow. The follow is not optional: Open Library's cover CDN 302s twice
+/// before serving bytes, so a zero-hop config drops every cover it publishes.
+/// The ISBN is re-canonicalized before storage.
 async fn create_fileless_from_meta(
     pool: &SqlitePool,
     meta: &ExternalBookMeta,
+    image_config: &RemoteImageConfig,
 ) -> Result<String, ScanError> {
     let cover = match &meta.cover_url {
-        Some(url) => fetch_remote_image(url)
-            .await
-            .ok()
-            .map(|(mime, bytes)| FilelessCover { mime, bytes }),
+        Some(url) => match fetch_remote_image_with(url, image_config).await {
+            Ok((mime, bytes)) => Some(FilelessCover { mime, bytes }),
+            // Non-fatal — a missing cover must not fail the check-in — but
+            // logged: a cover the reader watched render on the check-in card
+            // and then lost is otherwise invisible to the operator.
+            Err(e) => {
+                tracing::warn!(url, error = %e, "cover fetch failed; minting book without it");
+                None
+            }
+        },
         None => None,
     };
     let uuid = create_fileless_book(

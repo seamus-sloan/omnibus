@@ -110,6 +110,14 @@ recent releases are recorded below; everything earlier is available via the
 
 ### Fixed
 
+- Checking a book in with "I own it" — or adding one to the wishlist — now
+  keeps the cover the check-in card showed. The server fetched it under terms
+  that refused redirects, so every cover from Open Library's CDN (which
+  redirects twice before serving bytes) was silently discarded and the book
+  was created without one. The fetch now runs on the same terms as the
+  metadata editor's cover apply: the provider catalog's hosts only, over
+  HTTPS, every redirect hop re-checked, and a cover that still fails is
+  logged rather than dropped in silence (#2098)
 - Provider cover images no longer fail to load behind the content-security
   policy: the `img-src` allowlist is now derived from the provider catalog and
   includes the redirect hops Open Library's cover CDN and Hardcover's asset
