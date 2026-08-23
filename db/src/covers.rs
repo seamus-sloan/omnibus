@@ -139,6 +139,133 @@ pub(crate) fn write_cover_file(uuid: &str, mime: &str, bytes: &[u8]) -> std::io:
     std::fs::write(cover_path_for(uuid, fmt.to_ext()), bytes)
 }
 
+/// Tallest an override cover is stored at. Kobo panels top out around
+/// 1448px and the web only ever renders downscaled WebP thumbnails, so
+/// anything beyond this is bytes no surface reads — one upload arrived at
+/// 4281x5726 (24 MP, 775 KB) for a tile displayed ~500px tall.
+pub(crate) const MAX_OVERRIDE_COVER_HEIGHT: u32 = 1200;
+
+/// JPEG quality used when re-encoding an override cover.
+const OVERRIDE_COVER_JPEG_QUALITY: u8 = 85;
+
+/// Normalize a user-uploaded override cover for storage, returning the mime
+/// and bytes to write.
+///
+/// Two transformations, both driven by what the *Kobo* can read — it is the
+/// one client served the stored file verbatim rather than a derived
+/// thumbnail (`kobo::resources::image`):
+///
+/// - **WebP is transcoded to JPEG.** Kobo firmware renders no cover at all
+///   for a WebP, and the cover route it fetches is literally `image.jpg`.
+///   PNG and GIF are left alone — PNG is confirmed working on-device, and
+///   re-encoding a GIF would flatten it to its first frame.
+/// - **Anything taller than [`MAX_OVERRIDE_COVER_HEIGHT`] is downscaled.**
+///
+/// Normalization is best-effort by design: an undecodable image, an SVG, or
+/// bytes in a format we don't cache pass through untouched. A cover upload
+/// must never fail because a re-encode did — the worst case of passing
+/// through is the status quo before this existed.
+///
+/// The source format is sniffed from the bytes rather than taken from
+/// `mime`, for the same reason [`write_cover_file`] does it (#828): a WebP
+/// mislabelled `image/jpeg` is exactly the case this needs to catch. That
+/// also covers the cover-from-URL route, which funnels through the same
+/// write — a provider CDN serving WebP is the likelier source of one than a
+/// hand-picked file.
+///
+/// Decoding and re-encoding are CPU-bound; call this from the blocking pool
+/// (`write_override_cover`'s only caller already wraps it in
+/// `spawn_blocking`).
+pub(crate) fn normalize_override_cover(mime: &str, bytes: &[u8]) -> (String, Vec<u8>) {
+    let passthrough = || (mime.to_owned(), bytes.to_vec());
+
+    let Ok(guessed) = image::guess_format(bytes) else {
+        return passthrough();
+    };
+    let Some(source) = ImageFormat::from_guessed(guessed) else {
+        return passthrough();
+    };
+    // GIF is neither transcoded nor resized: `image` decodes only the first
+    // frame, so any re-encode would silently drop an animation.
+    if source == ImageFormat::Gif {
+        return passthrough();
+    }
+
+    let target = match source {
+        ImageFormat::Webp => ImageFormat::Jpeg,
+        other => other,
+    };
+
+    // Fast path for the common upload: a cover already in its target format
+    // is only ever rejected for being too tall, and the header carries its
+    // height. Decoding the pixels to learn that would allocate ~96 MB for a
+    // 24 MP JPEG purely to conclude there is nothing to do.
+    //
+    // A header we can't parse falls through to the full decode rather than
+    // passing through here, so a file whose dimensions are unreadable but
+    // whose pixels aren't still gets normalized.
+    if target == source
+        && image::ImageReader::with_format(std::io::Cursor::new(bytes), guessed)
+            .into_dimensions()
+            .is_ok_and(|(_, height)| height <= MAX_OVERRIDE_COVER_HEIGHT)
+    {
+        return passthrough();
+    }
+
+    let Ok(decoded) = image::load_from_memory(bytes) else {
+        return passthrough();
+    };
+    let oversized = decoded.height() > MAX_OVERRIDE_COVER_HEIGHT;
+
+    // Reachable only when the header probe above couldn't read dimensions.
+    // Re-encoding a correctly-sized image in its own format would cost it a
+    // generation of quality for no gain.
+    if target == source && !oversized {
+        return passthrough();
+    }
+
+    let resized = if oversized {
+        use image::imageops::FilterType;
+        let width = decoded.width().max(1);
+        let height = decoded.height().max(1);
+        // Round rather than truncate so a 2:3 cover keeps its aspect ratio
+        // instead of drifting a pixel narrow.
+        let scaled_width = ((u64::from(width) * u64::from(MAX_OVERRIDE_COVER_HEIGHT)
+            + u64::from(height) / 2)
+            / u64::from(height)) as u32;
+        decoded.resize(
+            scaled_width.max(1),
+            MAX_OVERRIDE_COVER_HEIGHT,
+            FilterType::Lanczos3,
+        )
+    } else {
+        decoded
+    };
+
+    let mut out = Vec::new();
+    let encoded = match target {
+        ImageFormat::Jpeg => {
+            // JPEG carries no alpha plane; flatten to RGB8 first so a
+            // transparent source doesn't encode as garbage.
+            image::codecs::jpeg::JpegEncoder::new_with_quality(
+                &mut out,
+                OVERRIDE_COVER_JPEG_QUALITY,
+            )
+            .encode_image(&resized.to_rgb8())
+            .is_ok()
+        }
+        ImageFormat::Png => resized
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .is_ok(),
+        // Every other variant either returned above or has no encoder here.
+        _ => false,
+    };
+    if !encoded || out.is_empty() {
+        return passthrough();
+    }
+    (target.to_mime().to_owned(), out)
+}
+
 /// Read a book's cover, returning `(mime, bytes)`. Probes the common
 /// extensions first, then falls back to scanning for `<uuid>.*`.
 pub(crate) fn find_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> {
