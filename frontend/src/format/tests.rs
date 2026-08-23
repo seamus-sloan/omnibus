@@ -146,10 +146,7 @@ fn facet_query_scopes_every_word_of_a_multi_word_name() {
     // The bug this replaced: `format!("tag:{name}")` scoped only "Dark" and
     // let "academia" fall through to `build_fts_match`'s free-text arm, so a
     // chip click matched books merely titled something with "academia".
-    assert_eq!(
-        facet_query("tag", "Dark academia"),
-        "tag:Dark tag:academia"
-    );
+    assert_eq!(facet_query("tag", "Dark academia"), "tag:Dark tag:academia");
     assert_eq!(
         facet_query("genre", "Hard Science Fiction"),
         "genre:Hard genre:Science genre:Fiction"
@@ -165,6 +162,9 @@ fn facet_query_passes_a_single_word_through_unchanged() {
 fn facet_query_collapses_surrounding_and_repeated_whitespace() {
     // `split_whitespace` drops empties, so no `tag:` token is ever emitted
     // bare — `build_fts_match` would silently discard one.
-    assert_eq!(facet_query("tag", "  Dark   academia  "), "tag:Dark tag:academia");
+    assert_eq!(
+        facet_query("tag", "  Dark   academia  "),
+        "tag:Dark tag:academia"
+    );
     assert_eq!(facet_query("tag", "   "), "");
 }
