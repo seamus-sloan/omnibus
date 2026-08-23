@@ -37,6 +37,12 @@ struct MetadataEditView: View {
     /// Same, for the genres field.
     @State private var pendingGenre = ""
 
+    /// Set to `errorAnchor` to scroll the error banner into view, then
+    /// cleared by `ScrollViewReader`'s `onChange`. A plain `Bool` wouldn't
+    /// re-fire for a second failed save.
+    @State private var scrollTarget: String?
+    private static let errorAnchor = "metadata-edit-error"
+
     /// Autocomplete pools for the chip and series fields, filled best-effort
     /// while the editor is up — an empty pool just means no dropdown.
     @State private var authorPool: [SuggestionItem] = []
@@ -78,6 +84,20 @@ struct MetadataEditView: View {
     }
 
     private var content: some View {
+        ScrollViewReader { proxy in
+            formScroll
+                .onChange(of: scrollTarget) { _, target in
+                    guard let target else { return }
+                    // `.center`, not `.bottom`: the bottom of the scroll view
+                    // is where the tab bar and a still-retracting keyboard
+                    // are, and a message parked under either is no message.
+                    proxy.scrollTo(target, anchor: .center)
+                    scrollTarget = nil
+                }
+        }
+    }
+
+    private var formScroll: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.xl) {
                 if let book { header(book) }
@@ -109,6 +129,9 @@ struct MetadataEditView: View {
                         field("Published", \.published, hint: "YYYY-MM-DD")
                         field("Language", \.language, hint: "e.g. en")
                         field("ISBN-13", \.isbn13, keyboard: .numberPad)
+                        // Not `.numberPad`: an ISBN-10's check digit can be X.
+                        field("ISBN-10", \.isbn10, hint: "10 characters", keyboard: .asciiCapable)
+                        field("Print Pages", \.printPages, hint: "whole number", keyboard: .numberPad)
                     }
                 }
 
@@ -153,6 +176,8 @@ struct MetadataEditView: View {
                         .font(.ui(13))
                         .foregroundStyle(palette.badColor)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .id(Self.errorAnchor)
+                        .accessibilityIdentifier("metadata-edit-error")
                 }
 
                 if book?.hasOverride == true {
@@ -316,13 +341,70 @@ struct MetadataEditView: View {
     }
 
     private func save() async {
-        isSaving = true
         error = nil
+
+        // Before the chip flush below, which mutates `draft`: a rejected save
+        // has to leave the form exactly as the reader left it, or a bad page
+        // count silently consumes the author they were half-way through
+        // typing. The web editor orders it the same way, rejecting in
+        // `build_on_save`'s first statement.
+        do {
+            try draft.validate(since: loaded)
+        } catch {
+            reportSaveFailure(error)
+            return
+        }
+
+        isSaving = true
         defer { isSaving = false }
 
-        // A value typed into an add field but never committed to a chip is
-        // still what the user meant to save; dropping it silently is worse
-        // than accepting it.
+        flushPendingChips()
+
+        let body = draft.payload(since: loaded)
+        // Nothing to send. Not merely wasteful: an empty body makes the
+        // server insert an override row that latches this book to "Edited"
+        // permanently — see `MetadataOverridesPayload.isEmpty`.
+        guard !body.isEmpty else {
+            dismiss()
+            return
+        }
+
+        do {
+            let _: Empty = try await APIClient.shared.post(
+                "/api/ebooks/\(uuid)/overrides", body: body
+            )
+            await OfflineStore.shared.cacheDelete(CacheKey.book(uuid))
+            Haptics.success()
+            onSaved?()
+            dismiss()
+        } catch {
+            reportSaveFailure(error)
+        }
+    }
+
+    /// Surface a failed save. The message alone isn't enough: it renders at
+    /// the bottom of a scrolling form, well below the fields that cause it,
+    /// so without the haptic and the scroll a rejected Save looks to the
+    /// reader like a Save that did nothing at all. The keyboard has to go
+    /// too — the field being rejected is usually the one still focused, and
+    /// its keypad covers exactly the part of the form the message lands in.
+    private func reportSaveFailure(_ error: Error) {
+        self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        Haptics.warning()
+        dismissKeyboard()
+        withAnimation(Motion.snap) { scrollTarget = Self.errorAnchor }
+    }
+
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
+        )
+    }
+
+    /// A value typed into an add field but never committed to a chip is still
+    /// what the user meant to save; dropping it silently is worse than
+    /// accepting it.
+    private func flushPendingChips() {
         if let chip = ChipEntry.committed(
             from: pendingAuthor, existing: draft.authors, deduplicating: false
         ) {
@@ -341,18 +423,6 @@ struct MetadataEditView: View {
             draft.genres.append(chip)
         }
         pendingGenre = ""
-
-        do {
-            let _: Empty = try await APIClient.shared.post(
-                "/api/ebooks/\(uuid)/overrides", body: draft.payload(since: loaded)
-            )
-            await OfflineStore.shared.cacheDelete(CacheKey.book(uuid))
-            Haptics.success()
-            onSaved?()
-            dismiss()
-        } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
-        }
     }
 
     private func revert() async {

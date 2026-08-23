@@ -41,6 +41,17 @@ recent releases are recorded below; everything earlier is available via the
 - **Book #** is now one of the fields the compare view can copy. Hardcover is
   the only source that publishes a book's position in its series, so a book
   numbered there can be numbered here in one click (#1665)
+- The **iOS metadata editor** now carries ISBN-10 and Print Pages alongside the
+  genres it already had, so the phone and the web no longer disagree about
+  which fields a book has. A save still sends only what you changed, so editing
+  from a phone that predates a field cannot wipe a value set on the web (#1664)
+- The iOS editor now **says why a save was refused** instead of failing
+  quietly: a page count that isn't a whole number or sits outside 1–20,000, a
+  malformed ISBN-10, or a page count you cleared — which the field has no way
+  to express — are all caught before the request, with the message scrolled
+  into view rather than left below the fold. A rejected save no longer eats a
+  half-typed author, and a book you opened but didn't really change is no
+  longer marked "Edited" for good (#1664)
 
 ### Changed
 
