@@ -13,6 +13,11 @@ struct SearchField: View {
     @Binding var text: String
     var prompt: String
     var onSubmit: () -> Void = {}
+    /// Applied to the inner `TextField`, so a UI test can address it directly.
+    /// Resolving one by identifier is a keyed lookup; `textFields.firstMatch`
+    /// walks the whole hierarchy, which on a screen this dense is slow enough
+    /// on a loaded runner to be the thing that times out.
+    var identifier: String?
 
     @Environment(\.palette) private var palette
     @FocusState private var focused: Bool
@@ -36,21 +41,36 @@ struct SearchField: View {
         .animation(Motion.snap, value: isActive)
     }
 
+    /// The identifier is applied only when one was given. An empty identifier
+    /// is still an identifier: setting it unconditionally would file every
+    /// unnamed field in the tree under one shared key, which is the ambiguity
+    /// the parameter exists to remove.
+    @ViewBuilder
+    private var textField: some View {
+        let base = TextField("", text: $text, prompt: promptText)
+            .font(.ui(16))
+            .foregroundStyle(palette.ink0Color)
+            .tint(palette.accentColor)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(.search)
+            .focused($focused)
+            .onSubmit(onSubmit)
+
+        if let identifier {
+            base.accessibilityIdentifier(identifier)
+        } else {
+            base
+        }
+    }
+
     private var field: some View {
         HStack(spacing: 9) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(isActive ? palette.accentColor : palette.ink3Color)
 
-            TextField("", text: $text, prompt: promptText)
-                .font(.ui(16))
-                .foregroundStyle(palette.ink0Color)
-                .tint(palette.accentColor)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.search)
-                .focused($focused)
-                .onSubmit(onSubmit)
+            textField
 
             if !text.isEmpty {
                 Button {
