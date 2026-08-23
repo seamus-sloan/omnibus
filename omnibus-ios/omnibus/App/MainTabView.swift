@@ -63,6 +63,9 @@ struct MainTabView: View {
             }
             .animation(Motion.glide, value: player.isActive)
         }
+        // The keyboard belongs over the tab bar, not under it. Has to sit on
+        // the modified view — on the inset's content it is a no-op (#2102).
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .environment(reselect)
         .sheet(isPresented: $addSheetPresented) {
             AddBooksSheet()
