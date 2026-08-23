@@ -6,7 +6,9 @@
 use omnibus_shared::EbookMetadata;
 use sqlx::{Row, SqlitePool};
 
-use crate::helpers::{build_fts_match, cap_query_len, library_paths_json, visible_book_sql};
+use crate::helpers::{
+    build_fts_match, cap_query_len, library_paths_json, visible_book_sql, FTS_BM25_RANK,
+};
 
 use super::projection::{
     backfill_creator_ids, merge_overrides_into_books, row_to_ebook, BOOK_COLUMNS,
@@ -16,13 +18,12 @@ use super::projection::{
 /// Full-text search across `books_fts`. Returns hydrated `EbookMetadata`
 /// ordered by bm25 rank (best first). Free-text terms are scoped to
 /// `title/authors/series` via a column filter so that short prefix queries
-/// don't surface spurious hits on generic `tags` values (e.g. typing "Dr"
-/// matching books tagged "Drama"). Ranking weights favour title matches:
-/// `bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0)` — unused columns keep
-/// neutral weights since the column filter prevents them from contributing.
+/// don't surface spurious hits on generic `tags` or `genres` values (e.g.
+/// typing "Dra" matching books tagged — or genred — "Drama"). Ranking weights
+/// favour title matches; see [`FTS_BM25_RANK`].
 ///
 /// `q` is parsed via [`build_fts_match`] (which recognises `author:`,
-/// `series:`, `tag:` facets and sanitises every token) before reaching
+/// `series:`, `tag:`, `genre:` facets and sanitises every token) before reaching
 /// `MATCH`, so arbitrary user input is safe to pass through. Returns an
 /// empty vec when the parsed query is empty.
 pub async fn search_books(
@@ -108,7 +109,7 @@ async fn fetch_search_rows(
         r"
         WITH matches AS MATERIALIZED (
             SELECT books_fts.rowid AS bid,
-                   bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0) AS rank
+                   {FTS_BM25_RANK} AS rank
             FROM books_fts
             JOIN books b ON b.id = books_fts.rowid
             JOIN scan_roots l ON l.id = b.library_id

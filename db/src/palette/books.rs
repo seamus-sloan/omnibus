@@ -8,7 +8,7 @@ use omnibus_shared::PaletteBookHit;
 use sqlx::{Row, SqlitePool};
 
 use crate::books::parse_json_array;
-use crate::helpers::{build_fts_match, library_paths_json, visible_book_sql};
+use crate::helpers::{build_fts_match, library_paths_json, visible_book_sql, FTS_BM25_RANK};
 use crate::metadata_overrides::load_overrides_bulk;
 
 use super::PaletteError;
@@ -25,7 +25,7 @@ fn search_books_sql() -> &'static str {
             r"
         WITH matches AS MATERIALIZED (
             SELECT books_fts.rowid AS bid,
-                   bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0) AS rank
+                   {FTS_BM25_RANK} AS rank
             FROM books_fts
             JOIN books b ON b.id = books_fts.rowid
             JOIN scan_roots l ON l.id = b.library_id

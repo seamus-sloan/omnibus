@@ -25,6 +25,12 @@ recent releases are recorded below; everything earlier is available via the
 
 ### Added
 
+- **Search can see genres.** A genre you assign in the metadata editor is now
+  indexed, and `genre:horror` narrows a search to the books carrying it — the
+  same way `author:`, `series:`, and `tag:` already did. Genres reach the index
+  on save, with no reindex in between. Typing a bare word still searches only
+  titles, authors, and series, so a book whose only match is a genre name
+  doesn't crowd out the ones you meant (#2099)
 - **Fetch metadata** on the metadata edit page: one button opens a search
   that has already asked every configured provider for this book, and lists
   what each returned — cover, title, authors, year, publisher, and which

@@ -23,7 +23,10 @@ const UPSERT_BATCH_CHUNK: usize = 450;
 /// 0005_fts5.sql so the inline upsert and the triggers agree on the same
 /// text. `isbn` takes the first ISBN-scheme identifier (case-insensitive)
 /// straight from `book_identifiers` — the canonical source now that the
-/// denormalized `books.isbn` column is gone (F8).
+/// denormalized `books.isbn` column is gone (F8). `genres` is the one column
+/// with no canonical table behind it: nothing Omnibus parses carries a genre,
+/// so migration `0066` gives them no link table and the override JSON is
+/// their only storage.
 const FTS_SELECT_FROM_BOOKS: &str = "
     SELECT
         b.id,
@@ -40,16 +43,27 @@ const FTS_SELECT_FROM_BOOKS: &str = "
         COALESCE(b.description, ''),
         COALESCE((SELECT bi.value FROM book_identifiers bi
                   WHERE bi.book_id = b.id AND bi.scheme = 'ISBN' COLLATE NOCASE
-                  LIMIT 1), '')
+                  LIMIT 1), ''),
+        COALESCE((SELECT group_concat(je.value, ' ')
+                  FROM metadata_overrides mo
+                  JOIN json_each(mo.overrides, '$.genres') je
+                  WHERE mo.book_uuid = b.uuid
+                    AND json_type(mo.overrides, '$.genres') IS NOT NULL), '')
      FROM books b";
+
+/// The `books_fts` column list every INSERT site names, in
+/// [`FTS_SELECT_FROM_BOOKS`]'s projection order. One constant so a future
+/// column can't be added to the projection and left out of one of the three
+/// insert sites.
+const FTS_INSERT_COLUMNS: &str = "rowid, title, authors, series, tags, description, isbn, genres";
 
 /// Delete-then-insert the `books_fts` row for `book_id`, sourcing the
 /// indexed text from the canonical `books` row plus its taxonomy links.
 ///
 /// This is the only place that inserts a single `books_fts` row (the
 /// whole-table rebuild in [`rebuild_all_fts`] uses the same projection but
-/// batches it into one statement). The column set (`title, authors,
-/// series, tags, description, isbn`) is identical for ebooks and
+/// batches it into one statement). The column set
+/// ([`FTS_INSERT_COLUMNS`]) is identical for ebooks and
 /// audiobooks — both live in the same `books` table and the joins below
 /// read whatever link rows exist — so one door serves both. A no-op
 /// INSERT when `book_id` has no `books` row, but callers only pass live
@@ -62,7 +76,7 @@ pub(crate) async fn upsert_fts(
     static UPSERT_SQL: OnceLock<String> = OnceLock::new();
     let sql = UPSERT_SQL.get_or_init(|| {
         format!(
-            "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
+            "INSERT INTO books_fts({FTS_INSERT_COLUMNS})
              {FTS_SELECT_FROM_BOOKS}
              WHERE b.id = ?"
         )
@@ -96,7 +110,7 @@ pub(crate) async fn upsert_fts_batch(
         del_q.execute(&mut *conn).await?;
 
         let ins_sql = format!(
-            "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
+            "INSERT INTO books_fts({FTS_INSERT_COLUMNS})
              {FTS_SELECT_FROM_BOOKS}
              WHERE b.id IN ({placeholders})"
         );
@@ -142,7 +156,7 @@ pub async fn rebuild_all_fts(pool: &SqlitePool) -> anyhow::Result<()> {
         .await
         .context("rebuild_all_fts: clear books_fts")?;
     sqlx::query(&format!(
-        "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
+        "INSERT INTO books_fts({FTS_INSERT_COLUMNS})
          {FTS_SELECT_FROM_BOOKS}"
     ))
     .execute(&mut *tx)

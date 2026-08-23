@@ -75,14 +75,14 @@ async fn fts_isbn_hits(pool: &sqlx::SqlitePool, isbn: &str) -> i64 {
 
 /// One `books_fts` row's plain-text columns, ordered by `rowid`. Used to
 /// diff the batched rebuild's output against the per-book upsert path.
-type FtsRowSnapshot = (i64, String, String, String, String, String, String);
+type FtsRowSnapshot = (i64, String, String, String, String, String, String, String);
 
-/// Snapshot every `books_fts` row (all seven columns) ordered by `rowid`,
+/// Snapshot every `books_fts` row (all eight columns) ordered by `rowid`,
 /// so two populations of the same `books` table can be compared for exact
 /// content equality regardless of which code path produced them.
 async fn snapshot_fts_rows(pool: &sqlx::SqlitePool) -> Vec<FtsRowSnapshot> {
     sqlx::query(
-        "SELECT rowid, title, authors, series, tags, description, isbn
+        "SELECT rowid, title, authors, series, tags, description, isbn, genres
          FROM books_fts ORDER BY rowid",
     )
     .fetch_all(pool)
@@ -98,6 +98,7 @@ async fn snapshot_fts_rows(pool: &sqlx::SqlitePool) -> Vec<FtsRowSnapshot> {
             r.get::<String, _>("tags"),
             r.get::<String, _>("description"),
             r.get::<String, _>("isbn"),
+            r.get::<String, _>("genres"),
         )
     })
     .collect()
@@ -450,8 +451,8 @@ async fn rebuild_all_fts_reconstructs_index_after_corruption() {
         .await
         .unwrap();
     sqlx::query(
-        "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn) \
-                 VALUES (999999, 'orphan', '', '', '', '', '')",
+        "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn, genres) \
+                 VALUES (999999, 'orphan', '', '', '', '', '', '')",
     )
     .execute(&pool)
     .await
@@ -487,6 +488,63 @@ async fn rebuild_all_fts_reconstructs_index_after_corruption() {
     let orphan_after =
         count_rows(&pool, "SELECT COUNT(*) FROM books_fts WHERE rowid = 999999").await;
     assert_eq!(orphan_after, 0, "orphan row must be swept by the rebuild");
+}
+
+#[tokio::test]
+async fn rebuild_all_fts_repopulates_genres_from_the_override_json() {
+    // `genres` is the one indexed column with no canonical table behind it,
+    // so the admin rebuild has to read `metadata_overrides` to restore it —
+    // reconstructing from `books` and its links alone would drop it silently
+    // while still leaving the row-count parity check green.
+    let _covers = CoversTempDir::new("fts_rebuild_genres");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            new_books: vec![indexed("a.epub", Some("Alpha"), &["Ann"], &[], None, None)],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = crate::test_support::uuid_by_scan_key(&pool, "a.epub").await;
+    crate::metadata_overrides::merge_metadata_overrides(
+        &pool,
+        &uuid,
+        &omnibus_shared::MetadataOverrides {
+            genres: Some(vec!["Horror".into(), "Gothic".into()]),
+            ..Default::default()
+        },
+        user_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(fts_genre_hits(&pool, "Horror").await, 1);
+
+    rebuild_all_fts(&pool).await.unwrap();
+
+    assert_fts_invariant(&pool).await;
+    assert_eq!(
+        fts_genre_hits(&pool, "Horror").await,
+        1,
+        "the rebuild must restore genres, not blank the column"
+    );
+    assert_eq!(fts_genre_hits(&pool, "Gothic").await, 1);
+}
+
+/// Count `books_fts` rows whose `genres` column MATCHes the term.
+async fn fts_genre_hits(pool: &sqlx::SqlitePool, genre: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books_fts WHERE genres MATCH ?")
+        .bind(genre)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 #[tokio::test]

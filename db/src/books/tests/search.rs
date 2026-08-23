@@ -93,6 +93,144 @@ async fn search_books_with_total_matches_count_search_books() {
     assert_eq!(zero, 0);
 }
 
+/// Seed a two-book library and put `genres` on the first through the
+/// override write path — the only way a book gets genres (migration `0066`).
+/// Returns the pool, the id of the user the overrides are attributed to, and
+/// the covers guard the caller must keep alive.
+async fn seed_genre_fixture(tag: &str, genres: &[&str]) -> (sqlx::SqlitePool, i64, CoversTempDir) {
+    let covers = CoversTempDir::new(tag);
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![
+            indexed("a.epub", Some("Dark Water"), &["Ann"], &[], None, None),
+            indexed("b.epub", Some("Bright Sky"), &["Bob"], &[], None, None),
+        ],
+    )
+    .await
+    .unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    set_genres(&pool, "Dark Water", genres, user_id).await;
+    (pool, user_id, covers)
+}
+
+/// Replace the genre list on the book titled `title` via the override door.
+async fn set_genres(pool: &sqlx::SqlitePool, title: &str, genres: &[&str], user_id: i64) {
+    let books = crate::books::list_books(pool, "/lib").await.unwrap();
+    let uuid = books
+        .iter()
+        .find(|b| b.title.as_deref() == Some(title))
+        .and_then(|b| b.unique_identifier.clone())
+        .expect("seeded book");
+    crate::metadata_overrides::merge_metadata_overrides(
+        pool,
+        &uuid,
+        &omnibus_shared::MetadataOverrides {
+            genres: Some(genres.iter().map(|g| (*g).to_string()).collect()),
+            ..Default::default()
+        },
+        user_id,
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn search_books_finds_by_genre_facet_right_after_an_override_save() {
+    // Genres reach the index through the same post-write FTS refresh a title
+    // or tag edit takes, so a genre is searchable with no reindex in between.
+    let (pool, _user, _covers) = seed_genre_fixture("fts_genre", &["Horror", "Gothic"]).await;
+
+    let hits = search_books(&pool, "/lib", "genre:horror").await.unwrap();
+    assert_eq!(hits.len(), 1, "only the overridden book carries Horror");
+    assert_eq!(hits[0].title.as_deref(), Some("Dark Water"));
+
+    // Every genre in the list indexes, not just the first.
+    let hits = search_books(&pool, "/lib", "genre:gothic").await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].title.as_deref(), Some("Dark Water"));
+
+    // A genre no book carries matches nothing.
+    assert!(search_books(&pool, "/lib", "genre:western")
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn search_books_genre_facet_drops_a_book_whose_genres_were_cleared() {
+    // An empty list is the clear-all override, and it has to reach the index
+    // — a stale `genres` column would keep serving a genre the book lost.
+    let (pool, user_id, _covers) = seed_genre_fixture("fts_genre_clear", &["Horror"]).await;
+    assert_eq!(
+        search_books(&pool, "/lib", "genre:horror")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    set_genres(&pool, "Dark Water", &[], user_id).await;
+
+    assert!(
+        search_books(&pool, "/lib", "genre:horror")
+            .await
+            .unwrap()
+            .is_empty(),
+        "a cleared genre must leave genre:-scoped results"
+    );
+}
+
+#[tokio::test]
+async fn search_books_genre_facet_drops_a_book_whose_overrides_were_deleted() {
+    // Deleting the overrides row removes the genres' only storage, and the
+    // delete path restores canonical FTS in its own transaction — the
+    // restored row must carry an empty `genres`, not the deleted list.
+    let (pool, _user, _covers) = seed_genre_fixture("fts_genre_delete", &["Horror"]).await;
+    let books = crate::books::list_books(&pool, "/lib").await.unwrap();
+    let uuid = books
+        .iter()
+        .find(|b| b.title.as_deref() == Some("Dark Water"))
+        .and_then(|b| b.unique_identifier.clone())
+        .expect("seeded book");
+
+    crate::metadata_overrides::delete_metadata_overrides(&pool, &uuid)
+        .await
+        .unwrap();
+
+    assert!(
+        search_books(&pool, "/lib", "genre:horror")
+            .await
+            .unwrap()
+            .is_empty(),
+        "a deleted override must leave genre:-scoped results"
+    );
+}
+
+#[tokio::test]
+async fn search_books_free_text_does_not_match_a_genre_name() {
+    // Same reason `tags` sits outside the default scope: typing "Dra" must
+    // not drag in every book someone genred "Drama".
+    let (pool, _user, _covers) = seed_genre_fixture("fts_genre_scope", &["Drama"]).await;
+
+    assert!(
+        search_books(&pool, "/lib", "Dra").await.unwrap().is_empty(),
+        "free text stays scoped to {{title authors series}}"
+    );
+    assert_eq!(
+        search_books(&pool, "/lib", "genre:Dra")
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "the same prefix does hit once it is genre:-scoped"
+    );
+}
+
 #[tokio::test]
 async fn search_books_finds_by_author_and_scopes_to_library() {
     let _covers = CoversTempDir::new("fts_author");

@@ -60,9 +60,14 @@ pub(crate) async fn rebuild_fts_row_tx(
 
 /// Patch the override-driven columns of an existing `books_fts` row with
 /// the merged metadata. The door already wrote the canonical row; this
-/// overwrites `title / authors / series / tags / description` so search
-/// reflects user edits. `isbn` is canonical-only (overrides can't change
-/// identifiers), so it's left as the door wrote it.
+/// overwrites `title / authors / series / tags / description / genres` so
+/// search reflects user edits. `isbn` is canonical-only (overrides can't
+/// change identifiers), so it's left as the door wrote it.
+///
+/// `genres` is written from the merged list rather than trusted to the door,
+/// even though the door reads the same `$.genres` key: this is the write that
+/// states the column is override-driven, and it keeps the row correct if the
+/// merge ever gains a source the projection's subquery doesn't read.
 async fn overlay_overrides(
     conn: &mut SqliteConnection,
     book_id: i64,
@@ -73,9 +78,10 @@ async fn overlay_overrides(
     let series = merged.series.clone().unwrap_or_default();
     let tags = crate::helpers::join_names(merged.subjects.iter().map(String::as_str));
     let description = merged.description.clone().unwrap_or_default();
+    let genres = crate::helpers::join_names(merged.genres.iter().map(String::as_str));
     sqlx::query(
         "UPDATE books_fts
-            SET title = ?, authors = ?, series = ?, tags = ?, description = ?
+            SET title = ?, authors = ?, series = ?, tags = ?, description = ?, genres = ?
           WHERE rowid = ?",
     )
     .bind(&title)
@@ -83,6 +89,7 @@ async fn overlay_overrides(
     .bind(&series)
     .bind(&tags)
     .bind(&description)
+    .bind(&genres)
     .bind(book_id)
     .execute(&mut *conn)
     .await?;
