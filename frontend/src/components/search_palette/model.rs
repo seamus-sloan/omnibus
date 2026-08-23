@@ -73,15 +73,7 @@ pub(super) fn plural(n: usize) -> &'static str {
     }
 }
 
-/// Build a facet query string where every whitespace-separated word in
-/// `value` is prefixed with `prefix:`. This ensures `build_fts_match`
-/// routes each token to the correct FTS5 column filter instead of
-/// treating trailing words as free-text (e.g. `tag:Dark tag:academia`
-/// rather than `tag:Dark academia`).
-pub(super) fn facet_query(prefix: &str, value: &str) -> String {
-    value
-        .split_whitespace()
-        .map(|w| format!("{prefix}:{w}"))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
+// `facet_query` used to live here. It moved to `crate::format` when the
+// `/search` chips turned out to have their own — wrong — copy; re-exported so
+// the palette's call sites read unchanged.
+pub(super) use crate::format::facet_query;

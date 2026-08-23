@@ -10,7 +10,7 @@ use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::{PaletteBookHit, PaletteResults};
 
-use crate::format::plural;
+use crate::format::{facet_query, plural};
 use crate::{data, use_server_url, Route};
 
 /// Which result groups the scope chips let through. Purely client-side —
@@ -347,7 +347,7 @@ fn tag_row(t: &omnibus_shared::PaletteTagHit, mut query: Signal<String>) -> Elem
     let key = t.id;
     let name = t.name.clone();
     let count = format!("{} book{}", t.book_count, plural(t.book_count));
-    let facet = facet_for("tag", &t.name);
+    let facet = facet_query("tag", &t.name);
     rsx! {
         button {
             key: "t{key}",
@@ -368,7 +368,7 @@ fn tag_row(t: &omnibus_shared::PaletteTagHit, mut query: Signal<String>) -> Elem
 fn genre_row(g: &omnibus_shared::PaletteGenreHit, mut query: Signal<String>) -> Element {
     let name = g.name.clone();
     let count = format!("{} book{}", g.book_count, plural(g.book_count));
-    let facet = facet_for("genre", &g.name);
+    let facet = facet_query("genre", &g.name);
     rsx! {
         button {
             key: "g{name}",
@@ -404,17 +404,6 @@ fn book_cover(book: &PaletteBookHit, server_url: &str) -> Element {
 /// First character of `s`, uppercased, for avatar/fallback glyphs.
 fn initial(s: &str) -> String {
     s.chars().next().unwrap_or('?').to_uppercase().to_string()
-}
-
-/// Build a `<prefix>:`-scoped FTS query from a taxonomy name so tapping a row
-/// refines to the books carrying it. Each whitespace word is scoped
-/// (`tag:Dark tag:academia`) to match how the FTS matcher column-scopes
-/// tokens — an unscoped trailing word would fall through to free text.
-fn facet_for(prefix: &str, name: &str) -> String {
-    name.split_whitespace()
-        .map(|w| format!("{prefix}:{w}"))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// Magnifying-glass icon (inline SVG, `currentColor`) — same glyph as the web

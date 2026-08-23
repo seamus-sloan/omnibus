@@ -11,7 +11,7 @@ use omnibus_shared::{
     PaletteTagHit,
 };
 
-use crate::format::plural;
+use crate::format::{facet_query, plural};
 use crate::{data, use_server_url, Route};
 
 /// Renders the full-page search results for the given query.
@@ -400,7 +400,7 @@ fn tag_chip(tag: &PaletteTagHit, q: &str, q_lower: &str) -> Element {
     rsx! {
         Link {
             key: "{tag.id}",
-            to: Route::Search { query: format!("tag:{}", tag.name) },
+            to: Route::Search { query: facet_query("tag", &tag.name) },
             class: "{class}",
             "data-testid": "search-tag-row",
             {highlight(&tag.name, q)}
@@ -436,7 +436,7 @@ fn genre_chip(genre: &PaletteGenreHit, q: &str, q_lower: &str) -> Element {
     rsx! {
         Link {
             key: "{genre.name}",
-            to: Route::Search { query: format!("genre:{}", genre.name) },
+            to: Route::Search { query: facet_query("genre", &genre.name) },
             class: "{class}",
             "data-testid": "search-genre-row",
             {highlight(&genre.name, q)}

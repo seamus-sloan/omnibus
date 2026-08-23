@@ -1,10 +1,32 @@
 //! Small display formatters shared across surfaces: file size/label for
-//! `book_files` pickers, [`plural`] for search-result summaries, and the
+//! `book_files` pickers, [`plural`] for search-result summaries,
+//! [`facet_query`] for taxonomy refinements, and the
 //! [`format_date_short`]/[`format_date_month_year`] pair for table and
 //! series-card dates. Pure functions with no Dioxus/renderer state, so
 //! they unit-test easily and render identically on SSR and WASM (rule 07).
 
 use omnibus_shared::BookFileInfo;
+
+/// Build a `<prefix>:`-scoped FTS query from a taxonomy name, so clicking a
+/// tag or genre narrows the search to the books carrying it.
+///
+/// **Every whitespace word is scoped individually** — `tag:Dark tag:academia`,
+/// not `tag:Dark academia`. `db::helpers::build_fts_match` routes one token
+/// per `prefix:` marker and lets everything else fall through to free text,
+/// so a bare `format!("tag:{name}")` silently turns every word after the
+/// first into an unscoped term: it would match books merely *titled*
+/// something with "academia" in them, and drop the scoping the click
+/// promised.
+///
+/// One definition for the palette rows, the `/search` chips, and the mobile
+/// rows — three surfaces that each had their own copy and did not agree.
+pub fn facet_query(prefix: &str, value: &str) -> String {
+    value
+        .split_whitespace()
+        .map(|word| format!("{prefix}:{word}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 /// Human-readable file size (`"3.1 MB"`), or `None` when the row carries no
 /// usable size — an unstat'd or zero-byte file shows no size rather than
