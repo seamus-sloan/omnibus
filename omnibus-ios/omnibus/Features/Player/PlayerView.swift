@@ -294,9 +294,12 @@ struct PlayerView: View {
 
             // Chapter elapsed, book remaining, chapter remaining — all three at
             // once. The middle one is the whole-book context that a
-            // chapter-scoped bar would otherwise cost you.
+            // chapter-scoped bar would otherwise cost you. All three are
+            // rate-adjusted wall-clock: an elapsed readout left at 1x book-time
+            // disagrees with its own row's remaining labels the moment the
+            // speed leaves 1x.
             HStack(spacing: Spacing.sm) {
-                Text(Format.duration(displayedOffset))
+                Text(Format.duration(Format.atRate(displayedOffset, rate: player.rate)))
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 if player.hasChapters {
