@@ -9,6 +9,24 @@
 import Foundation
 import Observation
 
+/// Why a download could not even be planned — a failure that happens before
+/// any bytes move, so nothing on the device is at risk.
+enum DownloadPlanError: LocalizedError {
+    /// The book plays only through the server's on-the-fly transcode, so its
+    /// source files are not something this device could decode anyway.
+    case unsupportedAudioFormat
+    case notConfigured
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedAudioFormat:
+            "This audiobook has to be converted by the server as it plays, so it can't be stored on this device."
+        case .notConfigured:
+            "No server configured."
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class DownloadManager: NSObject {
@@ -30,6 +48,22 @@ final class DownloadManager: NSObject {
     /// `DownloadRecord.id`. Held only while a replacement is in flight; the
     /// delegate puts it back if the replacement never lands.
     private var replacing: [String: DownloadRecord] = [:]
+
+    /// Records whose download has been given up on — a failed part, a cancel.
+    ///
+    /// A multi-part book has several transfers in flight at once, so one of
+    /// them failing leaves siblings that will go on landing afterwards. Left
+    /// unmarked they would resurrect a row the failure had already settled,
+    /// and write a second failure over the copy a `restoreReplaced` had just
+    /// put back. Cleared when the record is started again.
+    private var abandoned: Set<String> = []
+
+    /// Records currently being moved into place. The last two parts of a book
+    /// can land close enough together that both completions see every file
+    /// done, and the second one to reach [`install`] would find the incoming
+    /// files the first had already consumed and report the record failed on
+    /// the strength of it.
+    private var installing: Set<String> = []
 
     private var session: URLSession!
 
@@ -57,28 +91,101 @@ final class DownloadManager: NSObject {
     /// only stranded when nothing is behind it any more — checking that rather
     /// than assuming it is what keeps a download that is still going from being
     /// reported as interrupted the moment the app comes back.
+    ///
+    /// Merged onto what this process already holds rather than replacing it.
+    /// Every step here suspends, and the background session delivers its
+    /// completions on the main actor in exactly those gaps — a wholesale
+    /// `records = map` would put back the snapshot read before them and lose
+    /// the per-part `done` flags they had just set. A single lost flag is not
+    /// cosmetic: `install` fires only when every file reports done, so the
+    /// download would wedge at 99% forever and the next launch would sweep its
+    /// staged parts away as stranded.
     func hydrate() async {
         let all = await OfflineStore.shared.allDownloads()
-        let live = Set(await session.allTasks.compactMap(\.taskDescription))
+        let taskKeys = await session.allTasks.compactMap(\.taskDescription)
+        let live = Set(taskKeys.map(DownloadRecord.recordID(fromTaskKey:)))
+        Self.sweepStagedFiles(liveTaskKeys: taskKeys)
 
-        var map: [String: DownloadRecord] = [:]
         for var record in all {
+            // Already tracked here means this process has touched it since the
+            // read above, and memory is written before the store is mirrored —
+            // so the in-memory copy is the newer of the two by construction.
+            if records[record.id] != nil { continue }
             if record.state == .running || record.state == .queued, !live.contains(record.id) {
                 record.state = .failed
                 record.error = "Interrupted"
+                // Nothing resumes a stranded transfer, so the bytes it staged
+                // are dead weight — invisible to "Storage used", which counts
+                // completed records, and never reclaimed unless the reader
+                // happens to retry.
+                Self.discardIncoming(of: record)
+                for index in record.files.indices { record.files[index].done = false }
                 await OfflineStore.shared.upsertDownload(record)
             }
-            // Records written before `localPath` became container-relative
-            // hold a path under a stale container UUID. The file itself is
-            // still there under its own name, so recover it rather than
-            // making the reader re-download a book it already has.
-            if let stored = record.localPath, stored.contains("/") {
-                record.localPath = (stored as NSString).lastPathComponent
-                await OfflineStore.shared.upsertDownload(record)
-            }
-            map[record.id] = record
+            records[record.id] = record
         }
-        records = map
+        await healPartialAudiobooks()
+    }
+
+    /// Retire a completed audiobook record that only ever held part 1.
+    ///
+    /// The build this replaces stored one part of a multi-part audiobook and
+    /// called the download complete. Those records survive the upgrade and go
+    /// on claiming the book is on the device, while the player — which now
+    /// checks that a local copy covers every part — refuses to use them. Left
+    /// alone that is a book the shelf says is downloaded, the offline gate
+    /// lets you open, and the player then cannot play. Marking it failed puts
+    /// a Retry in front of the reader instead, which is the only thing that
+    /// actually gets them the rest of the book.
+    ///
+    /// Only decided against a manifest the device already holds; a book whose
+    /// manifest was never cached is left exactly as it is rather than guessed
+    /// at.
+    private func healPartialAudiobooks() async {
+        for record in records.values
+        where record.kind == .audio && record.state == .complete && record.isLegacyShape {
+            guard let manifest: AudiobookManifest = await Cache.cachedOnly(
+                CacheKey.manifest(record.bookUUID)
+            ) else { continue }
+            guard !AudioPlayer.localCovers(
+                manifest: manifest, localFileCount: record.files.count
+            ) else { continue }
+            await update(key: record.id) { record in
+                record.state = .failed
+                record.error = "Only part of this audiobook was downloaded — download it again."
+            }
+        }
+    }
+
+    /// Delete staged bytes no transfer is coming back for.
+    ///
+    /// `didFinishDownloadingTo` has to move the system's temp file somewhere
+    /// synchronously, before the main-actor hop that knows which file of which
+    /// record it is — and the process can be killed in that gap. What it
+    /// leaves is named for the transfer, so anything whose key no live task
+    /// claims belongs to a hop that never happened. Files from the build that
+    /// named these randomly are swept on the same pass; nothing could ever
+    /// attribute those, which is why they are only reclaimable in bulk.
+    private static func sweepStagedFiles(liveTaskKeys: [String]) {
+        let directory = OfflineStore.downloadsDirectory
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path)
+        else { return }
+        let live = Set(liveTaskKeys.map(DownloadRecord.stagedName(taskKey:)))
+        for name in names
+        where (name.hasPrefix(OfflineStore.legacyStagedPrefix)
+            || name.hasPrefix(DownloadRecord.stagedPrefix)) && !live.contains(name) {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+        }
+    }
+
+    /// Drop everything this process is tracking, for a wipe that has already
+    /// emptied the store — `hydrate` merges rather than replaces, so it can no
+    /// longer be the thing that clears the registry.
+    func forgetAll() {
+        records = [:]
+        replacing = [:]
+        abandoned = []
+        installing = []
     }
 
     // MARK: - Reads
@@ -93,26 +200,55 @@ final class DownloadManager: NSObject {
     }
 
     func isDownloaded(_ uuid: String, kind: DownloadKind) -> Bool {
-        localURL(for: uuid, kind: kind) != nil
+        !localFiles(for: uuid, kind: kind).isEmpty
     }
 
     /// Whether any format of this book is on the device — what a shelf badge
     /// means, as opposed to what the player needs to know.
+    ///
+    /// Answered from the registry alone, with no filesystem check. This runs
+    /// in the badge body of every visible grid tile, re-evaluated on every
+    /// `records` mutation — which during a download is several times a second
+    /// — so stat-ing each file of each format here would put N syscalls per
+    /// tile per frame on the main actor. A badge that is briefly optimistic
+    /// about a file deleted underneath us is a fair trade; the paths where
+    /// being wrong actually costs something ([`isDownloaded`],
+    /// [`localFiles`]) still check.
     func isAnyDownloaded(_ uuid: String) -> Bool {
-        DownloadKind.allCases.contains { isDownloaded(uuid, kind: $0) }
+        DownloadKind.allCases.contains { record(for: uuid, kind: $0)?.state == .complete }
     }
 
-    /// The local file for one format, or `nil` to stream.
+    /// Every local file of one format, in play order — one for an ebook or a
+    /// single-file audiobook, one per part for a multi-part audiobook.
+    ///
+    /// All or nothing on purpose: a book missing one of its parts is not
+    /// playable offline, and handing the player what is there would put it on
+    /// a timeline shorter than the book, which is the whole failure this
+    /// list exists to prevent.
     ///
     /// `kind` is not optional on purpose. Resolving by book alone is what let a
     /// dual-format book's downloaded epub be handed to `AVPlayer` as though it
     /// were the audiobook.
-    func localURL(for uuid: String, kind: DownloadKind) -> URL? {
+    func localFiles(for uuid: String, kind: DownloadKind) -> [URL] {
         guard let record = record(for: uuid, kind: kind), record.state == .complete,
-              let name = record.localPath
-        else { return nil }
-        let url = OfflineStore.downloadsDirectory.appendingPathComponent(name)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+              !record.files.isEmpty
+        else { return [] }
+        let urls = record.files
+            .sorted { $0.ordinal < $1.ordinal }
+            .map { OfflineStore.downloadsDirectory.appendingPathComponent($0.name) }
+        guard urls.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) else { return [] }
+        return urls
+    }
+
+    /// The single local file for one format, or `nil` to stream.
+    ///
+    /// `nil` for a multi-part audiobook too — a caller holding one URL cannot
+    /// represent a book that is several files, and treating part 1 as the
+    /// whole book is what marked multi-part audiobooks finished the moment
+    /// they were resumed past it. Part-aware callers use [`localFiles`].
+    func localURL(for uuid: String, kind: DownloadKind) -> URL? {
+        let files = localFiles(for: uuid, kind: kind)
+        return files.count == 1 ? files[0] : nil
     }
 
     /// Which formats of this book can be taken offline. A dual-format book
@@ -200,6 +336,73 @@ final class DownloadManager: NSObject {
         records.values.filter { $0.state == .complete }.reduce(0) { $0 + $1.totalBytes }
     }
 
+    // MARK: - Planning
+
+    /// Extension for a manifest part's mime type — the inverse of the
+    /// server's `mime_for_filename`, and a copy of the web engine's
+    /// `mime_ext`. Only used to name the file on disk.
+    nonisolated static func mimeExtension(_ mime: String) -> String {
+        switch mime.lowercased() {
+        case "audio/mpeg", "audio/mp3": "mp3"
+        case "audio/x-m4a", "audio/m4a": "m4a"
+        case "audio/aac": "aac"
+        default: "m4b"
+        }
+    }
+
+    /// The files a download of `kind` is made of, in play order.
+    ///
+    /// An audiobook is planned from its **manifest**, never from the download
+    /// URL alone. `/api/audiobooks/{uuid}/download` serves one part per
+    /// request, and the manifest is the only thing that says how many parts
+    /// there are — so a plan derived from the URL called a four-part book
+    /// complete after one part, and left the player treating part 1 as the
+    /// whole book.
+    nonisolated static func plan(
+        book: Book, kind: DownloadKind, manifest: AudiobookManifest?
+    ) throws -> [DownloadFile] {
+        let uuid = book.uuid
+        guard kind == .audio else {
+            let format = targetFile(book, kind: .ebook)?.format.lowercased()
+                ?? (book.opensAsComic ? "cbz" : "epub")
+            return [
+                DownloadFile(
+                    ordinal: 0,
+                    urlPath: "/api/ebooks/\(uuid)/file",
+                    name: "\(uuid).\(DownloadKind.ebook.rawValue).\(format)"
+                )
+            ]
+        }
+        // An HLS-mode book is one the server has to transcode as it plays, so
+        // its source files are not something this device can decode on its
+        // own — there is nothing worth storing. The web engine refuses the
+        // same books with `UnsupportedFormat`.
+        guard case let .direct(parts, _, _) = manifest, !parts.isEmpty else {
+            throw DownloadPlanError.unsupportedAudioFormat
+        }
+        let sorted = parts.sorted { $0.ordinal < $1.ordinal }
+        return sorted.map { part in
+            let ext = mimeExtension(part.mime)
+            let stem = "\(uuid).\(DownloadKind.audio.rawValue)"
+            return DownloadFile(
+                ordinal: part.ordinal,
+                // The gated `/download` route, not the part URL the manifest
+                // hands out: `/parts/{ordinal}` is the playback stream and is
+                // deliberately open to a reader whose account may listen but
+                // may not keep a copy. Planning against it would hand that
+                // reader the whole book.
+                urlPath: sorted.count == 1
+                    ? "/api/audiobooks/\(uuid)/download"
+                    : "/api/audiobooks/\(uuid)/download?part=\(part.ordinal)",
+                // A single-part book keeps the pre-multi-part name, so a copy
+                // already on the device is still the file this plan names.
+                name: sorted.count == 1
+                    ? "\(stem).\(ext)"
+                    : "\(stem).\(part.ordinal).\(ext)"
+            )
+        }
+    }
+
     // MARK: - Writes
 
     /// Replace a completed download with the library's current bytes.
@@ -210,10 +413,10 @@ final class DownloadManager: NSObject {
     /// full disk, a dropped transfer — leaves the reader with nothing where
     /// a perfectly readable book used to be. A stale book beats no book.
     ///
-    /// The existing file stays exactly where it is. `URLSession` stages the
-    /// replacement in its own temp location and the delegate only swaps it
-    /// in once the bytes are down; if anything fails first, the previous
-    /// record is restored and the file it points at was never touched.
+    /// The existing files stay exactly where they are. Each transfer lands
+    /// under its `incomingName` and the whole set is moved into place only
+    /// once every file is down; if anything fails first, the previous record
+    /// is restored and the files it points at were never touched.
     func redownload(book: Book, kind: DownloadKind) async {
         guard let previous = record(for: book.uuid, kind: kind), previous.state == .complete
         else {
@@ -224,83 +427,173 @@ final class DownloadManager: NSObject {
     }
 
     /// Begin (or restart) a download. `kind` picks the endpoint: an ebook pulls
-    /// `/api/ebooks/{uuid}/file` (the EPUB, or a comic-only book's CBZ), an
-    /// audiobook `/api/audiobooks/{uuid}/download`.
+    /// `/api/ebooks/{uuid}/file`, an audiobook one
+    /// `/api/audiobooks/{uuid}/download` request per part.
     ///
     /// `replacing` carries the completed record this download is standing in
-    /// for, so the book stays readable throughout and is restored on failure.
+    /// for, so the book stays on disk throughout and is restored on failure.
     func start(book: Book, kind: DownloadKind, replacing previous: DownloadRecord? = nil) async {
         let uuid = book.uuid
-        let path = kind == .audio
-            ? "/api/audiobooks/\(uuid)/download"
-            : "/api/ebooks/\(uuid)/file"
-        // The stored format names the file the endpoint will actually send —
-        // it becomes the local file's extension, which is how the comic
-        // reader recognises a downloaded archive.
-        let format = kind == .audio
-            ? (book.formats.first { Book.audioFormats.contains($0.lowercased()) } ?? "m4b")
-            : (Self.targetFile(book, kind: .ebook)?.format.lowercased()
-                ?? (book.opensAsComic ? "cbz" : "epub"))
+        let key = DownloadRecord.key(uuid, kind)
 
-        guard let url = await APIClient.shared.absoluteURL(path) else { return }
-        var request = URLRequest(url: url)
-        for (key, value) in await APIClient.shared.authHeaders() {
-            request.setValue(value, forHTTPHeaderField: key)
+        // Planned before anything is written, so a plan that can't be made
+        // leaves the registry — and any copy already on the device —
+        // untouched.
+        let plan: [DownloadFile]
+        do {
+            plan = try Self.plan(
+                book: book, kind: kind, manifest: try await Self.manifest(for: book, kind: kind)
+            )
+        } catch {
+            // A replacement that never got started leaves the reader with the
+            // book they already had, the same rule the delegate's failure
+            // path follows — there is nothing to report over a file that is
+            // still perfectly readable.
+            guard previous == nil else { return }
+            await fail(book: book, kind: kind, message: Self.message(for: error))
+            return
         }
 
+        var requests: [URLRequest] = []
+        let headers = await APIClient.shared.authHeaders()
+        for file in plan {
+            guard let url = await APIClient.shared.absoluteURL(file.urlPath) else {
+                guard previous == nil else { return }
+                await fail(book: book, kind: kind, message: Self.message(for: DownloadPlanError.notConfigured))
+                return
+            }
+            var request = URLRequest(url: url)
+            for (header, value) in headers { request.setValue(value, forHTTPHeaderField: header) }
+            requests.append(request)
+        }
+
+        // Anything still running for this key belongs to a previous attempt.
+        // Left alone, its completions would land against the plan being
+        // installed here and count files this attempt never fetched.
+        for task in await session.allTasks
+        where task.taskDescription.map(DownloadRecord.recordID(fromTaskKey:)) == key {
+            task.cancel()
+        }
+        abandoned.remove(key)
+
         let record = DownloadRecord(
-            bookUUID: uuid, kind: kind, format: format, state: .running,
-            // A replacement keeps pointing at the file already on disk, so
-            // the reader can go on opening the book while it downloads —
-            // and so a failure leaves something to fall back to.
-            localPath: previous?.localPath,
-            totalBytes: 0, receivedBytes: 0, updatedAt: Int64(Date().timeIntervalSince1970),
+            bookUUID: uuid, kind: kind, format: Self.formatLabel(book, kind: kind, plan: plan),
+            state: .running,
+            files: plan,
+            updatedAt: Int64(Date().timeIntervalSince1970),
             error: nil,
             // Snapshot what the library says this file is right now, so a
-            // later refresh can tell us it has been replaced since.
+            // later refresh can tell us it has been replaced since. One value
+            // for every part — they share a `book_files` row, so they share
+            // its validator.
             sourceEtag: Self.targetFile(book, kind: kind)?.etag
         )
-        if let previous { replacing[record.id] = previous }
-        records[record.id] = record
+        if let previous { replacing[key] = previous }
+        records[key] = record
         await OfflineStore.shared.upsertDownload(record)
 
-        let task = session.downloadTask(with: request)
-        // The identity has to ride on the task itself: a background session
-        // outlives the process, so an in-memory map from task identifier to
-        // book is gone by the time the completion is delivered. iOS persists
-        // `taskDescription` with the task.
-        task.taskDescription = record.id
-        task.resume()
+        for (file, request) in zip(plan, requests) {
+            let task = session.downloadTask(with: request)
+            // The identity has to ride on the task itself: a background session
+            // outlives the process, so an in-memory map from task identifier to
+            // book is gone by the time the completion is delivered. iOS persists
+            // `taskDescription` with the task.
+            task.taskDescription = DownloadRecord.taskKey(key, ordinal: file.ordinal)
+            task.resume()
+        }
 
         // Everything else the book needs offline, pulled while the server is
-        // still reachable. The transfer is the slow part and none of this
-        // gates it, but all of it is unavailable the moment it's wanted: a
-        // cover never scrolled past leaves a bare plate on the shelf, a
-        // manifest never fetched leaves an audiobook that can't be laid out on
-        // a timeline, and annotations never read leave a book that opens at
-        // the beginning with nothing marked in it.
+        // still reachable. The transfers are the slow part and none of this
+        // gates them, but all of it is unavailable the moment it's wanted: a
+        // cover never scrolled past leaves a bare plate on the shelf, and
+        // annotations never read leave a book that opens at the beginning with
+        // nothing marked in it. The manifest an audiobook needs to be laid out
+        // on a timeline is already cached — planning the parts fetched it.
         Task.detached(priority: .utility) {
             for size in [ThumbSize.sm, .md, .lg] {
                 await ImageCache.shared.prefetch("/api/thumbs/\(uuid)/\(size.rawValue)")
-            }
-            if kind == .audio {
-                _ = try? await LibraryService.audiobookManifest(uuid: uuid)
             }
             await UserDataService.prefetchForOffline(uuid: uuid)
         }
     }
 
+    /// The manifest a plan needs, or `nil` for an ebook.
+    ///
+    /// Fetched with no `file_id`, which is the file `/download` resolves on
+    /// its own and the one `targetFile` snapshots the validator of — so the
+    /// plan, the bytes, and the staleness check all describe the same file.
+    /// It also warms the cache row the offline player reads.
+    ///
+    /// The error is propagated rather than swallowed. A manifest that could
+    /// not be *fetched* and a book that genuinely cannot be stored are
+    /// different answers, and collapsing them told a reader in a tunnel that
+    /// a perfectly ordinary MP3 audiobook "has to be converted by the server"
+    /// — a permanent-sounding verdict on a transient failure.
+    private static func manifest(
+        for book: Book, kind: DownloadKind
+    ) async throws -> AudiobookManifest? {
+        guard kind == .audio else { return nil }
+        return try await LibraryService.audiobookManifest(uuid: book.uuid)
+    }
+
+    /// The badge a download row shows, and the extension a single-file
+    /// download lands under.
+    private static func formatLabel(_ book: Book, kind: DownloadKind, plan: [DownloadFile]) -> String {
+        guard kind == .audio else {
+            return targetFile(book, kind: .ebook)?.format.lowercased()
+                ?? (book.opensAsComic ? "cbz" : "epub")
+        }
+        return (plan.first?.name as NSString?)?.pathExtension
+            ?? book.formats.first { Book.audioFormats.contains($0.lowercased()) }
+            ?? "m4b"
+    }
+
+    /// What the reader is told about a download that never started.
+    ///
+    /// A failure to reach the server says so in the terms the reader can act
+    /// on. An audiobook has to be planned from its manifest before the first
+    /// byte is asked for, so unlike an ebook it cannot be handed to the
+    /// background session to complete whenever connectivity returns — the same
+    /// trade the web engine makes with its known-offline fast fail.
+    private static func message(for error: Error) -> String {
+        if let api = error as? APIError, api.isRecoverableOffline {
+            return "You're offline — connect to download."
+        }
+        return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+    }
+
+    /// Record a download that never started, so the reader sees why rather
+    /// than a button that did nothing.
+    private func fail(book: Book, kind: DownloadKind, message: String) async {
+        let record = DownloadRecord(
+            bookUUID: book.uuid, kind: kind, format: Self.formatLabel(book, kind: kind, plan: []),
+            state: .failed, files: [],
+            updatedAt: Int64(Date().timeIntervalSince1970),
+            error: message,
+            sourceEtag: nil
+        )
+        records[record.id] = record
+        await OfflineStore.shared.upsertDownload(record)
+    }
+
     func cancel(_ uuid: String, kind: DownloadKind) async {
         let key = DownloadRecord.key(uuid, kind)
-        for task in await session.allTasks where task.taskDescription == key {
+        abandoned.insert(key)
+        for task in await session.allTasks
+        where task.taskDescription.map(DownloadRecord.recordID(fromTaskKey:)) == key {
             task.cancel()
         }
         await remove(uuid, kind: kind)
     }
 
     func remove(_ uuid: String, kind: DownloadKind) async {
+        let key = DownloadRecord.key(uuid, kind)
+        // Bytes fetched but not yet installed are this record's too, and the
+        // store only knows about the files the record names.
+        if let record = records[key] { Self.discardIncoming(of: record) }
         await OfflineStore.shared.deleteDownload(uuid, kind: kind)
-        records[DownloadRecord.key(uuid, kind)] = nil
+        records[key] = nil
+        replacing[key] = nil
     }
 
     /// Drop registry keys already removed from the store, so the in-memory
@@ -322,10 +615,10 @@ final class DownloadManager: NSObject {
     /// report `true` when one was restored so the caller doesn't also write
     /// a failure over it.
     ///
-    /// The file itself was never touched — `URLSession` stages into its own
-    /// temp location and the swap only happens on success — so restoring the
-    /// record is enough to make the book readable again.
-    fileprivate func restoreReplaced(key: String) async -> Bool {
+    /// The files themselves were never touched — every transfer lands under
+    /// an `incomingName` and the set is only installed on success — so
+    /// restoring the record is enough to make the book readable again.
+    private func restoreReplaced(key: String) async -> Bool {
         guard let previous = replacing.removeValue(forKey: key) else { return false }
         records[key] = previous
         await OfflineStore.shared.upsertDownload(previous)
@@ -333,11 +626,11 @@ final class DownloadManager: NSObject {
     }
 
     /// A replacement landed, so the copy it stood in for is superseded.
-    fileprivate func forgetReplaced(key: String) {
+    private func forgetReplaced(key: String) {
         replacing[key] = nil
     }
 
-    fileprivate func update(key: String, mutate: (inout DownloadRecord) -> Void) async {
+    private func update(key: String, mutate: (inout DownloadRecord) -> Void) async {
         guard var record = records[key] else { return }
         mutate(&record)
         record.updatedAt = Int64(Date().timeIntervalSince1970)
@@ -348,13 +641,226 @@ final class DownloadManager: NSObject {
     /// Adopt a record the delegate saw for a transfer this process didn't
     /// start — the relaunch case, where the registry is on disk but `records`
     /// has not been hydrated with it yet.
-    fileprivate func adopt(key: String) async -> Bool {
+    private func adopt(key: String) async -> Bool {
         if records[key] != nil { return true }
         guard let (uuid, kind) = DownloadRecord.parse(key),
               let stored = await OfflineStore.shared.download(for: uuid, kind: kind)
         else { return false }
         records[key] = stored
         return true
+    }
+
+    // MARK: - Completion
+
+    /// One file's bytes have landed: stage them under the file's incoming
+    /// name, and install the whole record once nothing is left outstanding.
+    fileprivate func finish(key: String, ordinal: Int64?, status: Int, staged: URL?) async {
+        guard !abandoned.contains(key), await adopt(key: key) else {
+            Self.discard(staged)
+            return
+        }
+        // A completion for a record that is already installed is a duplicate
+        // delivery, not new bytes — staging it would leave an incoming file
+        // behind with nothing left to install it.
+        guard records[key]?.state != .complete else {
+            Self.discard(staged)
+            return
+        }
+        guard (200..<300).contains(status), let staged,
+              let record = records[key],
+              let index = record.index(ofOrdinal: ordinal)
+        else {
+            Self.discard(staged)
+            await abandon(key: key, message: "Download failed (\(status))")
+            return
+        }
+
+        // CBZ integrity check *before* anything is installed, so a damaged
+        // transfer never replaces a readable copy: every zip entry carries a
+        // recorded CRC-32, and reading each to EOF verifies it — the
+        // CRC-backed tier of rule 09's post-download backstop. Only comics get
+        // this today; the EPUB/audio formats have no verifier on this client
+        // yet.
+        if record.format.lowercased() == "cbz" {
+            let intact = await Task.detached(priority: .utility) {
+                ComicArchive.verify(url: staged)
+            }.value
+            guard intact else {
+                Self.discard(staged)
+                await abandon(key: key, message: "The download failed its integrity check.")
+                return
+            }
+        }
+
+        let incoming = OfflineStore.downloadsDirectory
+            .appendingPathComponent(record.files[index].incomingName)
+        try? FileManager.default.removeItem(at: incoming)
+        do {
+            try FileManager.default.moveItem(at: staged, to: incoming)
+        } catch {
+            Self.discard(staged)
+            await abandon(key: key, message: error.localizedDescription)
+            return
+        }
+
+        let size = (try? FileManager.default
+            .attributesOfItem(atPath: incoming.path)[.size] as? Int64) ?? 0
+        await update(key: key) { record in
+            guard let index = record.index(ofOrdinal: ordinal) else { return }
+            record.files[index].done = true
+            if size > 0 {
+                record.files[index].receivedBytes = size
+                if record.files[index].totalBytes == 0 { record.files[index].totalBytes = size }
+            }
+        }
+        guard records[key]?.files.allSatisfy(\.done) == true else { return }
+        await install(key: key)
+    }
+
+    /// One file's part in an install: where its bytes are, where they go, and
+    /// where the copy they supersede waits until the whole set has landed.
+    private struct Swap {
+        let incoming: URL
+        let destination: URL
+        let superseded: URL
+        /// Whether a previous copy was actually moved aside, so a rollback
+        /// knows whether there is one to put back.
+        var replaced = false
+    }
+
+    /// Move every fetched file into place at once and mark the record
+    /// complete.
+    ///
+    /// The all-at-once swap is what keeps a replacement honest: until this
+    /// runs, the copy the reader already had is the only thing in the
+    /// downloads directory under those names, so a failure at any point
+    /// before it leaves them a whole book rather than a book with one part
+    /// from each of two editions.
+    private func install(key: String) async {
+        guard !installing.contains(key), let record = records[key],
+              record.state != .complete
+        else { return }
+        installing.insert(key)
+        defer { installing.remove(key) }
+        let directory = OfflineStore.downloadsDirectory
+        let plan = record.files.map {
+            Swap(
+                incoming: directory.appendingPathComponent($0.incomingName),
+                destination: directory.appendingPathComponent($0.name),
+                superseded: directory.appendingPathComponent($0.supersededName)
+            )
+        }
+        // Checked before the first destination is touched — a half-installed
+        // set is the one outcome this ordering exists to rule out.
+        guard plan.allSatisfy({ FileManager.default.fileExists(atPath: $0.incoming.path) }) else {
+            await abandon(key: key, message: "The download is missing some of its files.")
+            return
+        }
+        let placed: [Swap]
+        do {
+            placed = try Self.swapIntoPlace(plan)
+        } catch {
+            await abandon(key: key, message: error.localizedDescription)
+            return
+        }
+
+        // Files the copy this one replaces held and this one doesn't — a book
+        // that lost a part between downloads would otherwise leave it on disk
+        // forever, counted under "Storage used" with no row pointing at it.
+        if let previous = replacing[key] {
+            let installed = Set(record.files.map(\.name))
+            for file in previous.files where !installed.contains(file.name) {
+                for name in file.onDiskNames {
+                    try? FileManager.default.removeItem(
+                        at: directory.appendingPathComponent(name)
+                    )
+                }
+            }
+        }
+        // Only now, with every file in place, is the copy they replaced
+        // genuinely superseded.
+        for step in placed where step.replaced {
+            try? FileManager.default.removeItem(at: step.superseded)
+        }
+        forgetReplaced(key: key)
+        await update(key: key) { record in
+            record.state = .complete
+            record.error = nil
+        }
+    }
+
+    /// Move each file into place, setting aside whatever it supersedes, and
+    /// undo the whole set if any single move fails.
+    ///
+    /// The copy being replaced is moved aside rather than deleted. Deleting it
+    /// first makes the failure unrecoverable: the rollback would restore a
+    /// record naming files that are no longer on disk, which is a book the
+    /// reader had a moment ago and now doesn't. Reaching this at all takes a
+    /// full disk or a permissions fault — but the whole staging scheme exists
+    /// to rule out a half-swapped book, and a swap that can't be undone
+    /// doesn't rule it out.
+    private static func swapIntoPlace(_ plan: [Swap]) throws -> [Swap] {
+        let fm = FileManager.default
+        var placed: [Swap] = []
+        for var step in plan {
+            // A leftover from an install killed mid-swap; it belongs to no
+            // copy anyone can still reach.
+            try? fm.removeItem(at: step.superseded)
+            step.replaced = (try? fm.moveItem(at: step.destination, to: step.superseded)) != nil
+            do {
+                try fm.moveItem(at: step.incoming, to: step.destination)
+                placed.append(step)
+            } catch {
+                if step.replaced {
+                    try? fm.moveItem(at: step.superseded, to: step.destination)
+                }
+                for done in placed.reversed() {
+                    try? fm.moveItem(at: done.destination, to: done.incoming)
+                    if done.replaced {
+                        try? fm.moveItem(at: done.superseded, to: done.destination)
+                    }
+                }
+                throw error
+            }
+        }
+        return placed
+    }
+
+    /// Give up on a record: stop whatever else is still in flight for it,
+    /// throw away the bytes staged so far, and either put back the copy this
+    /// download was replacing or report the failure.
+    fileprivate func abandon(key: String, message: String) async {
+        guard !abandoned.contains(key) else { return }
+        abandoned.insert(key)
+        for task in await session.allTasks
+        where task.taskDescription.map(DownloadRecord.recordID(fromTaskKey:)) == key {
+            task.cancel()
+        }
+        if let record = records[key] { Self.discardIncoming(of: record) }
+        if await restoreReplaced(key: key) { return }
+        await update(key: key) { record in
+            record.state = .failed
+            record.error = message
+            // Nothing here resumes, so the bytes are gone — saying otherwise
+            // would leave a retry showing a progress bar starting part-full.
+            for index in record.files.indices {
+                record.files[index].done = false
+                record.files[index].receivedBytes = 0
+            }
+        }
+    }
+
+    private static func discard(_ url: URL?) {
+        guard let url else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private static func discardIncoming(of record: DownloadRecord) {
+        for file in record.files {
+            try? FileManager.default.removeItem(
+                at: OfflineStore.downloadsDirectory.appendingPathComponent(file.incomingName)
+            )
+        }
     }
 }
 
@@ -366,12 +872,17 @@ extension DownloadManager: URLSessionDownloadDelegate {
         totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64
     ) {
-        guard let key = downloadTask.taskDescription else { return }
+        guard let taskKey = downloadTask.taskDescription else { return }
+        let key = DownloadRecord.recordID(fromTaskKey: taskKey)
+        let ordinal = DownloadRecord.ordinal(fromTaskKey: taskKey)
         Task { @MainActor in
             guard await self.adopt(key: key) else { return }
             await self.update(key: key) { record in
-                record.receivedBytes = totalBytesWritten
-                if totalBytesExpectedToWrite > 0 { record.totalBytes = totalBytesExpectedToWrite }
+                guard let index = record.index(ofOrdinal: ordinal) else { return }
+                record.files[index].receivedBytes = totalBytesWritten
+                if totalBytesExpectedToWrite > 0 {
+                    record.files[index].totalBytes = totalBytesExpectedToWrite
+                }
             }
         }
     }
@@ -381,83 +892,27 @@ extension DownloadManager: URLSessionDownloadDelegate {
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
     ) {
-        guard let key = downloadTask.taskDescription else { return }
+        guard let taskKey = downloadTask.taskDescription else { return }
+        let key = DownloadRecord.recordID(fromTaskKey: taskKey)
+        let ordinal = DownloadRecord.ordinal(fromTaskKey: taskKey)
         let status = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
         // The temp file is deleted the moment this method returns, so the move
         // has to happen synchronously here, not in the Task below.
+        //
+        // Named for the transfer rather than randomly: this runs nonisolated,
+        // so it cannot read the record to learn the file's own name, and the
+        // main-actor hop that can is exactly where the process may be killed.
+        // A random name left behind that way is unreachable — nothing on disk
+        // or in the registry says which download it belonged to — so it would
+        // sit in the downloads directory forever. Derived from the task key,
+        // `hydrate` can tell an orphan from a live transfer and sweep it.
         let staged = OfflineStore.downloadsDirectory
-            .appendingPathComponent("staged-\(UUID().uuidString)")
+            .appendingPathComponent(DownloadRecord.stagedName(taskKey: taskKey))
+        try? FileManager.default.removeItem(at: staged)
         let moved = (try? FileManager.default.moveItem(at: location, to: staged)) != nil
 
         Task { @MainActor in
-            guard await self.adopt(key: key) else {
-                try? FileManager.default.removeItem(at: staged)
-                return
-            }
-
-            guard (200..<300).contains(status), moved else {
-                try? FileManager.default.removeItem(at: staged)
-                // A replacement that never arrived leaves the reader with
-                // the book they already had, rather than a failed row over
-                // a file that is still perfectly readable.
-                if await self.restoreReplaced(key: key) { return }
-                await self.update(key: key) { record in
-                    record.state = .failed
-                    record.error = "Download failed (\(status))"
-                }
-                return
-            }
-
-            guard let record = self.records[key] else { return }
-
-            // CBZ integrity check *before* the swap, so a damaged transfer
-            // never replaces a readable copy: every zip entry carries a
-            // recorded CRC-32, and reading each to EOF verifies it — the
-            // CRC-backed tier of rule 09's post-download backstop. Only
-            // comics get this today; the EPUB/audio formats have no
-            // verifier on this client yet.
-            if record.format.lowercased() == "cbz" {
-                let intact = await Task.detached(priority: .utility) {
-                    ComicArchive.verify(url: staged)
-                }.value
-                guard intact else {
-                    try? FileManager.default.removeItem(at: staged)
-                    if await self.restoreReplaced(key: key) { return }
-                    await self.update(key: key) { record in
-                        record.state = .failed
-                        record.error = "The download failed its integrity check."
-                    }
-                    return
-                }
-            }
-
-            let name = "\(record.bookUUID).\(record.kind.rawValue).\(record.format)"
-            let destination = OfflineStore.downloadsDirectory.appendingPathComponent(name)
-            try? FileManager.default.removeItem(at: destination)
-            do {
-                try FileManager.default.moveItem(at: staged, to: destination)
-            } catch {
-                try? FileManager.default.removeItem(at: staged)
-                if await self.restoreReplaced(key: key) { return }
-                await self.update(key: key) { record in
-                    record.state = .failed
-                    record.error = error.localizedDescription
-                }
-                return
-            }
-
-            let size = (try? FileManager.default
-                .attributesOfItem(atPath: destination.path)[.size] as? Int64) ?? 0
-            self.forgetReplaced(key: key)
-            await self.update(key: key) { record in
-                record.state = .complete
-                record.localPath = name
-                if size > 0 {
-                    record.receivedBytes = size
-                    if record.totalBytes == 0 { record.totalBytes = size }
-                }
-                record.error = nil
-            }
+            await self.finish(key: key, ordinal: ordinal, status: status, staged: moved ? staged : nil)
         }
     }
 
@@ -466,17 +921,15 @@ extension DownloadManager: URLSessionDownloadDelegate {
         task: URLSessionTask,
         didCompleteWithError error: Error?
     ) {
-        guard let error, let key = task.taskDescription else { return }
+        guard let error, let taskKey = task.taskDescription else { return }
+        // A cancel tears the record down on its own — and is also how a
+        // failed sibling stops the rest of a multi-part book — so reporting it
+        // would resurrect a row that has already been settled.
+        guard (error as? URLError)?.code != .cancelled else { return }
+        let key = DownloadRecord.recordID(fromTaskKey: taskKey)
         Task { @MainActor in
             guard await self.adopt(key: key) else { return }
-            // A cancel tears the record down on its own; reporting it as a
-            // failure would resurrect the row the cancel just removed.
-            guard (error as? URLError)?.code != .cancelled else { return }
-            if await self.restoreReplaced(key: key) { return }
-            await self.update(key: key) { record in
-                record.state = .failed
-                record.error = error.localizedDescription
-            }
+            await self.abandon(key: key, message: error.localizedDescription)
         }
     }
 

@@ -487,15 +487,37 @@ final class AudioPlayer {
         return min(3.0, max(0.5, record.playbackRate))
     }
 
+    /// Whether the files on this device cover the whole of what `manifest`
+    /// describes.
+    ///
+    /// The count is the whole check. `/download` serves one part per request,
+    /// so a device can hold fewer files than the book has parts — and an item
+    /// built from those physically ends at part 1 while the manifest-driven
+    /// timeline still shows the whole book. Every resume or seek past that
+    /// point clamped to the item's real end, fired
+    /// `AVPlayerItemDidPlayToEndTime`, marked the book `finished`, and wrote
+    /// the clamped position back over the real one.
+    ///
+    /// An HLS manifest never qualifies: it names no parts, so there is
+    /// nothing to check a local copy against, and the book is one the server
+    /// has to transcode as it plays anyway.
+    nonisolated static func localCovers(manifest: AudiobookManifest, localFileCount: Int) -> Bool {
+        guard case let .direct(parts, _, _) = manifest else { return false }
+        return !parts.isEmpty && parts.count == localFileCount
+    }
+
     /// Build the player item. A downloaded book plays from disk; a single
-    /// remote part streams directly; multiple parts are stitched into one
-    /// composition so the timeline and seeking stay continuous.
+    /// part plays directly; multiple parts are stitched into one composition
+    /// so the timeline and seeking stay continuous.
     private func makeItem(for manifest: AudiobookManifest, uuid: String) async throws -> AVPlayerItem {
         // The downloaded copy is the server's default file (the download
         // endpoint takes no file id), so it can only stand in for that
         // selection — any other file of the book streams.
-        if isDefaultFileSelected, let local = DownloadManager.shared.localURL(for: uuid, kind: .audio) {
-            return AVPlayerItem(asset: AVURLAsset(url: local))
+        if isDefaultFileSelected {
+            let local = DownloadManager.shared.localFiles(for: uuid, kind: .audio)
+            if Self.localCovers(manifest: manifest, localFileCount: local.count) {
+                return try await item(from: local.map { AVURLAsset(url: $0) })
+            }
         }
 
         let headers = await APIClient.shared.authHeaders()
@@ -510,33 +532,47 @@ final class AudioPlayer {
 
         case let .direct(parts, _, _):
             guard !parts.isEmpty else { throw APIError.http(status: 404, message: "No audio parts.") }
-            let sorted = parts.sorted { $0.ordinal < $1.ordinal }
-
-            if sorted.count == 1 {
-                guard let url = await APIClient.shared.absoluteURL(sorted[0].url) else {
+            var assets: [AVURLAsset] = []
+            for part in parts.sorted(by: { $0.ordinal < $1.ordinal }) {
+                guard let url = await APIClient.shared.absoluteURL(part.url) else {
                     throw APIError.notConfigured
                 }
-                return AVPlayerItem(asset: AVURLAsset(url: url, options: options))
+                assets.append(AVURLAsset(url: url, options: options))
             }
-
-            let composition = AVMutableComposition()
-            guard let track = composition.addMutableTrack(
-                withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid
-            ) else { throw APIError.http(status: 500, message: "Could not build the audio timeline.") }
-
-            var cursor = CMTime.zero
-            for part in sorted {
-                guard let url = await APIClient.shared.absoluteURL(part.url) else { continue }
-                let asset = AVURLAsset(url: url, options: options)
-                guard let source = try await asset.loadTracks(withMediaType: .audio).first else { continue }
-                let assetDuration = try await asset.load(.duration)
-                try track.insertTimeRange(
-                    CMTimeRange(start: .zero, duration: assetDuration), of: source, at: cursor
-                )
-                cursor = CMTimeAdd(cursor, assetDuration)
-            }
-            return AVPlayerItem(asset: composition)
+            return try await item(from: assets)
         }
+    }
+
+    /// One player item spanning `assets` in order — a single asset plays as
+    /// itself, several are stitched into a composition.
+    ///
+    /// A part that yields no audio track is an error rather than something to
+    /// skip past. Dropping it silently produces exactly the item this whole
+    /// change exists to prevent: one shorter than the book, whose real end
+    /// arrives mid-timeline and reads as having finished it.
+    private func item(from assets: [AVURLAsset]) async throws -> AVPlayerItem {
+        guard let first = assets.first else {
+            throw APIError.http(status: 404, message: "No audio parts.")
+        }
+        if assets.count == 1 { return AVPlayerItem(asset: first) }
+
+        let composition = AVMutableComposition()
+        guard let track = composition.addMutableTrack(
+            withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid
+        ) else { throw APIError.http(status: 500, message: "Could not build the audio timeline.") }
+
+        var cursor = CMTime.zero
+        for asset in assets {
+            guard let source = try await asset.loadTracks(withMediaType: .audio).first else {
+                throw APIError.http(status: 500, message: "An audio part could not be read.")
+            }
+            let assetDuration = try await asset.load(.duration)
+            try track.insertTimeRange(
+                CMTimeRange(start: .zero, duration: assetDuration), of: source, at: cursor
+            )
+            cursor = CMTimeAdd(cursor, assetDuration)
+        }
+        return AVPlayerItem(asset: composition)
     }
 
     // MARK: - Transport
@@ -845,11 +881,17 @@ final class AudioPlayer {
                 self?.isPlaying = false
                 await self?.persistPosition(force: true)
                 await self?.checkpointSession()
-                // The manifest streams every part of the book as one item, so
-                // this fires once the last file has played out — finishing an
-                // audiobook is the strongest completion signal we get, and it
-                // goes through the same tracker as the readers rather than
-                // writing `finished` blind.
+                // The item spans every part of the book, so this fires once
+                // the last file has played out — finishing an audiobook is the
+                // strongest completion signal we get, and it goes through the
+                // same tracker as the readers rather than writing `finished`
+                // blind.
+                //
+                // That the item really is the whole book is a load-bearing
+                // precondition, not an observation: a downloaded copy holding
+                // fewer files than the manifest names ends mid-book, and this
+                // handler had no way to tell that apart from a listener
+                // reaching the end. `localCovers` is what keeps it true.
                 await tracker?.positionChanged(atEnd: true)
             }
         }

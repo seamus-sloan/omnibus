@@ -630,19 +630,32 @@ struct BookDetailView: View {
             }
 
         default:
-            Button {
-                Haptics.tap()
-                Task { await downloads.start(book: book, kind: kind) }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.down.circle")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(record?.state == .failed ? "Retry" : "Download")
-                        .font(.ui(14, weight: .medium))
+            HStack(spacing: Spacing.sm) {
+                // Why it failed, on the screen where it was asked for. A
+                // download can now fail before a byte moves — offline, or a
+                // book whose format can't be stored — and relabelling the
+                // button "Retry" left the reader to go and find the reason on
+                // the Downloads list.
+                if record?.state == .failed, let message = record?.error {
+                    Text(message)
+                        .font(.ui(11.5))
+                        .foregroundStyle(palette.badColor)
+                        .lineLimit(2)
                 }
-                .foregroundStyle(palette.accentColor)
+                Button {
+                    Haptics.tap()
+                    Task { await downloads.start(book: book, kind: kind) }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(record?.state == .failed ? "Retry" : "Download")
+                            .font(.ui(14, weight: .medium))
+                    }
+                    .foregroundStyle(palette.accentColor)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
     }
 

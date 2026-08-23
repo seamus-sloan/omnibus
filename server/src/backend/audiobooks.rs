@@ -300,16 +300,24 @@ pub(super) async fn get_audiobook_part(
 #[derive(Deserialize)]
 pub(super) struct DownloadQuery {
     file_id: Option<i64>,
+    part: Option<i64>,
 }
 
-/// Serves the audiobook's source file as a browser download
+/// Serves one source file of the audiobook as a browser download
 /// (`Content-Disposition: attachment`), streaming via [`super::serve_download`].
 ///
-/// Targets the lowest-ordinal part of the resolved `book_files` row
-/// (optionally selected via `?file_id=N`). For a single-file audiobook
-/// (the common m4b case) that is the whole book; multi-part sources only
-/// yield the first part today — there is no on-the-fly archiving yet, so
-/// per-part downloads go through the format switcher's file picker.
+/// `?file_id=N` picks a `book_files` row (default: the server's own — first
+/// audio file by ordinal); `?part=N` picks one part of that row by ordinal,
+/// defaulting to the lowest. A single-file audiobook (the common m4b case)
+/// has exactly one part, so the bare URL is the whole book.
+///
+/// A multi-part book is fetched one part at a time — there is still no
+/// on-the-fly archiving, and this is what the offline clients walk to take
+/// every part of a book with them. `?part=` exists rather than reusing
+/// `/parts/{ordinal}` so every byte the download feature serves stays behind
+/// [`super::deny_without_download`]: the streaming route is deliberately open
+/// to a `can_download = 0` user, and planning offline downloads against it
+/// would hand that user the whole book.
 pub(super) async fn get_audiobook_download(
     user: AuthUser,
     State(state): State<AppState>,
@@ -329,7 +337,11 @@ pub(super) async fn get_audiobook_download(
         Ok(p) => p,
         Err(e) => return internal("get_parts", e),
     };
-    let Some(part) = parts.into_iter().min_by_key(|p| p.ordinal) else {
+    let part = match query.part {
+        Some(ordinal) => parts.into_iter().find(|p| p.ordinal == ordinal),
+        None => parts.into_iter().min_by_key(|p| p.ordinal),
+    };
+    let Some(part) = part else {
         return axum::http::StatusCode::NOT_FOUND.into_response();
     };
     let abs_path = std::path::Path::new(&resolved.library_path).join(&part.filename);

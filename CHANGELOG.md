@@ -120,6 +120,14 @@ recent releases are recorded below; everything earlier is available via the
 - Raising the keyboard on iOS no longer drags the tab bar up with it: the
   keyboard now covers the bar instead of stacking on top of it, while fields
   inside a tab keep their keyboard avoidance (#2102)
+- Downloading a multi-part audiobook in the iOS app now takes the whole book.
+  Only its first part was ever stored, but the player treated that part as the
+  entire book: resuming anywhere past it snapped back to the end of part one,
+  marked the book finished, and saved that position over the real one. Every
+  part is downloaded now, they play as one continuous timeline, and a copy that
+  doesn't cover the whole book is streamed rather than played from disk — so a
+  partial download left by an older version can't finish a book you're in the
+  middle of. Single-file audiobooks are unaffected (#2103)
 
 ## [0.22.10] - 2026-08-18
 

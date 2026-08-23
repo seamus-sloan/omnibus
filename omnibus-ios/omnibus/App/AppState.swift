@@ -197,7 +197,10 @@ final class AppState {
         // account-switch wipe can't cover this, since it keys on the username
         // and a username says nothing about which server issued it.
         await OfflineStore.shared.resetForServerChange()
-        await DownloadManager.shared.hydrate()
+        // `forgetAll`, not `hydrate`: the registry merges what it reads onto
+        // what it already holds, so re-reading an emptied table would leave
+        // the previous server's downloads sitting in memory.
+        DownloadManager.shared.forgetAll()
         await Connectivity.shared.refreshPendingCount()
         ServerURLStore.clear()
         serverURL = nil
