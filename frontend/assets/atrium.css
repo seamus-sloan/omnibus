@@ -1427,10 +1427,10 @@ html, body { overscroll-behavior: none; }
   line-height: 1.7;
   color: var(--ink-1);
 }
-.bd-journal-preview :first-child,
-.bd-journal-entry-body :first-child { margin-top: 0; }
-.bd-journal-preview :last-child,
-.bd-journal-entry-body :last-child { margin-bottom: 0; }
+.bd-journal-preview > :first-child,
+.bd-journal-entry-body > :first-child { margin-top: 0; }
+.bd-journal-preview > :last-child,
+.bd-journal-entry-body > :last-child { margin-bottom: 0; }
 .bd-journal-preview h1,
 .bd-journal-entry-body h1,
 .bd-journal-preview h2,
