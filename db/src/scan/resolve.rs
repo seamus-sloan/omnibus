@@ -248,13 +248,14 @@ pub(crate) async fn wishlist_add_with(
 /// Mint a fileless book from external metadata, fetching its cover now.
 ///
 /// `meta` crosses the HTTP boundary (`AddPhysicalOnly`/`WishlistAdd` bodies), so
-/// its `cover_url` is client-controlled. The fetch therefore runs under
-/// [`provider_cover_image_config`] — the same terms the metadata editor's
-/// cover-apply uses: HTTPS only, hosts limited to the provider catalog's, the
-/// SSRF address gate before any connect, a size cap, and a bounded redirect
-/// follow. The follow is not optional: Open Library's cover CDN 302s twice
-/// before serving bytes, so a zero-hop config drops every cover it publishes.
-/// The ISBN is re-canonicalized before storage.
+/// its `cover_url` is client-controlled and `image_config` is what constrains
+/// the fetch of it. Production callers pass
+/// [`provider_cover_image_config`]`(false)` — the same terms the metadata
+/// editor's cover-apply uses: HTTPS only, hosts limited to the provider
+/// catalog's, the SSRF address gate before any connect, a size cap, and a
+/// bounded redirect follow. That follow is not optional: Open Library's cover
+/// CDN 302s twice before serving bytes, so a zero-hop config drops every cover
+/// it publishes. The ISBN is re-canonicalized before storage.
 async fn create_fileless_from_meta(
     pool: &SqlitePool,
     meta: &ExternalBookMeta,
