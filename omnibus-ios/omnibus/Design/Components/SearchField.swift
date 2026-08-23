@@ -41,22 +41,36 @@ struct SearchField: View {
         .animation(Motion.snap, value: isActive)
     }
 
+    /// The identifier is applied only when one was given. An empty identifier
+    /// is still an identifier: setting it unconditionally would file every
+    /// unnamed field in the tree under one shared key, which is the ambiguity
+    /// the parameter exists to remove.
+    @ViewBuilder
+    private var textField: some View {
+        let base = TextField("", text: $text, prompt: promptText)
+            .font(.ui(16))
+            .foregroundStyle(palette.ink0Color)
+            .tint(palette.accentColor)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(.search)
+            .focused($focused)
+            .onSubmit(onSubmit)
+
+        if let identifier {
+            base.accessibilityIdentifier(identifier)
+        } else {
+            base
+        }
+    }
+
     private var field: some View {
         HStack(spacing: 9) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(isActive ? palette.accentColor : palette.ink3Color)
 
-            TextField("", text: $text, prompt: promptText)
-                .font(.ui(16))
-                .foregroundStyle(palette.ink0Color)
-                .tint(palette.accentColor)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.search)
-                .focused($focused)
-                .onSubmit(onSubmit)
-                .accessibilityIdentifier(identifier ?? "")
+            textField
 
             if !text.isEmpty {
                 Button {
