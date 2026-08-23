@@ -112,3 +112,26 @@ fn remaining_at_rate_falls_back_unscaled_for_invalid_rates() {
     assert!((remaining_at_rate(600.0, f64::NAN) - 600.0).abs() < f64::EPSILON);
     assert!((remaining_at_rate(600.0, f64::INFINITY) - 600.0).abs() < f64::EPSILON);
 }
+
+#[test]
+fn remaining_at_rate_keeps_elapsed_and_remaining_labels_on_one_basis() {
+    // The scrubber-row contract (mirrors the iOS `scrubberRowLabelsAgree`
+    // test for #2108): a 60-minute span at 2x, 20 book-minutes in, reads
+    // 10:00 elapsed and 20:00 remaining, summing to the 30-minute
+    // rate-adjusted total. An elapsed label left in 1x book-time would show
+    // 20:00 beside 20:00 remaining at the one-third mark.
+    let duration = 3600.0;
+    let elapsed = 1200.0;
+    let rate = 2.0;
+    assert_eq!(format_hms(remaining_at_rate(elapsed, rate)), "10:00");
+    assert_eq!(
+        format_hms(remaining_at_rate(duration - elapsed, rate)),
+        "20:00"
+    );
+    assert!(
+        (remaining_at_rate(elapsed, rate) + remaining_at_rate(duration - elapsed, rate)
+            - remaining_at_rate(duration, rate))
+        .abs()
+            < f64::EPSILON
+    );
+}

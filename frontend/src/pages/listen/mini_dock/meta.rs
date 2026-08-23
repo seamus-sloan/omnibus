@@ -2,7 +2,7 @@
 //! gate shared with the `/read` route, and the subtitle line (chapter ·
 //! clock · time-left).
 
-use super::super::helpers::format_hms;
+use super::super::helpers::{format_hms, remaining_at_rate};
 
 /// Progress fill percent (0–100) for the dock's mini progress bar. Returns 0
 /// when the duration is unknown or `elapsed` is non-finite so the bar never
@@ -74,14 +74,21 @@ pub(super) fn time_left_text(elapsed: f64, duration: f64, rate: f64) -> Option<S
 
 /// Build the dock subtitle: the chapter label (when present), the inline
 /// `elapsed / total` clock, and the speed-adjusted time left. The single-row
-/// bar has no separate time track, so the clock lives here.
+/// bar has no separate time track, so the clock lives here. The clock shares
+/// the time-left's rate-adjusted wall-clock basis — a 1x clock beside a
+/// rate-adjusted "left" disagrees with itself off 1x (#2108, matching the
+/// player surfaces).
 pub(super) fn dock_sub_text(
     chapter_sub: Option<String>,
     elapsed: f64,
     duration: f64,
     rate: f64,
 ) -> String {
-    let time = format!("{} / {}", format_hms(elapsed), format_hms(duration));
+    let time = format!(
+        "{} / {}",
+        format_hms(remaining_at_rate(elapsed, rate)),
+        format_hms(remaining_at_rate(duration, rate))
+    );
     let mut sub = match chapter_sub {
         Some(chapter) => format!("{chapter} \u{00b7} {time}"),
         None => time,

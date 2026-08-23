@@ -100,6 +100,17 @@ fn dock_sub_text_is_clock_and_time_left_without_chapters() {
     );
 }
 
+#[test]
+fn dock_sub_text_scales_the_clock_to_the_playback_rate() {
+    // 10 book-minutes into an hour at 2x: the clock and the time-left share
+    // one wall-clock basis (5:00 elapsed + 25m left = the 30:00 total),
+    // rather than a 1x clock beside a rate-adjusted "left" (#2108).
+    assert_eq!(
+        dock_sub_text(None, 600.0, 3600.0, 2.0),
+        "5:00 / 30:00 \u{00b7} about 25m left"
+    );
+}
+
 // Mirrors MiniDock's "renders empty host vs. active bar" branch without needing a full component render.
 #[test]
 fn dock_active_state_is_none_when_nothing_is_playing() {

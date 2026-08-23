@@ -300,13 +300,15 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
             div { class: "{scrub_class}",
                 {segment_bar(&chapters, eff_current, effective, duration)}
 
-                // Visible playhead + drag-time bubble.
+                // Visible playhead + drag-time bubble. The bubble previews
+                // the same rate-adjusted elapsed the row's left label shows,
+                // so the two can't disagree mid-drag.
                 div { class: "lp-chapter-thumb", style: "left: {thumb:.3}%;" }
                 if is_scrubbing {
                     div {
                         class: "lp-chapter-bubble",
                         style: "left: {thumb:.3}%;",
-                        "{format_hms(effective)}"
+                        "{format_hms(helpers::remaining_at_rate(effective, rate))}"
                     }
                 }
 
@@ -325,14 +327,18 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
                 }
             }
 
+            // All three readouts share one rate-adjusted wall-clock basis
+            // (elapsed + remaining = total at the current speed) — a 1x
+            // elapsed or total beside a rate-adjusted remaining disagrees
+            // with its own row off 1x (#2108, matching the iOS player).
+            // Scaled after the scrub preview so a drag previews the
+            // rate-adjusted times too (matches the mobile player).
             div { class: "lp-scrub-times",
-                span { "{format_hms(effective)}" }
+                span { "{format_hms(helpers::remaining_at_rate(effective, rate))}" }
                 span { class: "lp-scrub-remaining",
-                    // Scaled after the scrub preview so a drag previews the
-                    // rate-adjusted time left too (matches the mobile player).
                     "\u{00b7} {format_hms(helpers::remaining_at_rate(eff_remaining, rate))} remaining"
                 }
-                span { "{format_hms(duration)}" }
+                span { "{format_hms(helpers::remaining_at_rate(duration, rate))}" }
             }
             if buffering {
                 div {
