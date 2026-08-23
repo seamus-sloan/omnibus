@@ -102,11 +102,9 @@ final class DownloadManager: NSObject {
     /// staged parts away as stranded.
     func hydrate() async {
         let all = await OfflineStore.shared.allDownloads()
-        let live = Set(
-            await session.allTasks
-                .compactMap(\.taskDescription)
-                .map(DownloadRecord.recordID(fromTaskKey:))
-        )
+        let taskKeys = await session.allTasks.compactMap(\.taskDescription)
+        let live = Set(taskKeys.map(DownloadRecord.recordID(fromTaskKey:)))
+        Self.sweepStagedFiles(liveTaskKeys: taskKeys)
 
         for var record in all {
             // Already tracked here means this process has touched it since the
@@ -156,6 +154,27 @@ final class DownloadManager: NSObject {
                 record.state = .failed
                 record.error = "Only part of this audiobook was downloaded — download it again."
             }
+        }
+    }
+
+    /// Delete staged bytes no transfer is coming back for.
+    ///
+    /// `didFinishDownloadingTo` has to move the system's temp file somewhere
+    /// synchronously, before the main-actor hop that knows which file of which
+    /// record it is — and the process can be killed in that gap. What it
+    /// leaves is named for the transfer, so anything whose key no live task
+    /// claims belongs to a hop that never happened. Files from the build that
+    /// named these randomly are swept on the same pass; nothing could ever
+    /// attribute those, which is why they are only reclaimable in bulk.
+    private static func sweepStagedFiles(liveTaskKeys: [String]) {
+        let directory = OfflineStore.downloadsDirectory
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path)
+        else { return }
+        let live = Set(liveTaskKeys.map(DownloadRecord.stagedName(taskKey:)))
+        for name in names
+        where (name.hasPrefix(OfflineStore.legacyStagedPrefix)
+            || name.hasPrefix(DownloadRecord.stagedPrefix)) && !live.contains(name) {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
         }
     }
 
@@ -879,8 +898,17 @@ extension DownloadManager: URLSessionDownloadDelegate {
         let status = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
         // The temp file is deleted the moment this method returns, so the move
         // has to happen synchronously here, not in the Task below.
+        //
+        // Named for the transfer rather than randomly: this runs nonisolated,
+        // so it cannot read the record to learn the file's own name, and the
+        // main-actor hop that can is exactly where the process may be killed.
+        // A random name left behind that way is unreachable — nothing on disk
+        // or in the registry says which download it belonged to — so it would
+        // sit in the downloads directory forever. Derived from the task key,
+        // `hydrate` can tell an orphan from a live transfer and sweep it.
         let staged = OfflineStore.downloadsDirectory
-            .appendingPathComponent("staged-\(UUID().uuidString)")
+            .appendingPathComponent(DownloadRecord.stagedName(taskKey: taskKey))
+        try? FileManager.default.removeItem(at: staged)
         let moved = (try? FileManager.default.moveItem(at: location, to: staged)) != nil
 
         Task { @MainActor in

@@ -140,6 +140,21 @@ struct DownloadRecord: Sendable, Identifiable {
         return Int64(parts[1])
     }
 
+    /// Every staged file carries this prefix, so a sweep can recognise one
+    /// without knowing which download it came from.
+    static let stagedPrefix = "staged."
+
+    /// Where a transfer's bytes land the instant `URLSession` hands them over,
+    /// before the main actor can look up the file they belong to.
+    ///
+    /// Derived from the task key so it is the *same* name every time that
+    /// transfer completes, which is what makes an abandoned one identifiable:
+    /// anything carrying a key no live task claims is a leftover from a
+    /// process that died before it could be installed.
+    static func stagedName(taskKey: String) -> String {
+        "\(stagedPrefix)\(taskKey.replacingOccurrences(of: ":", with: "-"))"
+    }
+
     var bookUUID: String
     var kind: DownloadKind
     var format: String
@@ -223,6 +238,11 @@ actor OfflineStore {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
+
+    /// What the build before deterministic staging named its temp files —
+    /// `staged-<random uuid>`. Kept only so the sweep can reclaim the ones it
+    /// stranded; nothing writes this shape any more.
+    static let legacyStagedPrefix = "staged-"
 
     static var downloadsDirectory: URL {
         let dir = dataDirectory.appendingPathComponent("downloads", isDirectory: true)

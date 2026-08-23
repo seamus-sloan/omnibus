@@ -278,6 +278,23 @@ struct MultipartDownloadTests {
     /// A transfer handed to the system by a build that predates per-part
     /// tasks carries the bare record key, and its completion still has to
     /// find its file after an upgrade.
+    /// The staged name has to be the same on every completion of the same
+    /// transfer, and distinct between transfers — that is what lets a sweep
+    /// tell bytes a live task will come back for from bytes a killed process
+    /// left behind.
+    @Test("a staged file is named for its transfer, not at random")
+    func stagedNamesAreDerivedFromTheTaskKey() {
+        let key = DownloadRecord.key("u-1", .audio)
+        let first = DownloadRecord.stagedName(taskKey: DownloadRecord.taskKey(key, ordinal: 0))
+        let second = DownloadRecord.stagedName(taskKey: DownloadRecord.taskKey(key, ordinal: 1))
+        #expect(first == DownloadRecord.stagedName(taskKey: "u-1:audio#0"))
+        #expect(first != second)
+        #expect(first.hasPrefix(DownloadRecord.stagedPrefix))
+        // A colon is legal on APFS but reads as a path separator in Finder;
+        // the sweep matches on the prefix either way.
+        #expect(!first.contains(":"))
+    }
+
     @Test("a task key without a part still names its record")
     func legacyTaskKeyIsTolerated() {
         #expect(DownloadRecord.recordID(fromTaskKey: "u-1:audio") == "u-1:audio")
