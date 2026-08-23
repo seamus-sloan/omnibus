@@ -118,6 +118,11 @@ recent releases are recorded below; everything earlier is available via the
   metadata editor's cover apply: the provider catalog's hosts only, over
   HTTPS, every redirect hop re-checked, and a cover that still fails is
   logged rather than dropped in silence (#2098)
+- The check-in overlay closes when the flow navigates. "View book" on the
+  success screen, and a scan of a book already owned or already wishlisted,
+  used to load the book's detail page underneath a still-open modal that had
+  reset itself back to the lookup screen, leaving a manual dismiss as the only
+  way out (#2097)
 - Provider cover images no longer fail to load behind the content-security
   policy: the `img-src` allowlist is now derived from the provider catalog and
   includes the redirect hops Open Library's cover CDN and Hardcover's asset
