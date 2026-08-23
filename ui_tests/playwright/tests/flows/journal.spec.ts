@@ -256,6 +256,50 @@ test("publishes an entry attributed to the current user, edits it, then deletes 
 });
 
 // ---------------------------------------------------------------------------
+// Action — block markdown (lists, quote, paragraphs) publishes structurally
+// ---------------------------------------------------------------------------
+
+test("publishes lists, a quote, and paragraphs as structured markup", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const marker = `e2e-blocks-${Date.now()}`;
+  await page.getByTestId("journal-open-composer").click();
+  // Type through the keyboard (not `fill`) so `\n` presses Enter and the
+  // multi-line body goes through the editor's own newline handling — the
+  // path a real author uses.
+  await editor(page).click();
+  await page.keyboard.type(
+    `${marker} intro\n\n1. first\n2. second\n\n- parent\n  - child\n\n> quoted one\nquoted two`,
+  );
+  // The mirror carries the exact markdown: blank lines and the sub-bullet's
+  // leading indent must survive the contenteditable round-trip.
+  await expect(editorMarkdown(page)).toHaveValue(
+    `${marker} intro\n\n1. first\n2. second\n\n- parent\n  - child\n\n> quoted one\nquoted two`,
+  );
+  await expectMutation(
+    page,
+    { method: "POST", url: SAVE_URL, expectedStatus: 200 },
+    async () => page.getByTestId("journal-publish").click(),
+  );
+
+  const card = page.getByTestId("journal-entry").filter({ hasText: marker });
+  await expect(card).toBeVisible();
+  // Numbered list → a real <ol>; the sub-bullet stays nested in its parent.
+  await expect(card.locator("ol > li")).toHaveCount(2);
+  await expect(card.locator("li > ul > li")).toHaveText("child");
+  // The quote keeps its blockquote wrapper, and the lazy continuation line
+  // keeps its own row (soft breaks are promoted to <br> on publish).
+  await expect(card.locator("blockquote")).toContainText("quoted two");
+  await expect(card.locator("blockquote br")).toHaveCount(1);
+
+  await deleteEntry(page, marker);
+});
+
+// ---------------------------------------------------------------------------
 // Action — markdown preview + spoiler reveal
 // ---------------------------------------------------------------------------
 

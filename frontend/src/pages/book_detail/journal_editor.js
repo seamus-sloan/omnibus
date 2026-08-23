@@ -138,15 +138,21 @@ if (!window.OmnibusJournalEditor) {
     // Newlines kept as literal text so textContent === the markdown source.
     // Each line is wrapped in a `.cm-line` span (adds no text) so the
     // active-line pass below can reveal markers per line.
-    const render = (md) =>
-      md
-        .split("\n")
-        // Empty lines get a `<br>` placeholder so they have layout height (a
-        // bare empty inline span collapses to zero and can't be clicked) and a
-        // caret landing spot. It contributes no text, so textContent still
-        // equals the markdown source exactly.
-        .map((line) => `<span class="cm-line">${blockLine(line) || "<br>"}</span>`)
+    const render = (md) => {
+      const lines = md.split("\n");
+      return lines
+        // An empty *final* line gets a `<br>` placeholder so it has layout
+        // height and a caret landing spot (a bare empty inline span collapses
+        // to zero). Interior empty lines must NOT get one: the literal "\n"
+        // join on each side already produces their line box, and a `<br>`
+        // there adds a second break — every blank line displayed double. The
+        // `<br>` contributes no text, so textContent still equals the source.
+        .map((line, i) => {
+          const filler = i === lines.length - 1 ? "<br>" : "";
+          return `<span class="cm-line">${blockLine(line) || filler}</span>`;
+        })
         .join("\n");
+    };
 
     // --- active-line marker reveal (Obsidian-style) ---------------------------
     // Markers are fully faded by CSS except on the `.cm-active` line. The

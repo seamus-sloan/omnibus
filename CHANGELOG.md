@@ -123,6 +123,14 @@ recent releases are recorded below; everything earlier is available via the
 
 ### Fixed
 
+- Journal entries now publish the way they read in the editor. Numbered and
+  nested lists render with their numbers, bullets, and indentation instead of
+  collapsing flush against the card; quotes get their accent bar and keep each
+  quoted line on its own row; every heading depth uses the journal's own
+  typeface rather than falling back to the site's display serif; a blank line
+  between paragraphs shows as a visible gap in both the preview tab and the
+  published entry; and the editor no longer displays a phantom extra blank
+  line for every empty line typed
 - Checking a book in with "I own it" — or adding one to the wishlist — now
   keeps the cover the check-in card showed. The server fetched it under terms
   that refused redirects, so every cover from Open Library's CDN (which
