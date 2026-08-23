@@ -152,6 +152,10 @@ struct PlateField: View {
     /// picking a row overwrites the value, and there is no "+ Create" row
     /// since typing already edits the value directly.
     var suggestions: [SuggestionItem] = []
+    /// Stable handle for omnibusUITests. The field has no label of its own
+    /// (the caption above it is a sibling), so without one a test can only
+    /// reach it positionally.
+    var identifier: String?
 
     @Environment(\.palette) private var palette
     @FocusState private var focused: Bool
@@ -202,6 +206,7 @@ struct PlateField: View {
                     .lineLimit(multiline ? 2...12 : 1...1)
                     .tint(palette.accentColor)
                     .focused($focused)
+                    .accessibilityIdentifier(identifier ?? "")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)

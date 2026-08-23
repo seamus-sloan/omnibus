@@ -27,8 +27,11 @@ struct SearchView: View {
             LazyVStack(alignment: .leading, spacing: 30) {
                 VStack(spacing: 0) {
                     Masthead(title: "Search")
-                    SearchField(text: $query, prompt: "Books, authors, series, tags")
-                        .screenPadding()
+                    SearchField(
+                        text: $query, prompt: "Books, authors, series, tags",
+                        identifier: "search-query"
+                    )
+                    .screenPadding()
                 }
 
                 content
