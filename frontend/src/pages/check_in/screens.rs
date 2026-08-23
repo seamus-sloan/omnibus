@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::{ExternalBookMeta, ScanBook, WishlistAddRequest};
 
-use super::{wishlist_request_for, FlowState};
+use super::{wishlist_request_for, CheckInOpen, FlowState};
 use crate::{media_url, use_server_url, Route};
 
 /// Matching spinner shown while the resolve request is in flight.
@@ -309,6 +309,11 @@ pub(super) fn SuccessScreen(
     book_uuid: Option<String>,
     on_restart: EventHandler<()>,
 ) -> Element {
+    // "View book" is the flow's one navigating control, so it is also what
+    // dismisses the overlay — the route change rebuilds the modal's subtree,
+    // so nothing downstream of the navigation could close it. `Link` pushes
+    // the route before running this handler, so both happen.
+    let mut overlay_open = use_context::<CheckInOpen>().0;
     rsx! {
         div { class: "check-in-screen check-in-success", "data-testid": "check-in-success",
             div { class: "check-in-rings",
@@ -329,6 +334,7 @@ pub(super) fn SuccessScreen(
                         to: Route::BookDetail { uuid },
                         class: "btn",
                         "data-testid": "check-in-view-book",
+                        onclick: move |_| overlay_open.set(false),
                         "View book"
                     }
                 }
