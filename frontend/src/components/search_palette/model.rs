@@ -1,7 +1,7 @@
 //! Flat-list item model + small helpers shared between the overlay, the
 //! keyboard handler, and the results list. The overlay builds a flat
 //! `Vec<FlatItem>` from grouped `PaletteResults` so arrow-key navigation
-//! has a single index space across Book / Author / Series / Tag rows.
+//! has a single index space across Book / Author / Series / Tag / Genre rows.
 
 use omnibus_shared::PaletteResults;
 
@@ -9,12 +9,16 @@ use omnibus_shared::PaletteResults;
 /// Books carry the stable `uuid` so the palette can build `/books/:uuid`
 /// URLs without a second round-trip — [`omnibus_shared::PaletteBookHit`]
 /// now includes the uuid alongside `id`.
+///
+/// `Genre` is keyed on its name alone: genres have no row to navigate to, so
+/// [`omnibus_shared::PaletteGenreHit`] carries no id (migration `0066`).
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum FlatItem {
     Book { uuid: String, title: String },
     Author { id: i64, name: String },
     Series { id: i64, name: String },
     Tag { id: i64, name: String },
+    Genre { name: String },
 }
 
 /// Build a flat ordered list of all selectable items from the results.
@@ -47,6 +51,11 @@ pub(super) fn build_flat_items(results: &Option<PaletteResults>) -> Vec<FlatItem
             name: t.name.clone(),
         });
     }
+    for g in &r.genres {
+        items.push(FlatItem::Genre {
+            name: g.name.clone(),
+        });
+    }
     items
 }
 
@@ -64,15 +73,7 @@ pub(super) fn plural(n: usize) -> &'static str {
     }
 }
 
-/// Build a facet query string where every whitespace-separated word in
-/// `value` is prefixed with `prefix:`. This ensures `build_fts_match`
-/// routes each token to the correct FTS5 column filter instead of
-/// treating trailing words as free-text (e.g. `tag:Dark tag:academia`
-/// rather than `tag:Dark academia`).
-pub(super) fn facet_query(prefix: &str, value: &str) -> String {
-    value
-        .split_whitespace()
-        .map(|w| format!("{prefix}:{w}"))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
+// `facet_query` used to live here. It moved to `crate::format` when the
+// `/search` chips turned out to have their own — wrong — copy; re-exported so
+// the palette's call sites read unchanged.
+pub(super) use crate::format::facet_query;

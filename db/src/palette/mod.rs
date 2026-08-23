@@ -1,8 +1,8 @@
 //! Search palette: grouped command-palette results across books, authors,
-//! series, and tags. Books go through the FTS5 MATCH path with override-aware
-//! overlays applied after hydration; taxonomy categories use scoped `LIKE`
-//! substring matches against the name columns. Bounded per category, and scoped
-//! to the books `helpers::visible_book_sql` admits.
+//! series, tags, and genres. Books go through the FTS5 MATCH path with
+//! override-aware overlays applied after hydration; taxonomy categories use
+//! scoped `LIKE` substring matches against the name columns. Bounded per
+//! category, and scoped to the books `helpers::visible_book_sql` admits.
 
 use omnibus_shared::PaletteResults;
 use sqlx::SqlitePool;
@@ -11,6 +11,7 @@ use crate::helpers::cap_query_len;
 
 pub mod authors;
 pub mod books;
+pub mod genres;
 pub mod series;
 pub mod tags;
 
@@ -25,11 +26,14 @@ mod tests;
 // `palette::authors::search_authors` path.
 use authors::{count_authors_for_paths, search_authors_for_paths};
 use books::search_books_for_paths;
+use genres::{count_genres_for_paths, search_genres_for_paths};
 use series::{count_series_for_paths, search_series_for_paths};
 use tags::{count_tags_for_paths, search_tags_for_paths};
 
 #[cfg(test)]
 use authors::{count_authors, search_authors};
+#[cfg(test)]
+use genres::{count_genres, search_genres};
 #[cfg(test)]
 use series::{count_series, search_series};
 #[cfg(test)]
@@ -75,8 +79,8 @@ const LIMIT: i32 = 5;
 
 /// Grouped command-palette results for one library path.
 ///
-/// Returns up to 5 books, authors, series, and tags plus server-side timing in
-/// `duration_ms`.
+/// Returns up to 5 books, authors, series, tags, and genres plus server-side
+/// timing in `duration_ms`.
 /// Books are matched via FTS5 (`build_fts_match`); taxonomy categories use
 /// `LIKE '%q%'`. Empty/whitespace queries return `PaletteResults::default()`.
 pub async fn search_palette(
@@ -131,6 +135,10 @@ pub async fn search_palette_for_paths(
     // D. Tags — substring match, scoped to library.
     let tags = search_tags_for_paths(pool, library_paths, &like_pattern, LIMIT).await?;
 
+    // E. Genres — substring match over the override-JSON arm alone; genres
+    // have no link table to give them a canonical arm.
+    let genres = search_genres_for_paths(pool, library_paths, &like_pattern, LIMIT).await?;
+
     // Uncapped per-category totals for the full-page results header. Each is a
     // cheap COUNT over the same visibility predicate the arm uses; books got
     // theirs in-pass above. Skipped when the capped vec already holds the whole
@@ -147,6 +155,10 @@ pub async fn search_palette_for_paths(
         count_tags_for_paths(pool, library_paths, &like_pattern)
     })
     .await?;
+    let genre_total = total_for(genres.len(), || {
+        count_genres_for_paths(pool, library_paths, &like_pattern)
+    })
+    .await?;
 
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
@@ -156,11 +168,13 @@ pub async fn search_palette_for_paths(
         authors,
         series,
         tags,
+        genres,
         duration_ms,
         book_total: u32::try_from(book_total).unwrap_or(u32::MAX),
         author_total,
         series_total,
         tag_total,
+        genre_total,
     })
 }
 

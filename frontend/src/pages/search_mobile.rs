@@ -2,14 +2,15 @@
 //!
 //! Reached from the Library header's magnifying-glass button. Owns a live,
 //! debounced query over the shared [`crate::data::search_palette`] REST call and
-//! renders grouped Authors/Books/Series/Tags results per the mobile design.
+//! renders grouped Authors/Books/Series/Tags/Genres results per the mobile
+//! design.
 
 use dioxus::core::Task;
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::{PaletteBookHit, PaletteResults};
 
-use crate::format::plural;
+use crate::format::{facet_query, plural};
 use crate::{data, use_server_url, Route};
 
 /// Which result groups the scope chips let through. Purely client-side —
@@ -21,6 +22,7 @@ enum Scope {
     Authors,
     Series,
     Tags,
+    Genres,
 }
 
 impl Scope {
@@ -36,14 +38,18 @@ impl Scope {
     fn shows_tags(self) -> bool {
         matches!(self, Scope::All | Scope::Tags)
     }
+    fn shows_genres(self) -> bool {
+        matches!(self, Scope::All | Scope::Genres)
+    }
 }
 
-const SCOPES: [(Scope, &str); 5] = [
+const SCOPES: [(Scope, &str); 6] = [
     (Scope::All, "All"),
     (Scope::Books, "Books"),
     (Scope::Authors, "Authors"),
     (Scope::Series, "Series"),
     (Scope::Tags, "Tags"),
+    (Scope::Genres, "Genres"),
 ];
 
 /// Wire up the debounced search effect: re-runs whenever `query` changes,
@@ -197,12 +203,13 @@ fn render_groups(
     let show_books = sc.shows_books() && !r.books.is_empty();
     let show_series = sc.shows_series() && !r.series.is_empty();
     let show_tags = sc.shows_tags() && !r.tags.is_empty();
+    let show_genres = sc.shows_genres() && !r.genres.is_empty();
 
-    if !(show_authors || show_books || show_series || show_tags) {
+    if !(show_authors || show_books || show_series || show_tags || show_genres) {
         return rsx! {
             div { class: "m-search-empty", "data-testid": "mobile-search-empty",
                 p { class: "m-search-empty-title", "Nothing for \u{201c}{q}\u{201d}" }
-                p { class: "m-search-empty-sub", "We checked titles, authors, series and tags." }
+                p { class: "m-search-empty-sub", "We checked titles, authors, series, tags and genres." }
             }
         };
     }
@@ -230,6 +237,12 @@ fn render_groups(
             {group_head("Tags", r.tag_total)}
             for t in r.tags.iter() {
                 {tag_row(t, query)}
+            }
+        }
+        if show_genres {
+            {group_head("Genres", r.genre_total)}
+            for g in r.genres.iter() {
+                {genre_row(g, query)}
             }
         }
     }
@@ -334,13 +347,34 @@ fn tag_row(t: &omnibus_shared::PaletteTagHit, mut query: Signal<String>) -> Elem
     let key = t.id;
     let name = t.name.clone();
     let count = format!("{} book{}", t.book_count, plural(t.book_count));
-    let facet = tag_facet(&t.name);
+    let facet = facet_query("tag", &t.name);
     rsx! {
         button {
             key: "t{key}",
             r#type: "button",
             class: "m-search-tag-row",
             "data-testid": "mobile-search-tag",
+            onclick: move |_| { query.set(facet.clone()); },
+            span { class: "m-search-tag-dot" }
+            span { class: "m-search-tag-name", "{name}" }
+            span { class: "m-search-tag-count", "{count}" }
+        }
+    }
+}
+
+/// One genre result → refine the query inline to `genre:<name>`. Keyed on the
+/// name because a genre has no id — it has no navigable row to carry one
+/// (migration `0066`), which is also why this row refines rather than pushes.
+fn genre_row(g: &omnibus_shared::PaletteGenreHit, mut query: Signal<String>) -> Element {
+    let name = g.name.clone();
+    let count = format!("{} book{}", g.book_count, plural(g.book_count));
+    let facet = facet_query("genre", &g.name);
+    rsx! {
+        button {
+            key: "g{name}",
+            r#type: "button",
+            class: "m-search-tag-row",
+            "data-testid": "mobile-search-genre",
             onclick: move |_| { query.set(facet.clone()); },
             span { class: "m-search-tag-dot" }
             span { class: "m-search-tag-name", "{name}" }
@@ -370,16 +404,6 @@ fn book_cover(book: &PaletteBookHit, server_url: &str) -> Element {
 /// First character of `s`, uppercased, for avatar/fallback glyphs.
 fn initial(s: &str) -> String {
     s.chars().next().unwrap_or('?').to_uppercase().to_string()
-}
-
-/// Build a `tag:`-scoped FTS query from a tag name so tapping a tag refines to
-/// books carrying it. Each whitespace word is scoped (`tag:Dark tag:academia`)
-/// to match how the FTS matcher column-scopes tokens.
-fn tag_facet(name: &str) -> String {
-    name.split_whitespace()
-        .map(|w| format!("tag:{w}"))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// Magnifying-glass icon (inline SVG, `currentColor`) — same glyph as the web

@@ -187,6 +187,11 @@ pub struct PaletteResults {
     pub authors: Vec<PaletteAuthorHit>,
     pub series: Vec<PaletteSeriesHit>,
     pub tags: Vec<PaletteTagHit>,
+    /// `#[serde(default)]` for the same reason as the totals below, and one
+    /// that bites harder: the native iOS client decodes this payload and
+    /// predates the field.
+    #[serde(default)]
+    pub genres: Vec<PaletteGenreHit>,
     pub duration_ms: u64,
     /// True match counts per category, before the 5-hit display cap.
     // `#[serde(default)]` keeps older/partial payloads (and the command
@@ -199,13 +204,19 @@ pub struct PaletteResults {
     pub series_total: u32,
     #[serde(default)]
     pub tag_total: u32,
+    #[serde(default)]
+    pub genre_total: u32,
 }
 
 impl PaletteResults {
     /// Total number of matches across every result category, using the true
     /// per-category totals (not the capped `Vec` lengths).
     pub fn total_count(&self) -> usize {
-        (self.book_total + self.author_total + self.series_total + self.tag_total) as usize
+        (self.book_total
+            + self.author_total
+            + self.series_total
+            + self.tag_total
+            + self.genre_total) as usize
     }
 }
 
@@ -263,6 +274,20 @@ pub struct PaletteTagHit {
     pub id: i64,
     pub name: String,
     /// Number of books with this tag in the active library.
+    pub book_count: u32,
+}
+
+/// Genre hit for the search palette. Carries no `id` — unlike a tag, a genre
+/// has no navigable row to link to: migration `0066` gives the vocabulary a
+/// `genres` table but no memberships, so the only thing to do with one is
+/// refine the query to `genre:<name>`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaletteGenreHit {
+    /// The canonical spelling `materialize_genre_rows` coined, so a library
+    /// holding both "sci-fi" and "Sci-Fi" reports one row (matching
+    /// `get_genre_cloud`).
+    pub name: String,
+    /// Number of books carrying this genre in the active library.
     pub book_count: u32,
 }
 

@@ -1,12 +1,13 @@
 //! Grouped results list rendered inside the palette panel — books,
-//! authors, series, tags, and the "Inside text" placeholder. Each row
-//! component owns its click handler that closes the palette and routes
-//! into the matching detail page (or `/search` for tag facets).
+//! authors, series, tags, genres, and the "Inside text" placeholder. Each
+//! row component owns its click handler that closes the palette and routes
+//! into the matching detail page (or `/search` for tag and genre facets).
 
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::{
-    PaletteAuthorHit, PaletteBookHit, PaletteResults, PaletteSeriesHit, PaletteTagHit,
+    PaletteAuthorHit, PaletteBookHit, PaletteGenreHit, PaletteResults, PaletteSeriesHit,
+    PaletteTagHit,
 };
 
 use super::model::{facet_query, is_selected, plural, FlatItem};
@@ -94,6 +95,19 @@ pub(super) fn SpResultsList(
                             tag: tag.clone(),
                             selected: has_nav && is_selected(&items, sel, &FlatItem::Tag { id: tag.id, name: tag.name.clone() }),
                             on_click: navigate_and_close(nav, open, Route::Search { query: facet_query("tag", &tag.name) }),
+                        }
+                    }
+                }
+
+                // Genres
+                if !r.genres.is_empty() {
+                    SpGroupHead { label: "Genres", count: r.genres.len() }
+                    for genre in r.genres.iter() {
+                        SpGenreRow {
+                            key: "{genre.name}",
+                            genre: genre.clone(),
+                            selected: has_nav && is_selected(&items, sel, &FlatItem::Genre { name: genre.name.clone() }),
+                            on_click: navigate_and_close(nav, open, Route::Search { query: facet_query("genre", &genre.name) }),
                         }
                     }
                 }
@@ -283,6 +297,33 @@ fn SpTagRow(tag: PaletteTagHit, selected: bool, on_click: EventHandler<MouseEven
             div { class: "sp-row-body",
                 div { class: "sp-row-sub",
                     "{tag.book_count} book{plural(tag.book_count as usize)}"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SpGenreRow(
+    genre: PaletteGenreHit,
+    selected: bool,
+    on_click: EventHandler<MouseEvent>,
+) -> Element {
+    let sel_class = if selected {
+        "sp-row selected"
+    } else {
+        "sp-row"
+    };
+
+    rsx! {
+        div {
+            class: "{sel_class}",
+            "data-testid": "sp-genre-row",
+            onclick: move |evt| on_click.call(evt),
+            span { class: "sp-tag-chip", "{genre.name}" }
+            div { class: "sp-row-body",
+                div { class: "sp-row-sub",
+                    "{genre.book_count} book{plural(genre.book_count as usize)}"
                 }
             }
         }

@@ -26,8 +26,8 @@ pub async fn rpc_get_genre_cloud() -> Result<Vec<GenreWeight>> {
         .map_err(|e| internal_rpc_error("get genre cloud", e))?)
 }
 
-/// Search palette — grouped results (books, authors, series, tags) for the
-/// command-palette overlay.
+/// Search palette — grouped results (books, authors, series, tags, genres)
+/// for the command-palette overlay.
 #[post("/api/rpc/search-palette", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_search_palette(q: String) -> Result<PaletteResults> {
     Ok(search_palette(&pool.0, &q).await?)

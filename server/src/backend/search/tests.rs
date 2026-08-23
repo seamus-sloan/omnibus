@@ -296,6 +296,49 @@ async fn api_search_palette_returns_a_physical_only_book_with_a_copy() {
     assert_eq!(by_author.authors[0].book_count, 1);
 }
 
+#[tokio::test]
+async fn api_search_palette_carries_a_genres_group_with_its_uncapped_total() {
+    // The widened payload is what the web palette and `/search` render the
+    // Genres group from, and what the native iOS client will read once it
+    // grows one — assert it on the wire, not just in the db layer.
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    db::set_settings(
+        &pool,
+        &Settings {
+            ebook_library_path: Some("/lib".into()),
+            audiobook_library_path: None,
+            scan_interval_hours: None,
+        },
+    )
+    .await
+    .unwrap();
+    let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Dark Water").await;
+    db::upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &omnibus_shared::MetadataOverrides {
+            genres: Some(vec!["Gothic Horror".into()]),
+            ..Default::default()
+        },
+        false,
+        user.id,
+    )
+    .await
+    .unwrap();
+
+    let results: omnibus_shared::PaletteResults = palette_query(app, &token, "gothic").await;
+    assert_eq!(results.genres.len(), 1, "got {results:?}");
+    assert_eq!(results.genres[0].name, "Gothic Horror");
+    assert_eq!(results.genres[0].book_count, 1);
+    assert_eq!(results.genre_total, 1);
+    assert!(
+        results.total_count() >= 1,
+        "genre_total must feed total_count"
+    );
+}
+
 /// Issue one palette request and decode the body, asserting a 200 on the way.
 async fn palette_query(app: axum::Router, token: &str, q: &str) -> omnibus_shared::PaletteResults {
     let response = app
