@@ -41,6 +41,10 @@ recent releases are recorded below; everything earlier is available via the
 - **Book #** is now one of the fields the compare view can copy. Hardcover is
   the only source that publishes a book's position in its series, so a book
   numbered there can be numbered here in one click (#1665)
+- The **iOS metadata editor** now carries ISBN-10 and Print Pages alongside the
+  genres it already had, so the phone and the web no longer disagree about
+  which fields a book has. A save still sends only what you changed, so editing
+  from a phone that predates a field cannot wipe a value set on the web (#1664)
 
 ### Changed
 

@@ -84,6 +84,10 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
     var genres: [String] = []
     var identifiers: [Identifier] = []
     var isbn13: String?
+    /// Secondary ISBN-10. Unlike `isbn13` — which the server derives from the
+    /// scanned `identifiers` when no override exists — no format Omnibus reads
+    /// carries a distinct ISBN-10, so this is only ever an explicit edit.
+    var isbn10: String?
     var series: String?
     var seriesIndex: String?
     var seriesId: Int64?
@@ -102,10 +106,14 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
     /// comic books only — the pager's slider range and progress mapping.
     /// `nil` on every other payload (list projections, non-comics).
     var pageCount: Int64?
+    /// Print edition page count. Deliberately *not* `pageCount`, which is the
+    /// CBZ archive's image count and drives the comic pager's slider — the two
+    /// mean different things on a book that has both.
+    var printPages: Int64?
 
     enum CodingKeys: String, CodingKey {
         case id, filename, title, description, publisher, published, modified
-        case language, creators, subjects, genres, identifiers, isbn13, series, formats
+        case language, creators, subjects, genres, identifiers, isbn13, isbn10, series, formats
         case accent, error
         case seriesIndex = "series_index"
         case seriesId = "series_id"
@@ -118,6 +126,7 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
         case bookFiles = "book_files"
         case epubSizeBytes = "epub_size_bytes"
         case pageCount = "page_count"
+        case printPages = "print_pages"
     }
 
     /// Stable identity used for every `/books/:uuid` and `/api/covers/:uuid`

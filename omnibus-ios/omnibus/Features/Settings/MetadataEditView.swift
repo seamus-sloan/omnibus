@@ -109,6 +109,9 @@ struct MetadataEditView: View {
                         field("Published", \.published, hint: "YYYY-MM-DD")
                         field("Language", \.language, hint: "e.g. en")
                         field("ISBN-13", \.isbn13, keyboard: .numberPad)
+                        // Not `.numberPad`: an ISBN-10's check digit can be X.
+                        field("ISBN-10", \.isbn10, hint: "10 characters", keyboard: .asciiCapable)
+                        field("Print Pages", \.printPages, hint: "whole number", keyboard: .numberPad)
                     }
                 }
 
@@ -343,8 +346,11 @@ struct MetadataEditView: View {
         pendingGenre = ""
 
         do {
+            // Built before the request so a bad print-page entry is rejected
+            // here rather than by the server's 400.
+            let body = try draft.payload(since: loaded)
             let _: Empty = try await APIClient.shared.post(
-                "/api/ebooks/\(uuid)/overrides", body: draft.payload(since: loaded)
+                "/api/ebooks/\(uuid)/overrides", body: body
             )
             await OfflineStore.shared.cacheDelete(CacheKey.book(uuid))
             Haptics.success()

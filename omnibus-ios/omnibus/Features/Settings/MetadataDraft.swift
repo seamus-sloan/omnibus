@@ -30,6 +30,10 @@ struct MetadataDraft: Equatable {
     var published = ""
     var language = ""
     var isbn13 = ""
+    var isbn10 = ""
+    /// Held as text, not `Int64?`, because that is what a text field edits —
+    /// the parse to the wire's integer happens once, in `payload(since:)`.
+    var printPages = ""
     var description = ""
 
     init() {}
@@ -47,6 +51,8 @@ struct MetadataDraft: Equatable {
         published = book.published ?? ""
         language = book.language ?? ""
         isbn13 = book.isbn13 ?? ""
+        isbn10 = book.isbn10 ?? ""
+        printPages = book.printPages.map(String.init) ?? ""
         description = book.description ?? ""
     }
 
@@ -56,7 +62,11 @@ struct MetadataDraft: Equatable {
     /// touched, pinning scanned values so a later rescan could no longer
     /// update them. The endpoint merges, so omitting a field leaves it as it
     /// was, and an empty string clears an existing override.
-    func payload(since loaded: MetadataDraft) -> MetadataOverridesPayload {
+    ///
+    /// Throws `MetadataDraftError` when the print-pages field holds something
+    /// that isn't a whole number — rejected here so the editor can say so
+    /// instead of posting a body the server would 400.
+    func payload(since loaded: MetadataDraft) throws -> MetadataOverridesPayload {
         func changed(_ key: KeyPath<MetadataDraft, String>) -> String? {
             self[keyPath: key] == loaded[keyPath: key] ? nil : self[keyPath: key]
         }
@@ -72,8 +82,53 @@ struct MetadataDraft: Equatable {
             published: changed(\.published),
             language: changed(\.language),
             isbn13: changed(\.isbn13),
+            isbn10: changed(\.isbn10),
+            print_pages: try changedPrintPages(since: loaded),
             description: changed(\.description)
         )
+    }
+
+    /// The print-pages value a save sends, or `nil` to omit the field.
+    ///
+    /// Unlike every scalar above, this one can't be diffed as a raw string:
+    /// the wire field is an integer, and there is no "empty" integer to carry
+    /// the empty-string-clears convention. So a blanked field means *leave the
+    /// override alone*, not *clear it* — matching the web editor
+    /// (`build_overrides` in `frontend/src/pages/metadata_edit.rs`), which the
+    /// two editors have to agree on.
+    private func changedPrintPages(since loaded: MetadataDraft) throws -> Int64? {
+        guard let parsed = try MetadataDraft.parsePrintPages(printPages) else { return nil }
+        return parsed == loaded.printPagesValue ? nil : parsed
+    }
+
+    /// This draft's print-pages field as an integer, ignoring a blank or
+    /// unparseable entry. Only meaningful on a `loaded` snapshot, whose value
+    /// came from the server and so always parses.
+    private var printPagesValue: Int64? {
+        try? MetadataDraft.parsePrintPages(printPages)
+    }
+
+    /// Parses the print-pages field: blank is `nil` (nothing to send), and a
+    /// non-numeric entry is rejected with a specific message rather than
+    /// silently dropped, which would look like a save that worked.
+    static func parsePrintPages(_ input: String) throws -> Int64? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let value = Int64(trimmed) else {
+            throw MetadataDraftError.invalidPrintPages
+        }
+        return value
+    }
+}
+
+/// Client-side rejections raised before a save leaves the device.
+enum MetadataDraftError: LocalizedError, Equatable {
+    case invalidPrintPages
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidPrintPages: "Print page count must be a whole number."
+        }
     }
 }
 
@@ -101,6 +156,10 @@ struct MetadataOverridesPayload: Encodable, Equatable {
     var published: String?
     var language: String?
     var isbn13: String?
+    var isbn10: String?
+    /// Snake-cased to match the wire, like `series_index`. Absent unless the
+    /// field actually changed — it has no empty-string-clears form.
+    var print_pages: Int64?
     var description: String?
 }
 
