@@ -139,6 +139,19 @@ jobs:
             -retry-tests-on-failure -test-iterations 2 2>&1 \
             | xcbeautify --report junit --report-path ios-test-results
 
+      # An XCUITest assertion message reaches neither xcodebuild's stdout nor
+      # the JUnit report — JUnit records a bare "Parallel test failed", and the
+      # message exists only inside the .xcresult. Without this, a UI failure
+      # that doesn't reproduce locally can't be diagnosed at all. Read it back
+      # with `xcrun xcresulttool get test-results tests --path ui.xcresult`.
+      - name: Upload xcresult on failure
+        if: ${{ failure() && hashFiles('ios-test-results/ui.xcresult/**') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-xcresult
+          path: ios-test-results/ui.xcresult
+          retention-days: 7
+
       - name: Upload test results to Codecov
         if: ${{ !cancelled() && hashFiles('ios-test-results/junit.xml') != '' }}
         uses: codecov/codecov-action@v5
