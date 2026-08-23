@@ -212,6 +212,77 @@ async fn search_books_genre_facet_drops_a_book_whose_overrides_were_deleted() {
 }
 
 #[tokio::test]
+async fn search_books_genre_facet_ignores_overrides_on_an_embedded_tags_first_root() {
+    // `apply_overrides` returns before applying genres when the scan root
+    // ranks embedded metadata above the override layer, so the book's
+    // effective genres are empty. The FTS door must agree — otherwise
+    // `genre:` answers for a book whose own detail page shows no genres, and
+    // the door and `overlay_overrides` (which sources this column from the
+    // precedence-gated merge) disagree inside a single transaction.
+    let (pool, user_id, _covers) = seed_genre_fixture("fts_genre_precedence", &["Horror"]).await;
+    assert_eq!(
+        search_books(&pool, "/lib", "genre:horror")
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "default precedence lets the override through"
+    );
+
+    sqlx::query(
+        r#"UPDATE scan_roots SET metadata_precedence =
+             '["folder_structure","omnibus_overrides","opf_sidecar","embedded_tags","provider_match"]'
+           WHERE path = '/lib'"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Re-run the write door so the index reflects the new precedence.
+    set_genres(&pool, "Dark Water", &["Horror"], user_id).await;
+
+    assert!(
+        search_books(&pool, "/lib", "genre:horror")
+            .await
+            .unwrap()
+            .is_empty(),
+        "embedded-tags-first must keep override genres out of the index"
+    );
+}
+
+#[tokio::test]
+async fn search_books_tolerates_a_corrupt_overrides_blob() {
+    // `json_each` raises `malformed JSON` on a bad blob, and the genres
+    // projection now runs on the write path — so one corrupt row would fail
+    // every reindex and the admin rebuild, not just one read.
+    let (pool, _user, _covers) = seed_genre_fixture("fts_genre_corrupt", &["Horror"]).await;
+    let books = crate::books::list_books(&pool, "/lib").await.unwrap();
+    let uuid = books
+        .iter()
+        .find(|b| b.title.as_deref() == Some("Bright Sky"))
+        .and_then(|b| b.unique_identifier.clone())
+        .expect("seeded book");
+    sqlx::query("INSERT INTO metadata_overrides (book_uuid, overrides) VALUES (?, ?)")
+        .bind(&uuid)
+        .bind("{ not valid json")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    crate::sync::rebuild_all_fts(&pool)
+        .await
+        .expect("a corrupt blob must not fail the whole-index rebuild");
+
+    // The healthy book is still indexed; the corrupt one simply has none.
+    assert_eq!(
+        search_books(&pool, "/lib", "genre:horror")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn search_books_free_text_does_not_match_a_genre_name() {
     // Same reason `tags` sits outside the default scope: typing "Dra" must
     // not drag in every book someone genred "Drama".

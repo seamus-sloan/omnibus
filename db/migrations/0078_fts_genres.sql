@@ -18,6 +18,18 @@
 -- the backfill reads the override JSON directly. A book with no override, or
 -- one whose override never set the key, yields no `json_each` rows and lands
 -- on the empty string.
+--
+-- Two guards on that read, matching `GENRES_FROM_OVERRIDES` in
+-- db/src/sync/fts.rs so a backfilled row and a later rescan agree:
+--
+--   * `json_valid`, substituted into the `json_each` argument rather than
+--     filtered in `WHERE`. A corrupt `overrides` blob is reachable state, and
+--     `json_each` raises `malformed JSON` on one — which here would abort the
+--     migration and take startup down with it, for every user, on upgrade.
+--   * The precedence gate, mirroring `apply_overrides`'s
+--     `overrides_outrank_embedded` early return, so a scan root configured
+--     embedded-tags-first does not get override genres seeded into an index
+--     its effective metadata says it has none of.
 
 DROP TRIGGER IF EXISTS books_fts_authors_rename;
 DROP TRIGGER IF EXISTS books_fts_tags_rename;
@@ -46,10 +58,19 @@ SELECT
     f.isbn,
     COALESCE((SELECT group_concat(je.value, ' ')
               FROM books b
+              JOIN scan_roots sr ON sr.id = b.library_id
               JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-              JOIN json_each(mo.overrides, '$.genres') je
+              JOIN json_each(CASE WHEN json_valid(mo.overrides)
+                                  THEN mo.overrides ELSE '{}' END, '$.genres') je
              WHERE b.id = f.rowid
-               AND json_type(mo.overrides, '$.genres') IS NOT NULL), '')
+               AND COALESCE(
+                     (SELECT o.key FROM json_each(CASE WHEN json_valid(sr.metadata_precedence)
+                                                       THEN sr.metadata_precedence ELSE '[]' END) o
+                       WHERE o.value = 'omnibus_overrides')
+                     >
+                     (SELECT e.key FROM json_each(CASE WHEN json_valid(sr.metadata_precedence)
+                                                       THEN sr.metadata_precedence ELSE '[]' END) e
+                       WHERE e.value = 'embedded_tags'), 1)), '')
 FROM books_fts f;
 
 DROP TABLE books_fts;
