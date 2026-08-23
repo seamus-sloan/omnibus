@@ -35,6 +35,9 @@ recent releases are recorded below; everything earlier is available via the
   alongside Tags, and picking one narrows the search to that genre. A library
   holding both "sci-fi" and "Sci-Fi" shows a single row covering every book,
   matching the genre cloud rather than splitting the count in two (#2099)
+- Clicking a **tag or genre chip** on the `/search` page now narrows to the
+  whole name rather than its first word — "Dark academia" no longer also
+  pulled in every book merely titled something with "academia" in it (#2099)
 - **Fetch metadata** on the metadata edit page: one button opens a search
   that has already asked every configured provider for this book, and lists
   what each returned — cover, title, authors, year, publisher, and which
@@ -120,6 +123,29 @@ recent releases are recorded below; everything earlier is available via the
 
 ### Fixed
 
+- Checking a book in with "I own it" — or adding one to the wishlist — now
+  keeps the cover the check-in card showed. The server fetched it under terms
+  that refused redirects, so every cover from Open Library's CDN (which
+  redirects twice before serving bytes) was silently discarded and the book
+  was created without one. The fetch now runs on the same terms as the
+  metadata editor's cover apply: the provider catalog's hosts only, over
+  HTTPS, every redirect hop re-checked, and a cover that still fails is
+  logged rather than dropped in silence (#2098)
+- The check-in overlay closes when the flow navigates. "View book" on the
+  success screen, and a scan of a book already owned or already wishlisted,
+  used to load the book's detail page underneath a still-open modal that had
+  reset itself back to the lookup screen, leaving a manual dismiss as the only
+  way out (#2097)
+- Covers now render on a Kobo for books whose cover was replaced by hand. A
+  user-uploaded WebP cover was stored as-is and served verbatim to the device,
+  which renders no cover for a WebP; override covers are now converted to JPEG
+  on upload, and downscaled if oversized. PNG and GIF uploads are unchanged
+  (#2116)
+- Audiobook-only books are no longer offered to a Kobo. A book with no EPUB
+  and no CBZ on a Kobo-synced shelf used to sync as an entitlement the device
+  could never download, so it retried the failing download indefinitely; such
+  books are now excluded from the sync set, and one a device already holds is
+  archived on its next sync (#2116)
 - Provider cover images no longer fail to load behind the content-security
   policy: the `img-src` allowlist is now derived from the provider catalog and
   includes the redirect hops Open Library's cover CDN and Hardcover's asset

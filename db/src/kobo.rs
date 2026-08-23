@@ -46,6 +46,18 @@ const SELECT_COLS: &str = "b.id AS id,
                     WHERE bf.book_id = b.id AND bf.format = 'EPUB'
                 ) AS has_epub";
 
+/// A book only belongs in the sync set if the download route can actually
+/// serve it: `resources::download` resolves EPUB, else CBZ, else 404s.
+///
+/// Without this an audiobook-only book on a `sync_to_kobo` shelf syncs as an
+/// entitlement advertising format `CBZ` with `download_size_bytes = 0`, and
+/// then 404s on every download the device attempts — which the device retries
+/// indefinitely rather than giving up.
+const DOWNLOADABLE_PREDICATE: &str = "EXISTS(
+                    SELECT 1 FROM book_files bf
+                    WHERE bf.book_id = b.id AND bf.format IN ('EPUB', 'CBZ')
+                )";
+
 /// One book shaped for the Kobo sync endpoint: durable uuid, display title, a
 /// best-effort author line, and the last-modified epoch that drives the
 /// device's metadata-freshness check.
@@ -141,6 +153,12 @@ impl From<crate::metadata_overrides::MetadataOverridesError> for KoboError {
 /// is the lowest-`position` entry in `books_authors_link` (empty when a book
 /// has none — Kobo tolerates a blank author).
 ///
+/// Membership alone is not enough: a member with no EPUB and no CBZ is
+/// filtered out by [`DOWNLOADABLE_PREDICATE`], because the device can only
+/// 404 on it. A book that leaves the set this way is reported to a device
+/// already holding it as a removal, which `delta::sync_delta` derives from
+/// its absence here.
+///
 /// Scoped through shelf ownership, so a device token can only ever reach books
 /// its own user opted in.
 pub async fn sync_books(pool: &SqlitePool, user_id: i64) -> Result<Vec<KoboBookRow>, KoboError> {
@@ -166,6 +184,7 @@ pub async fn sync_books(pool: &SqlitePool, user_id: i64) -> Result<Vec<KoboBookR
             "SELECT {SELECT_COLS}
              FROM books b
              WHERE b.uuid IS NOT NULL AND b.uuid != ''
+               AND {DOWNLOADABLE_PREDICATE}
                AND b.uuid IN ({placeholders})"
         );
         let mut q = sqlx::query(&sql);

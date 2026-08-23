@@ -262,3 +262,173 @@ async fn get_last_modified_epoch_propagates_db_error_when_pool_is_closed() {
     let err = get_last_modified_epoch(&pool, 1).await.unwrap_err();
     assert!(matches!(err, CoversError::Db(_)));
 }
+
+/// Encode a solid-colour raster of the given size, for the normalization
+/// tests below. WebP is decode-only in our `image` feature set, so a real
+/// WebP fixture has to come from bytes rather than an encoder — see
+/// [`webp_fixture`].
+fn raster(width: u32, height: u32, format: image::ImageFormat) -> Vec<u8> {
+    let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(width, height, |x, y| {
+        image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+    }));
+    let mut out = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut out), format)
+        .unwrap();
+    out
+}
+
+/// A real lossy-WebP fixture, encoded with the `webp` crate the thumbnail
+/// pipeline already depends on.
+fn webp_fixture(width: u32, height: u32) -> Vec<u8> {
+    let rgba = image::RgbaImage::from_fn(width, height, |x, y| {
+        image::Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255])
+    });
+    webp::Encoder::from_rgba(rgba.as_raw(), width, height)
+        .encode(80.0)
+        .to_vec()
+}
+
+#[test]
+fn normalize_override_cover_transcodes_webp_to_jpeg() {
+    // The bug this exists for: Kobo renders no cover at all for a WebP, and
+    // the route it fetches is literally `image.jpg`.
+    let (mime, bytes) = normalize_override_cover("image/webp", &webp_fixture(400, 600));
+
+    assert_eq!(mime, "image/jpeg");
+    assert_eq!(
+        image::guess_format(&bytes).unwrap(),
+        image::ImageFormat::Jpeg
+    );
+}
+
+#[test]
+fn normalize_override_cover_transcodes_webp_mislabelled_as_jpeg() {
+    // The format is sniffed from the bytes, not the declared mime (#828) —
+    // a WebP arriving as `image/jpeg` is exactly the case that would
+    // otherwise reach a Kobo untranscoded.
+    let (mime, bytes) = normalize_override_cover("image/jpeg", &webp_fixture(400, 600));
+
+    assert_eq!(mime, "image/jpeg");
+    assert_eq!(
+        image::guess_format(&bytes).unwrap(),
+        image::ImageFormat::Jpeg
+    );
+}
+
+#[test]
+fn normalize_override_cover_leaves_png_untouched() {
+    // PNG is confirmed working on-device, so it must not pay a re-encode.
+    let png = raster(400, 600, image::ImageFormat::Png);
+    let (mime, bytes) = normalize_override_cover("image/png", &png);
+
+    assert_eq!(mime, "image/png");
+    assert_eq!(bytes, png, "a correctly-sized PNG must pass through as-is");
+}
+
+#[test]
+fn normalize_override_cover_leaves_correctly_sized_jpeg_byte_identical() {
+    let jpeg = raster(400, 600, image::ImageFormat::Jpeg);
+    let (mime, bytes) = normalize_override_cover("image/jpeg", &jpeg);
+
+    assert_eq!(mime, "image/jpeg");
+    assert_eq!(
+        bytes, jpeg,
+        "re-encoding an already-valid JPEG would cost a generation of quality for nothing"
+    );
+}
+
+#[test]
+fn normalize_override_cover_downscales_an_oversized_image_preserving_aspect_ratio() {
+    // The reported upload was 4281x5726 (~24 MP) for a tile rendered ~500px
+    // tall; 2:3 here so the rounded width is checkable.
+    let png = raster(1600, 2400, image::ImageFormat::Png);
+    let (mime, bytes) = normalize_override_cover("image/png", &png);
+
+    assert_eq!(mime, "image/png");
+    let decoded = image::load_from_memory(&bytes).unwrap();
+    assert_eq!(decoded.height(), MAX_OVERRIDE_COVER_HEIGHT);
+    assert_eq!(decoded.width(), 800, "2:3 aspect ratio must be preserved");
+    assert!(
+        bytes.len() < png.len(),
+        "downscaled cover should be smaller: {} vs {}",
+        bytes.len(),
+        png.len()
+    );
+}
+
+#[test]
+fn normalize_override_cover_downscales_and_transcodes_an_oversized_webp() {
+    let (mime, bytes) = normalize_override_cover("image/webp", &webp_fixture(1600, 2400));
+
+    assert_eq!(mime, "image/jpeg");
+    let decoded = image::load_from_memory(&bytes).unwrap();
+    assert_eq!(decoded.height(), MAX_OVERRIDE_COVER_HEIGHT);
+}
+
+#[test]
+fn normalize_override_cover_leaves_a_short_image_at_its_own_height() {
+    // Only oversized covers are touched — upscaling a small cover would
+    // invent detail that isn't there.
+    let png = raster(200, 300, image::ImageFormat::Png);
+    let (_, bytes) = normalize_override_cover("image/png", &png);
+
+    assert_eq!(bytes, png);
+}
+
+#[test]
+fn normalize_override_cover_leaves_gif_untouched_even_when_oversized() {
+    // `image` decodes only a GIF's first frame, so any re-encode here would
+    // silently flatten an animation.
+    let gif = raster(1600, 2400, image::ImageFormat::Gif);
+    let (mime, bytes) = normalize_override_cover("image/gif", &gif);
+
+    assert_eq!(mime, "image/gif");
+    assert_eq!(bytes, gif);
+}
+
+#[test]
+fn normalize_override_cover_passes_through_undecodable_bytes() {
+    // SVG and anything else we can't decode must never fail an upload —
+    // passing through is the pre-existing behaviour.
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>"#;
+    let (mime, bytes) = normalize_override_cover("image/svg+xml", svg);
+
+    assert_eq!(mime, "image/svg+xml");
+    assert_eq!(bytes, svg);
+
+    let (mime, bytes) = normalize_override_cover("image/jpeg", b"not an image at all");
+    assert_eq!(mime, "image/jpeg");
+    assert_eq!(bytes, b"not an image at all");
+}
+
+#[test]
+fn normalize_override_cover_passes_through_a_within_cap_image_whose_pixels_are_truncated() {
+    // Pins the header-only fast path: a correctly-sized cover is decided on
+    // its dimensions alone, without a full pixel decode. The fixture is
+    // chosen so the two are distinguishable — its header parses, its pixels
+    // don't — and the assertions below prove it sits on that boundary.
+    // PNG rather than JPEG: `IHDR` carries the dimensions up front and each
+    // `IDAT` chunk is CRC-checked, so a truncation reliably splits the two.
+    // A truncated JPEG decodes fine — its entropy-coded scan simply ends.
+    let full = raster(400, 600, image::ImageFormat::Png);
+    let truncated = full[..full.len() / 2].to_vec();
+
+    assert!(
+        image::ImageReader::with_format(std::io::Cursor::new(&truncated), image::ImageFormat::Png,)
+            .into_dimensions()
+            .is_ok(),
+        "fixture must still have a readable header"
+    );
+    assert!(
+        image::load_from_memory(&truncated).is_err(),
+        "fixture must not survive a full decode"
+    );
+
+    let (mime, bytes) = normalize_override_cover("image/png", &truncated);
+
+    assert_eq!(mime, "image/png");
+    assert_eq!(
+        bytes, truncated,
+        "a cover that needs no work must be stored untouched, decode or not"
+    );
+}

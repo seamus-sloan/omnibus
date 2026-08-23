@@ -13,13 +13,18 @@ use sqlx::SqlitePool;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::metadata_lookup::{MetadataLookupConfig, MetadataLookupError, ProviderKeys};
+use crate::author_photos::RemoteImageConfig;
+use crate::covers::find_cover_file;
+use crate::metadata_lookup::{
+    provider_cover_image_config, MetadataLookupConfig, MetadataLookupError, ProviderKeys,
+};
 use crate::normalize::{normalize_author, normalize_title};
 use crate::physical::{
     add_physical_copy, add_wishlist_entry, list_physical_copies, list_wishlist, PhysicalError,
 };
+use crate::test_support::CoversTempDir;
 
-use super::resolve::MAX_CLOSE_MATCH_CANDIDATES;
+use super::resolve::{add_physical_only_with, wishlist_add_with, MAX_CLOSE_MATCH_CANDIDATES};
 use super::*;
 
 const ISBN: &str = "9780134685991";
@@ -1037,35 +1042,123 @@ async fn resolve_meta_surfaces_sqlx_error_when_pool_is_closed() {
 
 // ── write composition ──────────────────────────────────────────────
 
-#[tokio::test]
-async fn add_physical_only_creates_fileless_book_with_copy() {
-    let pool = pool().await;
-    let meta = omnibus_shared::metadata_lookup::ExternalBookMeta {
-        isbn13: ISBN.into(),
-        title: "Print Only".into(),
-        authors: vec!["Jane Doe".into()],
-        year: Some("2020".into()),
-        pages: None,
-        publisher: None,
-        description: None,
-        cover_url: None, // no cover → no fetch, no CoversTempDir needed
-        series: None,
-        first_publish_year: None,
-        source: MetadataProvider::OpenLibrary,
-    };
-    let uuid = add_physical_only(&pool, &meta, Some("first ed"), None)
+/// [`provider_cover_image_config`] aimed at a loopback `wiremock` origin: the
+/// catalog allowlist plus `127.0.0.1`, and plaintext permitted, since a mock
+/// server is neither publicly routable nor HTTPS. Every other gate — the
+/// redirect budget above all — is production's, so what these tests exercise
+/// is the config the check-in path actually ships.
+fn loopback_cover_config() -> RemoteImageConfig {
+    let mut config = provider_cover_image_config(true);
+    config.require_https = false;
+    config.host_allowlist.push("127.0.0.1".into());
+    config
+}
+
+/// Serve a cover the way Open Library's CDN does: a 302 before the bytes.
+async fn mount_redirected_cover(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/cover.jpg"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", "/cdn/cover.jpg"))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/cdn/cover.jpg"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "image/jpeg")
+                .set_body_bytes(b"\xFF\xD8\xFFcoverbytes".to_vec()),
+        )
+        .mount(server)
+        .await;
+}
+
+async fn has_cover(pool: &SqlitePool, uuid: &str) -> bool {
+    sqlx::query_scalar::<_, i64>("SELECT has_cover FROM books WHERE uuid = ?1")
+        .bind(uuid)
+        .fetch_one(pool)
         .await
-        .unwrap();
+        .unwrap()
+        != 0
+}
+
+#[tokio::test]
+async fn add_physical_only_creates_fileless_book_with_copy_and_provider_cover() {
+    let pool = pool().await;
+    let _covers = CoversTempDir::new("add_physical_only_cover");
+    let origin = MockServer::start().await;
+    mount_redirected_cover(&origin).await;
+    let mut meta = picked_meta("Print Only", "Jane Doe", ISBN);
+    meta.cover_url = Some(format!("{}/cover.jpg", origin.uri()));
+
+    let uuid = add_physical_only_with(
+        &pool,
+        &meta,
+        Some("first ed"),
+        None,
+        &loopback_cover_config(),
+    )
+    .await
+    .unwrap();
 
     let copies = list_physical_copies(&pool, &uuid).await.unwrap();
     assert_eq!(copies.len(), 1);
     assert_eq!(copies[0].isbn.as_deref(), Some(ISBN));
+    // The cover the check-in card rendered survives the redirect hop onto disk.
+    assert!(has_cover(&pool, &uuid).await);
+    assert!(find_cover_file(&uuid).is_some());
     // The book resolves by its ISBN now (exact rung).
     let server = MockServer::start().await;
     let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     assert!(matches!(outcome, ScanOutcome::AlreadyOwned { .. }));
+}
+
+#[tokio::test]
+async fn add_physical_only_refuses_a_cover_url_outside_the_provider_host_allowlist() {
+    let pool = pool().await;
+    let _covers = CoversTempDir::new("add_physical_only_off_catalog");
+    let origin = MockServer::start().await;
+    mount_redirected_cover(&origin).await;
+    // The same reachable origin under a host the catalog never publishes, so
+    // the allowlist is the only gate that can account for the refusal.
+    let mut meta = picked_meta("Off Catalog", "Jane Doe", ISBN);
+    meta.cover_url = Some(format!(
+        "http://localhost:{}/cover.jpg",
+        origin.address().port()
+    ));
+
+    let uuid = add_physical_only_with(&pool, &meta, None, None, &loopback_cover_config())
+        .await
+        .unwrap();
+
+    assert!(!has_cover(&pool, &uuid).await);
+    assert!(find_cover_file(&uuid).is_none());
+    // Refused before any request left the process, not after reading bytes.
+    assert!(origin.received_requests().await.unwrap().is_empty());
+    // Still a book with a copy — a dropped cover must not fail the check-in.
+    assert_eq!(list_physical_copies(&pool, &uuid).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn add_physical_only_creates_the_book_when_the_cover_fetch_fails() {
+    let pool = pool().await;
+    let _covers = CoversTempDir::new("add_physical_only_cover_404");
+    let origin = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/cover.jpg"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&origin)
+        .await;
+    let mut meta = picked_meta("Missing Cover", "Jane Doe", ISBN);
+    meta.cover_url = Some(format!("{}/cover.jpg", origin.uri()));
+
+    let uuid = add_physical_only_with(&pool, &meta, None, None, &loopback_cover_config())
+        .await
+        .unwrap();
+
+    assert!(!has_cover(&pool, &uuid).await);
+    assert_eq!(list_physical_copies(&pool, &uuid).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -1082,26 +1175,29 @@ async fn wishlist_add_by_book_uuid() {
 }
 
 #[tokio::test]
-async fn wishlist_add_by_meta_creates_fileless_book() {
+async fn wishlist_add_by_meta_creates_fileless_book_with_provider_cover() {
     let pool = pool().await;
+    let _covers = CoversTempDir::new("wishlist_add_cover");
     let user = seed_user(&pool, "reader").await;
-    let meta = omnibus_shared::metadata_lookup::ExternalBookMeta {
-        isbn13: ISBN.into(),
-        title: "Wishlisted".into(),
-        authors: vec!["Jane Doe".into()],
-        year: None,
-        pages: None,
-        publisher: None,
-        description: None,
-        cover_url: None,
-        series: None,
-        first_publish_year: None,
-        source: MetadataProvider::GoogleBooks,
-    };
+    let origin = MockServer::start().await;
+    mount_redirected_cover(&origin).await;
+    let mut meta = picked_meta("Wishlisted", "Jane Doe", ISBN);
+    meta.source = MetadataProvider::GoogleBooks;
+    meta.cover_url = Some(format!("{}/cover.jpg", origin.uri()));
 
-    let uuid = wishlist_add(&pool, user, None, Some(&meta), WishlistSource::Detail)
-        .await
-        .unwrap();
+    let uuid = wishlist_add_with(
+        &pool,
+        user,
+        None,
+        Some(&meta),
+        WishlistSource::Detail,
+        &loopback_cover_config(),
+    )
+    .await
+    .unwrap();
+
+    assert!(has_cover(&pool, &uuid).await);
+    assert!(find_cover_file(&uuid).is_some());
     let list = list_wishlist(&pool, user).await.unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].book_uuid, uuid);

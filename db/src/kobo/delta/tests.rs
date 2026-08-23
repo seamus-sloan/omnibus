@@ -487,3 +487,39 @@ async fn sync_delta_prefers_a_metadata_change_over_a_state_change() {
     assert_eq!(delta.len(), 1);
     assert!(matches!(&delta.changes[0], SyncChange::Changed(_)));
 }
+
+#[tokio::test]
+async fn sync_delta_removes_a_held_book_that_no_longer_has_a_downloadable_file() {
+    // A book the device already holds can stop being downloadable — its EPUB
+    // is removed from the library and only an audio format remains. It must
+    // be archived on the device rather than left as an entitlement whose
+    // download 404s forever.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let device = make_device(&pool, user, "Clara").await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    synced_shelf(&pool, user, "Kobo", std::slice::from_ref(&uuid)).await;
+
+    let first = sync_once(&pool, user, device).await;
+    assert!(matches!(&first.changes[0], SyncChange::New(b) if b.uuid == uuid));
+
+    // Swap the EPUB for an M4B, leaving the book itself (and its shelf
+    // membership) intact — the shape a dual-format book takes when its
+    // ebook file goes away.
+    sqlx::query(
+        "UPDATE book_files SET format = 'M4B' \
+           WHERE book_id = (SELECT id FROM books WHERE uuid = ?)",
+    )
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let delta = sync_delta(&pool, user, device).await.unwrap();
+
+    assert_eq!(delta.len(), 1, "got {:?}", delta.changes);
+    assert!(matches!(
+        &delta.changes[0],
+        SyncChange::Removed { book_uuid } if *book_uuid == uuid
+    ));
+}

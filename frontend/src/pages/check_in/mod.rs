@@ -14,7 +14,7 @@ mod search;
 mod tests;
 
 use dioxus::prelude::*;
-use dioxus_router::{use_navigator, use_route, Link};
+use dioxus_router::{use_navigator, Link};
 use omnibus_shared::{
     isbn::normalize_isbn, AddPhysicalOnlyRequest, CheckInRequest, ExternalBookMeta,
     ResolveMetaRequest, ResolveRequest, ScanBook, ScanOutcome, WishlistAddRequest, WishlistSource,
@@ -63,21 +63,13 @@ pub fn CheckInOverlay() -> Element {
 #[component]
 fn CheckInModal() -> Element {
     let mut open = use_context::<CheckInOpen>().0;
-    // The overlay lives in `ScreenLayout` and survives route changes, so a
-    // check-in that navigates away (an already-owned scan, or "View book" on
-    // the success screen) would otherwise strand the modal over the new page.
-    // Reading the route subscribes this component; dismiss on any change from
-    // the route we opened over. Comparing against the mount route (not a bare
-    // "close on every run") keeps the effect's mount pass from closing us
-    // immediately.
-    let route = use_route::<Route>();
-    let opened_over = use_hook(|| route.clone());
-    use_effect(use_reactive!(|route| {
-        if route != opened_over {
-            open.set(false);
-        }
-    }));
-
+    // Dismissal on navigation is *not* handled here. `ScreenLayout` is not a
+    // router `#[layout]` — every route in `routes.rs` wraps its own — so a
+    // route change rebuilds this whole subtree, and a modal that tried to
+    // notice the navigation after the fact would remount already looking at
+    // the destination. The three paths that navigate out of the flow clear
+    // `CheckInOpen` themselves instead: `make_on_resolve`, `make_on_pick`,
+    // and the success screen's "View book" link.
     let mut close = move || open.set(false);
     rsx! {
         div {
@@ -285,6 +277,11 @@ struct CheckInHandlers {
 pub fn CheckInPage() -> Element {
     let server_url = use_server_url();
     let nav = use_navigator();
+    // Cleared by the handlers that navigate away, so the overlay doesn't
+    // strand itself over the destination — see [`CheckInModal`]. Reading it
+    // here (rather than in each handler) keeps the context lookup a hook.
+    // A no-op on the full-page `/check-in` route, where it is already false.
+    let overlay_open = use_context::<CheckInOpen>().0;
     let state = FlowState {
         stage: use_signal(front_door),
         isbn: use_signal(String::new),
@@ -293,10 +290,10 @@ pub fn CheckInPage() -> Element {
         error: use_signal(|| None),
     };
 
-    let on_resolve = make_on_resolve(server_url.clone(), state, nav);
+    let on_resolve = make_on_resolve(server_url.clone(), state, nav, overlay_open);
     let on_check_in = make_on_check_in(server_url.clone(), state);
     let on_own_it = make_on_own_it(server_url.clone(), state);
-    let on_pick = make_on_pick(server_url.clone(), state, nav);
+    let on_pick = make_on_pick(server_url.clone(), state, nav, overlay_open);
     let on_wishlist = make_on_wishlist(server_url, state);
     let handlers = CheckInHandlers {
         on_resolve: EventHandler::new(on_resolve),
@@ -572,6 +569,7 @@ fn make_on_resolve(
     server_url: String,
     state: FlowState,
     nav: dioxus_router::Navigator,
+    mut overlay_open: Signal<bool>,
 ) -> impl FnMut(String) {
     let FlowState {
         mut stage,
@@ -599,6 +597,7 @@ fn make_on_resolve(
             let req = ResolveRequest { isbn: isbn.clone() };
             match data::resolve_scan(&server_url, req).await {
                 Ok(ScanOutcome::AlreadyOwned { book }) | Ok(ScanOutcome::OnWishlist { book }) => {
+                    overlay_open.set(false);
                     nav.push(Route::BookDetail { uuid: book.uuid });
                 }
                 Ok(outcome) => {
@@ -626,6 +625,7 @@ fn make_on_pick(
     server_url: String,
     state: FlowState,
     nav: dioxus_router::Navigator,
+    mut overlay_open: Signal<bool>,
 ) -> impl FnMut(ExternalBookMeta) {
     let FlowState {
         mut stage,
@@ -642,6 +642,7 @@ fn make_on_pick(
             let req = ResolveMetaRequest { meta };
             match data::resolve_scan_meta(&server_url, req).await {
                 Ok(ScanOutcome::AlreadyOwned { book }) | Ok(ScanOutcome::OnWishlist { book }) => {
+                    overlay_open.set(false);
                     nav.push(Route::BookDetail { uuid: book.uuid });
                 }
                 Ok(outcome) => {
