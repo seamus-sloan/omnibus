@@ -230,6 +230,10 @@ struct PlayerView: View {
 
     // MARK: - Controls
 
+    /// Chapter, scrubber and transport read as one block; the utility row is a
+    /// separate one, so its gap is the widest here. At the same `sm` step as
+    /// the rest, the play disc — 74pt inside a 78pt row — came within 14pt of
+    /// the Speed glyph and the whole bottom of the screen read as smushed.
     private var controls: some View {
         VStack(spacing: 0) {
             chapterRow
@@ -238,7 +242,7 @@ struct PlayerView: View {
             transport
                 .padding(.top, Spacing.sm)
             utilityRow
-                .padding(.top, Spacing.md)
+                .padding(.top, Spacing.xl)
         }
     }
 
