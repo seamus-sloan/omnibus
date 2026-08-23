@@ -108,6 +108,13 @@ recent releases are recorded below; everything earlier is available via the
   through the same correction (and echo tagging) a boot restore does, so it
   writes no position and never moves the restore anchor. Added an explicit
   single/two-page reader setting on iOS, matching web (#2081)
+- Updating the iOS app no longer resets the EPUB reader's typography. Theme,
+  font, size, line height, margins, justification, and page layout share one
+  stored blob that was discarded wholesale the moment a new build added a
+  setting to it — which the single/two-page option (#2081) did, sending anyone
+  who had chosen Sepia back to Dark on first launch. Each setting is now read
+  on its own, so an update — or a rollback to an older build — keeps the rest
+  (#2117)
 - Uploading a book from the iOS app works. Every upload previously failed with
   "title and author are required to file the book", because the app posted the
   file straight to the commit endpoint and skipped the confirm step those
