@@ -10,7 +10,7 @@ use omnibus_shared::{
 use super::*;
 use crate::init_db;
 use crate::shelves::{create_shelf, update_shelf};
-use crate::test_support::seed_synced_ebook;
+use crate::test_support::{seed_synced_audiobook, seed_synced_ebook};
 use crate::upsert_metadata_overrides;
 
 async fn make_user(pool: &SqlitePool, username: &str) -> i64 {
@@ -644,5 +644,47 @@ fn kobo_error_from_metadata_overrides_error_returns_other_for_bulk_write_variant
     assert!(
         matches!(&err, KoboError::Other(msg) if msg.contains("abc")),
         "expected Other carrying the source message, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn sync_books_excludes_an_audiobook_only_member_the_download_route_cannot_serve() {
+    // `resources::download` resolves EPUB, else CBZ, else 404s. An M4B-only
+    // book on an opted-in shelf used to sync as an entitlement advertising
+    // format `CBZ` with size 0, then 404 on every download the device tried.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let audiobook =
+        seed_synced_audiobook(&pool, "Kuang/Katabasis", "Katabasis", "R.F. Kuang").await;
+    let ebook = seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
+    synced_manual_shelf(&pool, user, "Kobo", &[audiobook.clone(), ebook.clone()]).await;
+
+    let rows = sync_books(&pool, user).await.unwrap();
+
+    let uuids: Vec<&str> = rows.iter().map(|r| r.uuid.as_str()).collect();
+    assert_eq!(
+        uuids,
+        vec![ebook.as_str()],
+        "only the book with a Kobo-readable file belongs in the sync set"
+    );
+}
+
+#[tokio::test]
+async fn sync_books_includes_a_cbz_only_book() {
+    // Kobo firmware reads sideloaded CBZ natively and `download` streams the
+    // archive as-is, so a comic-only book is downloadable and must survive
+    // the filter.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let comic = seed_synced_ebook(&pool, "aurora.cbz", "Aurora Station", "A. Nother").await;
+    synced_manual_shelf(&pool, user, "Kobo", std::slice::from_ref(&comic)).await;
+
+    let rows = sync_books(&pool, user).await.unwrap();
+
+    assert_eq!(rows.len(), 1, "got {rows:?}");
+    assert_eq!(rows[0].uuid, comic);
+    assert!(
+        !rows[0].has_epub,
+        "a CBZ-only book advertises the CBZ download format"
     );
 }

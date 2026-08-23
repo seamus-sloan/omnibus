@@ -99,6 +99,16 @@ recent releases are recorded below; everything earlier is available via the
 
 ### Fixed
 
+- Covers now render on a Kobo for books whose cover was replaced by hand. A
+  user-uploaded WebP cover was stored as-is and served verbatim to the device,
+  which renders no cover for a WebP; override covers are now converted to JPEG
+  on upload, and downscaled if oversized. PNG and GIF uploads are unchanged
+  (#2116)
+- Audiobook-only books are no longer offered to a Kobo. A book with no EPUB
+  and no CBZ on a Kobo-synced shelf used to sync as an entitlement the device
+  could never download, so it retried the failing download indefinitely; such
+  books are now excluded from the sync set, and one a device already holds is
+  archived on its next sync (#2116)
 - Provider cover images no longer fail to load behind the content-security
   policy: the `img-src` allowlist is now derived from the provider catalog and
   includes the redirect hops Open Library's cover CDN and Hardcover's asset

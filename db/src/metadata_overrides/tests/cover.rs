@@ -249,3 +249,54 @@ fn write_override_cover_returns_typed_error_when_stale_cleanup_hits_a_directory(
         .expect_err("remove_file on a directory must fail instead of silently leaving it behind");
     assert!(matches!(err, MetadataOverridesError::Io(_)), "got {err:?}");
 }
+
+/// A WebP upload must land on disk as `override-<uuid>.jpg`, not
+/// `override-<uuid>.webp` — the Kobo cover route serves the stored file
+/// verbatim and its firmware renders no cover for a WebP.
+#[test]
+fn write_override_cover_stores_a_webp_upload_as_jpeg() {
+    let covers = CoversTempDir::new("write_cover_webp");
+
+    let rgba = image::RgbaImage::from_pixel(40, 60, image::Rgba([10, 20, 30, 255]));
+    let webp = webp::Encoder::from_rgba(rgba.as_raw(), 40, 60)
+        .encode(80.0)
+        .to_vec();
+    write_override_cover("webp-uuid", "image/webp", &webp).unwrap();
+
+    assert!(
+        !covers.path.join("override-webp-uuid.webp").exists(),
+        "the WebP extension must not survive the write"
+    );
+    let written = std::fs::read(covers.path.join("override-webp-uuid.jpg")).unwrap();
+    assert_eq!(
+        image::guess_format(&written).unwrap(),
+        image::ImageFormat::Jpeg
+    );
+}
+
+/// Re-uploading over an existing override must not leave the previous
+/// extension behind: `find_override_cover_file` probes JPEG before WebP, so
+/// a stale `.jpg` would shadow a later `.png` entirely.
+#[test]
+fn write_override_cover_replaces_a_prior_jpeg_when_a_png_is_uploaded() {
+    let covers = CoversTempDir::new("write_cover_replace");
+
+    let rgba = image::RgbaImage::from_pixel(40, 60, image::Rgba([1, 2, 3, 255]));
+    let webp = webp::Encoder::from_rgba(rgba.as_raw(), 40, 60)
+        .encode(80.0)
+        .to_vec();
+    write_override_cover("swap-uuid", "image/webp", &webp).unwrap();
+    assert!(covers.path.join("override-swap-uuid.jpg").exists());
+
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(40, 60, image::Rgb([9, 9, 9])))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    write_override_cover("swap-uuid", "image/png", &png).unwrap();
+
+    assert!(
+        !covers.path.join("override-swap-uuid.jpg").exists(),
+        "the transcoded JPEG from the first upload must be cleaned up"
+    );
+    assert!(covers.path.join("override-swap-uuid.png").exists());
+}

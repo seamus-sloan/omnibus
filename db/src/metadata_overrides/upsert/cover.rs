@@ -168,12 +168,21 @@ fn overrides_outrank_embedded(precedence: &[MetadataSource]) -> bool {
     }
 }
 
-/// Write a user-uploaded override cover to disk.
+/// Write a user-uploaded override cover to disk, normalized for storage by
+/// [`crate::covers::normalize_override_cover`] — WebP is transcoded to JPEG
+/// (Kobo renders no cover for a WebP) and an oversized image is downscaled.
+///
+/// Normalizing here rather than on the read path means the conversion is paid
+/// once per upload instead of once per request, and every client sees the same
+/// bytes. The trade-off is that covers written before this existed keep their
+/// original format until re-uploaded.
 pub fn write_override_cover(
     uuid: &str,
     mime: &str,
     bytes: &[u8],
 ) -> Result<(), MetadataOverridesError> {
+    let (mime, bytes) = crate::covers::normalize_override_cover(mime, bytes);
+    let (mime, bytes) = (mime.as_str(), bytes.as_slice());
     let ext = crate::covers::ImageFormat::from_mime(mime).to_ext();
     let dir = crate::covers::covers_dir();
     std::fs::create_dir_all(&dir)?;
