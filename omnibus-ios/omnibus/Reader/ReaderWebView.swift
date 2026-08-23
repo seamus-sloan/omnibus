@@ -78,11 +78,15 @@ struct ReaderSettings: Codable, Equatable {
     var justify: Bool = true
     /// epub.js theme token — matches the four `themes.register` names.
     var theme: String = "dark"
-    /// Matches epub.js's own default ("auto") so a reader upgrading from a
-    /// build that never sent `spread` sees no change in behavior.
+    /// Matches epub.js's own default ("auto"), which is what a build predating
+    /// the setting rendered.
     var spread: ReaderSpread = .double
 
     static let storageKey = "omnibus.readerSettings"
+
+    enum CodingKeys: String, CodingKey {
+        case fontSize, fontFamily, lineHeight, margins, justify, theme, spread
+    }
 
     static func load() -> ReaderSettings {
         guard let data = UserDefaults.standard.data(forKey: storageKey),
@@ -94,6 +98,39 @@ struct ReaderSettings: Codable, Equatable {
     func save() {
         guard let data = try? JSONEncoder().encode(self) else { return }
         UserDefaults.standard.set(data, forKey: Self.storageKey)
+    }
+}
+
+/// Decoded field by field, so one unreadable value costs one setting instead of
+/// all of them.
+///
+/// Swift's synthesized decoder ignores property defaults: a key the stored blob
+/// doesn't carry throws `keyNotFound`, and `load()`'s `try?` then hands back a
+/// fresh `ReaderSettings()` — every *other* setting reset with it. Adding
+/// `spread` (#2081) did exactly that to the theme, face, and size of anyone who
+/// had ever changed one. A new field must stay additive, so it goes here too.
+/// Written in an extension to keep the struct's synthesized initializers.
+extension ReaderSettings {
+    init(from decoder: any Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Each `or:` reads what `self.init()` just seeded, so the property
+        // defaults above stay the one place a default is written down.
+        fontSize = container.value(.fontSize, or: fontSize)
+        fontFamily = container.value(.fontFamily, or: fontFamily)
+        lineHeight = container.value(.lineHeight, or: lineHeight)
+        margins = container.value(.margins, or: margins)
+        justify = container.value(.justify, or: justify)
+        theme = container.value(.theme, or: theme)
+        spread = container.value(.spread, or: spread)
+    }
+}
+
+private extension KeyedDecodingContainer where K == ReaderSettings.CodingKeys {
+    /// The stored value, or `fallback` when the key is absent, holds the wrong
+    /// type, or carries a rawValue this build doesn't know (a downgrade).
+    func value<T: Decodable>(_ key: K, or fallback: T) -> T {
+        (try? decode(T.self, forKey: key)) ?? fallback
     }
 }
 
