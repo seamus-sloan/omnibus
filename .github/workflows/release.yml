@@ -34,6 +34,6 @@ jobs:
       github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     steps:
-      - uses: seamus-sloan/gh-actions/release@v1
+      - uses: seamus-sloan/gh-actions/release@release-v1
         with:
           docker-workflow: docker.yml
