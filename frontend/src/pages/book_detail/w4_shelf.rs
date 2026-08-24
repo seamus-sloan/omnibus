@@ -32,11 +32,19 @@ pub(super) fn W4ShelfStop(b: EbookMetadata, view: W4ViewFacts) -> Element {
 #[component]
 fn W4SeriesShelf(series_id: i64, series_name: String, current_uuid: String) -> Element {
     let mut detail = use_signal(|| None::<SeriesDetail>);
+    // Monotonic load counter (the page-wide `w4.rs` pattern): a slow response
+    // for the previous series must not land on the current one after a fast
+    // SPA navigation between books.
+    let mut load_seq = use_signal(|| 0u64);
     use_effect(use_reactive!(|series_id| {
+        let my_load = *load_seq.peek() + 1;
+        load_seq.set(my_load);
         detail.set(None);
         spawn(async move {
             if let Ok(d) = data::get_series("", series_id).await {
-                detail.set(d);
+                if *load_seq.peek() == my_load {
+                    detail.set(d);
+                }
             }
         });
     }));
@@ -113,9 +121,13 @@ fn render_series_item(x: &EbookMetadata, current_uuid: &str, next_uuid: Option<&
 fn W4StandaloneShelves(uuid: String) -> Element {
     let server_url = use_server_url();
     let mut shelves = use_signal(|| None::<Vec<ShelfSummary>>);
+    // Same stale-response guard as `W4SeriesShelf`.
+    let mut load_seq = use_signal(|| 0u64);
     {
         let server_url = server_url.clone();
         use_effect(use_reactive!(|uuid| {
+            let my_load = *load_seq.peek() + 1;
+            load_seq.set(my_load);
             shelves.set(None);
             let url = server_url.clone();
             let uuid = uuid.clone();
@@ -123,9 +135,11 @@ fn W4StandaloneShelves(uuid: String) -> Element {
                 let all = data::list_shelves(&url).await;
                 let holding = data::shelves_containing(&url, &uuid).await;
                 if let (Ok(all), Ok(ids)) = (all, holding) {
-                    let held: Vec<ShelfSummary> =
-                        all.into_iter().filter(|s| ids.contains(&s.id)).collect();
-                    shelves.set(Some(held));
+                    if *load_seq.peek() == my_load {
+                        let held: Vec<ShelfSummary> =
+                            all.into_iter().filter(|s| ids.contains(&s.id)).collect();
+                        shelves.set(Some(held));
+                    }
                 }
             });
         }));

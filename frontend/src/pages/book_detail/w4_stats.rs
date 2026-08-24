@@ -155,7 +155,9 @@ fn spark_buckets(daily: &[DayActivity], as_of_day: &str) -> Vec<i64> {
     out
 }
 
-/// `YYYY-MM-DD` → days since the unix epoch. `None` on a malformed string.
+/// `YYYY-MM-DD` → days since the unix epoch. `None` on a malformed string or
+/// an impossible calendar date (the round-trip through `civil_from_days`
+/// rejects e.g. `2026-02-31`, which `days_from_civil` would silently shift).
 fn parse_day(s: &str) -> Option<i64> {
     let mut parts = s.splitn(3, '-');
     let y: i64 = parts.next()?.parse().ok()?;
@@ -164,7 +166,8 @@ fn parse_day(s: &str) -> Option<i64> {
     if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
         return None;
     }
-    Some(days_from_civil(y, m, d))
+    let days = days_from_civil(y, m, d);
+    (civil_from_days(days) == (y, m, d)).then_some(days)
 }
 
 /// Howard Hinnant's `days_from_civil` — the inverse of the shared
@@ -192,6 +195,9 @@ mod tests {
         }
         assert_eq!(parse_day("1970-01-01"), Some(0));
         assert_eq!(parse_day("not-a-day"), None);
+        // Impossible calendar dates are rejected, not silently shifted.
+        assert_eq!(parse_day("2026-02-31"), None);
+        assert_eq!(parse_day("2025-02-29"), None);
     }
 
     #[test]
