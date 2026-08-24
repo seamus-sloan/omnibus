@@ -22,8 +22,14 @@ const GB_RETRY_BACKOFF: [Duration; 2] = [Duration::from_millis(200), Duration::f
 /// The header Google accepts the API key in. Same key and same reasoning as
 /// `metadata_lookup::providers::googlebooks::API_KEY_HEADER`: a
 /// `reqwest::Error` renders the request URL but never a header, so a key that
-/// is never in a URL cannot reach a log from any fallible step. This module is
-/// where that mattered most — its decode site never stripped its URL at all.
+/// is never in a URL cannot reach a log from any fallible step.
+///
+/// This client's decode site called no `without_url` at all, so its error
+/// carried the key — but nothing here ever printed it: `fetch_summary` reaches
+/// only `%e` sinks, and anyhow's non-alternate `Display` stops at the outer
+/// context. That is the whole difference from `metadata_lookup`, whose `{e:#}`
+/// warns turned the same omission into a real leak. A latent hole guarded by
+/// its callers' choice of format specifier is not one worth keeping.
 const API_KEY_HEADER: &str = "X-goog-api-key";
 
 /// Connection config for the Google Books description fetch. `base_url` is

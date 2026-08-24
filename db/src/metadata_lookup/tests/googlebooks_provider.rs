@@ -402,6 +402,18 @@ fn googlebooks_bare_url_drops_the_field_restriction() {
 }
 
 #[test]
+fn googlebooks_volume_url_addresses_the_single_volume_endpoint() {
+    // The credential property above says only what this URL must *not* contain.
+    // Its three sibling builders each assert their shape as well, and this one
+    // is reached only through `by_ref`, whose tests mount a path-agnostic mock —
+    // so without this, a typo in the path would pass the whole suite.
+    assert_eq!(
+        googlebooks::volume_url(&offline_config(Some("sekret")), "AQk_EAAAQBAJ").unwrap(),
+        "http://gb.test/books/v1/volumes/AQk_EAAAQBAJ"
+    );
+}
+
+#[test]
 fn publication_year_trims_google_dates_to_a_bare_year() {
     // Google returns whatever precision it holds; Open Library gives a year.
     assert_eq!(publication_year("2025-02-25").as_deref(), Some("2025"));

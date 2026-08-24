@@ -391,9 +391,10 @@ async fn googlebooks_summary_sends_the_key_as_a_header_and_not_in_the_url() {
 
 #[tokio::test]
 async fn googlebooks_summary_decode_failure_never_renders_the_api_key() {
-    // This client's decode site stripped nothing at all, so before the key
-    // moved to a header, a keyed instance served an HTML quota page wrote its
-    // key into `omnibus.log` verbatim.
+    // This client's decode site stripped nothing at all, so its error object
+    // carried the key. Asserting over `{err:?} {err:#}` is deliberately
+    // stricter than the `%e` sinks this path actually reaches today — the
+    // point is that no future sink can turn that into a leak.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/books/v1/volumes"))

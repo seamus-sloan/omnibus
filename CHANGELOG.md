@@ -132,13 +132,16 @@ recent releases are recorded below; everything earlier is available via the
 ### Fixed
 
 - **Your Google Books API key can no longer end up in the logs.** It used to
-  travel as a `?key=` query parameter, and a failed request writes its URL into
-  both the console and the daily JSON log under `OMNIBUS_LOG_DIR` — the file
-  people attach to bug reports. The summary fetch leaked it outright whenever
-  Google answered a keyed instance with an HTML quota page instead of JSON. The
-  key is now sent as a header on every Google Books request, so no request URL
-  carries it and no failure can render it. If you have shipped logs to anyone,
-  rotate the key (#2131)
+  travel as a `?key=` query parameter, so a failed request carried it in the URL
+  the error printed — into the console and the daily JSON log under
+  `OMNIBUS_LOG_DIR`, the file people attach to bug reports. Check-in and
+  metadata search wrote it there for real: when Google answered a keyed instance
+  with an HTML quota page instead of JSON, the decode error reached a provider
+  warning that prints the whole error chain. That specific hole was closed in
+  the previous release (#2129); the key is now sent as a header on every Google
+  Books request instead, so no URL carries it and there is nothing left for a
+  future error to render. **If you ran a keyed instance before #2129 and have
+  shared a log with anyone, rotate the key.** (#2131)
 - Journal entries now publish the way they read in the editor. Numbered and
   nested lists render with their numbers, bullets, and indentation instead of
   collapsing flush against the card; quotes get their accent bar and keep each
