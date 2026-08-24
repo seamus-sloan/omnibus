@@ -975,7 +975,7 @@ test("opens the quote-card editor in a modal and closes it again", async ({
   expect((await request.delete(`/api/highlights/${id}`)).status()).toBe(204);
 });
 
-test("collapses a long passage list behind a show-more control", async ({
+test("lists every saved passage with no show-more control", async ({
   page,
   request,
 }) => {
@@ -989,16 +989,10 @@ test("collapses a long passage list behind a show-more control", async ({
   }
 
   await gotoReady(page, `/books/${uuid}`);
-  const cards = page.getByTestId("highlight-card");
-  await expect(cards).toHaveCount(5);
-
-  const showMore = page.getByTestId("highlights-show-more");
-  await expect(showMore).toHaveText("Show 3 more ↓");
-  await showMore.click();
-
-  // Expanding is one-way: every passage lists and the control goes away.
-  await expect(cards).toHaveCount(8);
-  await expect(showMore).toHaveCount(0);
+  // The stop scrolls the list rather than holding rows back, so all eight
+  // are in the DOM and nothing offers to load more.
+  await expect(page.getByTestId("highlight-card")).toHaveCount(8);
+  await expect(page.getByTestId("highlights-show-more")).toHaveCount(0);
 
   // Clean up shared state so the next run starts from the empty state.
   for (const id of ids) {

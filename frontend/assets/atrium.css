@@ -1141,8 +1141,6 @@ html, body { overscroll-behavior: none; }
 }
 .bd-hl-meta { font-size: 11px; color: var(--ink-3); }
 .bd-hl-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-/* Matches `.bd-hl-list`'s row gap so the control reads as one more row. */
-.bd-hl-show-more { margin-top: 14px; font-family: var(--sans); font-size: 12px; }
 @media (hover: hover) { .bd-hl-delete:hover { color: var(--bad); } }
 
 /* Quote-card modal — the shared reader editor (rd-quote-*) hosted in the
@@ -10443,12 +10441,8 @@ html {
 .bdw4-stack-avatar-photo, .bdw4-lrow-avatar-photo { width: 100%; height: 100%; object-fit: cover; }
 .bdw4-journal .bd-journal-blurb { display: none; }
 .bdw4-journal .bd-journal-composer, .bdw4 .bd-journal-open { margin-top: 14px; }
-.bdw4-ladderhint {
-  font-size: 10px; color: var(--ink-3); margin: 10px 0 8px; letter-spacing: .06em;
-  text-transform: uppercase;
-}
 .bdw4-ladder {
-  overflow-y: auto; max-height: min(400px, 50vh); padding-right: 10px;
+  overflow-y: auto; max-height: min(400px, 50vh); margin-top: 10px; padding-right: 10px;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in oklch, var(--accent) 75%, var(--bg-3)) var(--bg-2);
 }
@@ -10458,29 +10452,36 @@ html {
 }
 .bdw4-ladder::-webkit-scrollbar-track { background: var(--bg-2); border-radius: 99px; }
 .bdw4-lrow {
-  display: flex; gap: 10px; align-items: center; width: 100%;
-  padding: 8px 0; border: 0; border-bottom: 1px solid var(--line-2);
+  display: flex; gap: 14px; align-items: flex-start; width: 100%;
+  padding: 13px 0; border: 0; border-bottom: 1px solid var(--line-2);
   background: transparent; cursor: pointer; font: inherit; color: inherit;
   text-align: left; border-radius: 0;
 }
 .bdw4-lrow:hover { background: color-mix(in oklch, var(--bg-2) 55%, transparent); }
-.bdw4-lrow .nm { font-family: var(--mono); font-size: 10px; color: var(--ink-2); flex: 0 0 60px; letter-spacing: .04em; }
+.bdw4-lrow-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.bdw4-lrow-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; }
+.bdw4-lrow .nm { font-size: 13px; color: var(--ink-0); flex: 0 0 auto; }
+.bdw4-lrow .bdw4-lrow-you { color: var(--ink-3); }
 .bdw4-lrow .ex {
-  flex: 1; min-width: 0;
-  font-family: var(--serif); font-style: italic; font-size: 15.5px; color: var(--ink-1);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-family: var(--serif); font-style: italic; font-size: 15.5px;
+  color: var(--ink-1); line-height: 1.5;
 }
 .bdw4-lrow:hover .ex { color: var(--ink-0); }
+/* The row itself is the button, so this is a text cue, not a nested control. */
+.bdw4-lrow-read {
+  font-family: var(--mono); font-style: normal; font-size: 10px;
+  letter-spacing: .06em; color: var(--accent); white-space: nowrap;
+}
 .bdw4-lrow .at { font-family: var(--mono); font-size: 10px; color: var(--ink-3); flex: 0 0 auto; }
 .bdw4-lrow-avatar {
-  width: 22px; height: 22px; border-radius: 50%; flex: 0 0 auto;
+  width: 28px; height: 28px; border-radius: 50%; flex: 0 0 auto; margin-top: 1px;
   display: inline-grid; place-items: center; overflow: hidden;
   background: var(--bg-3); color: var(--ink-1);
-  font-family: var(--mono); font-size: 9px; font-weight: 700;
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
 }
 .bdw4-lrow.draft {
   border: 1px dashed color-mix(in oklch, var(--accent) 45%, transparent);
-  border-radius: 8px; padding: 8px 10px; margin: 2px 0;
+  border-radius: 8px; padding: 12px 10px; margin: 2px 0;
 }
 .bdw4-draftchip {
   font-family: var(--mono); font-size: 8.5px; letter-spacing: .12em;

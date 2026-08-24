@@ -86,6 +86,8 @@ fn sync_line_names_the_saved_audio_position_when_linked() {
     assert!(html.contains("one spot, both formats"), "{html}");
     assert!(html.contains("audio at 30m"), "{html}");
     assert!(html.contains("data-testid=\"sync-link-manage\""), "{html}");
+    // The affordance names what it manages rather than reading "manage →".
+    assert!(html.contains("Manage Ebook &#38; Audiobook Sync"), "{html}");
 }
 
 #[test]

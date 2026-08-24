@@ -80,7 +80,7 @@ fn sync_line(view: &AlignmentView, mut open_modal: Signal<bool>) -> Element {
                         r#type: "button",
                         "data-testid": "sync-link-manage",
                         onclick: move |_| open_modal.set(true),
-                        "manage \u{2192}"
+                        "Manage Ebook & Audiobook Sync"
                     }
                 }
             }
