@@ -1,7 +1,7 @@
 //! Shared discovery sections of the book-detail page — "From the same hand"
 //! (author lead + cover stack) and the Hardcover suggestions strip — plus the
-//! identifier-label helpers the files stop's metadata table reuses. The W4
-//! stops compose these from `w4.rs`.
+//! identifier-label helpers the files stop's metadata table reuses. The marquee
+//! stops compose these from `marquee.rs`.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;

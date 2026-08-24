@@ -8,34 +8,34 @@ use dioxus_router::Link;
 use omnibus_shared::EbookMetadata;
 
 use crate::components::{BookActionMeta, FormatSwitcher};
+use crate::pages::book_detail::body::{bd_identifier_key, bd_identifier_label};
+use crate::pages::book_detail::physical::{BdBookIdentity, BdPhysicalPanel, BdWishlistRailSlot};
+use crate::pages::book_detail::{BdMetaRow, PhysSignals};
 use crate::Route;
 
-use super::body::{bd_identifier_key, bd_identifier_label};
-use super::physical::{BdBookIdentity, BdPhysicalPanel, BdWishlistRailSlot};
-use super::w4::{W4AdminActions, W4ViewFacts};
-use super::{BdMetaRow, PhysSignals};
+use super::{MarqueeAdminActions, MarqueeViewFacts};
 
 /// The Files stop.
 #[component]
-pub(super) fn W4FilesStop(
+pub(super) fn MarqueeFilesStop(
     b: EbookMetadata,
-    view: W4ViewFacts,
-    admin: W4AdminActions,
+    view: MarqueeViewFacts,
+    admin: MarqueeAdminActions,
     phys: PhysSignals,
     refresh: Signal<u32>,
     is_fileless: bool,
 ) -> Element {
     let uuid = b.unique_identifier.clone().unwrap_or_default();
     rsx! {
-        div { class: "bdw4-k", "Every way you hold this book" }
+        div { class: "bdmq-k", "Every way you hold this book" }
         // One list, one row per way you hold the book — file formats first,
         // then the physical copies and the wishlist. The design has no
         // separate badge row or physical panel here: a copy row *is* the
         // statement that you hold it that way.
-        div { class: "bdw4-copies rx-copies",
+        div { class: "bdmq-copies rx-copies",
             if !b.formats.is_empty() {
                 FormatSwitcher {
-                    w4: true,
+                    marquee: true,
                     formats: b.formats.clone(),
                     meta: BookActionMeta {
                         uuid: uuid.clone(),
@@ -51,7 +51,7 @@ pub(super) fn W4FilesStop(
                 is_fileless,
                 refresh,
                 phys,
-                w4: true,
+                marquee: true,
             }
             BdWishlistRailSlot {
                 identity: BdBookIdentity {
@@ -62,10 +62,10 @@ pub(super) fn W4FilesStop(
                     author: view.primary_author.clone(),
                 },
                 phys,
-                w4: true,
+                marquee: true,
             }
         }
-        div { class: "divider bdw4-files-div" }
+        div { class: "divider bdmq-files-div" }
         table { class: "rx-kv bd-meta-table mono",
             tbody {
                 BdMetaRow { k: "Title".to_string(), v: view.title.clone() }
@@ -91,7 +91,7 @@ pub(super) fn W4FilesStop(
                 }
             }
         }
-        div { class: "bdw4-files-actions",
+        div { class: "bdmq-files-actions",
             Link {
                 to: Route::MetadataEdit { uuid: uuid.clone() },
                 class: "btn ghost sm",

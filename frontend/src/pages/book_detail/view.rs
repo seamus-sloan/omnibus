@@ -1,15 +1,15 @@
 //! Loaded-book view composition for [`super::BookDetailPage`]. Derives display
 //! fields from the fetched [`EbookMetadata`] (series label, format flags,
-//! accent) and renders the platform body: web's W4 marquee stage via
-//! [`super::w4`], or mobile's single-column re-flow via [`super::mobile`].
+//! accent) and renders the platform body: web's marquee stage via
+//! [`super::marquee`], or mobile's single-column re-flow via [`super::mobile`].
 
 use dioxus::prelude::*;
 use omnibus_shared::{EbookMetadata, SuggestionsResponse};
 
+#[cfg(not(feature = "mobile"))]
+use super::marquee::{MarqueeAdminActions, MarqueeStage, MarqueeStageCtx, MarqueeViewFacts};
 #[cfg(feature = "mobile")]
 use super::mobile;
-#[cfg(not(feature = "mobile"))]
-use super::w4::{W4AdminActions, W4Stage, W4StageCtx, W4ViewFacts};
 use super::{DescriptionSignals, PhysSignals};
 
 fn series_label(series: Option<&str>, index: Option<&str>) -> Option<String> {
@@ -140,7 +140,7 @@ pub(super) fn render_loaded(
     })
 }
 
-/// Render the fully-loaded book detail view — the web W4 marquee stage
+/// Render the fully-loaded book detail view — the web marquee stage
 /// (cover pinned left, seven snap-scrolled stops on the right).
 #[cfg(not(feature = "mobile"))]
 pub(super) fn render_loaded(
@@ -158,7 +158,7 @@ pub(super) fn render_loaded(
         phys,
         after_merge,
     } = ctx;
-    // Web keeps its own local copy inside `W4HomeStop`, a real `#[component]`
+    // Web keeps its own local copy inside `MarqueeHomeStop`, a real `#[component]`
     // that gets a fresh scope per mount — no hook-order risk there, so this
     // param is unused on this target.
     let _ = description;
@@ -168,21 +168,21 @@ pub(super) fn render_loaded(
     } = rail;
     let loaded = derive_loaded_view(&b);
     let accent_style = loaded.accent_style.clone();
-    let view = W4ViewFacts::from_loaded(&loaded);
+    let view = MarqueeViewFacts::from_loaded(&loaded);
 
     rsx! {
-        div { class: "bd-root bdw4", style: "{accent_style}",
-            W4Stage {
+        div { class: "bd-root bdmq", style: "{accent_style}",
+            MarqueeStage {
                 b,
                 view,
                 author_books,
                 suggestions,
-                admin: W4AdminActions {
+                admin: MarqueeAdminActions {
                     merge_button,
                     delete_button,
                 },
                 phys,
-                ctx: W4StageCtx {
+                ctx: MarqueeStageCtx {
                     server_url,
                     is_admin,
                     refresh,

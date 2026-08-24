@@ -78,7 +78,7 @@ test("renders the sync entry row for a dual-format book", async ({
 
   const row = page.getByTestId("sync-link-row");
   await expect(row).toBeVisible();
-  // On the W4 stage the panel is one mono readout under the Home stop's
+  // On the marquee stage the panel is one mono readout under the Home stop's
   // position ruler. The position itself is NOT asserted here — other specs
   // (immersive, mini-dock) open this shared fixture in readers/players in
   // parallel — so the stable contract is the line's state + affordance.

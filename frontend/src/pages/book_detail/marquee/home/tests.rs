@@ -2,8 +2,8 @@ use omnibus_shared::EbookMetadata;
 
 use super::*;
 
-fn facts(has_ebook: bool, has_audio: bool, has_comic: bool) -> W4ViewFacts {
-    W4ViewFacts {
+fn facts(has_ebook: bool, has_audio: bool, has_comic: bool) -> MarqueeViewFacts {
+    MarqueeViewFacts {
         title: "Book".into(),
         primary_author: "Author".into(),
         author_id: None,
@@ -22,8 +22,8 @@ fn book() -> EbookMetadata {
     }
 }
 
-fn no_progress() -> W4Progress {
-    W4Progress {
+fn no_progress() -> MarqueeProgress {
+    MarqueeProgress {
         reading: None,
         listening: None,
     }
@@ -32,7 +32,7 @@ fn no_progress() -> W4Progress {
 /// SSR-render the CTA row for a book with the given format availability.
 fn render_cta_row(has_ebook: bool, has_audio: bool) -> String {
     dioxus::ssr::render_element(rsx! {
-        W4CtaRow {
+        MarqueeCtaRow {
             b: book(),
             view: facts(has_ebook, has_audio, false),
             progress: no_progress(),
@@ -44,7 +44,7 @@ fn render_cta_row(has_ebook: bool, has_audio: bool) -> String {
 fn immersive_cta_renders_when_book_has_both_ebook_and_audio() {
     let html = render_cta_row(true, true);
     assert!(html.contains("data-testid=\"immersive-read\""));
-    // The W4 row uses the design's terser label.
+    // The marquee row uses the design's terser label.
     assert!(html.contains(">Immersive<"), "{html}");
 }
 
@@ -86,7 +86,7 @@ enum ComicOnlyRoute {
 #[component]
 fn ComicOnlyHost() -> Element {
     rsx! {
-        W4CtaRow {
+        MarqueeCtaRow {
             b: book(),
             view: facts(false, false, true),
             progress: no_progress(),
@@ -103,7 +103,7 @@ enum EpubAndComicRoute {
 #[component]
 fn EpubAndComicHost() -> Element {
     rsx! {
-        W4CtaRow {
+        MarqueeCtaRow {
             b: book(),
             view: facts(true, false, true),
             progress: no_progress(),
@@ -154,7 +154,7 @@ enum ResumeRoute {
 #[component]
 fn ResumeHost() -> Element {
     use omnibus_shared::progress::{ProgressFormat, ProgressRecord};
-    let progress = W4Progress {
+    let progress = MarqueeProgress {
         reading: Some(ProgressRecord {
             book_uuid: "book-uuid".into(),
             format: ProgressFormat::Epub,
@@ -169,7 +169,7 @@ fn ResumeHost() -> Element {
         listening: None,
     };
     rsx! {
-        W4CtaRow {
+        MarqueeCtaRow {
             b: book(),
             view: facts(true, false, false),
             progress,

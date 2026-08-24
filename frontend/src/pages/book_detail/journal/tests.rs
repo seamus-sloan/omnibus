@@ -1,4 +1,4 @@
-//! Tests for the W4 journal stop's excerpt helper and its two-line ladder row.
+//! Tests for the marquee journal stop's excerpt helper and its two-line ladder row.
 
 use super::*;
 

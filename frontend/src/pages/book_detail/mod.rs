@@ -1,9 +1,9 @@
-//! Book detail page — the W4 "marquee" stage on web, single-column re-flow
-//! on mobile.
+//! Book detail page — the marquee stage on web, single-column re-flow on
+//! mobile.
 //!
 //! Owns the data fetch and shared markup primitives; the loaded-book view
-//! composition lives in [`view`], the web stage in [`w4`] and its `w4_*`
-//! stop modules, and shared discovery sections in [`body`].
+//! composition lives in [`view`], the web stage in [`marquee`] and its stop
+//! submodules, and shared discovery sections in [`body`].
 
 use dioxus::prelude::*;
 use omnibus_shared::physical::WishlistEntry;
@@ -26,7 +26,7 @@ mod read_status;
 mod sync_link;
 mod view;
 
-// Web renders the W4 marquee stage (seven snap-scrolled stops); mobile
+// Web renders the marquee stage (seven snap-scrolled stops); mobile
 // re-flows the same loaded-book data into a single-column surface. The
 // web-only sections aren't compiled on the native shell. (Separate build →
 // no impact on web SSR/WASM parity, rule 07.)
@@ -38,22 +38,14 @@ mod chips;
 mod export_menu;
 #[cfg(not(feature = "mobile"))]
 mod highlights;
+#[cfg(not(feature = "mobile"))]
+mod marquee;
 #[cfg(feature = "mobile")]
 mod mobile;
 #[cfg(feature = "mobile")]
 mod offline;
 #[cfg(not(feature = "mobile"))]
 mod physical;
-#[cfg(not(feature = "mobile"))]
-mod w4;
-#[cfg(not(feature = "mobile"))]
-mod w4_files;
-#[cfg(not(feature = "mobile"))]
-mod w4_home;
-#[cfg(not(feature = "mobile"))]
-mod w4_shelf;
-#[cfg(not(feature = "mobile"))]
-mod w4_stats;
 
 // The landing Continue hero's Immersive pill shares the book-detail CTA's
 // retarget-and-navigate handler; the hero is web-only, so the re-export is

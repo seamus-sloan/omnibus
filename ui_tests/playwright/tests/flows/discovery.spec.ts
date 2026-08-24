@@ -119,7 +119,7 @@ test("book detail shelf stop links to the series page", async ({
   page,
   request,
 }) => {
-  // `beta` ("Beta in the Series") is Pioneers #1, so the W4 Shelf stop
+  // `beta` ("Beta in the Series") is Pioneers #1, so the marquee Shelf stop
   // renders the whole series as covers with a dedicated "series page →"
   // link under the shelf (the Home kicker's series link is covered by
   // book_detail.spec.ts — this test owns the shelf-stop affordance).
@@ -127,7 +127,7 @@ test("book detail shelf stop links to the series page", async ({
   const id = await fetchBookIdByTitle(request, beta.title);
   await gotoReady(page, `/books/${id}`);
 
-  await expect(page.getByTestId("bdw4-series-shelf")).toBeVisible();
+  await expect(page.getByTestId("bdmq-series-shelf")).toBeVisible();
   const shelfLink = page.getByRole("link", { name: /series page/ });
   await shelfLink.click();
 

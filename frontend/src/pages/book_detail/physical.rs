@@ -61,10 +61,10 @@ pub(super) fn BdPhysicalPanel(
     is_fileless: bool,
     refresh: Signal<u32>,
     phys: PhysSignals,
-    /// W4 book page: render each copy as a row in the book's copies list
+    /// Marquee book page: render each copy as a row in the book's copies list
     /// instead of as a standalone panel.
     #[props(default)]
-    w4: bool,
+    marquee: bool,
 ) -> Element {
     let server_url = use_server_url();
     let user = crate::use_current_user_summary();
@@ -105,11 +105,11 @@ pub(super) fn BdPhysicalPanel(
 
     rsx! {
         section {
-            class: if w4 { "bd-physical-panel bd-physical-panel-w4" } else { "bd-physical-panel" },
+            class: if marquee { "bd-physical-panel bd-physical-panel-marquee" } else { "bd-physical-panel" },
             "data-testid": "bd-physical-panel",
             if !copies().is_empty() {
-                if w4 {
-                    {render_physical_rows_w4(state, server_url.clone(), is_fileless, can_edit)}
+                if marquee {
+                    {render_physical_rows_marquee(state, server_url.clone(), is_fileless, can_edit)}
                 } else {
                     {render_physical_section(state, server_url.clone(), is_fileless, can_edit)}
                 }
@@ -144,9 +144,9 @@ struct WishlistCardState {
 pub(super) fn BdWishlistRailSlot(
     identity: BdBookIdentity,
     phys: PhysSignals,
-    /// W4 book page: render as a dashed row in the copies list.
+    /// Marquee book page: render as a dashed row in the copies list.
     #[props(default)]
-    w4: bool,
+    marquee: bool,
 ) -> Element {
     let BdBookIdentity {
         uuid,
@@ -177,9 +177,9 @@ pub(super) fn BdWishlistRailSlot(
         err,
     };
 
-    if w4 {
+    if marquee {
         return rsx! {
-            {render_wishlist_row_w4(entry, isbn, title, author, state)}
+            {render_wishlist_row_marquee(entry, isbn, title, author, state)}
             if let Some(e) = err.read().clone() {
                 p { role: "alert", class: "bd-phys-error", "data-testid": "wishlist-error", "{e}" }
             }
@@ -225,7 +225,7 @@ fn render_wishlist_card(
 
 /// The wishlist as an `rx-copy` row: a dashed tile (the design marks a copy
 /// you don't have yet), the tracking line, and the find/remove actions.
-fn render_wishlist_row_w4(
+fn render_wishlist_row_marquee(
     entry: Option<WishlistEntry>,
     isbn: Option<String>,
     title: String,
@@ -428,12 +428,12 @@ fn render_physical_section(
     }
 }
 
-/// The W4 copies-list rendering of the same section: each checked-in copy is
+/// The marquee copies-list rendering of the same section: each checked-in copy is
 /// a row in the book's copies list — the design treats a physical copy as
 /// just another way you hold the book, not a panel of its own — with the
 /// glyph tile, a green status dot on the check-in line, the ISBN as the mono
 /// sub-line, and the note/remove actions beneath.
-fn render_physical_rows_w4(
+fn render_physical_rows_marquee(
     state: PhysPanelState,
     url: String,
     is_fileless: bool,
@@ -442,13 +442,13 @@ fn render_physical_rows_w4(
     let copies = state.copies;
     rsx! {
         for copy in copies() {
-            {render_copy_row_w4(state, url.clone(), copy, is_fileless, can_edit)}
+            {render_copy_row_marquee(state, url.clone(), copy, is_fileless, can_edit)}
         }
     }
 }
 
 /// One physical copy as an `rx-copy` row.
-fn render_copy_row_w4(
+fn render_copy_row_marquee(
     state: PhysPanelState,
     url: String,
     copy: PhysicalCopy,

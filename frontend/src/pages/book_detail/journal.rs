@@ -27,7 +27,7 @@ use composer::BdJournalComposer;
 use entry_card::BdJournalEntryCard;
 
 /// Public reading-journal section: header, composer, and the entry feed.
-/// Mobile's single-column re-flow; the web stage uses [`W4JournalStop`].
+/// Mobile's single-column re-flow; the web stage uses [`MarqueeJournalStop`].
 #[cfg(feature = "mobile")]
 #[component]
 pub(super) fn BdJournalSection(uuid: String) -> Element {
@@ -139,13 +139,13 @@ fn journal_kicker(list: &[JournalEntry]) -> String {
     )
 }
 
-/// Stop 05 · Journals for the W4 stage: header (entry/reader counts + the
+/// Stop 05 · Journals for the marquee stage: header (entry/reader counts + the
 /// reader avatar stack), the composer, and the excerpt ladder — a two-line
 /// row per entry that opens the full card over the stop. Wishlist-only books
 /// render the design's empty state instead.
 #[cfg(not(feature = "mobile"))]
 #[component]
-pub(super) fn W4JournalStop(uuid: String, wish_mode: bool) -> Element {
+pub(super) fn MarqueeJournalStop(uuid: String, wish_mode: bool) -> Element {
     let server_url = use_server_url();
     let entries = use_signal(Vec::<JournalEntry>::new);
     let current_user = crate::use_current_user_summary();
@@ -171,14 +171,14 @@ pub(super) fn W4JournalStop(uuid: String, wish_mode: bool) -> Element {
         let mut seen = std::collections::HashSet::new();
         list.iter().filter(|e| seen.insert(e.author_id)).collect()
     };
-    let kicker = w4_journal_kicker(published, readers.len(), drafts, wish_mode);
+    let kicker = marquee_journal_kicker(published, readers.len(), drafts, wish_mode);
     let opened = open_entry().and_then(|id| list.iter().find(|e| e.id == id).cloned());
 
     rsx! {
-        div { id: "journal", class: "bd-journal bdw4-journal", "data-testid": "journal-section",
-        div { class: "bdw4-journalhead",
-            div { class: "bdw4-k", "{kicker}" }
-            span { class: "bdw4-headspacer" }
+        div { id: "journal", class: "bd-journal bdmq-journal", "data-testid": "journal-section",
+        div { class: "bdmq-journalhead",
+            div { class: "bdmq-k", "{kicker}" }
+            span { class: "bdmq-headspacer" }
             if !wish_mode {
                 button {
                     r#type: "button",
@@ -189,28 +189,28 @@ pub(super) fn W4JournalStop(uuid: String, wish_mode: bool) -> Element {
                 }
             }
             if readers.len() > 1 {
-                div { class: "bdw4-avatarstack", aria_hidden: "true",
+                div { class: "bdmq-avatarstack", aria_hidden: "true",
                     for e in readers.iter().take(5) {
                         UserAvatar {
                             key: "{e.author_id}",
                             user_id: e.author_id,
                             name: e.author_name.clone(),
                             has_avatar: e.author_has_avatar,
-                            class: "bdw4-stack-avatar".to_string(),
+                            class: "bdmq-stack-avatar".to_string(),
                         }
                     }
                 }
             }
         }
         if wish_mode {
-            div { class: "bdw4-bigquiet", "No entries yet \u{2014} the journal begins when you do." }
-            p { class: "mono bdw4-quiet-hint", "a shared log \u{2014} anyone reading this book can write here" }
+            div { class: "bdmq-bigquiet", "No entries yet \u{2014} the journal begins when you do." }
+            p { class: "mono bdmq-quiet-hint", "a shared log \u{2014} anyone reading this book can write here" }
         } else {
             if composer_open() {
                 // Deliberately not click-outside-dismissable: a stray click
                 // must not throw away an open draft.
-                div { class: "bdw4-overlay bdw4-overlay-static", "data-testid": "journal-composer-overlay",
-                    div { class: "bdw4-ocard bdw4-ocard-composer",
+                div { class: "bdmq-overlay bdmq-overlay-static", "data-testid": "journal-composer-overlay",
+                    div { class: "bdmq-ocard bdmq-ocard-composer",
                         BdJournalComposer {
                             uuid: uuid.clone(),
                             server_url: server_url.clone(),
@@ -226,7 +226,7 @@ pub(super) fn W4JournalStop(uuid: String, wish_mode: bool) -> Element {
                     p { class: "mono", "No journal entries yet \u{2014} be the first to write one." }
                 }
             } else {
-                div { class: "bdw4-ladder", "data-testid": "journal-list",
+                div { class: "bdmq-ladder", "data-testid": "journal-list",
                     for entry in list.iter() {
                         {render_ladder_row(entry, current_user().map(|u| u.id), dates_ready, open_entry)}
                     }
@@ -235,11 +235,11 @@ pub(super) fn W4JournalStop(uuid: String, wish_mode: bool) -> Element {
         }
         if let Some(entry) = opened {
             div {
-                class: "bdw4-overlay",
+                class: "bdmq-overlay",
                 "data-testid": "journal-overlay",
                 onclick: move |_| open_entry.set(None),
                 div {
-                    class: "bdw4-ocard",
+                    class: "bdmq-ocard",
                     onclick: move |e| e.stop_propagation(),
                     BdJournalEntryCard {
                         entry,
@@ -249,7 +249,7 @@ pub(super) fn W4JournalStop(uuid: String, wish_mode: bool) -> Element {
                         dates_ready,
                     }
                     button {
-                        class: "btn ghost sm bdw4-ocard-close",
+                        class: "btn ghost sm bdmq-ocard-close",
                         "data-testid": "journal-overlay-close",
                         onclick: move |_| open_entry.set(None),
                         "\u{2715} Close"
@@ -288,38 +288,43 @@ fn render_ladder_row(
         button {
             key: "{id}",
             r#type: "button",
-            class: if is_draft { "bdw4-lrow draft" } else { "bdw4-lrow" },
+            class: if is_draft { "bdmq-lrow draft" } else { "bdmq-lrow" },
             "data-testid": "journal-ladder-row",
             onclick: move |_| open_entry.set(Some(id)),
             UserAvatar {
                 user_id: entry.author_id,
                 name: entry.author_name.clone(),
                 has_avatar: entry.author_has_avatar,
-                class: "bdw4-lrow-avatar".to_string(),
+                class: "bdmq-lrow-avatar".to_string(),
             }
-            span { class: "bdw4-lrow-body",
-                span { class: "bdw4-lrow-head",
+            span { class: "bdmq-lrow-body",
+                span { class: "bdmq-lrow-head",
                     span { class: "nm", "{author}" }
                     if is_owner {
-                        span { class: "nm bdw4-lrow-you", "\u{b7} you" }
+                        span { class: "nm bdmq-lrow-you", "\u{b7} you" }
                     }
                     if is_draft {
-                        span { class: "bdw4-draftchip", "data-testid": "journal-draft-chip-row", "Draft" }
+                        span { class: "bdmq-draftchip", "data-testid": "journal-draft-chip-row", "Draft" }
                     }
                     span { class: "at", "{meta_line}" }
                 }
                 span { class: "ex",
                     "{excerpt} "
-                    span { class: "bdw4-lrow-read", "read \u{2192}" }
+                    span { class: "bdmq-lrow-read", "read \u{2192}" }
                 }
             }
         }
     }
 }
 
-/// The W4 journal kicker: `The journal · N entries from M readers · d draft`.
+/// The marquee journal kicker: `The journal · N entries from M readers · d draft`.
 #[cfg(not(feature = "mobile"))]
-fn w4_journal_kicker(published: usize, readers: usize, drafts: usize, wish_mode: bool) -> String {
+fn marquee_journal_kicker(
+    published: usize,
+    readers: usize,
+    drafts: usize,
+    wish_mode: bool,
+) -> String {
     if wish_mode {
         return "The journal \u{b7} empty".to_string();
     }

@@ -10,30 +10,31 @@ use omnibus_shared::{BookInsights, DayActivity};
 use crate::date_fmt::civil_from_days;
 use crate::time::now_unix;
 
-use super::rating::BdRatingWidget;
-use super::w4::W4Progress;
+use crate::pages::book_detail::rating::BdRatingWidget;
+
+use super::MarqueeProgress;
 
 /// Days shown in the activity spark, mirroring the old Insights card's strip.
 const SPARK_DAYS: usize = 22;
 
 /// The Stats stop.
 #[component]
-pub(super) fn W4StatsStop(
+pub(super) fn MarqueeStatsStop(
     uuid: String,
     insights: Option<BookInsights>,
-    progress: W4Progress,
+    progress: MarqueeProgress,
     audio_only: bool,
     wish_mode: bool,
 ) -> Element {
     rsx! {
-        div { class: "bdw4-k", if wish_mode { "Stats" } else { "What this read has looked like" } }
+        div { class: "bdmq-k", if wish_mode { "Stats" } else { "What this read has looked like" } }
         match insights {
             Some(i) if i.sessions > 0 && !wish_mode => rsx! {
                 {render_stats(&i, &progress, audio_only)}
             },
             _ => rsx! {
-                div { class: "bdw4-bigquiet", "data-testid": "bdw4-no-stats", "No stats yet." }
-                p { class: "bdw4-quiet-body",
+                div { class: "bdmq-bigquiet", "data-testid": "bdmq-no-stats", "No stats yet." }
+                p { class: "bdmq-quiet-body",
                     if wish_mode {
                         "Add an ebook or an audiobook to start tracking your reading stats for this book."
                     } else {
@@ -42,14 +43,14 @@ pub(super) fn W4StatsStop(
                 }
             },
         }
-        div { class: "bdw4-ratingrow", "data-testid": "bdw4-rating",
+        div { class: "bdmq-ratingrow", "data-testid": "bdmq-rating",
             BdRatingWidget { uuid: uuid.clone() }
         }
     }
 }
 
 /// The populated record: stat grid, note line, spark.
-fn render_stats(i: &BookInsights, progress: &W4Progress, audio_only: bool) -> Element {
+fn render_stats(i: &BookInsights, progress: &MarqueeProgress, audio_only: bool) -> Element {
     let started_short = short_date(i.started_at);
     let days_in = ((now_unix() - i.started_at) / 86_400).max(0) + 1;
     let avg = duration_label(i.seconds_total / i.sessions.max(1));
@@ -62,16 +63,16 @@ fn render_stats(i: &BookInsights, progress: &W4Progress, audio_only: bool) -> El
     let spark = spark_buckets(&i.daily, &i.as_of_day);
     let max = spark.iter().copied().max().unwrap_or(0).max(1);
     rsx! {
-        div { class: "bdw4-stats", "data-testid": "bdw4-stats",
+        div { class: "bdmq-stats", "data-testid": "bdmq-stats",
             {stat_cell("Started", &started_short, &format!("{days_in} days in"))}
             {stat_cell(time_label, &duration_label(i.seconds_total), &format!("{} sessions", i.sessions))}
             {stat_cell("Pickups", &i.sessions.to_string(), &format!("avg sit {avg}"))}
             {stat_cell("Longest sit", &duration_label(i.longest_seconds), &short_date(i.longest_started_at))}
         }
         if let Some(n) = note {
-            div { class: "mono bdw4-statsnote", "{n}" }
+            div { class: "mono bdmq-statsnote", "{n}" }
         }
-        div { class: "rx-spark", "data-testid": "bdw4-spark", aria_hidden: "true",
+        div { class: "rx-spark", "data-testid": "bdmq-spark", aria_hidden: "true",
             for (idx, v) in spark.iter().enumerate() {
                 i {
                     key: "{idx}",
@@ -100,7 +101,7 @@ fn stat_cell(k: &str, v: &str, s: &str) -> Element {
 }
 
 /// "≈ Xh Ym to go at your pace" from total time and the newest percent.
-fn time_left_note(i: &BookInsights, progress: &W4Progress) -> Option<String> {
+fn time_left_note(i: &BookInsights, progress: &MarqueeProgress) -> Option<String> {
     let pct = progress.newest_percent()?.clamp(0, 100);
     if pct == 0 {
         return None;

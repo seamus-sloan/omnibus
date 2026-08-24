@@ -1,4 +1,4 @@
-//! The W4 hero's sync readout: one mono line under the position ruler that
+//! The marquee hero's sync readout: one mono line under the position ruler that
 //! says where the two formats stand — linked ("one spot, both formats"),
 //! stale, or unlinked — with the affordance that opens the alignment modal.
 //! SSR and the first WASM paint render the same neutral shell; a post-mount
@@ -43,10 +43,10 @@ fn linked_audio_at(view: &AlignmentView) -> Option<String> {
 fn sync_line(view: &AlignmentView, mut open_modal: Signal<bool>) -> Element {
     match &view.link {
         None => rsx! {
-            div { class: "mono bdw4-syncline",
+            div { class: "mono bdmq-syncline",
                 "\u{21c4} positions aren't synced \u{2014} each format keeps its own spot"
                 button {
-                    class: "bdw4-synclink",
+                    class: "bdmq-synclink",
                     r#type: "button",
                     "data-testid": "sync-link-open",
                     onclick: move |_| open_modal.set(true),
@@ -55,10 +55,10 @@ fn sync_line(view: &AlignmentView, mut open_modal: Signal<bool>) -> Element {
             }
         },
         Some(l) if l.stale => rsx! {
-            div { class: "mono bdw4-syncline bdw4-syncline-warn", role: "status",
+            div { class: "mono bdmq-syncline bdmq-syncline-warn", role: "status",
                 "\u{21c4} the audiobook files changed since you linked \u{2014} sync is paused"
                 button {
-                    class: "bdw4-synclink",
+                    class: "bdmq-synclink",
                     r#type: "button",
                     "data-testid": "sync-link-review",
                     onclick: move |_| open_modal.set(true),
@@ -73,10 +73,10 @@ fn sync_line(view: &AlignmentView, mut open_modal: Signal<bool>) -> Element {
             let when = recency(l.confirmed_at);
             let follow = if l.follow { " \u{b7} following" } else { "" };
             rsx! {
-                div { class: "mono bdw4-syncline",
+                div { class: "mono bdmq-syncline",
                     "\u{21c4} one spot, both formats{at} \u{b7} confirmed {when}{follow}"
                     button {
-                        class: "bdw4-synclink",
+                        class: "bdmq-synclink",
                         r#type: "button",
                         "data-testid": "sync-link-manage",
                         onclick: move |_| open_modal.set(true),
@@ -127,9 +127,9 @@ pub(super) fn BdSyncPanel(
     /// Accepted for call-site clarity; the compact line is the only web
     /// rendering now.
     #[props(default = true)]
-    w4: bool,
+    marquee: bool,
 ) -> Element {
-    let _ = w4;
+    let _ = marquee;
     // None = state unknown (SSR / first paint); Some is the fetched view.
     let view = use_signal(|| None::<AlignmentView>);
     let fetch_failed = use_signal(|| false);
@@ -152,10 +152,10 @@ pub(super) fn BdSyncPanel(
         section { class: "bd-sync-panel", "data-testid": "sync-link-row",
             match view() {
                 None if fetch_failed() => rsx! {
-                    div { class: "mono bdw4-syncline", role: "status",
+                    div { class: "mono bdmq-syncline", role: "status",
                         "couldn't load the sync status"
                         button {
-                            class: "bdw4-synclink",
+                            class: "bdmq-synclink",
                             r#type: "button",
                             "data-testid": "sync-link-retry",
                             onclick: move |_| epoch.set(epoch() + 1),
