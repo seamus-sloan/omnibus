@@ -1,10 +1,13 @@
-//! Tests for `GET /api/metadata/providers` and
-//! `POST /api/metadata/editions/search`.
+//! Tests for `GET /api/metadata/providers`,
+//! `POST /api/metadata/editions/search`, and
+//! `POST /api/metadata/editions/hydrate`.
 //!
-//! The search tests stay network-free: each one either fails before the
-//! fan-out (validation, permission) or names only an unconfigured provider,
-//! which is reported rather than requested. The fan-out itself is covered by
-//! the wiremock suite in `omnibus_db::metadata_lookup`.
+//! The tests stay network-free: each one either fails before any provider is
+//! reached (validation, permission) or names only an unconfigured provider,
+//! which the search reports rather than requests and whose `by_ref` answers a
+//! clean miss without sending anything. The fan-out and the detail fetch
+//! themselves are covered by the wiremock suite in
+//! `omnibus_db::metadata_lookup`.
 
 use axum::{
     body::{to_bytes, Body},
@@ -13,15 +16,18 @@ use axum::{
     Json,
 };
 use omnibus_db::{auth::SessionKind, test_support::EnvVarGuard};
-use omnibus_shared::metadata_lookup::EditionSearchRequest;
+use omnibus_shared::metadata_lookup::{
+    EditionHydrateRequest, EditionSearchRequest, MetadataProvider,
+};
 use tower::ServiceExt;
 
-use super::{get_providers, post_edition_search};
+use super::{get_providers, post_edition_hydrate, post_edition_search};
 use crate::auth::test_support as auth_test_support;
 use crate::auth::AuthUser;
 use crate::backend::test_support::*;
 
 const SEARCH_PATH: &str = "/api/metadata/editions/search";
+const HYDRATE_PATH: &str = "/api/metadata/editions/hydrate";
 
 /// A minimal `AuthUser` for driving the handler directly (bypassing the
 /// `AuthUser` extractor), so a closed pool exercises the handler's own
@@ -339,5 +345,126 @@ async fn api_post_edition_search_returns_500_when_db_unavailable() {
         ..EditionSearchRequest::default()
     };
     let res = post_edition_search(fake_editor(1), State(state), Json(req)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+// ── POST /api/metadata/editions/hydrate ──────────────────────────
+
+/// A hydrate body naming Hardcover, which is unconfigured in these tests — so
+/// its `by_ref` answers a clean miss without a request ever leaving.
+fn hardcover_hydrate(provider_ref: &str) -> serde_json::Value {
+    serde_json::json!({ "source": "hardcover", "provider_ref": provider_ref })
+}
+
+#[tokio::test]
+async fn api_post_edition_hydrate_answers_null_when_the_provider_does_not_know_the_candidate() {
+    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", None);
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "editor").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let res = app
+        .oneshot(post(HYDRATE_PATH, &token, hardcover_hydrate("12345")))
+        .await
+        .expect("request should succeed");
+    // A miss is 200 `null`, never an error: the caller answers it by keeping
+    // the list row it already has, and an error would read as one to discard.
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_string(res).await, "null");
+}
+
+#[tokio::test]
+async fn api_post_edition_hydrate_treats_a_malformed_isbn_hint_as_absent() {
+    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", None);
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "editor").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let res = app
+        .oneshot(post(
+            HYDRATE_PATH,
+            &token,
+            serde_json::json!({
+                "source": "hardcover",
+                "provider_ref": "12345",
+                "isbn13": "not-an-isbn",
+            }),
+        ))
+        .await
+        .expect("request should succeed");
+    // The handle is what identifies a candidate; the ISBN is only a hint, so
+    // a bad one falls back to the handle rather than stranding the row.
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_string(res).await, "null");
+}
+
+#[tokio::test]
+async fn api_post_edition_hydrate_rejects_a_blank_provider_ref() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "editor").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let res = app
+        .oneshot(post(HYDRATE_PATH, &token, hardcover_hydrate("   ")))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(body_string(res).await.contains("provider_ref is required"));
+}
+
+#[tokio::test]
+async fn api_post_edition_hydrate_rejects_an_oversized_provider_ref() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "editor").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let long = "x".repeat(EditionHydrateRequest::PROVIDER_REF_MAX_LEN + 1);
+    let res = app
+        .oneshot(post(HYDRATE_PATH, &token, hardcover_hydrate(&long)))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(body_string(res).await.contains("exceeds"));
+}
+
+#[tokio::test]
+async fn api_post_edition_hydrate_requires_edit_permission() {
+    let (app, _state, pool) = fixture().await;
+    let reader = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, reader.id).await;
+
+    let res = app
+        .oneshot(post(HYDRATE_PATH, &token, hardcover_hydrate("12345")))
+        .await
+        .expect("request should succeed");
+    // Same gate as the search it follows: this is the second outbound call the
+    // picker spends, not a cheaper read.
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn api_post_edition_hydrate_requires_auth() {
+    let (app, _state, _pool) = fixture().await;
+    let req = Request::builder()
+        .uri(HYDRATE_PATH)
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(hardcover_hydrate("12345").to_string()))
+        .unwrap();
+
+    let res = app.oneshot(req).await.expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_post_edition_hydrate_returns_500_when_db_unavailable() {
+    let (_app, state, pool) = fixture().await;
+    pool.close().await;
+    let req = EditionHydrateRequest {
+        source: MetadataProvider::Hardcover,
+        provider_ref: "12345".to_string(),
+        isbn13: None,
+    };
+    let res = post_edition_hydrate(fake_editor(1), State(state), Json(req)).await;
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

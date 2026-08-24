@@ -2,8 +2,9 @@
 //! `/api/rpc/metadata/*` server fns, which mirror these gates. The catalog
 //! (`GET /api/metadata/providers`) is readable by any authenticated user and
 //! carries no key material, only `configured: bool`; the fan-out edition
-//! search (`POST /api/metadata/editions/search`) is `can_edit`-gated, since it
-//! makes outbound provider calls.
+//! search (`POST /api/metadata/editions/search`) and the follow-up detail
+//! fetch (`POST /api/metadata/editions/hydrate`) are `can_edit`-gated, since
+//! they make outbound provider calls.
 
 use axum::{
     extract::State,
@@ -12,7 +13,7 @@ use axum::{
     Json,
 };
 use omnibus_db as db;
-use omnibus_shared::metadata_lookup::EditionSearchRequest;
+use omnibus_shared::metadata_lookup::{EditionHydrateRequest, EditionSearchRequest};
 
 use super::{internal, AppState};
 use crate::auth::AuthUser;
@@ -65,6 +66,57 @@ pub(super) async fn post_edition_search(
     let found =
         db::search_all_providers(&config, &search_query(&req), req.providers.as_deref()).await;
     Json(found).into_response()
+}
+
+/// Re-fetch one selected candidate from the provider that offered it.
+///
+/// The picker's second call: a search hit is thinner than the provider's own
+/// record, so selecting one is worth a round trip. Answers `null` when that
+/// provider no longer knows the candidate — a clean miss the caller absorbs by
+/// keeping the list row it already has, never by blanking it.
+///
+/// 400 for a blank or oversized handle, 403 without edit permission (the same
+/// gate the search carries, for the same reason), and 502 when the provider
+/// itself could not be reached — which is a failure, unlike the miss above.
+pub(super) async fn post_edition_hydrate(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<EditionHydrateRequest>,
+) -> Response {
+    if !user.is_admin && !user.can_edit {
+        return (StatusCode::FORBIDDEN, "edit permission required").into_response();
+    }
+    if let Err(msg) = req.validate() {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
+    let config = match provider_config(&state).await {
+        Ok(c) => c,
+        Err(e) => return internal("edition_hydrate_provider_keys", e),
+    };
+    let found = db::hydrate_edition(
+        &config,
+        req.source,
+        req.provider_ref.trim(),
+        req.isbn13
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty()),
+    )
+    .await;
+    match found {
+        Ok(edition) => Json(edition).into_response(),
+        // Logged with `?e`, not `{e:#}`: thiserror lowers a literal
+        // `#[error("…")]` to a `write_str`, which ignores the alternate flag,
+        // so `{e:#}` would record the same fixed sentence the caller already
+        // got and the provider's own cause would reach nothing. `Debug` walks
+        // the chain. Safe to log in full — `providers::http::strip_url` has
+        // already removed the request URL, and so any `?key=`, from every
+        // provider error. Mirrors `rpc_hydrate_edition`'s handling.
+        Err(e) => {
+            tracing::warn!(error = ?e, "hydrate edition failed");
+            (StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+        }
+    }
 }
 
 /// Turn a request into the query the providers are actually asked.
