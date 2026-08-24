@@ -1,8 +1,8 @@
 //! Google Books description fetch for the "fetch summary" action. Queries
 //! `volumes?q=isbn:` per ISBN, then falls back to a title + author search, and
-//! reads `volumeInfo.description`. The API key (when configured) rides in the
-//! `?key=` query param, so a request error is stripped of its URL before it can
-//! reach a log.
+//! reads `volumeInfo.description`. The API key (when configured) rides in a
+//! header, so no URL here carries a credential for an error to render — see
+//! [`API_KEY_HEADER`].
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -19,6 +19,13 @@ const GB_TIMEOUT: Duration = Duration::from_secs(8);
 /// so a couple of quick retries meaningfully raise the hit rate.
 const GB_RETRY_BACKOFF: [Duration; 2] = [Duration::from_millis(200), Duration::from_millis(600)];
 
+/// The header Google accepts the API key in. Same key and same reasoning as
+/// `metadata_lookup::providers::googlebooks::API_KEY_HEADER`: a
+/// `reqwest::Error` renders the request URL but never a header, so a key that
+/// is never in a URL cannot reach a log from any fallible step. This module is
+/// where that mattered most — its decode site never stripped its URL at all.
+const API_KEY_HEADER: &str = "X-goog-api-key";
+
 /// Connection config for the Google Books description fetch. `base_url` is
 /// injectable so tests point it at a local `wiremock` server; `api_key` is the
 /// effective key resolved from settings/env by the caller.
@@ -27,8 +34,8 @@ pub struct GoogleBooksSummaryConfig {
     /// `https://www.googleapis.com` in production.
     pub base_url: String,
     /// Optional API key. Without one the API still answers, but on a shared
-    /// anonymous quota that a self-hosted instance hits (HTTP 429). Never
-    /// logged; a request error is stripped of its URL first.
+    /// anonymous quota that a self-hosted instance hits (HTTP 429). Sent as a
+    /// header, so no error on this path has it to render.
     pub api_key: Option<String>,
     pub timeout: Duration,
 }
@@ -124,6 +131,7 @@ async fn query_description(
     let body: GbResponse = resp
         .json()
         .await
+        .map_err(reqwest::Error::without_url)
         .context("google books response was not valid json")?;
     Ok(body
         .items
@@ -135,7 +143,8 @@ async fn query_description(
 }
 
 /// GET the volumes URL for `q`, retrying a retryable status a couple of times.
-/// Errors are stripped of their URL so the `?key=` never reaches a log.
+/// The one place the key is attached, and the reason no builder here appends
+/// it. Errors are still stripped of their URL, which is noise in a log.
 async fn get_with_retry(
     config: &GoogleBooksSummaryConfig,
     q: &str,
@@ -143,9 +152,11 @@ async fn get_with_retry(
     let url = volumes_url(config, q)?;
     let mut last: Option<reqwest::StatusCode> = None;
     for attempt in 0..=GB_RETRY_BACKOFF.len() {
-        let resp = client()?
-            .get(url.clone())
-            .timeout(config.timeout)
+        let mut request = client()?.get(url.clone()).timeout(config.timeout);
+        if let Some(key) = config.api_key.as_deref() {
+            request = request.header(API_KEY_HEADER, key);
+        }
+        let resp = request
             .send()
             .await
             .map_err(reqwest::Error::without_url)
@@ -162,7 +173,7 @@ async fn get_with_retry(
             tokio::time::sleep(*backoff).await;
         }
     }
-    // Status only — never the URL, which carries the API key.
+    // Status only: the URL diagnoses nothing the status doesn't.
     anyhow::bail!(
         "google books unavailable after {} attempts (last status {})",
         GB_RETRY_BACKOFF.len() + 1,
@@ -176,14 +187,12 @@ fn is_retryable(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
 }
 
-/// Build the volumes URL, percent-encoding `q` and appending the key when set.
-/// A build error can't leak the key — `parse_with_params` fails before the key
-/// is rendered anywhere reachable.
+/// Build the volumes URL, percent-encoding `q`. Carries no key — that rides on
+/// [`API_KEY_HEADER`], attached in [`get_with_retry`].
 fn volumes_url(config: &GoogleBooksSummaryConfig, q: &str) -> anyhow::Result<reqwest::Url> {
-    let mut params: Vec<(&str, &str)> = vec![("q", q)];
-    if let Some(key) = config.api_key.as_deref() {
-        params.push(("key", key));
-    }
-    reqwest::Url::parse_with_params(&format!("{}/books/v1/volumes", config.base_url), &params)
-        .context("failed to build google books url")
+    reqwest::Url::parse_with_params(
+        &format!("{}/books/v1/volumes", config.base_url),
+        &[("q", q)],
+    )
+    .context("failed to build google books url")
 }

@@ -25,16 +25,20 @@ pub(super) fn client() -> reqwest::Result<reqwest::Client> {
 
 /// Drop the URL from a `reqwest::Error` before it reaches a log.
 ///
-/// Google's API takes its key as a `?key=` query parameter, and a
-/// `reqwest::Error` renders the full request URL in its `Display` — so a plain
-/// `?` on a 429 would write the key into `omnibus.log`. The status and kind
-/// are what diagnose a provider failure; the URL is not.
+/// A `reqwest::Error` renders the full request URL in its `Display`, and the
+/// status and kind are what diagnose a provider failure — the URL is noise in
+/// `omnibus.log` either way. Apply it to **every** fallible step, not just the
+/// send and the status check: `Response::json` attaches the URL to a decode
+/// error too, which is the path a provider answering 200 with an HTML quota
+/// page takes.
 ///
-/// **Every** fallible step needs it, not just the send and the status check:
-/// `Response::json` attaches the URL to a decode error too, so a provider
-/// answering 200 with an HTML quota page leaks exactly as loudly as a 429
-/// would. That path is reached whenever a body fails to parse, which is why
-/// the three `json()` sites in `googlebooks` call this as well.
+/// It is no longer what keeps a credential out of a log, and must not be
+/// relied on for that again. It was, back when Google's key rode in `?key=`,
+/// and being opt-in per call site is exactly how it came to be missing from
+/// all three `json()` sites in `googlebooks` (#2129). The key now travels on
+/// `googlebooks::API_KEY_HEADER`, which a `reqwest::Error` never renders, so no
+/// provider here puts a secret in a URL for this to strip. Anything that adds
+/// one must make the same move rather than adding a call here.
 pub(super) fn strip_url(e: reqwest::Error) -> reqwest::Error {
     e.without_url()
 }
