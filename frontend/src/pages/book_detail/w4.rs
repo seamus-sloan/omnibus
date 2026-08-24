@@ -6,7 +6,9 @@
 
 use dioxus::prelude::*;
 use omnibus_shared::progress::ProgressFormat;
-use omnibus_shared::{BookInsights, EbookMetadata, ProgressRecord, SuggestionsResponse};
+use omnibus_shared::{
+    AlignmentView, BookInsights, EbookMetadata, ProgressRecord, SuggestionsResponse,
+};
 
 use crate::components::atrium::Cover;
 use crate::data;
@@ -73,6 +75,10 @@ pub(super) fn W4Stage(
     let mut reading = use_signal(|| None::<ProgressRecord>);
     let mut listening = use_signal(|| None::<ProgressRecord>);
     let mut insights = use_signal(|| None::<BookInsights>);
+    // The alignment view doubles as the chapter table + audio timeline for
+    // the Home stop's CTA labels and ruler ticks — fetched for any book with
+    // files, not just dual-format ones.
+    let mut alignment = use_signal(|| None::<AlignmentView>);
     let mut load_seq = use_signal(|| 0u64);
     {
         let uuid = uuid.clone();
@@ -86,6 +92,7 @@ pub(super) fn W4Stage(
             reading.set(None);
             listening.set(None);
             insights.set(None);
+            alignment.set(None);
             let uuid = uuid.clone();
             spawn(async move {
                 let read = if has_text {
@@ -105,10 +112,16 @@ pub(super) fn W4Stage(
                     None
                 };
                 let ins = data::get_book_insights(&uuid).await.ok().flatten();
+                let align = if has_text || has_audio {
+                    data::get_alignment("", &uuid).await.ok()
+                } else {
+                    None
+                };
                 if *load_seq.peek() == my_load {
                     reading.set(read);
                     listening.set(listen);
                     insights.set(ins);
+                    alignment.set(align);
                 }
             });
         }));
@@ -146,6 +159,7 @@ pub(super) fn W4Stage(
                 view: view.clone(),
                 progress: W4Progress { reading: reading(), listening: listening() },
                 insights: insights(),
+                alignment: alignment(),
                 phys,
                 refresh: ctx.refresh,
                 after_merge: ctx.after_merge,

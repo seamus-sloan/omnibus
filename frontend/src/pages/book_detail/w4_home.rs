@@ -8,7 +8,9 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::physical::WishlistEntry;
 use omnibus_shared::summary::summary_is_sparse;
-use omnibus_shared::{BookFileInfo, BookInsights, EbookMetadata, MetadataOverrides};
+use omnibus_shared::{AlignmentView, BookFileInfo, BookInsights, EbookMetadata, MetadataOverrides};
+
+use crate::components::alignment_modal::{fmt_hm, listening_frac};
 
 use crate::components::FetchSummaryButton;
 use crate::{data, use_server_url, Route};
@@ -31,6 +33,7 @@ pub(super) fn W4HomeStop(
     view: W4ViewFacts,
     progress: W4Progress,
     insights: Option<BookInsights>,
+    alignment: Option<AlignmentView>,
     phys: PhysSignals,
     refresh: Signal<u32>,
     after_merge: Signal<bool>,
@@ -64,6 +67,7 @@ pub(super) fn W4HomeStop(
 
     let kicker = home_kicker(&b, &view, wish_mode, wishlist.as_ref());
     let dual = view.has_ebook && view.has_audio;
+    let readout = derive_readout(alignment.as_ref(), &progress);
 
     rsx! {
         div { class: "bdw4-k",
@@ -133,7 +137,12 @@ pub(super) fn W4HomeStop(
                 phys,
             }
         } else {
-            W4CtaRow { b: b.clone(), view: view.clone(), progress: progress.clone() }
+            W4CtaRow {
+                b: b.clone(),
+                view: view.clone(),
+                progress: progress.clone(),
+                readout: readout.clone(),
+            }
         }
         div { class: "bdw4-statusrow",
             BdReadStatusControl { uuid: uuid.clone() }
@@ -144,11 +153,86 @@ pub(super) fn W4HomeStop(
             }
         }
         if !wish_mode {
-            {render_ruler(&progress, insights.as_ref(), dates_ready())}
+            {render_ruler(&progress, &readout, insights.as_ref(), dates_ready(), !dual)}
             if dual {
-                BdSyncPanel { uuid: uuid.clone(), refresh, after_merge }
+                BdSyncPanel { uuid: uuid.clone(), refresh, after_merge, w4: true }
             }
         }
+    }
+}
+
+/// Chapter- and timeline-aware display facts derived from the alignment
+/// view: what the design's CTA labels, ruler ticks, and caret flag show.
+#[derive(Clone, PartialEq, Default)]
+pub(super) struct HomeReadout {
+    /// Total ebook chapters, for the ruler's tick count.
+    pub ch_total: Option<usize>,
+    /// 1-based current chapter + its title, from the reading percent against
+    /// the chapter table.
+    pub ch_now: Option<(usize, String)>,
+    /// Listening position as `Hh Mm` on the whole audio timeline.
+    pub audio_at: Option<String>,
+    /// Whole-timeline audio duration as `Hh Mm`.
+    pub audio_total: Option<String>,
+    /// Seconds left on the audio timeline at 1.0×, for the pace estimate.
+    pub audio_left_secs: Option<i64>,
+}
+
+/// Chapter titles come from the EPUB's own nav, where they run anywhere from
+/// "Cinder" to "CHAPTER XIII DR. SEWARD'S DIARY—continued". The CTA names the
+/// chapter inline, so cap it at a phrase rather than letting one book's
+/// verbose nav stretch the button across the panel.
+fn short_chapter_title(title: &str) -> String {
+    const CAP: usize = 32;
+    let t = title.trim();
+    if t.chars().count() <= CAP {
+        return t.to_string();
+    }
+    // Prefer breaking at the last word boundary inside the cap so the label
+    // ends on a whole word.
+    let head: String = t.chars().take(CAP).collect();
+    let cut = head.rfind(char::is_whitespace).unwrap_or(head.len());
+    format!(
+        "{}\u{2026}",
+        head[..cut].trim_end_matches(['—', '-', ',', ':'])
+    )
+}
+
+fn derive_readout(alignment: Option<&AlignmentView>, progress: &W4Progress) -> HomeReadout {
+    let Some(v) = alignment else {
+        return HomeReadout::default();
+    };
+    let chapters = v.ebook.as_ref().map(|e| &e.chapters);
+    let ch_total = chapters.map(|c| c.len()).filter(|n| *n > 1);
+    let ch_now = match (
+        chapters,
+        progress.reading.as_ref().and_then(|r| r.progress_percent),
+    ) {
+        (Some(chapters), Some(pct)) if !chapters.is_empty() && pct > 0 => {
+            // Chapter starts are whole-book percents (0..=100), same scale
+            // as the saved position.
+            let idx = chapters
+                .iter()
+                .rposition(|c| c.percent <= pct as f64)
+                .unwrap_or(0);
+            Some((idx + 1, short_chapter_title(&chapters[idx].title)))
+        }
+        _ => None,
+    };
+    let total_secs: f64 = v.audio_files.iter().map(|f| f.duration_seconds).sum();
+    let audio_total = (total_secs > 0.0).then(|| fmt_hm(total_secs));
+    let files: Vec<_> = v.audio_files.iter().collect();
+    let frac = listening_frac(v, &files);
+    let audio_at = frac.map(|f| fmt_hm(f * total_secs));
+    let audio_left_secs = frac
+        .filter(|_| total_secs > 0.0)
+        .map(|f| ((1.0 - f) * total_secs) as i64);
+    HomeReadout {
+        ch_total,
+        ch_now,
+        audio_at,
+        audio_total,
+        audio_left_secs,
     }
 }
 
@@ -212,7 +296,12 @@ fn home_kicker(
 /// the Export menu — the old hero's `BdCtaRow` re-voiced for W4 (resume verbs
 /// when a position exists; identical testids).
 #[component]
-fn W4CtaRow(b: EbookMetadata, view: W4ViewFacts, progress: W4Progress) -> Element {
+fn W4CtaRow(
+    b: EbookMetadata,
+    view: W4ViewFacts,
+    progress: W4Progress,
+    #[props(default)] readout: HomeReadout,
+) -> Element {
     let uuid = b.unique_identifier.clone().unwrap_or_default();
     let book_author = b
         .creators
@@ -242,15 +331,22 @@ fn W4CtaRow(b: EbookMetadata, view: W4ViewFacts, progress: W4Progress) -> Elemen
         .as_ref()
         .map(|l| l.audio_position_seconds.unwrap_or_default() > 0.0)
         .unwrap_or(false);
-    let read_verb = if started_reading {
-        "Resume reading"
-    } else {
-        "Start reading"
+    // Design voice: the resume CTA names the chapter when the chapter table
+    // is known — "Resume — Ch. 41 · Cinder" — and the secondary listen names
+    // the timeline position — "Listen from 15h 21m".
+    let read_verb = match (&readout.ch_now, started_reading) {
+        (Some((n, title)), true) => format!("Resume \u{2014} Ch. {n} \u{b7} {title}"),
+        (None, true) => "Resume reading".to_string(),
+        (_, false) => "Start reading".to_string(),
     };
-    let listen_primary = if started_listening {
-        "Resume listening"
-    } else {
-        "Start listening"
+    let listen_primary = match (&readout.audio_at, started_listening) {
+        (Some(at), true) => format!("Resume listening from {at}"),
+        (None, true) => "Resume listening".to_string(),
+        (_, false) => "Start listening".to_string(),
+    };
+    let listen_secondary = match (&readout.audio_at, started_listening) {
+        (Some(at), true) => format!("Listen from {at}"),
+        _ => "Listen".to_string(),
     };
     let is_fileless = !view.has_ebook && !view.has_audio && !view.has_comic;
 
@@ -267,7 +363,7 @@ fn W4CtaRow(b: EbookMetadata, view: W4ViewFacts, progress: W4Progress) -> Elemen
                         kind: FilePickerKind::Read,
                         files: epub_files.clone(),
                         chrome: FilePickerChrome {
-                            label: read_verb.to_string(),
+                            label: read_verb.clone(),
                             button_class: "btn primary lg".to_string(),
                             single_testid: "start-reading".to_string(),
                         },
@@ -285,7 +381,7 @@ fn W4CtaRow(b: EbookMetadata, view: W4ViewFacts, progress: W4Progress) -> Elemen
                         kind: FilePickerKind::Listen,
                         files: audio_files.clone(),
                         chrome: FilePickerChrome {
-                            label: listen_primary.to_string(),
+                            label: listen_primary.clone(),
                             button_class: "btn primary lg".to_string(),
                             single_testid: "start-listening".to_string(),
                         },
@@ -297,14 +393,14 @@ fn W4CtaRow(b: EbookMetadata, view: W4ViewFacts, progress: W4Progress) -> Elemen
                         kind: FilePickerKind::Listen,
                         files: audio_files.clone(),
                         chrome: FilePickerChrome {
-                            label: "Listen".to_string(),
+                            label: listen_secondary.clone(),
                             button_class: "btn lg".to_string(),
                             single_testid: "listen-secondary".to_string(),
                         },
                     }
                 }
                 if view.has_audio && view.has_ebook {
-                    BdImmersiveButton { uuid: uuid.clone() }
+                    BdImmersiveButton { uuid: uuid.clone(), label: "Immersive" }
                 }
                 BdExportMenu {
                     ctx: BdExportContext {
@@ -369,37 +465,64 @@ fn W4WishlistCtas(
     }
 }
 
-/// The position ruler + the mono line under it. Renders only once a saved
-/// position carries a percent; the line prefers a time-left estimate
-/// (`seconds_total` scaled to the remaining fraction) and falls back to the
-/// position's recency.
+/// The position ruler + the mono line under it, per the design: chapter
+/// ticks when the chapter table is known, a caret flag naming the chapter
+/// (or the bare percent), the `Ch. N of M · pct%` axis, and a time-left
+/// estimate — the audio timeline at 1.0× when one exists, else scaled from
+/// this book's recorded pace.
 fn render_ruler(
     progress: &W4Progress,
+    readout: &HomeReadout,
     insights: Option<&BookInsights>,
     dates_ready: bool,
+    // Dual-format books get the sync line instead of a second recency line.
+    show_last_opened: bool,
 ) -> Element {
     let Some(pct) = progress.newest_percent() else {
         return rsx! {};
     };
     let pct = pct.clamp(0, 100);
     let done = pct >= 100;
-    let left_label = format!("{pct}% of the book");
-    let right_label = match insights {
-        Some(i) if pct > 0 && !done => {
+    let flag = match &readout.ch_now {
+        Some((n, _)) => format!("Ch. {n}"),
+        None => format!("{pct}%"),
+    };
+    let left_label = match (&readout.ch_now, readout.ch_total) {
+        (Some((n, _)), Some(total)) => format!("Ch. {n} of {total} \u{b7} {pct}%"),
+        _ => match (&readout.audio_at, &readout.audio_total) {
+            (Some(at), Some(of)) => format!("{at} of {of} \u{b7} {pct}%"),
+            _ => format!("{pct}% of the book"),
+        },
+    };
+    let right_label = if done {
+        None
+    } else if let Some(left) = readout.audio_left_secs.filter(|l| *l > 0) {
+        Some(format!(
+            "\u{2248} {} left at 1.0\u{d7}",
+            super::w4_stats::duration_label(left)
+        ))
+    } else {
+        insights.filter(|_| pct > 0).map(|i| {
             let left_secs = i.seconds_total * (100 - pct) / pct;
-            Some(format!(
+            format!(
                 "\u{2248} {} left at your pace",
                 super::w4_stats::duration_label(left_secs)
-            ))
-        }
-        _ => None,
+            )
+        })
     };
-    let when = progress.newest_updated_at().map(|t| {
-        format!(
-            "last opened {}",
-            fmt_long_date(t, local_date_offset(dates_ready, t))
-        )
-    });
+    let when = progress
+        .newest_updated_at()
+        .filter(|_| show_last_opened)
+        .map(|t| {
+            format!(
+                "last opened {}",
+                fmt_long_date(t, local_date_offset(dates_ready, t))
+            )
+        });
+    let tick_style = readout
+        .ch_total
+        .map(|n| format!("--n:{n};"))
+        .unwrap_or_default();
     rsx! {
         div { class: "bdw4-rulerwrap", "data-testid": "bdw4-ruler",
             div { class: "rx-ruler",
@@ -407,8 +530,11 @@ fn render_ruler(
                     class: if done { "rx-fill done" } else { "rx-fill" },
                     style: "width:{pct}%",
                 }
+                if readout.ch_total.is_some() {
+                    div { class: "rx-tix", style: "{tick_style}" }
+                }
                 if !done {
-                    div { class: "rx-caret", style: "left:{pct}%", i { "{pct}%" } }
+                    div { class: "rx-caret", style: "left:{pct}%", i { "{flag}" } }
                 }
             }
             div { class: "rx-ruler-axis",

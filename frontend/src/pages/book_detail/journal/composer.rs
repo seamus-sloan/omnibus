@@ -90,9 +90,9 @@ struct ComposerAuxSignals {
 /// unconditionally each render), split out of [`BdJournalComposer`] to keep
 /// its body under the line cap — safe to call unconditionally since it runs
 /// in the same position on every render.
-fn use_composer_signals() -> (JournalComposerState, ComposerAuxSignals) {
+fn use_composer_signals(open: Signal<bool>) -> (JournalComposerState, ComposerAuxSignals) {
     let state = JournalComposerState {
-        open: use_signal(|| false),
+        open,
         body: use_signal(String::new),
         track_progress: use_signal(|| false),
         progress: use_signal(|| 50i64),
@@ -153,8 +153,19 @@ fn use_composer_autosave(state: JournalComposerState, server_url: &str, uuid: &s
 /// [`BdJournalHighlightsPopover`], [`BdJournalEditorBody`], and
 /// [`BdJournalComposerFoot`].
 #[component]
-pub(super) fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> Element {
-    let (state, aux) = use_composer_signals();
+pub(super) fn BdJournalComposer(
+    uuid: String,
+    server_url: String,
+    reload: Signal<u32>,
+    /// Caller-owned open state, so a host (the W4 journal stop's modal) can
+    /// raise the composer and observe it closing after publish/cancel.
+    open: Signal<bool>,
+    /// Modal hosting: skip the collapsed "Write a journal entry…" prompt —
+    /// the host renders its own New-entry affordance while closed.
+    #[props(default = false)]
+    modal: bool,
+) -> Element {
+    let (state, aux) = use_composer_signals(open);
     let mut open = state.open;
     let body = state.body;
     let show_preview = state.show_preview;
@@ -169,6 +180,9 @@ pub(super) fn BdJournalComposer(uuid: String, server_url: String, reload: Signal
     use_composer_autosave(state, &server_url, &uuid);
 
     if !open() {
+        if modal {
+            return rsx! {};
+        }
         return rsx! {
             button {
                 r#type: "button",

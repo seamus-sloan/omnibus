@@ -44,7 +44,8 @@ fn render_cta_row(has_ebook: bool, has_audio: bool) -> String {
 fn immersive_cta_renders_when_book_has_both_ebook_and_audio() {
     let html = render_cta_row(true, true);
     assert!(html.contains("data-testid=\"immersive-read\""));
-    assert!(html.contains("Immersive Read"));
+    // The W4 row uses the design's terser label.
+    assert!(html.contains(">Immersive<"), "{html}");
 }
 
 #[test]
@@ -184,4 +185,18 @@ fn resume_verbs_take_over_once_a_position_exists() {
         }
     });
     assert!(html.contains("Resume reading"), "{html}");
+}
+
+#[test]
+fn short_chapter_title_keeps_a_terse_title_and_caps_a_verbose_one() {
+    assert_eq!(short_chapter_title("Cinder"), "Cinder");
+    assert_eq!(
+        short_chapter_title("CHAPTER XIII DR. SEWARD'S DIARY\u{2014}continued"),
+        "CHAPTER XIII DR. SEWARD'S\u{2026}"
+    );
+    // Breaks on a word boundary and trims a trailing dash/comma.
+    assert_eq!(
+        short_chapter_title("The Vestibule of the Sixteenth Hall, north"),
+        "The Vestibule of the Sixteenth\u{2026}"
+    );
 }

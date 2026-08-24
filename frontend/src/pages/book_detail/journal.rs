@@ -37,6 +37,7 @@ pub(super) fn BdJournalSection(uuid: String) -> Element {
 
     use_journal_entries_load(uuid.clone(), server_url.clone(), reload, entries);
     use_spoiler_reveal_binding();
+    let composer_open = use_signal(|| false);
 
     let list = entries();
     let kicker = journal_kicker(&list);
@@ -47,7 +48,12 @@ pub(super) fn BdJournalSection(uuid: String) -> Element {
             p { class: "mono bd-journal-blurb",
                 "A shared log — every reader's journal for this book lives here."
             }
-            BdJournalComposer { uuid: uuid.clone(), server_url: server_url.clone(), reload }
+            BdJournalComposer {
+                uuid: uuid.clone(),
+                server_url: server_url.clone(),
+                reload,
+                open: composer_open,
+            }
             BdJournalList { list, current_user: current_user(), server_url, reload }
         }
     }
@@ -146,6 +152,9 @@ pub(super) fn W4JournalStop(uuid: String, wish_mode: bool) -> Element {
     use_journal_entries_load(uuid.clone(), server_url.clone(), reload, entries);
     use_spoiler_reveal_binding();
     let dates_ready = use_local_dates_ready();
+    // The composer opens as a modal over the stop (design: "✎ New entry"),
+    // not as an inline card; the composer clears this on publish/cancel.
+    let mut composer_open = use_signal(|| false);
 
     let list = entries();
     let published = list
@@ -164,6 +173,16 @@ pub(super) fn W4JournalStop(uuid: String, wish_mode: bool) -> Element {
         div { id: "journal", class: "bd-journal bdw4-journal", "data-testid": "journal-section",
         div { class: "bdw4-journalhead",
             div { class: "bdw4-k", "{kicker}" }
+            span { class: "bdw4-headspacer" }
+            if !wish_mode {
+                button {
+                    r#type: "button",
+                    class: "btn sm",
+                    "data-testid": "journal-open-composer",
+                    onclick: move |_| composer_open.set(true),
+                    "\u{270e} New entry"
+                }
+            }
             if readers.len() > 1 {
                 div { class: "bdw4-avatarstack", aria_hidden: "true",
                     for e in readers.iter().take(5) {
@@ -182,7 +201,21 @@ pub(super) fn W4JournalStop(uuid: String, wish_mode: bool) -> Element {
             div { class: "bdw4-bigquiet", "No entries yet \u{2014} the journal begins when you do." }
             p { class: "mono bdw4-quiet-hint", "a shared log \u{2014} anyone reading this book can write here" }
         } else {
-            BdJournalComposer { uuid: uuid.clone(), server_url: server_url.clone(), reload }
+            if composer_open() {
+                // Deliberately not click-outside-dismissable: a stray click
+                // must not throw away an open draft.
+                div { class: "bdw4-overlay bdw4-overlay-static", "data-testid": "journal-composer-overlay",
+                    div { class: "bdw4-ocard bdw4-ocard-composer",
+                        BdJournalComposer {
+                            uuid: uuid.clone(),
+                            server_url: server_url.clone(),
+                            reload,
+                            open: composer_open,
+                            modal: true,
+                        }
+                    }
+                }
+            }
             if list.is_empty() {
                 div { class: "bd-journal-empty card", "data-testid": "journal-empty",
                     p { class: "mono", "No journal entries yet \u{2014} be the first to write one." }

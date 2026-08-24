@@ -55,6 +55,7 @@ pub(super) fn W4FilesStop(
         if !b.formats.is_empty() {
             div { class: "bdw4-copies",
                 FormatSwitcher {
+                    w4: true,
                     formats: b.formats.clone(),
                     meta: BookActionMeta {
                         uuid: uuid.clone(),

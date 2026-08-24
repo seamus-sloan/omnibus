@@ -303,7 +303,13 @@ test("renders the detail contents for the selected book", async ({
   // attribute/class locators per `04-playwright.md` ("semantic first").
   const epubRow = switcher.getByTestId("format-row-epub");
   await expect(epubRow).toBeVisible();
-  await expect(epubRow.getByTestId("format-badge")).toHaveText("EPUB");
+  await expect(epubRow).toHaveAttribute("data-format", "EPUB");
+  // The W4 copies row draws the format as a glyph tile, so the code lives in
+  // the badge's accessible name rather than its text.
+  await expect(epubRow.getByTestId("format-badge")).toHaveAttribute(
+    "aria-label",
+    "EPUB",
+  );
 
   // Read now routes into the F2.2 immersive reader (an enabled link to
   // /read/:uuid on web); F4.3 Send-to-Kindle is now an enabled action button

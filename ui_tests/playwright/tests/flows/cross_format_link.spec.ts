@@ -78,16 +78,13 @@ test("renders the sync entry row for a dual-format book", async ({
 
   const row = page.getByTestId("sync-link-row");
   await expect(row).toBeVisible();
-  // The panel now lives in the hero's title column as the "Your progress"
-  // block: heading first, then the entry row. The per-format bars are NOT
-  // asserted either way here — other specs (immersive, mini-dock) open this
-  // shared fixture in readers/players in parallel, so its progress rows are
-  // racy; presence of the heading + entry row is the stable contract.
-  await expect(row.getByText("Your progress")).toBeVisible();
-  // Unlinked by default: the nudge and its open affordance.
+  // On the W4 stage the panel is one mono readout under the Home stop's
+  // position ruler. The position itself is NOT asserted here — other specs
+  // (immersive, mini-dock) open this shared fixture in readers/players in
+  // parallel — so the stable contract is the line's state + affordance.
   await expect(page.getByTestId("sync-link-open")).toBeVisible();
   await expect(
-    page.getByText("Positions aren't synced", { exact: false }),
+    row.getByText("positions aren't synced", { exact: false }),
   ).toBeVisible();
 });
 

@@ -236,19 +236,21 @@ fn BdHighlightCard(
             if let Some(n) = note {
                 p { class: "bd-hl-note", "data-testid": "highlight-note", "{n}" }
             }
+            // One mono line, per the W4 design: locator · saved date · the
+            // actions as inline text links rather than a button row.
             div { class: "bd-hl-foot",
                 span { class: "mono bd-hl-meta", "data-testid": "highlight-meta", "{meta_line}" }
                 div { class: "bd-hl-actions",
                     if let Some(href) = open_href {
                         Link {
                             to: "{href}",
-                            class: "btn ghost sm",
+                            class: "bd-hl-act",
                             "data-testid": "highlight-open",
-                            "Open in reader"
+                            "open in book \u{2192}"
                         }
                     }
                     button {
-                        class: "btn ghost sm",
+                        class: "bd-hl-act",
                         r#type: "button",
                         "data-testid": "highlight-quote",
                         disabled: quote_disabled,
@@ -256,10 +258,10 @@ fn BdHighlightCard(
                             let mut quote_target = quote_target;
                             quote_target.set(Some(quote_src.clone()));
                         },
-                        "Quote"
+                        "quote card \u{2192}"
                     }
                     button {
-                        class: "btn ghost sm",
+                        class: "bd-hl-act",
                         r#type: "button",
                         "data-testid": "highlight-copy",
                         disabled: copy_src.is_none(),
@@ -268,14 +270,14 @@ fn BdHighlightCard(
                                 copy_to_clipboard(text);
                             }
                         },
-                        "Copy"
+                        "copy"
                     }
                     button {
-                        class: "btn ghost sm bd-hl-delete",
+                        class: "bd-hl-act bd-hl-delete",
                         r#type: "button",
                         "data-testid": "highlight-delete",
                         onclick: on_delete,
-                        "Delete"
+                        "delete"
                     }
                 }
             }
