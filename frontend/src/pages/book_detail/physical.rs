@@ -7,6 +7,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::physical::{PhysicalCopy, WishlistEntry, WishlistSource};
 
+use crate::components::glyphs::book_glyph;
 use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 use crate::time::now_unix;
 use crate::{data, use_server_url};
@@ -60,6 +61,10 @@ pub(super) fn BdPhysicalPanel(
     is_fileless: bool,
     refresh: Signal<u32>,
     phys: PhysSignals,
+    /// W4 book page: render each copy as a row in the book's copies list
+    /// instead of as a standalone panel.
+    #[props(default)]
+    w4: bool,
 ) -> Element {
     let server_url = use_server_url();
     let user = crate::use_current_user_summary();
@@ -99,9 +104,15 @@ pub(super) fn BdPhysicalPanel(
     }
 
     rsx! {
-        section { class: "bd-physical-panel", "data-testid": "bd-physical-panel",
+        section {
+            class: if w4 { "bd-physical-panel bd-physical-panel-w4" } else { "bd-physical-panel" },
+            "data-testid": "bd-physical-panel",
             if !copies().is_empty() {
-                {render_physical_section(state, server_url.clone(), is_fileless, can_edit)}
+                if w4 {
+                    {render_physical_rows_w4(state, server_url.clone(), is_fileless, can_edit)}
+                } else {
+                    {render_physical_section(state, server_url.clone(), is_fileless, can_edit)}
+                }
             }
             if let Some(e) = state.err.read().clone() {
                 p { role: "alert", class: "bd-phys-error", "data-testid": "physical-error", "{e}" }
@@ -130,7 +141,13 @@ struct WishlistCardState {
 /// panel's shared post-mount load resolves (rule 07 — SSR and first WASM
 /// paint both empty), and nothing for a book already in the collection.
 #[component]
-pub(super) fn BdWishlistRailSlot(identity: BdBookIdentity, phys: PhysSignals) -> Element {
+pub(super) fn BdWishlistRailSlot(
+    identity: BdBookIdentity,
+    phys: PhysSignals,
+    /// W4 book page: render as a dashed row in the copies list.
+    #[props(default)]
+    w4: bool,
+) -> Element {
     let BdBookIdentity {
         uuid,
         has_physical,
@@ -159,6 +176,15 @@ pub(super) fn BdWishlistRailSlot(identity: BdBookIdentity, phys: PhysSignals) ->
         busy,
         err,
     };
+
+    if w4 {
+        return rsx! {
+            {render_wishlist_row_w4(entry, isbn, title, author, state)}
+            if let Some(e) = err.read().clone() {
+                p { role: "alert", class: "bd-phys-error", "data-testid": "wishlist-error", "{e}" }
+            }
+        };
+    }
 
     rsx! {
         div { class: "divider" }
@@ -193,6 +219,83 @@ fn render_wishlist_card(
         }
         None => rsx! {
             BdWishlistAddCard { state }
+        },
+    }
+}
+
+/// The wishlist as an `rx-copy` row: a dashed tile (the design marks a copy
+/// you don't have yet), the tracking line, and the find/remove actions.
+fn render_wishlist_row_w4(
+    entry: Option<WishlistEntry>,
+    isbn: Option<String>,
+    title: String,
+    author: String,
+    state: WishlistCardState,
+) -> Element {
+    let WishlistCardState {
+        uuid,
+        server_url,
+        wishlist,
+        busy,
+        err,
+    } = state;
+    let find_url = find_a_copy_url(isbn.as_deref(), &title, &author);
+    match entry {
+        Some(e) => {
+            let added = time_ago(now_unix(), e.added_at);
+            let source = source_label(e.source);
+            rsx! {
+                div { class: "rx-copy wish", "data-testid": "wishlist-card",
+                    span {
+                        class: "format-badge rx-ic",
+                        "data-testid": "format-badge-wishlist",
+                        title: "On your physical wishlist",
+                        "aria-label": "Physical Wishlist",
+                        {book_glyph(15)}
+                    }
+                    div { class: "rx-copy-body",
+                        div { class: "nm", "Print wishlist" }
+                        div { class: "sb", "Tracking since {added} \u{b7} added from {source}" }
+                    }
+                    div { class: "format-actions",
+                        a {
+                            class: "btn sm",
+                            "data-testid": "find-a-copy",
+                            href: "{find_url}",
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            "Find a copy"
+                        }
+                        button {
+                            class: "btn ghost sm",
+                            "data-testid": "wishlist-remove",
+                            disabled: busy(),
+                            onclick: move |_| {
+                                remove_from_wishlist(wishlist, busy, err, server_url.clone(), uuid.clone())
+                            },
+                            "Remove from wishlist"
+                        }
+                    }
+                }
+            }
+        }
+        None => rsx! {
+            div { class: "rx-copy wish", "data-testid": "wishlist-add-card",
+                span { class: "format-badge rx-ic", aria_hidden: "true", {book_glyph(15)} }
+                div { class: "rx-copy-body",
+                    div { class: "nm", "Print wishlist" }
+                    div { class: "sb", "Track this title to find a physical copy later." }
+                }
+                div { class: "format-actions",
+                    button {
+                        class: "btn sm",
+                        "data-testid": "add-to-wishlist",
+                        disabled: busy(),
+                        onclick: move |_| add_to_wishlist(wishlist, busy, err, server_url.clone(), uuid.clone()),
+                        "Add to physical wishlist"
+                    }
+                }
+            }
         },
     }
 }
@@ -320,6 +423,97 @@ fn render_physical_section(
         div { class: "bd-phys-copies",
             for copy in copies() {
                 {render_copy_card(state, url.clone(), copy, is_fileless, can_edit)}
+            }
+        }
+    }
+}
+
+/// The W4 copies-list rendering of the same section: each checked-in copy is
+/// a row in the book's copies list — the design treats a physical copy as
+/// just another way you hold the book, not a panel of its own — with the
+/// glyph tile, a green status dot on the check-in line, the ISBN as the mono
+/// sub-line, and the note/remove actions beneath.
+fn render_physical_rows_w4(
+    state: PhysPanelState,
+    url: String,
+    is_fileless: bool,
+    can_edit: bool,
+) -> Element {
+    let copies = state.copies;
+    rsx! {
+        for copy in copies() {
+            {render_copy_row_w4(state, url.clone(), copy, is_fileless, can_edit)}
+        }
+    }
+}
+
+/// One physical copy as an `rx-copy` row.
+fn render_copy_row_w4(
+    state: PhysPanelState,
+    url: String,
+    copy: PhysicalCopy,
+    is_fileless: bool,
+    can_edit: bool,
+) -> Element {
+    let mut editing = state.editing;
+    let mut note_draft = state.note_draft;
+    let mut delete_target = state.delete_target;
+    let copies_sig = state.copies;
+    let copy_id = copy.id;
+    let is_editing = editing() == Some(copy_id);
+    let checked_in = checked_in_label(now_unix(), copy.checked_in_at);
+    let note_val = copy.note.clone().unwrap_or_default();
+    let note_is_empty = note_val.trim().is_empty();
+    rsx! {
+        div {
+            key: "{copy.id}",
+            class: "rx-copy",
+            "data-testid": "physical-copy-card",
+            span {
+                class: "format-badge rx-ic",
+                "data-testid": "format-badge-physical",
+                title: "In your physical collection",
+                "aria-label": "Physical",
+                {book_glyph(15)}
+            }
+            div { class: "rx-copy-body",
+                div { class: "nm", "Physical copy" }
+                div { class: "sb",
+                    span { class: "rx-statusdot", "data-testid": "physical-pill",
+                        "aria-label": "In your physical collection" }
+                    "{checked_in}"
+                    if let Some(isbn) = copy.isbn.clone() {
+                        br {}
+                        "ISBN {isbn}"
+                    }
+                }
+                if !note_is_empty && !is_editing {
+                    p { class: "bd-phys-copy-note", "{note_val}" }
+                }
+            }
+            if is_editing {
+                div { class: "rx-copy-editor", {render_note_editor(state, url, copy_id)} }
+            } else if can_edit {
+                div { class: "format-actions",
+                    button {
+                        class: "btn ghost sm",
+                        "data-testid": "copy-edit-note",
+                        onclick: move |_| {
+                            note_draft.set(note_val.clone());
+                            editing.set(Some(copy_id));
+                        },
+                        if note_is_empty { "Add a note" } else { "Edit note" }
+                    }
+                    button {
+                        class: "btn ghost sm bd-phys-danger",
+                        "data-testid": "copy-delete",
+                        onclick: move |_| {
+                            let last_fileless = is_fileless && copies_sig.peek().len() == 1;
+                            delete_target.set(Some(DeleteTarget { copy_id, last_fileless }));
+                        },
+                        "Remove\u{2026}"
+                    }
+                }
             }
         }
     }
@@ -659,7 +853,7 @@ fn add_to_wishlist(
 
 /// Remove the book from the caller's wishlist. Same signal-taking shape as
 /// [`add_to_wishlist`].
-fn remove_from_wishlist(
+pub(super) fn remove_from_wishlist(
     mut wishlist: Signal<Option<WishlistEntry>>,
     mut busy: Signal<bool>,
     mut err: Signal<Option<String>>,
@@ -704,7 +898,7 @@ fn checked_in_label(now: i64, ts: i64) -> String {
 }
 
 /// Human phrase for where a wishlist entry originated.
-fn source_label(source: WishlistSource) -> &'static str {
+pub(super) fn source_label(source: WishlistSource) -> &'static str {
     match source {
         WishlistSource::Scan => "a scan",
         WishlistSource::Detail => "this page",
@@ -714,7 +908,7 @@ fn source_label(source: WishlistSource) -> &'static str {
 
 /// "Find a copy" target URL: an Amazon search on the ISBN when present, else
 /// on title + author.
-fn find_a_copy_url(isbn: Option<&str>, title: &str, author: &str) -> String {
+pub(super) fn find_a_copy_url(isbn: Option<&str>, title: &str, author: &str) -> String {
     let query = match isbn {
         Some(i) if !i.trim().is_empty() => i.trim().to_string(),
         _ => format!("{title} {author}").trim().to_string(),

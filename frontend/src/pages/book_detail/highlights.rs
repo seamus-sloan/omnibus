@@ -190,10 +190,9 @@ fn BdHighlightCard(
         .text
         .clone()
         .unwrap_or_else(|| "(highlighted passage)".to_string());
-    // Highlights created before the text column (migration 0030) have nothing
-    // to copy or put on a card; disable both actions rather than offer a
-    // silent no-op.
-    let copy_src = highlight.text.clone();
+    // Highlights created before the text column (migration 0030) have no
+    // text to put on a card; disable the action rather than offer a silent
+    // no-op.
     let quote_disabled = highlight.text.is_none();
     let quote_src = highlight.clone();
     let note = highlight.note.clone();
@@ -236,19 +235,21 @@ fn BdHighlightCard(
             if let Some(n) = note {
                 p { class: "bd-hl-note", "data-testid": "highlight-note", "{n}" }
             }
+            // One mono line, per the W4 design: locator · saved date · the
+            // actions as inline text links rather than a button row.
             div { class: "bd-hl-foot",
                 span { class: "mono bd-hl-meta", "data-testid": "highlight-meta", "{meta_line}" }
                 div { class: "bd-hl-actions",
                     if let Some(href) = open_href {
                         Link {
                             to: "{href}",
-                            class: "btn ghost sm",
+                            class: "bd-hl-act",
                             "data-testid": "highlight-open",
-                            "Open in reader"
+                            "open in book \u{2192}"
                         }
                     }
                     button {
-                        class: "btn ghost sm",
+                        class: "bd-hl-act",
                         r#type: "button",
                         "data-testid": "highlight-quote",
                         disabled: quote_disabled,
@@ -256,26 +257,14 @@ fn BdHighlightCard(
                             let mut quote_target = quote_target;
                             quote_target.set(Some(quote_src.clone()));
                         },
-                        "Quote"
+                        "quote card \u{2192}"
                     }
                     button {
-                        class: "btn ghost sm",
-                        r#type: "button",
-                        "data-testid": "highlight-copy",
-                        disabled: copy_src.is_none(),
-                        onclick: move |_| {
-                            if let Some(ref text) = copy_src {
-                                copy_to_clipboard(text);
-                            }
-                        },
-                        "Copy"
-                    }
-                    button {
-                        class: "btn ghost sm bd-hl-delete",
+                        class: "bd-hl-act bd-hl-delete",
                         r#type: "button",
                         "data-testid": "highlight-delete",
                         onclick: on_delete,
-                        "Delete"
+                        "delete"
                     }
                 }
             }
@@ -308,16 +297,4 @@ fn percent_encode(s: &str) -> String {
         }
     }
     out
-}
-
-/// Write `text` to the system clipboard (no-op on SSR, where there is none).
-#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(unused_variables))]
-fn copy_to_clipboard(text: &str) {
-    #[cfg(any(feature = "web", feature = "mobile"))]
-    {
-        let lit = crate::js_interop::json_literal(text);
-        let _ = dioxus::document::eval(&format!(
-            "navigator.clipboard && navigator.clipboard.writeText({lit});"
-        ));
-    }
 }

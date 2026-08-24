@@ -74,16 +74,35 @@ async function cancelComposerDiscardingDraft(page: Page) {
 }
 
 /**
- * Delete the entry whose rendered body contains `marker`. Delete opens a
- * "This can't be undone" confirm modal (#1907) before the RPC fires — the
- * mutation is asserted around the modal's own confirm button, not the
- * card's Delete button.
+ * The W4 journal stop lists entries as a one-line excerpt ladder; the full
+ * entry card (with its edit/delete/publish actions) opens in an overlay when
+ * a row is tapped. Open the entry whose excerpt contains `marker` and return
+ * its card locator. No-op if the overlay already shows the entry.
+ */
+async function openEntry(page: Page, marker: string) {
+  const card = page.getByTestId("journal-entry").filter({ hasText: marker });
+  if ((await card.count()) === 0) {
+    await page
+      .getByTestId("journal-ladder-row")
+      .filter({ hasText: marker })
+      .click();
+  }
+  await expect(card).toBeVisible();
+  return card;
+}
+
+/**
+ * Delete the entry whose rendered body contains `marker`. Opens the entry's
+ * overlay first, then its Delete → the "This can't be undone" confirm modal
+ * (#1907) before the RPC fires — the mutation is asserted around the modal's
+ * own confirm button, not the card's Delete button. A successful delete drops
+ * the entry from the feed, which closes the overlay with it.
  */
 async function deleteEntry(
   page: import("@playwright/test").Page,
   marker: string,
 ) {
-  const card = page.getByTestId("journal-entry").filter({ hasText: marker });
+  const card = await openEntry(page, marker);
   await card.getByTestId("journal-delete").click();
   await expectMutation(
     page,
@@ -91,8 +110,9 @@ async function deleteEntry(
     async () => page.getByTestId("journal-delete-confirm").click(),
   );
   await expect(
-    page.getByTestId("journal-entry").filter({ hasText: marker }),
+    page.getByTestId("journal-ladder-row").filter({ hasText: marker }),
   ).toHaveCount(0);
+  await expect(page.getByTestId("journal-overlay")).toHaveCount(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -105,11 +125,11 @@ test("renders the journal section layout", async ({ page, request }) => {
 
   await expectNavVisible(page);
 
-  // Section heading + shared-log blurb + collapsed composer prompt.
+  // Journal stop: kicker + collapsed composer prompt.
   await expect(page.getByTestId("journal-section")).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "What readers have written" }),
-  ).toBeVisible();
+  await expect(page.getByTestId("journal-section")).toContainText(
+    /The journal/i,
+  );
   await expect(page.getByTestId("journal-open-composer")).toBeVisible();
 
   // Expanding the composer reveals the live editor, the spoiler-syntax hint,
@@ -228,9 +248,9 @@ test("publishes an entry attributed to the current user, edits it, then deletes 
   const marker = `e2e-journal-${Date.now()}`;
   await publish(page, `First thoughts ${marker}`);
 
-  // The new entry renders with the author's "you" chip (current user owns it).
-  const card = page.getByTestId("journal-entry").filter({ hasText: marker });
-  await expect(card).toBeVisible();
+  // The new entry lands in the excerpt ladder; opening it shows the card
+  // with the author's "you" chip (current user owns it).
+  const card = await openEntry(page, marker);
   await expect(card.getByText("you")).toBeVisible();
 
   // Owner edit → the body updates in place. Entering edit mode swaps the
@@ -286,8 +306,7 @@ test("publishes lists, a quote, and paragraphs as structured markup", async ({
     async () => page.getByTestId("journal-publish").click(),
   );
 
-  const card = page.getByTestId("journal-entry").filter({ hasText: marker });
-  await expect(card).toBeVisible();
+  const card = await openEntry(page, marker);
   // Numbered list → a real <ol>; the sub-bullet stays nested in its parent.
   await expect(card.locator("ol > li")).toHaveCount(2);
   await expect(card.locator("li > ul > li")).toHaveText("child");
@@ -333,10 +352,8 @@ test("renders a markdown preview and blurs spoilers until clicked", async ({
     async () => page.getByTestId("journal-publish").click(),
   );
 
-  const spoiler = page
-    .getByTestId("journal-entry")
-    .filter({ hasText: marker })
-    .locator(".spoiler");
+  const spoilerCard = await openEntry(page, marker);
+  const spoiler = spoilerCard.locator(".spoiler");
   await expect(spoiler).toHaveText("the secret");
   await expect(spoiler).not.toHaveClass(/revealed/);
   // The wrapper is a native `<button>` so `aria-expanded` reflects state.
@@ -365,10 +382,8 @@ test("reveals a spoiler with Enter and toggles it back with Space", async ({
   const marker = `e2e-spoiler-kb-${Date.now()}`;
   await publish(page, `keyboard ${marker}: ||hidden reveal||`);
 
-  const spoiler = page
-    .getByTestId("journal-entry")
-    .filter({ hasText: marker })
-    .locator(".spoiler");
+  const card = await openEntry(page, marker);
+  const spoiler = card.locator(".spoiler");
   await expect(spoiler).toHaveAttribute("aria-expanded", "false");
 
   // Native `<button>` semantics: Enter fires click → reveals + expands.
@@ -406,10 +421,13 @@ test("saves a draft that stays marked Draft until published from its card", asyn
     async () => page.getByTestId("journal-save-draft").click(),
   );
 
-  // The composer closes and the entry renders with a Draft chip + a Publish
+  // The composer closes and the entry lands in the ladder with a Draft
+  // chip on its row; the opened card carries its own chip + a Publish
   // action (drafts are owner-private, so only this user sees it).
-  const card = page.getByTestId("journal-entry").filter({ hasText: marker });
-  await expect(card).toBeVisible();
+  await expect(
+    page.getByTestId("journal-draft-chip-row").first(),
+  ).toBeVisible();
+  const card = await openEntry(page, marker);
   await expect(card.getByTestId("journal-draft-chip")).toBeVisible();
 
   await expectMutation(
@@ -457,7 +475,7 @@ test("autosaves the draft while typing and discards it on cancel", async ({
   );
   await expect(page.getByTestId("journal-composer")).toHaveCount(0);
   await expect(
-    page.getByTestId("journal-entry").filter({ hasText: marker }),
+    page.getByTestId("journal-ladder-row").filter({ hasText: marker }),
   ).toHaveCount(0);
 });
 
@@ -509,7 +527,7 @@ test("uploads an image from the toolbar and renders it as a captioned figure", a
     { method: "POST", url: SAVE_URL, expectedStatus: 200 },
     async () => page.getByTestId("journal-publish").click(),
   );
-  const card = page.getByTestId("journal-entry").filter({ hasText: marker });
+  const card = await openEntry(page, marker);
   await expect(card.locator(".journal-figure img")).toBeVisible();
   await expect(card.locator(".journal-figure figcaption")).toHaveText(
     "Add a caption",
@@ -628,8 +646,7 @@ test("surfaces an error on the entry card when the owner's delete fails", async 
 
   const marker = `e2e-journal-delete-fail-${Date.now()}`;
   await publish(page, `Doomed thoughts ${marker}`);
-  const card = page.getByTestId("journal-entry").filter({ hasText: marker });
-  await expect(card).toBeVisible();
+  const card = await openEntry(page, marker);
 
   await page.route("**/api/rpc/journals/delete", (route) =>
     route.fulfill({

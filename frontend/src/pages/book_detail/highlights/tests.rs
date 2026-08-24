@@ -344,13 +344,12 @@ mod render_tests {
     }
 
     #[test]
-    fn card_disables_copy_and_quote_for_a_highlight_saved_before_the_text_column() {
-        // Pre-migration-0030 rows carry no prose, so Copy would be a silent
-        // no-op and a quote card would be blank; both controls are disabled.
+    fn card_disables_quote_for_a_highlight_saved_before_the_text_column() {
+        // Pre-migration-0030 rows carry no prose, so a quote card would come
+        // out blank; the control is disabled rather than offered.
         let html = render_in_vdom(render_plain_card);
         assert!(html.contains("(highlighted passage)"));
         assert!(!html.contains("data-testid=\"highlight-note\""));
-        assert_button_disabled(&html, "highlight-copy");
         assert_button_disabled(&html, "highlight-quote");
     }
 

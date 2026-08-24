@@ -76,7 +76,17 @@ recent releases are recorded below; everything earlier is available via the
 
 ### Changed
 
-- **The metadata search takes a title, an author, and an ISBN separately.** One
+- **The book page is now the marquee.** The web Book Detail page was rebuilt
+  around the W4 design: the cover fills the left half under a soft parallax
+  while the page snap-scrolls through seven stops — Home, Shelf, Stats,
+  Highlights, Journals, The files, Recommendations — with a dot rail on the
+  right that expands into a table of contents on hover. The Stats stop now
+  shows real numbers (pickups, average and longest sit, a per-day activity
+  spark), the journal reads as a one-line-per-entry ladder that opens the full
+  entry over the page, a book in a series lays the whole series out as a
+  shelf with an "Up next" pill, and a wishlist-only book gets its own Find a
+  copy / Check in / Remove actions with quiet empty states behind them
+  (#2133)
   box could not say which part was which, so the search had to guess — and
   guessing wrong is what sent "Dune Frank Herbert" to Open Library as a title
   and got back five books written *about* Dune. Three fields, each seeded from

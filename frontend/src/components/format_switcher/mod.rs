@@ -17,6 +17,7 @@ use omnibus_shared::BookFileInfo;
 #[cfg(not(feature = "mobile"))]
 use crate::Route;
 
+use crate::components::glyphs::{book_glyph, headphones_glyph};
 use kindle::send_to_kindle_action;
 use kobo::send_to_kobo_action;
 
@@ -71,7 +72,16 @@ pub struct BookActionMeta {
 /// Renders the format switcher, letting the reader pick which available
 /// format of a book to open.
 #[component]
-pub fn FormatSwitcher(formats: Vec<String>, meta: BookActionMeta) -> Element {
+pub fn FormatSwitcher(
+    formats: Vec<String>,
+    meta: BookActionMeta,
+    /// W4 book-page presentation: the same rows, actions, and testids in the
+    /// design's copies anatomy (icon tile + name + mono sub-line + action
+    /// row) instead of the compact badge row. Purely a class swap — the
+    /// markup shape is identical so every existing selector still resolves.
+    #[props(default)]
+    w4: bool,
+) -> Element {
     let BookActionMeta {
         uuid,
         author: book_author,
@@ -83,10 +93,15 @@ pub fn FormatSwitcher(formats: Vec<String>, meta: BookActionMeta) -> Element {
     if rows.is_empty() {
         return rsx! {};
     }
+    let switcher_class = if w4 {
+        "format-switcher rx-copies"
+    } else {
+        "format-switcher"
+    };
 
     rsx! {
         div {
-            class: "format-switcher",
+            class: "{switcher_class}",
             role: "group",
             aria_label: "Available formats",
             "data-testid": "format-switcher",
@@ -104,6 +119,7 @@ pub fn FormatSwitcher(formats: Vec<String>, meta: BookActionMeta) -> Element {
                                 files: files_for_format.into_iter().cloned().collect(),
                                 book_author: book_author.clone(),
                                 book_title: book_title.clone(),
+                                w4,
                             }
                         }
                     } else {
@@ -115,6 +131,11 @@ pub fn FormatSwitcher(formats: Vec<String>, meta: BookActionMeta) -> Element {
                                 book_author: book_author.clone(),
                                 book_title: book_title.clone(),
                                 epub_size_bytes,
+                                sub: files_for_format
+                                    .first()
+                                    .map(|f| file_sub_line(f))
+                                    .filter(|s| !s.is_empty()),
+                                w4,
                             }
                         }
                     }
@@ -131,15 +152,46 @@ fn FormatRow(
     #[props(default)] book_author: String,
     #[props(default)] book_title: String,
     #[props(default)] epub_size_bytes: Option<i64>,
+    /// W4 only: the mono sub-line under the format name (size · bitrate).
+    #[props(default)]
+    sub: Option<String>,
+    #[props(default)] w4: bool,
 ) -> Element {
     let label = kind.label();
     let testid = format!("format-row-{}", label.to_ascii_lowercase());
+    let row_class = if w4 {
+        "format-row rx-copy"
+    } else {
+        "format-row"
+    };
+    let badge_class = if w4 {
+        "format-badge rx-ic"
+    } else {
+        "format-badge"
+    };
     rsx! {
         div {
-            class: "format-row",
+            class: "{row_class}",
             "data-format": "{label}",
             "data-testid": "{testid}",
-            span { class: "format-badge", "data-testid": "format-badge", "{label}" }
+            // W4 draws the format as a glyph tile, so the code moves to the
+            // accessible name — the row's `data-format` stays the machine
+            // contract either way.
+            span {
+                class: "{badge_class}",
+                "data-testid": "format-badge",
+                title: if w4 { Some(label.to_string()) } else { None },
+                "aria-label": if w4 { Some(label.to_string()) } else { None },
+                if w4 { {kind.copy_glyph()} } else { "{label}" }
+            }
+            if w4 {
+                div { class: "rx-copy-body",
+                    div { class: "nm", "{kind.copy_name()}" }
+                    if let Some(sub) = sub.clone() {
+                        div { class: "sb", "{sub}" }
+                    }
+                }
+            }
             div { class: "format-actions",
                 match kind {
                     FormatKind::Epub => rsx! {
@@ -175,18 +227,39 @@ fn MultiFileRow(
     files: Vec<BookFileInfo>,
     #[props(default)] book_author: String,
     #[props(default)] book_title: String,
+    #[props(default)] w4: bool,
 ) -> Element {
     let label = kind.label();
     let testid = format!("format-row-{}", label.to_ascii_lowercase());
     let count = files.len();
+    let row_class = if w4 {
+        "format-row format-row-multi rx-copy"
+    } else {
+        "format-row format-row-multi"
+    };
+    let badge_class = if w4 {
+        "format-badge rx-ic"
+    } else {
+        "format-badge"
+    };
 
     rsx! {
         div {
-            class: "format-row format-row-multi",
+            class: "{row_class}",
             "data-format": "{label}",
             "data-testid": "{testid}",
-            span { class: "format-badge", "data-testid": "format-badge",
-                "{label} ({count} files)"
+            span {
+                class: "{badge_class}",
+                "data-testid": "format-badge",
+                title: if w4 { Some(format!("{label} ({count} files)")) } else { None },
+                "aria-label": if w4 { Some(format!("{label} ({count} files)")) } else { None },
+                if w4 { {kind.copy_glyph()} } else { "{label} ({count} files)" }
+            }
+            if w4 {
+                div { class: "rx-copy-body",
+                    div { class: "nm", "{kind.copy_name()}" }
+                    div { class: "sb", "{count} editions" }
+                }
             }
             // Per-file Read/Listen live in the sub-rows below, but "Send to
             // Kobo" is book-level: the KEPUB endpoint converts the primary
@@ -206,7 +279,7 @@ fn MultiFileRow(
                 rsx! {
                     div {
                         key: "{file_id}",
-                        class: "format-row format-subrow",
+                        class: if w4 { "format-row format-subrow rx-copy-sub" } else { "format-row format-subrow" },
                         "data-testid": "{file_testid}",
                         span { class: "format-sublabel", "{file_label}" }
                         div { class: "format-actions",
@@ -382,6 +455,50 @@ impl FormatKind {
             FormatKind::Mp3 => "MP3",
             FormatKind::Other(s) => s.as_str(),
         }
+    }
+
+    /// Human name for the W4 copies row ("Ebook", "Audiobook") — the design
+    /// names the *copy*, with the raw format code demoted to the icon tile.
+    fn copy_name(&self) -> &str {
+        match self {
+            FormatKind::Epub => "Ebook",
+            FormatKind::M4b | FormatKind::Mp3 => "Audiobook",
+            FormatKind::Other(s) => s.as_str(),
+        }
+    }
+
+    /// The W4 icon tile's mark: the book / headphones glyphs the design
+    /// draws, with the raw format code standing in for anything else.
+    fn copy_glyph(&self) -> Element {
+        match self {
+            FormatKind::Epub => book_glyph(15),
+            FormatKind::M4b | FormatKind::Mp3 => headphones_glyph(15),
+            FormatKind::Other(s) => rsx! { "{s}" },
+        }
+    }
+}
+
+/// The mono sub-line under a copy's name: size, and bitrate when the row is
+/// a single audio file. Empty when the row carries neither.
+fn file_sub_line(f: &BookFileInfo) -> String {
+    if f.size_bytes > 0 {
+        human_size(f.size_bytes)
+    } else {
+        String::new()
+    }
+}
+
+/// "1.4 MB" / "806 MB" / "1.2 GB" — the design's copies sub-line units.
+fn human_size(bytes: i64) -> String {
+    const MB: f64 = 1_048_576.0;
+    const GB: f64 = 1_073_741_824.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else {
+        format!("{} KB", (b / 1024.0).round().max(1.0) as i64)
     }
 }
 
