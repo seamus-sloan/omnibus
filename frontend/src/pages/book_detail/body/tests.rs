@@ -14,6 +14,15 @@ fn ident(scheme: Option<&str>, value: &str) -> Identifier {
 
 #[test]
 fn bd_identifier_key_distinguishes_same_scheme_different_values() {
+    // The book-detail crash repro: two `unknown`-scheme identifiers on one
+    // book must not collide on the rendered list key.
+    assert_ne!(
+        bd_identifier_key(&ident(Some("unknown"), "978-1-938570-40-7")),
+        bd_identifier_key(&ident(
+            Some("unknown"),
+            "urn:uuid:c0e51a66-085f-4805-b116-a0d451d281bd"
+        ))
+    );
     assert_ne!(
         bd_identifier_key(&ident(Some("ISBN"), "111")),
         bd_identifier_key(&ident(Some("ISBN"), "222"))
@@ -21,7 +30,11 @@ fn bd_identifier_key_distinguishes_same_scheme_different_values() {
 }
 
 #[test]
-fn bd_identifier_key_distinguishes_schemeless_from_named_scheme() {
+fn bd_identifier_key_distinguishes_schemeless_values_from_each_other_and_from_a_scheme() {
+    assert_ne!(
+        bd_identifier_key(&ident(None, "a")),
+        bd_identifier_key(&ident(None, "b"))
+    );
     assert_ne!(
         bd_identifier_key(&ident(None, "111")),
         bd_identifier_key(&ident(Some("ISBN"), "111"))
@@ -30,6 +43,8 @@ fn bd_identifier_key_distinguishes_schemeless_from_named_scheme() {
 
 #[test]
 fn bd_identifier_key_survives_delimiter_shuffle_between_fields() {
+    // A naive `scheme|value` join would map both of these to "a|b|c"; the
+    // `Debug`-quoted encoding keeps them distinct.
     let a = bd_identifier_key(&ident(Some("a\u{1f}b"), "c"));
     let b = bd_identifier_key(&ident(Some("a"), "b\u{1f}c"));
     assert_ne!(a, b);

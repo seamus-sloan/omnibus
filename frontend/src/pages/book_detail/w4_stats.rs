@@ -227,8 +227,16 @@ mod tests {
     #[test]
     fn duration_label_scales_minutes_and_hours() {
         assert_eq!(duration_label(0), "0m");
+        assert_eq!(duration_label(59), "0m");
+        assert_eq!(duration_label(60), "1m");
         assert_eq!(duration_label(3600), "1h");
         assert_eq!(duration_label(5400), "1h 30m");
+        assert_eq!(duration_label(7 * 3600 + 5 * 60), "7h 5m");
+    }
+
+    #[test]
+    fn duration_label_clamps_negative_input_to_zero() {
+        assert_eq!(duration_label(-100), "0m");
     }
 
     #[test]
