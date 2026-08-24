@@ -29,6 +29,12 @@ pub(super) fn client() -> reqwest::Result<reqwest::Client> {
 /// `reqwest::Error` renders the full request URL in its `Display` — so a plain
 /// `?` on a 429 would write the key into `omnibus.log`. The status and kind
 /// are what diagnose a provider failure; the URL is not.
+///
+/// **Every** fallible step needs it, not just the send and the status check:
+/// `Response::json` attaches the URL to a decode error too, so a provider
+/// answering 200 with an HTML quota page leaks exactly as loudly as a 429
+/// would. That path is reached whenever a body fails to parse, which is why
+/// the three `json()` sites in `googlebooks` call this as well.
 pub(super) fn strip_url(e: reqwest::Error) -> reqwest::Error {
     e.without_url()
 }
