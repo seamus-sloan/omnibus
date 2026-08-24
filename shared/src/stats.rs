@@ -77,13 +77,14 @@ pub struct RankedEntity {
 }
 
 /// Reading/listening insights for one book, scoped to one user — the
-/// book-detail page's Insights card (Started / Time read / Sessions / Pace).
-/// Produced by `db::stats::book_insights` from the same `reading_sessions` /
+/// book-detail page's Stats stop (Started / Time in book / Pickups + avg sit /
+/// Longest sit, plus the per-day activity spark). Produced by
+/// `db::stats::book_insights` from the same `reading_sessions` /
 /// `listening_sessions` tables [`StatsSummary`] aggregates from, but scoped to
 /// a single `(user, book_uuid)` rather than a user-wide window. The RPC wraps
 /// this in `Option` — `None` means the book has no recorded sessions yet,
-/// driving the card's em-dash empty state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// driving the stop's quiet empty state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BookInsights {
     /// Unix seconds of the earliest recorded session (reading or listening).
     pub started_at: i64,
@@ -91,6 +92,17 @@ pub struct BookInsights {
     pub seconds_total: i64,
     /// Count of reading + listening sessions on this book.
     pub sessions: i64,
+    /// Seconds of the single longest session on this book.
+    pub longest_seconds: i64,
+    /// Unix seconds when that longest session started.
+    pub longest_started_at: i64,
+    /// Per-day activity on this book (active days only, ascending). Days use
+    /// the same UTC `YYYY-MM-DD` bucketing as [`DayActivity`] elsewhere;
+    /// callers fill calendar gaps against [`Self::as_of_day`].
+    pub daily: Vec<DayActivity>,
+    /// The server's current UTC day (`YYYY-MM-DD`) — the right edge of the
+    /// `daily` window, so clients don't have to guess the server's "today".
+    pub as_of_day: String,
 }
 
 /// One genre-donut slice: a tag and how many distinct books carrying it had
