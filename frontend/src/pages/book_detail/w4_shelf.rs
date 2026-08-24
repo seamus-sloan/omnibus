@@ -12,15 +12,22 @@ use crate::{data, use_server_url, Route};
 
 use super::w4::W4ViewFacts;
 
-/// The Shelf stop: series shelf or standalone shelves.
+/// The Shelf stop: series shelf or standalone shelves. The series itself is
+/// fetched once by the stage and threaded in, so this stop and the Home
+/// kicker read the same record.
 #[component]
-pub(super) fn W4ShelfStop(b: EbookMetadata, view: W4ViewFacts) -> Element {
+pub(super) fn W4ShelfStop(
+    b: EbookMetadata,
+    view: W4ViewFacts,
+    series: Option<SeriesDetail>,
+) -> Element {
     rsx! {
         if let Some(series_id) = b.series_id {
             W4SeriesShelf {
                 series_id,
                 series_name: view.series.clone().unwrap_or_default(),
                 current_uuid: b.unique_identifier.clone().unwrap_or_default(),
+                detail: series,
             }
         } else {
             W4StandaloneShelves { uuid: b.unique_identifier.clone().unwrap_or_default() }
@@ -30,31 +37,16 @@ pub(super) fn W4ShelfStop(b: EbookMetadata, view: W4ViewFacts) -> Element {
 
 /// The whole series as covers, in reading order.
 #[component]
-fn W4SeriesShelf(series_id: i64, series_name: String, current_uuid: String) -> Element {
-    let mut detail = use_signal(|| None::<SeriesDetail>);
-    // Monotonic load counter (the page-wide `w4.rs` pattern): a slow response
-    // for the previous series must not land on the current one after a fast
-    // SPA navigation between books.
-    let mut load_seq = use_signal(|| 0u64);
-    use_effect(use_reactive!(|series_id| {
-        let my_load = *load_seq.peek() + 1;
-        load_seq.set(my_load);
-        detail.set(None);
-        spawn(async move {
-            if let Ok(d) = data::get_series("", series_id).await {
-                if *load_seq.peek() == my_load {
-                    detail.set(d);
-                }
-            }
-        });
-    }));
-
-    let d = detail();
-    let count = d.as_ref().map(|d| d.book_count).unwrap_or(0);
-    // "Up next": the first unfinished book after the current one in series
-    // order. Per-book progress isn't on the listing wire, so the pill marks
-    // the next series entry instead.
-    let next_uuid: Option<String> = d.as_ref().and_then(|d| {
+fn W4SeriesShelf(
+    series_id: i64,
+    series_name: String,
+    current_uuid: String,
+    detail: Option<SeriesDetail>,
+) -> Element {
+    let count = detail.as_ref().map(|d| d.book_count).unwrap_or(0);
+    // "Up next": the next series entry after this one. Per-book progress
+    // isn't on the listing wire, so the pill marks position, not state.
+    let next_uuid: Option<String> = detail.as_ref().and_then(|d| {
         let idx = d
             .books
             .iter()
@@ -68,10 +60,13 @@ fn W4SeriesShelf(series_id: i64, series_name: String, current_uuid: String) -> E
         div { class: "bdw4-k",
             "{series_name}"
             if count > 0 {
+                // The design reads "you own N of M", but M (the series' full
+                // published length) isn't something the library knows — only
+                // what it holds. Name that instead of inventing a total.
                 " \u{b7} {count} in your library"
             }
         }
-        if let Some(d) = d {
+        if let Some(d) = detail {
             div { class: "rx-shelf", "data-testid": "bdw4-series-shelf",
                 for x in d.books.iter() {
                     {render_series_item(x, &current_uuid, next_uuid.as_deref())}
@@ -121,7 +116,8 @@ fn render_series_item(x: &EbookMetadata, current_uuid: &str, next_uuid: Option<&
 fn W4StandaloneShelves(uuid: String) -> Element {
     let server_url = use_server_url();
     let mut shelves = use_signal(|| None::<Vec<ShelfSummary>>);
-    // Same stale-response guard as `W4SeriesShelf`.
+    // A fast SPA hop between books can leave the previous book's shelf fetch
+    // in flight; drop its result rather than showing it under the new book.
     let mut load_seq = use_signal(|| 0u64);
     {
         let server_url = server_url.clone();

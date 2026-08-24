@@ -7,7 +7,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::progress::ProgressFormat;
 use omnibus_shared::{
-    AlignmentView, BookInsights, EbookMetadata, ProgressRecord, SuggestionsResponse,
+    AlignmentView, BookInsights, EbookMetadata, ProgressRecord, SeriesDetail, SuggestionsResponse,
 };
 
 use crate::components::atrium::Cover;
@@ -79,11 +79,15 @@ pub(super) fn W4Stage(
     // the Home stop's CTA labels and ruler ticks — fetched for any book with
     // files, not just dual-format ones.
     let mut alignment = use_signal(|| None::<AlignmentView>);
+    // The series, fetched once for the stage: the Home kicker names "Book N
+    // of M" from its count and the Shelf stop lays its members out.
+    let mut series = use_signal(|| None::<SeriesDetail>);
     let mut load_seq = use_signal(|| 0u64);
     {
         let uuid = uuid.clone();
         let has_text = view.has_ebook || view.has_comic;
         let has_audio = view.has_audio;
+        let series_id = b.series_id;
         let refresh = ctx.refresh;
         use_effect(use_reactive!(|uuid| {
             let _ = refresh();
@@ -93,6 +97,7 @@ pub(super) fn W4Stage(
             listening.set(None);
             insights.set(None);
             alignment.set(None);
+            series.set(None);
             let uuid = uuid.clone();
             spawn(async move {
                 let read = if has_text {
@@ -112,6 +117,10 @@ pub(super) fn W4Stage(
                     None
                 };
                 let ins = data::get_book_insights(&uuid).await.ok().flatten();
+                let ser = match series_id {
+                    Some(id) => data::get_series("", id).await.ok().flatten(),
+                    None => None,
+                };
                 let align = if has_text || has_audio {
                     data::get_alignment("", &uuid).await.ok()
                 } else {
@@ -122,6 +131,7 @@ pub(super) fn W4Stage(
                     listening.set(listen);
                     insights.set(ins);
                     alignment.set(align);
+                    series.set(ser);
                 }
             });
         }));
@@ -160,6 +170,7 @@ pub(super) fn W4Stage(
                 progress: W4Progress { reading: reading(), listening: listening() },
                 insights: insights(),
                 alignment: alignment(),
+                series_total: series().map(|s| s.book_count),
                 phys,
                 refresh: ctx.refresh,
                 after_merge: ctx.after_merge,
@@ -167,7 +178,7 @@ pub(super) fn W4Stage(
             }
         },
         rsx! {
-            w4_shelf::W4ShelfStop { b: b.clone(), view: view.clone() }
+            w4_shelf::W4ShelfStop { b: b.clone(), view: view.clone(), series: series() }
         },
         rsx! {
             w4_stats::W4StatsStop {

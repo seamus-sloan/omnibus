@@ -34,6 +34,9 @@ pub(super) fn W4HomeStop(
     progress: W4Progress,
     insights: Option<BookInsights>,
     alignment: Option<AlignmentView>,
+    /// How many books of this series the library holds — the kicker's
+    /// "Book N of M". `None` until the stage's series fetch resolves.
+    series_total: Option<usize>,
     phys: PhysSignals,
     refresh: Signal<u32>,
     after_merge: Signal<bool>,
@@ -65,7 +68,7 @@ pub(super) fn W4HomeStop(
 
     let dates_ready = use_local_dates_ready();
 
-    let kicker = home_kicker(&b, &view, wish_mode, wishlist.as_ref());
+    let kicker = home_kicker(&b, &view, series_total, wish_mode, wishlist.as_ref());
     let dual = view.has_ebook && view.has_audio;
     let readout = derive_readout(alignment.as_ref(), &progress);
 
@@ -249,6 +252,7 @@ struct HomeKicker {
 fn home_kicker(
     b: &EbookMetadata,
     view: &W4ViewFacts,
+    series_total: Option<usize>,
     wish_mode: bool,
     wishlist: Option<&WishlistEntry>,
 ) -> HomeKicker {
@@ -273,16 +277,30 @@ fn home_kicker(
     } else {
         format!(" \u{b7} {year}")
     };
-    if let Some(series) = view.series.clone() {
+    // The bare series name, not the `Name #N` label: the position follows it
+    // as its own "Book N of M" clause, per the design.
+    if let Some(series) = b.series.clone().or_else(|| view.series.clone()) {
+        // The design's "Kingkiller Chronicle · Book 1 of 3 · 2007": the
+        // position comes from the book's own series index, the total from
+        // how many of the series the library holds.
+        let position = match (b.series_index.as_deref(), series_total) {
+            (Some(n), Some(total)) if total > 0 => format!(" \u{b7} Book {n} of {total}"),
+            (Some(n), _) => format!(" \u{b7} Book {n}"),
+            (None, _) => String::new(),
+        };
+        let tail = format!("{position}{year_tail}");
         return HomeKicker {
-            text: format!("{series}{year_tail}"),
+            text: format!("{series}{tail}"),
             series_label: Some(series),
-            tail: year_tail,
+            tail,
         };
     }
+    // The design leads a standalone with its category; genres are ours, with
+    // a scanned subject as the fallback before the generic word.
     let lead = b
         .genres
         .first()
+        .or_else(|| b.subjects.first())
         .cloned()
         .unwrap_or_else(|| "Book".to_string());
     HomeKicker {

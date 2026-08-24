@@ -10696,3 +10696,11 @@ html {
 .bdw4-overlay-static { cursor: default; }
 .bdw4-ocard-composer { max-width: 720px; padding: 0; background: transparent; border: 0; box-shadow: none; }
 .bdw4-ocard-composer .bd-journal-composer { margin: 0; }
+
+/* Immersive reads as a quiet third option in the W4 CTA row (design: a
+   plain ghost button beside the two solid ones), not a second accent. */
+.bdw4 .bd-immersive-cta {
+  background: transparent; border-color: transparent; color: var(--ink-1);
+}
+.bdw4 .bd-immersive-cta:hover { background: var(--bg-1); color: var(--ink-0); }
+.bdw4 .bd-immersive-cta .bd-immersive-mark { color: inherit; }
