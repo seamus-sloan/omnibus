@@ -18,6 +18,12 @@ import { fixturesDir, seedLibrary } from "../utils/seed";
 
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "standalone-tundra")!;
 
+// Every test writes/clears overrides on the SAME reserved book, so the
+// suite-wide `fullyParallel` would let one test's `clearOverrides` wipe
+// another's just-saved genres mid-assertion. Run this file sequentially
+// in one worker instead (the `book_detail_chips.spec.ts` precedent).
+test.describe.configure({ mode: "default" });
+
 /** The save endpoint every genre write goes through. */
 const OVERRIDES_RPC = /\/api\/rpc\/ebook\/overrides$/;
 
