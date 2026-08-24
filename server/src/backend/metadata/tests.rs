@@ -1,13 +1,11 @@
-//! Tests for `GET /api/metadata/providers`,
-//! `POST /api/metadata/editions/search`, and
-//! `POST /api/metadata/editions/hydrate`.
+//! Tests for the three `/api/metadata/*` handlers.
 //!
-//! The tests stay network-free: each one either fails before any provider is
-//! reached (validation, permission) or names only an unconfigured provider,
-//! which the search reports rather than requests and whose `by_ref` answers a
-//! clean miss without sending anything. The fan-out and the detail fetch
-//! themselves are covered by the wiremock suite in
-//! `omnibus_db::metadata_lookup`.
+//! Network-free throughout: each case either fails before a provider is
+//! reached, or names only an unconfigured one — which the search reports and
+//! whose `by_ref` misses without sending. The provider calls themselves are
+//! covered by the wiremock suite in `omnibus_db::metadata_lookup`.
+
+use std::time::Duration;
 
 use axum::{
     body::{to_bytes, Body},
@@ -15,7 +13,7 @@ use axum::{
     http::{header::AUTHORIZATION, Request, StatusCode},
     Json,
 };
-use omnibus_db::{auth::SessionKind, test_support::EnvVarGuard};
+use omnibus_db::{auth::SessionKind, test_support::EnvVarGuard, ThrottleTracker};
 use omnibus_shared::metadata_lookup::{
     EditionHydrateRequest, EditionSearchRequest, MetadataProvider,
 };
@@ -454,6 +452,54 @@ async fn api_post_edition_hydrate_requires_auth() {
 
     let res = app.oneshot(req).await.expect("request should succeed");
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Puts one provider on a cooldown for the length of a test and takes it off
+/// again on drop.
+///
+/// `MetadataLookupConfig::live` reads `ThrottleTracker::shared()` — the
+/// process-wide tracker, deliberately, since a cooldown learned serving one
+/// request has to be known to the next. Under nextest each test is its own
+/// process, but `cargo test` shares one, and a leaked Hardcover cooldown would
+/// turn this module's `not_configured` expectations into `throttled`.
+struct CooldownGuard(MetadataProvider);
+
+impl CooldownGuard {
+    fn set(provider: MetadataProvider) -> Self {
+        ThrottleTracker::shared().record(provider, Some(Duration::from_secs(600)));
+        Self(provider)
+    }
+}
+
+impl Drop for CooldownGuard {
+    fn drop(&mut self) {
+        ThrottleTracker::shared().clear(self.0);
+    }
+}
+
+#[tokio::test]
+async fn api_post_edition_hydrate_returns_502_when_the_provider_could_not_be_asked() {
+    // The one branch that separates a failure from a miss, and the distinction
+    // the iOS picker depends on: a cooldown short-circuits `hydrate_edition`
+    // before any request is built, so this stays network-free.
+    let _cooldown = CooldownGuard::set(MetadataProvider::Hardcover);
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "editor").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let res = app
+        .oneshot(post(HYDRATE_PATH, &token, hardcover_hydrate("12345")))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    // The caller-facing sentence, never the provider's own wording — and never
+    // a URL, which is where a `?key=` would ride.
+    let body = body_string(res).await;
+    assert!(body.contains("temporarily unavailable"), "got: {body}");
+    assert!(
+        !body.contains("http"),
+        "a provider error must not carry a URL"
+    );
 }
 
 #[tokio::test]

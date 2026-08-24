@@ -229,6 +229,7 @@ async fn query_one(
     let body: GbResponse = resp
         .json()
         .await
+        .map_err(strip_url)
         .context("google books response was not valid json")?;
 
     let Some((id, info)) = body.items.into_iter().find_map(volume) else {
@@ -419,6 +420,7 @@ pub async fn by_ref(
     let volume: GbItem = resp
         .json()
         .await
+        .map_err(strip_url)
         .context("google books response was not valid json")?;
     let Some(info) = volume.volume_info else {
         return Ok(None);
@@ -436,6 +438,7 @@ pub async fn search(
     let body: GbResponse = resp
         .json()
         .await
+        .map_err(strip_url)
         .context("google books response was not valid json")?;
     Ok(body
         .items
