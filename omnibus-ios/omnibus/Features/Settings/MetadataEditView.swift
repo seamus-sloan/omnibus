@@ -48,13 +48,6 @@ struct MetadataEditView: View {
     /// renders nothing until the catalog says otherwise.
     @State private var canFetch = false
     @State private var showFetch = false
-    /// What the fetch sheet staged on its way out, so the reader can see that
-    /// something happened without hunting the form for accent dots.
-    @State private var fetchNote: String?
-    /// Kept current by the sheet as it stages, and published to `fetchNote`
-    /// once it is actually gone — a note animating in behind a sheet that is
-    /// still on screen is a note nobody reads.
-    @State private var pendingFetchNote: String?
 
     /// Autocomplete pools for the chip and series fields, filled best-effort
     /// while the editor is up — an empty pool just means no dropdown.
@@ -95,10 +88,7 @@ struct MetadataEditView: View {
         .task { await load() }
         .task { await loadSuggestionPools() }
         .task { await checkProviders() }
-        // `onDismiss` rather than a callback off the sheet's Done button: a
-        // swipe-down tears the sheet down without running any of its own
-        // teardown, and that is how an iOS reader usually closes one.
-        .sheet(isPresented: $showFetch, onDismiss: revealFetchNote) { fetchSheet }
+        .sheet(isPresented: $showFetch) { fetchSheet }
     }
 
     /// Presented rather than pushed: finding an edition is a detour off the
@@ -120,15 +110,9 @@ struct MetadataEditView: View {
                 // its `hasCover` is what gates the thumbnail request at all.
                 // Deliberately not touching `draft`/`loaded` — a cover is not
                 // a draft change and must not register as one.
-                onCoverApplied: { book = $0 },
-                stagedNote: $pendingFetchNote
+                onCoverApplied: { book = $0 }
             )
         }
-    }
-
-    private func revealFetchNote() {
-        guard let note = pendingFetchNote else { return }
-        withAnimation(Motion.settle) { fetchNote = note }
     }
 
     private var content: some View {
@@ -151,7 +135,6 @@ struct MetadataEditView: View {
                 if let book { header(book) }
 
                 if canFetch, book != nil { fetchButton }
-                if let fetchNote { fetchNoteLine(fetchNote) }
 
                 group("Title & authors") {
                     Plate {
@@ -312,10 +295,6 @@ struct MetadataEditView: View {
     private var fetchButton: some View {
         Button {
             Haptics.tap()
-            fetchNote = nil
-            // The sheet keeps its own tally; a second visit starts it fresh
-            // rather than re-reporting what the first one staged.
-            pendingFetchNote = nil
             showFetch = true
         } label: {
             HStack(spacing: 11) {
@@ -353,23 +332,6 @@ struct MetadataEditView: View {
         }
         .buttonStyle(PressableStyle())
         .accessibilityIdentifier("metadata-fetch-open")
-    }
-
-    /// What the sheet staged, stated once. It clears on the next fetch and on
-    /// a save, so it can never outlive the edit it describes.
-    private func fetchNoteLine(_ note: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 13))
-                .foregroundStyle(palette.accentColor)
-            Text(note)
-                .font(.ui(13))
-                .foregroundStyle(palette.ink1Color)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .transition(.opacity.combined(with: .move(edge: .top)))
-        .accessibilityIdentifier("metadata-fetch-note")
     }
 
     private var revertButton: some View {

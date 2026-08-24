@@ -526,19 +526,4 @@ enum MetadataFetchFlow {
         }
     }
 
-    /// What the editor says after the sheet closes, or `nil` when nothing is
-    /// staged.
-    ///
-    /// Attributed, because "4 fields changed" with no source is the state a
-    /// reader can't audit — and attributed *honestly*: fields can be taken
-    /// from several candidates in one session, so a single name is only
-    /// claimed when a single source actually supplied them all.
-    static func stagedNote(count: Int, sources: Set<MetadataProvider>) -> String? {
-        guard count > 0 else { return nil }
-        let fields = count == 1 ? "1 field" : "\(count) fields"
-        guard let only = sources.count == 1 ? sources.first : nil else {
-            return "Staged \(fields) from \(sources.count) sources. Press Save to keep them."
-        }
-        return "Staged \(fields) from \(only.displayName). Press Save to keep them."
-    }
 }

@@ -600,29 +600,11 @@ struct MetadataFetchCandidateTests {
         #expect(MetadataFetchFlow.authorsLine(edition(authors: [])) == MetadataFetchFlow.empty)
     }
 
-    @Test func theTakeAllLabelCountsAndTheStagedNoteAttributes() {
+    @Test func theTakeAllLabelCountsWhatIsLeftToTake() {
+        // `nil` is the bar's own disabled state — there is nothing to take, so
+        // there is nothing to label.
         #expect(MetadataFetchFlow.takeAllLabel(changes: 0) == nil)
         #expect(MetadataFetchFlow.takeAllLabel(changes: 1) == "Take 1 field")
         #expect(MetadataFetchFlow.takeAllLabel(changes: 4) == "Take all 4 fields")
-        #expect(MetadataFetchFlow.stagedNote(count: 0, sources: [.hardcover]) == nil)
-        // Named, because "4 fields changed" with no attribution is the state a
-        // reader can't audit.
-        #expect(
-            MetadataFetchFlow.stagedNote(count: 2, sources: [.googleBooks])?
-                .contains("Google Books") == true
-        )
-    }
-
-    @Test func theStagedNoteRefusesToNameOneSourceWhenSeveralContributed() {
-        // Fields can be taken from several candidates in one session — Back
-        // returns to the list without clearing what was staged — so naming the
-        // last one touched would attribute the others to a source that never
-        // supplied them.
-        let note = MetadataFetchFlow.stagedNote(
-            count: 3, sources: [.openLibrary, .googleBooks]
-        )
-        #expect(note?.contains("2 sources") == true)
-        #expect(note?.contains("Google Books") == false)
-        #expect(note?.contains("Open Library") == false)
     }
 }

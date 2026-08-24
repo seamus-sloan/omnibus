@@ -29,10 +29,6 @@ struct MetadataFetchSheet: View {
     /// header stops rendering the plate. A cover is not a draft change — this
     /// must not touch `draft` or `loaded`, or the Save bar would report one.
     var onCoverApplied: (Book) -> Void
-    /// The line about what this sheet staged, published so the editor can show
-    /// it however the sheet was dismissed — including a swipe-down, which runs
-    /// none of this view's own teardown.
-    @Binding var stagedNote: String?
 
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
@@ -60,11 +56,6 @@ struct MetadataFetchSheet: View {
     @State private var hydrateFailure: String?
     @State private var showAllFields = false
 
-    /// Which fields *this sheet* took, and from which source — so the closing
-    /// note counts what it did rather than every edit the form is carrying,
-    /// and can attribute honestly when two candidates each contributed.
-    @State private var taken: [MetadataFetchField: MetadataProvider] = [:]
-
     @State private var coverStatus: String?
     @State private var isApplyingCover = false
     /// Bumped after a cover applies so the thumbnail is re-read rather than
@@ -84,15 +75,13 @@ struct MetadataFetchSheet: View {
         book: Book,
         draft: Binding<MetadataDraft>,
         loaded: MetadataDraft,
-        onCoverApplied: @escaping (Book) -> Void,
-        stagedNote: Binding<String?>
+        onCoverApplied: @escaping (Book) -> Void
     ) {
         self.uuid = uuid
         self.book = book
         _draft = draft
         self.loaded = loaded
         self.onCoverApplied = onCoverApplied
-        _stagedNote = stagedNote
         _coverIdentity = State(initialValue: CoverIdentity(book))
         // Seeded from the draft, including its ISBN, because that is what the
         // book says. It does narrow the search hard — every provider goes to
@@ -331,7 +320,7 @@ struct MetadataFetchSheet: View {
             }
         }
         ToolbarItem(placement: .confirmationAction) {
-            Button("Done") { close() }
+            Button("Done") { dismiss() }
         }
     }
 
@@ -386,8 +375,13 @@ struct MetadataFetchSheet: View {
             }
         }
         .screenPadding()
-        .padding(.top, Spacing.sm)
-        .padding(.bottom, Spacing.sm)
+        // Asymmetric on purpose: the scroll view runs right up to the bar, so
+        // the primary action needs air above it — while below, the home
+        // indicator already supplies the whole margin the bar needs, and
+        // adding to it left the controls floating in the middle of a band of
+        // empty chrome.
+        .padding(.top, Spacing.md)
+        .padding(.bottom, 0)
         .background(.bar)
     }
 
@@ -403,26 +397,19 @@ struct MetadataFetchSheet: View {
         .disabled(isHydrating || changes == 0)
         .opacity(isHydrating || changes == 0 ? 0.5 : 1)
 
-        HStack(spacing: Spacing.md) {
-            Button {
-                Haptics.select()
-                withAnimation(Motion.settle) { showAllFields.toggle() }
-            } label: {
-                Label(
-                    showAllFields ? "Only differences" : "Show every field",
-                    systemImage: showAllFields ? "line.3.horizontal.decrease" : "list.bullet"
-                )
-                .font(.ui(13, weight: .medium))
-                .foregroundStyle(palette.accentColor)
-            }
-            .buttonStyle(.plain)
-
-            Spacer(minLength: 0)
-
-            Text("Not saved yet")
-                .font(.monoUI(10))
-                .foregroundStyle(palette.ink3Color)
+        Button {
+            Haptics.select()
+            withAnimation(Motion.settle) { showAllFields.toggle() }
+        } label: {
+            Label(
+                showAllFields ? "Only differences" : "Show every field",
+                systemImage: showAllFields ? "line.3.horizontal.decrease" : "list.bullet"
+            )
+            .font(.ui(13, weight: .medium))
+            .foregroundStyle(palette.accentColor)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Derived
@@ -473,20 +460,16 @@ struct MetadataFetchSheet: View {
 
     // MARK: - Staging
 
+    /// Staging writes straight through the binding, so there is nothing to
+    /// report on the way out: the editor's own per-field edited markers and its
+    /// Save button are what say a field changed, and they say it in the place
+    /// the change actually happened.
     private func take(_ field: MetadataFetchField, from edition: ProviderEdition) {
-        withAnimation(Motion.snap) {
-            field.apply(to: &draft, from: edition)
-            taken[field] = edition.source
-        }
-        publishNote()
+        withAnimation(Motion.snap) { field.apply(to: &draft, from: edition) }
     }
 
     private func undo(_ field: MetadataFetchField) {
-        withAnimation(Motion.snap) {
-            field.undo(in: &draft, to: loaded)
-            taken.removeValue(forKey: field)
-        }
-        publishNote()
+        withAnimation(Motion.snap) { field.undo(in: &draft, to: loaded) }
     }
 
     private func takeAll(_ edition: ProviderEdition) {
@@ -495,32 +478,8 @@ struct MetadataFetchSheet: View {
             for field in MetadataFetchField.allCases where field.isAvailable(edition) {
                 guard field.differs(draft: draft, edition: edition) else { continue }
                 field.apply(to: &draft, from: edition)
-                taken[field] = edition.source
             }
         }
-        publishNote()
-    }
-
-    /// Republish what this sheet has staged, after every take and undo.
-    ///
-    /// Written on each change rather than once on the way out, because a
-    /// swipe-down dismissal runs none of this view's teardown — the editor
-    /// reads the binding on `onDismiss` and needs it already current.
-    ///
-    /// The count is what is *still* staged, not what was pressed: `apply` can
-    /// write a value identical to the baseline when the reader edited that
-    /// field in the form first, and a note claiming staged fields beside a
-    /// disabled Save asks for something they cannot do.
-    private func publishNote() {
-        let live = taken.filter { $0.key.isStaged(draft: draft, loaded: loaded) }
-        stagedNote = MetadataFetchFlow.stagedNote(
-            count: live.count, sources: Set(live.values)
-        )
-    }
-
-    private func close() {
-        publishNote()
-        dismiss()
     }
 
     // MARK: - Network
