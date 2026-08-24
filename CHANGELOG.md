@@ -25,6 +25,14 @@ recent releases are recorded below; everything earlier is available via the
 
 ### Added
 
+- **Fetch metadata on iPhone.** The iOS metadata editor gets its own way in: a
+  search seeded with the book's own title, author, and ISBN — with a chip per
+  source, so you can leave out one that's rate-limited — a list of candidates
+  that says up front how many fields each would change, and a compare screen
+  built for a phone rather than for a spreadsheet: one card per field, yours
+  over theirs, taken one at a time or all at once, and undoable from the same
+  card. Nothing is written until you press Save, except the cover, which says
+  so on its own card (#2127)
 - **Search can see genres.** A genre you assign in the metadata editor is now
   indexed, and `genre:horror` narrows a search to the books carrying it — the
   same way `author:`, `series:`, and `tag:` already did. Genres reach the index

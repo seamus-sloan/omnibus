@@ -43,6 +43,15 @@ struct MetadataEditView: View {
     @State private var scrollTarget: String?
     private static let errorAnchor = "metadata-edit-error"
 
+    /// Whether this instance has any provider to search. Offering a search
+    /// that could only fail is worse than not offering one, so the trigger
+    /// renders nothing until the catalog says otherwise.
+    @State private var canFetch = false
+    @State private var showFetch = false
+    /// What the fetch sheet staged on its way out, so the reader can see that
+    /// something happened without hunting the form for accent dots.
+    @State private var fetchNote: String?
+
     /// Autocomplete pools for the chip and series fields, filled best-effort
     /// while the editor is up — an empty pool just means no dropdown.
     @State private var authorPool: [SuggestionItem] = []
@@ -81,6 +90,26 @@ struct MetadataEditView: View {
         .toolbar { toolbar }
         .task { await load() }
         .task { await loadSuggestionPools() }
+        .task { await checkProviders() }
+        .sheet(isPresented: $showFetch) { fetchSheet }
+    }
+
+    /// Presented rather than pushed: finding an edition is a detour off the
+    /// form, not a step through it, and a sheet is what says "you'll come back
+    /// here" on iOS.
+    @ViewBuilder
+    private var fetchSheet: some View {
+        if let book {
+            MetadataFetchSheet(
+                uuid: uuid,
+                identity: CoverIdentity(book),
+                draft: $draft,
+                loaded: loaded
+            ) { note in
+                guard let note else { return }
+                withAnimation(Motion.settle) { fetchNote = note }
+            }
+        }
     }
 
     private var content: some View {
@@ -101,6 +130,9 @@ struct MetadataEditView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.xl) {
                 if let book { header(book) }
+
+                if canFetch, book != nil { fetchButton }
+                if let fetchNote { fetchNoteLine(fetchNote) }
 
                 group("Title & authors") {
                     Plate {
@@ -254,6 +286,70 @@ struct MetadataEditView: View {
         )
     }
 
+    /// The way into the provider search. Sits above the fields rather than in
+    /// the toolbar because it is the fastest route through this whole screen —
+    /// a reader fixing a badly-scanned book should find it before they start
+    /// typing, not after.
+    private var fetchButton: some View {
+        Button {
+            Haptics.tap()
+            fetchNote = nil
+            showFetch = true
+        } label: {
+            HStack(spacing: 11) {
+                Image(systemName: "sparkle.magnifyingglass")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(palette.accentColor)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Fetch metadata")
+                        .font(.ui(15, weight: .semibold))
+                        .foregroundStyle(palette.ink0Color)
+                    Text("Search Open Library, Google Books and more")
+                        .font(.ui(12))
+                        .foregroundStyle(palette.ink2Color)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(palette.ink3Color)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 13)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                    .fill(palette.bg1Color)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                    .strokeBorder(palette.accentColor.opacity(0.35), lineWidth: 1)
+            )
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityIdentifier("metadata-fetch-open")
+    }
+
+    /// What the sheet staged, stated once. It clears on the next fetch and on
+    /// a save, so it can never outlive the edit it describes.
+    private func fetchNoteLine(_ note: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(palette.accentColor)
+            Text(note)
+                .font(.ui(13))
+                .foregroundStyle(palette.ink1Color)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .transition(.opacity.combined(with: .move(edge: .top)))
+        .accessibilityIdentifier("metadata-fetch-note")
+    }
+
     private var revertButton: some View {
         Button {
             Haptics.warning()
@@ -294,6 +390,14 @@ struct MetadataEditView: View {
         loaded = MetadataDraft(book: book)
         draft = loaded
         isLoading = false
+    }
+
+    /// Whether to offer the provider search at all. One read, best-effort: a
+    /// catalog that can't be fetched leaves the trigger absent, which is the
+    /// same answer an instance with no configured source gets.
+    private func checkProviders() async {
+        let catalog: [ProviderInfo] = (try? await APIClient.shared.get("/api/metadata/providers")) ?? []
+        withAnimation(Motion.settle) { canFetch = catalog.contains(where: \.configured) }
     }
 
     /// Fill the four autocomplete pools, mirroring the web editor's

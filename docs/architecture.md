@@ -302,8 +302,34 @@ Features/           — one directory per surface: Account, AddBooks, Auth,
                       testable request shaping (which endpoint a format targets,
                       how a multi-file pick groups into commits, which fields a
                       commit carries) and `UploadConfirmSheet` is the editable
-                      confirm step the commit endpoints require
-Models/             — Codable mirrors of the `shared/` wire DTOs
+                      confirm step the commit endpoints require. Settings'
+                      metadata editor carries the native "Fetch metadata" flow
+                      (#2127): `MetadataFetchSheet` is a three-phase sheet —
+                      ask (the title/author/ISBN the book already carries, plus
+                      a per-source filter over the provider catalog), choose (a
+                      candidate card per result, each stating how many fields it
+                      would change against the draft), compare (one card per
+                      differing field, yours over theirs, taken one at a time or
+                      all at once). Deliberately **not** a port of the web
+                      picker's two-column compare table, which needs a desktop's
+                      width to read at all. `MetadataFetch` holds the testable
+                      half — the `MetadataFetchStage` machine, the
+                      `MetadataFetchField` enum the compare screen renders (so a
+                      field is data, not a hand-written row), candidate
+                      ordering, the hydrate staleness guard, and the merge that
+                      keeps a re-fetch from blanking what the list row showed —
+                      and `MetadataFetchCards` the leaf views. Taking a field
+                      **stages** into the editor's `draft`, so Save stays the
+                      single writer; the cover is the one card that can't stage
+                      and writes immediately through
+                      `/api/ebooks/{uuid}/cover/from-url`, and says so
+Models/             — Codable mirrors of the `shared/` wire DTOs.
+                      `MetadataLookup.swift` mirrors
+                      `shared/src/metadata_lookup.rs` for the fetch flow;
+                      `MetadataProvider` is a `RawRepresentable` wrapper rather
+                      than a closed enum, so a server that grows a fourth source
+                      still decodes — and still round-trips into a hydrate
+                      request — on a client that can't be updated in lockstep
 Networking/         — APIClient (plus a separate upload session, whose
                       whole-transfer budget is sized for bytes rather than for
                       server think time, and which neither claims the
