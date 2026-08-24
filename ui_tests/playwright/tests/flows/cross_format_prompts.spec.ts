@@ -200,11 +200,11 @@ test("the hero shows one synced card with the counterpart affordance", async ({
 test("the book detail shows the newest-format progress row above the sync chip", async ({
   page,
 }) => {
-  // Linked and fresh: the W4 stage shows ONE position ruler for the book
+  // Linked and fresh: the marquee stage shows ONE position ruler for the book
   // plus the linked sync readout naming the audio-timeline hand-off.
   await gotoReady(page, `/books/${uuid}`);
   const row = page.getByTestId("sync-link-row");
-  await expect(page.getByTestId("bdw4-ruler")).toBeVisible();
+  await expect(page.getByTestId("bdmq-ruler")).toBeVisible();
   await expect(page.getByTestId("sync-link-manage")).toBeVisible();
   // The one-spot line explains the mapped hand-off.
   await expect(row.getByText("one spot, both formats")).toBeVisible();

@@ -79,8 +79,8 @@ pub(super) fn BdHighlightsSection(uuid: String, quote_meta: BdQuoteMeta) -> Elem
 }
 
 /// Every saved passage, in one list. A heavily highlighted book runs to
-/// hundreds of rows, so the W4 stop scrolls the list inside the stage
-/// (`.bdw4 .bd-hl-list`) rather than holding rows back behind a control.
+/// hundreds of rows, so the marquee stop scrolls the list inside the stage
+/// (`.bdmq .bd-hl-list`) rather than holding rows back behind a control.
 #[component]
 fn BdHighlightList(
     highlights: Signal<Vec<Highlight>>,
@@ -213,7 +213,7 @@ fn BdHighlightCard(
             if let Some(n) = note {
                 p { class: "bd-hl-note", "data-testid": "highlight-note", "{n}" }
             }
-            // One mono line, per the W4 design: locator · saved date · the
+            // One mono line, per the marquee design: locator · saved date · the
             // actions as inline text links rather than a button row.
             div { class: "bd-hl-foot",
                 span { class: "mono bd-hl-meta", "data-testid": "highlight-meta", "{meta_line}" }

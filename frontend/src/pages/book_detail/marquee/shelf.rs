@@ -10,34 +10,34 @@ use omnibus_shared::{EbookMetadata, SeriesDetail, ShelfSummary};
 use crate::components::atrium::Cover;
 use crate::{data, use_server_url, Route};
 
-use super::w4::W4ViewFacts;
+use super::MarqueeViewFacts;
 
 /// The Shelf stop: series shelf or standalone shelves. The series itself is
 /// fetched once by the stage and threaded in, so this stop and the Home
 /// kicker read the same record.
 #[component]
-pub(super) fn W4ShelfStop(
+pub(super) fn MarqueeShelfStop(
     b: EbookMetadata,
-    view: W4ViewFacts,
+    view: MarqueeViewFacts,
     series: Option<SeriesDetail>,
 ) -> Element {
     rsx! {
         if let Some(series_id) = b.series_id {
-            W4SeriesShelf {
+            MarqueeSeriesShelf {
                 series_id,
                 series_name: view.series.clone().unwrap_or_default(),
                 current_uuid: b.unique_identifier.clone().unwrap_or_default(),
                 detail: series,
             }
         } else {
-            W4StandaloneShelves { uuid: b.unique_identifier.clone().unwrap_or_default() }
+            MarqueeStandaloneShelves { uuid: b.unique_identifier.clone().unwrap_or_default() }
         }
     }
 }
 
 /// The whole series as covers, in reading order.
 #[component]
-fn W4SeriesShelf(
+fn MarqueeSeriesShelf(
     series_id: i64,
     series_name: String,
     current_uuid: String,
@@ -57,7 +57,7 @@ fn W4SeriesShelf(
     });
 
     rsx! {
-        div { class: "bdw4-k",
+        div { class: "bdmq-k",
             "{series_name}"
             if count > 0 {
                 // The design reads "you own N of M", but M (the series' full
@@ -67,16 +67,16 @@ fn W4SeriesShelf(
             }
         }
         if let Some(d) = detail {
-            div { class: "rx-shelf", "data-testid": "bdw4-series-shelf",
+            div { class: "rx-shelf", "data-testid": "bdmq-series-shelf",
                 for x in d.books.iter() {
                     {render_series_item(x, &current_uuid, next_uuid.as_deref())}
                 }
             }
-            div { class: "mono bdw4-quiet-hint",
-                Link { to: Route::SeriesDetail { id: series_id }, class: "bdw4-k-link", "series page \u{2192}" }
+            div { class: "mono bdmq-quiet-hint",
+                Link { to: Route::SeriesDetail { id: series_id }, class: "bdmq-k-link", "series page \u{2192}" }
             }
         } else {
-            div { class: "mono bdw4-quiet-hint", "loading the shelf\u{2026}" }
+            div { class: "mono bdmq-quiet-hint", "loading the shelf\u{2026}" }
         }
     }
 }
@@ -113,7 +113,7 @@ fn render_series_item(x: &EbookMetadata, current_uuid: &str, next_uuid: Option<&
 
 /// Standalone: the hand-picked shelves holding this book, as chips.
 #[component]
-fn W4StandaloneShelves(uuid: String) -> Element {
+fn MarqueeStandaloneShelves(uuid: String) -> Element {
     let server_url = use_server_url();
     let mut shelves = use_signal(|| None::<Vec<ShelfSummary>>);
     // A fast SPA hop between books can leave the previous book's shelf fetch
@@ -142,33 +142,33 @@ fn W4StandaloneShelves(uuid: String) -> Element {
     }
 
     rsx! {
-        div { class: "bdw4-k", "Standalone \u{b7} on your shelves" }
+        div { class: "bdmq-k", "Standalone \u{b7} on your shelves" }
         match shelves() {
             Some(held) if !held.is_empty() => rsx! {
-                div { class: "bdw4-chips bdw4-shelfchips", "data-testid": "bdw4-shelves",
+                div { class: "bdmq-chips bdmq-shelfchips", "data-testid": "bdmq-shelves",
                     for (i, s) in held.iter().enumerate() {
                         span {
                             key: "{s.id}",
-                            class: if i == 0 { "chip bdw4-shelfchip first" } else { "chip bdw4-shelfchip" },
+                            class: if i == 0 { "chip bdmq-shelfchip first" } else { "chip bdmq-shelfchip" },
                             style: if let Some(a) = s.accent.clone() { format!("--accent:{a};") } else { String::new() },
                             "{s.name}"
                         }
                     }
                 }
-                p { class: "mono bdw4-quiet-hint",
+                p { class: "mono bdmq-quiet-hint",
                     "open a shelf from the "
-                    Link { to: Route::Landing {}, class: "bdw4-k-link", "library page \u{2192}" }
+                    Link { to: Route::Landing {}, class: "bdmq-k-link", "library page \u{2192}" }
                 }
             },
             Some(_) => rsx! {
-                div { class: "bdw4-bigquiet", "Not on a shelf yet." }
-                p { class: "mono bdw4-quiet-hint",
+                div { class: "bdmq-bigquiet", "Not on a shelf yet." }
+                p { class: "mono bdmq-quiet-hint",
                     "shelves are made on the "
-                    Link { to: Route::Landing {}, class: "bdw4-k-link", "library page \u{2192}" }
+                    Link { to: Route::Landing {}, class: "bdmq-k-link", "library page \u{2192}" }
                 }
             },
             None => rsx! {
-                div { class: "mono bdw4-quiet-hint", "checking your shelves\u{2026}" }
+                div { class: "mono bdmq-quiet-hint", "checking your shelves\u{2026}" }
             },
         }
     }

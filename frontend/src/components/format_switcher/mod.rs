@@ -75,12 +75,12 @@ pub struct BookActionMeta {
 pub fn FormatSwitcher(
     formats: Vec<String>,
     meta: BookActionMeta,
-    /// W4 book-page presentation: the same rows, actions, and testids in the
+    /// Marquee book-page presentation: the same rows, actions, and testids in the
     /// design's copies anatomy (icon tile + name + mono sub-line + action
     /// row) instead of the compact badge row. Purely a class swap — the
     /// markup shape is identical so every existing selector still resolves.
     #[props(default)]
-    w4: bool,
+    marquee: bool,
 ) -> Element {
     let BookActionMeta {
         uuid,
@@ -93,7 +93,7 @@ pub fn FormatSwitcher(
     if rows.is_empty() {
         return rsx! {};
     }
-    let switcher_class = if w4 {
+    let switcher_class = if marquee {
         "format-switcher rx-copies"
     } else {
         "format-switcher"
@@ -119,7 +119,7 @@ pub fn FormatSwitcher(
                                 files: files_for_format.into_iter().cloned().collect(),
                                 book_author: book_author.clone(),
                                 book_title: book_title.clone(),
-                                w4,
+                                marquee,
                             }
                         }
                     } else {
@@ -135,7 +135,7 @@ pub fn FormatSwitcher(
                                     .first()
                                     .map(|f| file_sub_line(f))
                                     .filter(|s| !s.is_empty()),
-                                w4,
+                                marquee,
                             }
                         }
                     }
@@ -152,19 +152,19 @@ fn FormatRow(
     #[props(default)] book_author: String,
     #[props(default)] book_title: String,
     #[props(default)] epub_size_bytes: Option<i64>,
-    /// W4 only: the mono sub-line under the format name (size · bitrate).
+    /// Marquee only: the mono sub-line under the format name (size · bitrate).
     #[props(default)]
     sub: Option<String>,
-    #[props(default)] w4: bool,
+    #[props(default)] marquee: bool,
 ) -> Element {
     let label = kind.label();
     let testid = format!("format-row-{}", label.to_ascii_lowercase());
-    let row_class = if w4 {
+    let row_class = if marquee {
         "format-row rx-copy"
     } else {
         "format-row"
     };
-    let badge_class = if w4 {
+    let badge_class = if marquee {
         "format-badge rx-ic"
     } else {
         "format-badge"
@@ -174,17 +174,17 @@ fn FormatRow(
             class: "{row_class}",
             "data-format": "{label}",
             "data-testid": "{testid}",
-            // W4 draws the format as a glyph tile, so the code moves to the
+            // The marquee draws the format as a glyph tile, so the code moves to the
             // accessible name — the row's `data-format` stays the machine
             // contract either way.
             span {
                 class: "{badge_class}",
                 "data-testid": "format-badge",
-                title: if w4 { Some(label.to_string()) } else { None },
-                "aria-label": if w4 { Some(label.to_string()) } else { None },
-                if w4 { {kind.copy_glyph()} } else { "{label}" }
+                title: if marquee { Some(label.to_string()) } else { None },
+                "aria-label": if marquee { Some(label.to_string()) } else { None },
+                if marquee { {kind.copy_glyph()} } else { "{label}" }
             }
-            if w4 {
+            if marquee {
                 div { class: "rx-copy-body",
                     div { class: "nm", "{kind.copy_name()}" }
                     if let Some(sub) = sub.clone() {
@@ -227,17 +227,17 @@ fn MultiFileRow(
     files: Vec<BookFileInfo>,
     #[props(default)] book_author: String,
     #[props(default)] book_title: String,
-    #[props(default)] w4: bool,
+    #[props(default)] marquee: bool,
 ) -> Element {
     let label = kind.label();
     let testid = format!("format-row-{}", label.to_ascii_lowercase());
     let count = files.len();
-    let row_class = if w4 {
+    let row_class = if marquee {
         "format-row format-row-multi rx-copy"
     } else {
         "format-row format-row-multi"
     };
-    let badge_class = if w4 {
+    let badge_class = if marquee {
         "format-badge rx-ic"
     } else {
         "format-badge"
@@ -251,11 +251,11 @@ fn MultiFileRow(
             span {
                 class: "{badge_class}",
                 "data-testid": "format-badge",
-                title: if w4 { Some(format!("{label} ({count} files)")) } else { None },
-                "aria-label": if w4 { Some(format!("{label} ({count} files)")) } else { None },
-                if w4 { {kind.copy_glyph()} } else { "{label} ({count} files)" }
+                title: if marquee { Some(format!("{label} ({count} files)")) } else { None },
+                "aria-label": if marquee { Some(format!("{label} ({count} files)")) } else { None },
+                if marquee { {kind.copy_glyph()} } else { "{label} ({count} files)" }
             }
-            if w4 {
+            if marquee {
                 div { class: "rx-copy-body",
                     div { class: "nm", "{kind.copy_name()}" }
                     div { class: "sb", "{count} editions" }
@@ -279,7 +279,7 @@ fn MultiFileRow(
                 rsx! {
                     div {
                         key: "{file_id}",
-                        class: if w4 { "format-row format-subrow rx-copy-sub" } else { "format-row format-subrow" },
+                        class: if marquee { "format-row format-subrow rx-copy-sub" } else { "format-row format-subrow" },
                         "data-testid": "{file_testid}",
                         span { class: "format-sublabel", "{file_label}" }
                         div { class: "format-actions",
@@ -457,7 +457,7 @@ impl FormatKind {
         }
     }
 
-    /// Human name for the W4 copies row ("Ebook", "Audiobook") — the design
+    /// Human name for the marquee copies row ("Ebook", "Audiobook") — the design
     /// names the *copy*, with the raw format code demoted to the icon tile.
     fn copy_name(&self) -> &str {
         match self {
@@ -467,7 +467,7 @@ impl FormatKind {
         }
     }
 
-    /// The W4 icon tile's mark: the book / headphones glyphs the design
+    /// The marquee icon tile's mark: the book / headphones glyphs the design
     /// draws, with the raw format code standing in for anything else.
     fn copy_glyph(&self) -> Element {
         match self {

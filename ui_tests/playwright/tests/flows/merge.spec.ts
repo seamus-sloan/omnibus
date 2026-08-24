@@ -115,7 +115,7 @@ test("surfaces a server error in the dialog and leaves the book unchanged", asyn
   );
 
   // The dialog stays open with an alert; the book keeps its single format.
-  // The W4 files stop states a book's formats as the rows of its copies
+  // The marquee files stop states a book's formats as the rows of its copies
   // list — one row (and one badge tile) per format — so that is what a
   // format count asserts against now.
   await expect(page.getByRole("alert")).toBeVisible();

@@ -115,7 +115,7 @@ pub(crate) fn retarget_and_open_immersive(uuid: String) {
 #[component]
 pub(super) fn BdImmersiveButton(
     uuid: String,
-    /// Button text — the W4 hero uses the design's terser "Immersive".
+    /// Button text — the marquee hero uses the design's terser "Immersive".
     #[props(default = String::from("Immersive Read"))]
     label: String,
 ) -> Element {

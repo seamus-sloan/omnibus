@@ -157,7 +157,7 @@ pub(super) fn BdJournalComposer(
     uuid: String,
     server_url: String,
     reload: Signal<u32>,
-    /// Caller-owned open state, so a host (the W4 journal stop's modal) can
+    /// Caller-owned open state, so a host (the marquee journal stop's modal) can
     /// raise the composer and observe it closing after publish/cancel.
     open: Signal<bool>,
     /// Modal hosting: skip the collapsed "Write a journal entry…" prompt —

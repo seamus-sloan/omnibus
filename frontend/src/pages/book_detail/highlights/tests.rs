@@ -276,7 +276,7 @@ mod render_tests {
 
     #[test]
     fn list_renders_every_passage_without_a_show_more_control() {
-        // The W4 stop scrolls the list inside the stage, so a long list is
+        // The marquee stop scrolls the list inside the stage, so a long list is
         // bounded by the surface rather than by a load-more button.
         let html = render_in_vdom(render_long_list);
         assert_eq!(count_cards(&html), 8);

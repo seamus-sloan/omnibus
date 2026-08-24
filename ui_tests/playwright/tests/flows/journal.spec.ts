@@ -74,7 +74,7 @@ async function cancelComposerDiscardingDraft(page: Page) {
 }
 
 /**
- * The W4 journal stop lists entries as a one-line excerpt ladder; the full
+ * The marquee journal stop lists entries as a one-line excerpt ladder; the full
  * entry card (with its edit/delete/publish actions) opens in an overlay when
  * a row is tapped. Open the entry whose excerpt contains `marker` and return
  * its card locator. No-op if the overlay already shows the entry.

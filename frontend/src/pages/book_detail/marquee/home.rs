@@ -1,4 +1,4 @@
-//! Stop 01 · Home — the W4 hero panel: kicker, marquee title, authors,
+//! Stop 01 · Home — the hero panel: kicker, marquee title, authors,
 //! genre/tag chips, description, the read/listen/immersive/export CTA row,
 //! reading-status control, and the position ruler with the sync line under
 //! it. Wishlist-only books swap the CTA row for the design's
@@ -11,27 +11,28 @@ use omnibus_shared::summary::summary_is_sparse;
 use omnibus_shared::{AlignmentView, BookFileInfo, BookInsights, EbookMetadata, MetadataOverrides};
 
 use crate::components::alignment_modal::{fmt_hm, listening_frac};
-
 use crate::components::FetchSummaryButton;
+use crate::pages::book_detail::chips::{BdChipKind, BdChipListEditor};
+use crate::pages::book_detail::dates::{fmt_long_date, local_date_offset, use_local_dates_ready};
+use crate::pages::book_detail::export_menu::{BdExportContext, BdExportMenu};
+use crate::pages::book_detail::file_picker::{
+    is_audio_book_file, BdFilePickerMenu, FilePickerChrome, FilePickerKind,
+};
+use crate::pages::book_detail::immersive::BdImmersiveButton;
+use crate::pages::book_detail::physical::{find_a_copy_url, remove_from_wishlist};
+use crate::pages::book_detail::read_status::BdReadStatusControl;
+use crate::pages::book_detail::sync_link::BdSyncPanel;
+use crate::pages::book_detail::PhysSignals;
 use crate::{data, use_server_url, Route};
 
-use super::chips::{BdChipKind, BdChipListEditor};
-use super::dates::{fmt_long_date, local_date_offset, use_local_dates_ready};
-use super::export_menu::{BdExportContext, BdExportMenu};
-use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerChrome, FilePickerKind};
-use super::immersive::BdImmersiveButton;
-use super::physical::{find_a_copy_url, remove_from_wishlist};
-use super::read_status::BdReadStatusControl;
-use super::sync_link::BdSyncPanel;
-use super::w4::{W4Progress, W4ViewFacts};
-use super::PhysSignals;
+use super::{MarqueeProgress, MarqueeViewFacts};
 
 /// The Home stop.
 #[component]
-pub(super) fn W4HomeStop(
+pub(super) fn MarqueeHomeStop(
     b: EbookMetadata,
-    view: W4ViewFacts,
-    progress: W4Progress,
+    view: MarqueeViewFacts,
+    progress: MarqueeProgress,
     insights: Option<BookInsights>,
     alignment: Option<AlignmentView>,
     /// How many books of this series the library holds — the kicker's
@@ -73,27 +74,27 @@ pub(super) fn W4HomeStop(
     let readout = derive_readout(alignment.as_ref(), &progress);
 
     rsx! {
-        div { class: "bdw4-k",
+        div { class: "bdmq-k",
             if let (Some(label), Some(sid)) = (kicker.series_label.clone(), b.series_id) {
-                Link { to: Route::SeriesDetail { id: sid }, class: "bdw4-k-link", "{label}" }
+                Link { to: Route::SeriesDetail { id: sid }, class: "bdmq-k-link", "{label}" }
                 "{kicker.tail}"
             } else {
                 "{kicker.text}"
             }
         }
-        div { class: "bdw4-titlerow",
-            h1 { class: "bdw4-title", "{view.title}" }
+        div { class: "bdmq-titlerow",
+            h1 { class: "bdmq-title", "{view.title}" }
         }
         Link {
             to: Route::MetadataEdit { uuid: uuid.clone() },
-            class: "btn ghost sm bdw4-editcorner",
+            class: "btn ghost sm bdmq-editcorner",
             "data-testid": "edit-metadata-hero",
             title: "Edit metadata\u{2026}",
             "aria-label": "Edit metadata",
             "\u{270e} Edit"
         }
         if !b.creators.is_empty() {
-            p { class: "bdw4-by", "data-testid": "book-authors",
+            p { class: "bdmq-by", "data-testid": "book-authors",
                 "by "
                 for (i, creator) in b.creators.iter().enumerate() {
                     if i > 0 { ", " }
@@ -114,7 +115,7 @@ pub(super) fn W4HomeStop(
                 }
             }
         }
-        div { class: "bdw4-chips",
+        div { class: "bdmq-chips",
             BdChipListEditor {
                 uuid: uuid.clone(),
                 kind: BdChipKind::Genres,
@@ -127,30 +128,30 @@ pub(super) fn W4HomeStop(
             }
         }
         if !description().is_empty() {
-            div { class: "bdw4-desc bd-desc", "data-testid": "book-description", dangerous_inner_html: "{description()}" }
+            div { class: "bdmq-desc bd-desc", "data-testid": "book-description", dangerous_inner_html: "{description()}" }
         }
         if summary_is_sparse(&description()) {
             FetchSummaryButton { uuid: uuid.clone(), on_fetched }
         }
         if wish_mode {
-            W4WishlistCtas {
+            MarqueeWishlistCtas {
                 uuid: uuid.clone(),
                 isbn: b.isbn13.clone(),
                 view: view.clone(),
                 phys,
             }
         } else {
-            W4CtaRow {
+            MarqueeCtaRow {
                 b: b.clone(),
                 view: view.clone(),
                 progress: progress.clone(),
                 readout: readout.clone(),
             }
         }
-        div { class: "bdw4-statusrow",
+        div { class: "bdmq-statusrow",
             BdReadStatusControl { uuid: uuid.clone() }
             if let Some(w) = wishlist.as_ref() {
-                span { class: "mono bdw4-statusnote",
+                span { class: "mono bdmq-statusnote",
                     "tracking since {fmt_long_date(w.added_at, local_date_offset(dates_ready(), w.added_at))}"
                 }
             }
@@ -158,7 +159,7 @@ pub(super) fn W4HomeStop(
         if !wish_mode {
             {render_ruler(&progress, &readout, insights.as_ref(), dates_ready(), !dual)}
             if dual {
-                BdSyncPanel { uuid: uuid.clone(), refresh, after_merge, w4: true }
+                BdSyncPanel { uuid: uuid.clone(), refresh, after_merge, marquee: true }
             }
         }
     }
@@ -201,7 +202,7 @@ fn short_chapter_title(title: &str) -> String {
     )
 }
 
-fn derive_readout(alignment: Option<&AlignmentView>, progress: &W4Progress) -> HomeReadout {
+fn derive_readout(alignment: Option<&AlignmentView>, progress: &MarqueeProgress) -> HomeReadout {
     let Some(v) = alignment else {
         return HomeReadout::default();
     };
@@ -251,14 +252,14 @@ struct HomeKicker {
 /// `On your wishlist · <source>`.
 fn home_kicker(
     b: &EbookMetadata,
-    view: &W4ViewFacts,
+    view: &MarqueeViewFacts,
     series_total: Option<usize>,
     wish_mode: bool,
     wishlist: Option<&WishlistEntry>,
 ) -> HomeKicker {
     if wish_mode {
         let source = wishlist
-            .map(|w| super::physical::source_label(w.source))
+            .map(|w| crate::pages::book_detail::physical::source_label(w.source))
             .unwrap_or("your wishlist");
         return HomeKicker {
             text: format!("On your wishlist \u{b7} added from {source}"),
@@ -311,13 +312,13 @@ fn home_kicker(
 }
 
 /// The CTA row: primary read/listen picker, secondary listen, Immersive, and
-/// the Export menu — the old hero's `BdCtaRow` re-voiced for W4 (resume verbs
+/// the Export menu — the old hero's `BdCtaRow` re-voiced for the marquee (resume verbs
 /// when a position exists; identical testids).
 #[component]
-fn W4CtaRow(
+fn MarqueeCtaRow(
     b: EbookMetadata,
-    view: W4ViewFacts,
-    progress: W4Progress,
+    view: MarqueeViewFacts,
+    progress: MarqueeProgress,
     #[props(default)] readout: HomeReadout,
 ) -> Element {
     let uuid = b.unique_identifier.clone().unwrap_or_default();
@@ -369,7 +370,7 @@ fn W4CtaRow(
     let is_fileless = !view.has_ebook && !view.has_audio && !view.has_comic;
 
     rsx! {
-        div { class: "bdw4-ctarow",
+        div { class: "bdmq-ctarow",
             if is_fileless {
                 p { class: "bd-no-files", "data-testid": "no-files-disclaimer",
                     "No ebook or audiobook files in your library yet \u{2014} this title is tracked from your physical collection or wishlist."
@@ -439,10 +440,10 @@ fn W4CtaRow(
 /// wishlist (danger on hover, per the design). A real component — it mounts
 /// conditionally, so it must own its hooks in its own scope.
 #[component]
-fn W4WishlistCtas(
+fn MarqueeWishlistCtas(
     uuid: String,
     isbn: Option<String>,
-    view: W4ViewFacts,
+    view: MarqueeViewFacts,
     phys: PhysSignals,
 ) -> Element {
     let find_url = find_a_copy_url(isbn.as_deref(), &view.title, &view.primary_author);
@@ -452,7 +453,7 @@ fn W4WishlistCtas(
     let busy = use_signal(|| false);
     let err = use_signal(|| None::<String>);
     rsx! {
-        div { class: "bdw4-ctarow",
+        div { class: "bdmq-ctarow",
             a {
                 class: "btn primary lg",
                 "data-testid": "find-a-copy",
@@ -468,7 +469,7 @@ fn W4WishlistCtas(
                 "Check in when acquired"
             }
             button {
-                class: "btn lg ghost bdw4-danger",
+                class: "btn lg ghost bdmq-danger",
                 "data-testid": "wishlist-remove",
                 disabled: busy(),
                 onclick: move |_| {
@@ -489,7 +490,7 @@ fn W4WishlistCtas(
 /// estimate — the audio timeline at 1.0× when one exists, else scaled from
 /// this book's recorded pace.
 fn render_ruler(
-    progress: &W4Progress,
+    progress: &MarqueeProgress,
     readout: &HomeReadout,
     insights: Option<&BookInsights>,
     dates_ready: bool,
@@ -517,14 +518,14 @@ fn render_ruler(
     } else if let Some(left) = readout.audio_left_secs.filter(|l| *l > 0) {
         Some(format!(
             "\u{2248} {} left at 1.0\u{d7}",
-            super::w4_stats::duration_label(left)
+            super::stats::duration_label(left)
         ))
     } else {
         insights.filter(|_| pct > 0).map(|i| {
             let left_secs = i.seconds_total * (100 - pct) / pct;
             format!(
                 "\u{2248} {} left at your pace",
-                super::w4_stats::duration_label(left_secs)
+                super::stats::duration_label(left_secs)
             )
         })
     };
@@ -542,7 +543,7 @@ fn render_ruler(
         .map(|n| format!("--n:{n};"))
         .unwrap_or_default();
     rsx! {
-        div { class: "bdw4-rulerwrap", "data-testid": "bdw4-ruler",
+        div { class: "bdmq-rulerwrap", "data-testid": "bdmq-ruler",
             div { class: "rx-ruler",
                 div {
                     class: if done { "rx-fill done" } else { "rx-fill" },
@@ -562,7 +563,7 @@ fn render_ruler(
                 }
             }
             if let Some(w) = when {
-                div { class: "mono bdw4-lastopened", "{w}" }
+                div { class: "mono bdmq-lastopened", "{w}" }
             }
         }
     }

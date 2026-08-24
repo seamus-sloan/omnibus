@@ -108,12 +108,12 @@ test("renders the book detail layout", async ({ page, request }) => {
     new RegExp(`/read/${uuid}$`),
   );
 
-  // W4 stage — the dot-rail TOC renders one row per stop, with the first
+  // marquee stage — the dot-rail TOC renders one row per stop, with the first
   // stop active on load.
-  const dots = page.getByTestId("bdw4-dots");
+  const dots = page.getByTestId("bdmq-dots");
   await expect(dots).toBeVisible();
   await expect(dots.getByRole("button")).toHaveCount(7);
-  await expect(page.getByTestId("bdw4-dot-0")).toHaveClass(/\bon\b/);
+  await expect(page.getByTestId("bdmq-dot-0")).toHaveClass(/\bon\b/);
 
   // Stops — "Passages you saved" (stop 04) is always rendered. Only its
   // presence is asserted here: `journal.spec.ts` seeds a highlight on this
@@ -140,9 +140,9 @@ test("dot rail jumps between stops and tracks the active section", async ({
 
   // Jumping to stop 06 via the rail scrolls the snap container and moves
   // the active marker. The scroll is smooth, so poll for the class flip.
-  await page.getByTestId("bdw4-dot-5").click();
-  await expect(page.getByTestId("bdw4-dot-5")).toHaveClass(/\bon\b/);
-  await expect(page.getByTestId("bdw4-dot-0")).not.toHaveClass(/\bon\b/);
+  await page.getByTestId("bdmq-dot-5").click();
+  await expect(page.getByTestId("bdmq-dot-5")).toHaveClass(/\bon\b/);
+  await expect(page.getByTestId("bdmq-dot-0")).not.toHaveClass(/\bon\b/);
 
   // The files stop's content is on screen once the snap settles.
   await expect(page.getByTestId("format-switcher")).toBeInViewport();
@@ -263,7 +263,7 @@ test("navigates from a landing row to the detail page and back", async ({
   // The detail page should render the marquee title heading.
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 
-  // The topbar's Library link is the way back on the W4 stage (the old
+  // The topbar's Library link is the way back on the marquee stage (the old
   // footer link is gone). Assert URL plus that the table view (persisted
   // above) comes back.
   await page.getByRole("link", { name: "Library", exact: true }).click();
@@ -304,7 +304,7 @@ test("renders the detail contents for the selected book", async ({
   const epubRow = switcher.getByTestId("format-row-epub");
   await expect(epubRow).toBeVisible();
   await expect(epubRow).toHaveAttribute("data-format", "EPUB");
-  // The W4 copies row draws the format as a glyph tile, so the code lives in
+  // The marquee copies row draws the format as a glyph tile, so the code lives in
   // the badge's accessible name rather than its text.
   await expect(epubRow.getByTestId("format-badge")).toHaveAttribute(
     "aria-label",

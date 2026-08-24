@@ -176,8 +176,8 @@ mod render_tests {
         assert!(html.contains("data-testid=\"copy-delete\""));
     }
 
-    /// The same copies, rendered as W4 rows in the book's copies list.
-    fn physical_rows_w4_preview() -> Element {
+    /// The same copies, rendered as marquee rows in the book's copies list.
+    fn physical_rows_marquee_preview() -> Element {
         let state = PhysPanelState {
             copies: use_signal(|| {
                 vec![PhysicalCopy {
@@ -197,12 +197,12 @@ mod render_tests {
             delete_target: use_signal(|| None),
             refresh: use_signal(|| 0u32),
         };
-        render_physical_rows_w4(state, "".to_string(), false, true)
+        render_physical_rows_marquee(state, "".to_string(), false, true)
     }
 
     #[test]
-    fn physical_rows_w4_render_a_copy_row_with_its_status_dot_and_actions() {
-        let html = render_in_vdom(physical_rows_w4_preview);
+    fn physical_rows_marquee_render_a_copy_row_with_its_status_dot_and_actions() {
+        let html = render_in_vdom(physical_rows_marquee_preview);
         // A copy is a row in the copies list, not a panel of its own.
         assert!(html.contains("class=\"rx-copy\""), "{html}");
         assert!(

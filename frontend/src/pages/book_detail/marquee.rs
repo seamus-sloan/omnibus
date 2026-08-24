@@ -1,8 +1,8 @@
-//! W4 "marquee" book-detail stage (web): the cover pinned huge on the left
+//! Marquee book-detail stage (web): the cover pinned huge on the left
 //! under a soft parallax, content in a translucent panel on the right, and
 //! seven snap-scrolled stops — Home · Shelf · Stats · Highlights · Journals ·
 //! The files · Recommendations — with a hover-expanding dot-rail table of
-//! contents. Scroll mechanics live in `w4.js` (installed post-mount, rule 07).
+//! contents. Scroll mechanics live in `marquee.js` (installed post-mount, rule 07).
 
 use dioxus::prelude::*;
 use omnibus_shared::progress::ProgressFormat;
@@ -15,13 +15,18 @@ use crate::data;
 
 use super::body::{BdAuthorCluster, BdPageCtx, BdSameHand, BdSuggestionsStrip};
 use super::highlights::{BdHighlightsSection, BdQuoteMeta};
-use super::journal::W4JournalStop;
+use super::journal::MarqueeJournalStop;
 use super::view::LoadedBookView;
-use super::{w4_files, w4_home, w4_shelf, w4_stats, PhysSignals};
+use super::PhysSignals;
+
+mod files;
+mod home;
+mod shelf;
+mod stats;
 
 /// The seven stops, in running order. The label pair is `NN` + name — the
 /// section label renders `NN / 07 — Name` and the dot rail `NN · Name`.
-pub(super) const W4_SECTIONS: [(&str, &str); 7] = [
+pub(super) const MARQUEE_SECTIONS: [(&str, &str); 7] = [
     ("01", "Home"),
     ("02", "Shelf"),
     ("03", "Stats"),
@@ -32,12 +37,12 @@ pub(super) const W4_SECTIONS: [(&str, &str); 7] = [
 ];
 
 /// Scroll-mechanics glue (parallax, dot tracking, dot-rail navigation).
-const W4_JS: &str = include_str!("w4.js");
+const MARQUEE_JS: &str = include_str!("marquee.js");
 
 /// Everything the stage needs beyond the book itself, bundled to keep the
 /// component under the prop-count guideline (mirrors `view::LoadedCtx`).
 #[derive(Clone, PartialEq, Props)]
-pub(super) struct W4StageCtx {
+pub(super) struct MarqueeStageCtx {
     pub server_url: String,
     pub is_admin: bool,
     pub refresh: Signal<u32>,
@@ -47,24 +52,24 @@ pub(super) struct W4StageCtx {
 /// Prebuilt admin rail actions (Merge / Delete dialogs' openers), threaded
 /// into the files stop.
 #[derive(Clone, PartialEq, Props)]
-pub(super) struct W4AdminActions {
+pub(super) struct MarqueeAdminActions {
     pub merge_button: Option<Element>,
     pub delete_button: Option<Element>,
 }
 
-/// The full W4 stage. Owns the page-wide fetches the stops share (reading /
+/// The full marquee stage. Owns the page-wide fetches the stops share (reading /
 /// listening progress and per-book insights) plus the post-mount scroll glue;
 /// each stop fetches its own section data (series, shelves, journal,
 /// highlights, physical copies) exactly as the sections it absorbed did.
 #[component]
-pub(super) fn W4Stage(
+pub(super) fn MarqueeStage(
     b: EbookMetadata,
-    view: W4ViewFacts,
+    view: MarqueeViewFacts,
     author_books: Vec<EbookMetadata>,
     suggestions: Option<SuggestionsResponse>,
-    admin: W4AdminActions,
+    admin: MarqueeAdminActions,
     phys: PhysSignals,
-    ctx: W4StageCtx,
+    ctx: MarqueeStageCtx,
 ) -> Element {
     let uuid = b.unique_identifier.clone().unwrap_or_default();
 
@@ -144,7 +149,7 @@ pub(super) fn W4Stage(
         let uuid = uuid.clone();
         use_effect(use_reactive!(|uuid| {
             let _ = uuid;
-            let _ = dioxus::document::eval(W4_JS);
+            let _ = dioxus::document::eval(MARQUEE_JS);
         }));
     }
 
@@ -164,10 +169,10 @@ pub(super) fn W4Stage(
 
     let stops: [Element; 7] = [
         rsx! {
-            w4_home::W4HomeStop {
+            home::MarqueeHomeStop {
                 b: b.clone(),
                 view: view.clone(),
-                progress: W4Progress { reading: reading(), listening: listening() },
+                progress: MarqueeProgress { reading: reading(), listening: listening() },
                 insights: insights(),
                 alignment: alignment(),
                 series_total: series().map(|s| s.book_count),
@@ -178,31 +183,31 @@ pub(super) fn W4Stage(
             }
         },
         rsx! {
-            w4_shelf::W4ShelfStop { b: b.clone(), view: view.clone(), series: series() }
+            shelf::MarqueeShelfStop { b: b.clone(), view: view.clone(), series: series() }
         },
         rsx! {
-            w4_stats::W4StatsStop {
+            stats::MarqueeStatsStop {
                 uuid: uuid.clone(),
                 insights: insights(),
-                progress: W4Progress { reading: reading(), listening: listening() },
+                progress: MarqueeProgress { reading: reading(), listening: listening() },
                 audio_only: view.has_audio && !view.has_ebook && !view.has_comic,
                 wish_mode,
             }
         },
         rsx! {
             if wish_mode {
-                div { class: "bdw4-k", "Kept lines \u{b7} none" }
-                div { class: "bdw4-bigquiet", "Highlight while you read to keep lines here." }
-                p { class: "mono bdw4-quiet-hint", "find a copy first \u{2014} check in when it arrives" }
+                div { class: "bdmq-k", "Kept lines \u{b7} none" }
+                div { class: "bdmq-bigquiet", "Highlight while you read to keep lines here." }
+                p { class: "mono bdmq-quiet-hint", "find a copy first \u{2014} check in when it arrives" }
             } else {
                 BdHighlightsSection { uuid: uuid.clone(), quote_meta }
             }
         },
         rsx! {
-            W4JournalStop { uuid: uuid.clone(), wish_mode }
+            MarqueeJournalStop { uuid: uuid.clone(), wish_mode }
         },
         rsx! {
-            w4_files::W4FilesStop {
+            files::MarqueeFilesStop {
                 b: b.clone(),
                 view: view.clone(),
                 admin: admin.clone(),
@@ -212,7 +217,7 @@ pub(super) fn W4Stage(
             }
         },
         rsx! {
-            div { class: "bdw4-tight",
+            div { class: "bdmq-tight",
                 BdSameHand {
                     author: BdAuthorCluster {
                         primary_author: view.primary_author.clone(),
@@ -233,38 +238,38 @@ pub(super) fn W4Stage(
     ];
 
     rsx! {
-        div { class: "bdw4-stage", id: "bdw4-stage",
-            div { class: "bdw4-coverwrap", aria_hidden: "true",
-                div { class: "bdw4-coverpx", id: "bdw4-coverpx",
+        div { class: "bdmq-stage", id: "bdmq-stage",
+            div { class: "bdmq-coverwrap", aria_hidden: "true",
+                div { class: "bdmq-coverpx", id: "bdmq-coverpx",
                     Cover { book: b.clone() }
                 }
             }
-            nav { class: "bdw4-dots", "aria-label": "Page sections", "data-testid": "bdw4-dots",
-                for (i, (no, name)) in W4_SECTIONS.iter().enumerate() {
+            nav { class: "bdmq-dots", "aria-label": "Page sections", "data-testid": "bdmq-dots",
+                for (i, (no, name)) in MARQUEE_SECTIONS.iter().enumerate() {
                     button {
                         key: "{no}",
                         r#type: "button",
-                        class: if i == 0 { "bdw4-dotrow on" } else { "bdw4-dotrow" },
+                        class: if i == 0 { "bdmq-dotrow on" } else { "bdmq-dotrow" },
                         title: "{name}",
-                        "data-testid": "bdw4-dot-{i}",
+                        "data-testid": "bdmq-dot-{i}",
                         i {}
                         span { class: "lb", "{no} \u{b7} {name}" }
                     }
                 }
             }
-            div { class: "bdw4-snap", id: "bdw4-snap",
-                for (i, (no, name)) in W4_SECTIONS.iter().enumerate() {
+            div { class: "bdmq-snap", id: "bdmq-snap",
+                for (i, (no, name)) in MARQUEE_SECTIONS.iter().enumerate() {
                     section {
                         key: "{no}",
-                        class: "bdw4-sec",
-                        "data-testid": "bdw4-sec-{i}",
-                        div { class: "bdw4-seclab", "{no} / 07 \u{2014} " b { "{name}" } }
-                        div { class: "bdw4-panel",
-                            div { class: "bdw4-panel-inner", {stops[i].clone()} }
+                        class: "bdmq-sec",
+                        "data-testid": "bdmq-sec-{i}",
+                        div { class: "bdmq-seclab", "{no} / 07 \u{2014} " b { "{name}" } }
+                        div { class: "bdmq-panel",
+                            div { class: "bdmq-panel-inner", {stops[i].clone()} }
                         }
-                        if i < W4_SECTIONS.len() - 1 {
-                            div { class: "bdw4-next", aria_hidden: "true",
-                                "scroll \u{2014} next: {W4_SECTIONS[i + 1].1}"
+                        if i < MARQUEE_SECTIONS.len() - 1 {
+                            div { class: "bdmq-next", aria_hidden: "true",
+                                "scroll \u{2014} next: {MARQUEE_SECTIONS[i + 1].1}"
                                 span { class: "arr", "\u{2193}" }
                             }
                         }
@@ -278,7 +283,7 @@ pub(super) fn W4Stage(
 /// Display facts shared by every stop, derived once in `view.rs` from the
 /// loaded book. Cloneable so each stop takes its own copy.
 #[derive(Clone, PartialEq)]
-pub(super) struct W4ViewFacts {
+pub(super) struct MarqueeViewFacts {
     pub title: String,
     pub primary_author: String,
     pub author_id: Option<i64>,
@@ -289,7 +294,7 @@ pub(super) struct W4ViewFacts {
     pub has_comic: bool,
 }
 
-impl W4ViewFacts {
+impl MarqueeViewFacts {
     pub(super) fn from_loaded(v: &LoadedBookView) -> Self {
         Self {
             title: v.title.clone(),
@@ -308,12 +313,12 @@ impl W4ViewFacts {
 /// stops. Either side is `None` until the post-mount fetch resolves — or
 /// forever, for a format the reader has never opened.
 #[derive(Clone, PartialEq)]
-pub(super) struct W4Progress {
+pub(super) struct MarqueeProgress {
     pub reading: Option<ProgressRecord>,
     pub listening: Option<ProgressRecord>,
 }
 
-impl W4Progress {
+impl MarqueeProgress {
     /// Whole-book percent from the freshest format that carries one.
     pub(super) fn newest_percent(&self) -> Option<i64> {
         let read = self

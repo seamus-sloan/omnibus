@@ -213,7 +213,7 @@ test("shows the physical copy card for a checked-in book", async ({
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
-  // The W4 copies list marks a physical copy with a status dot on its row
+  // The marquee copies list marks a physical copy with a status dot on its row
   // rather than a standalone text pill, so the wording lives in the
   // accessible name.
   await expect(page.getByTestId("physical-pill")).toBeVisible();

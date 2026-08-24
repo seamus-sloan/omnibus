@@ -101,7 +101,7 @@ test("renders the Immersive Read CTA on a dual-format book detail", async ({
 
   const immersive = page.getByTestId("immersive-read");
   await expect(immersive).toBeVisible();
-  // The W4 CTA row uses the design's terser label.
+  // The marquee CTA row uses the design's terser label.
   await expect(immersive).toHaveText(/Immersive/);
 });
 

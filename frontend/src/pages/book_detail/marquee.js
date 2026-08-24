@@ -1,4 +1,4 @@
-// W4 marquee scroll glue for the book-detail stage: measures the topbar so
+// Marquee scroll glue for the book-detail stage: measures the topbar so
 // the fixed stage starts below it, drives the cover parallax from the snap
 // container's scroll position, tracks the active dot, and wires the dot rail
 // to smooth-scroll between stops. Pure presentation — no app state. Installed
@@ -6,20 +6,20 @@
 // it (uuid change, refetch) replaces the previous listeners instead of
 // stacking them.
 (function () {
-  var snap = document.getElementById('bdw4-snap');
+  var snap = document.getElementById('bdmq-snap');
   if (!snap) return;
-  var cover = document.getElementById('bdw4-coverpx');
-  var dots = Array.prototype.slice.call(document.querySelectorAll('.bdw4-dotrow'));
+  var cover = document.getElementById('bdmq-coverpx');
+  var dots = Array.prototype.slice.call(document.querySelectorAll('.bdmq-dotrow'));
   var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // Tear down the previous install (SPA nav between books remounts nothing —
   // the page component persists — so listeners must not accumulate).
-  if (window.__omnibusW4 && window.__omnibusW4.teardown) window.__omnibusW4.teardown();
+  if (window.__omnibusMarquee && window.__omnibusMarquee.teardown) window.__omnibusMarquee.teardown();
 
   function measureTopbar() {
     var bar = document.querySelector('.atrium-topbar');
     if (bar) {
-      document.documentElement.style.setProperty('--bdw4-top', bar.offsetHeight + 'px');
+      document.documentElement.style.setProperty('--bdmq-top', bar.offsetHeight + 'px');
     }
   }
 
@@ -59,12 +59,12 @@
   snap.addEventListener('scroll', paint, { passive: true });
   window.addEventListener('resize', onResize);
 
-  window.__omnibusW4 = {
+  window.__omnibusMarquee = {
     teardown: function () {
       snap.removeEventListener('scroll', paint);
       window.removeEventListener('resize', onResize);
       for (var i = 0; i < dots.length; i++) dots[i].removeEventListener('click', dotHandlers[i]);
-      window.__omnibusW4 = null;
+      window.__omnibusMarquee = null;
     },
   };
 
