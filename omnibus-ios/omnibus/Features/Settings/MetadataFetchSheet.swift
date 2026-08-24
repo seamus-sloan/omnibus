@@ -17,15 +17,22 @@ import SwiftUI
 
 struct MetadataFetchSheet: View {
     let uuid: String
-    /// The book's current cover, for the compare screen's yours-vs-theirs.
-    let identity: CoverIdentity
+    /// The book as the editor holds it, for the compare screen's
+    /// yours-vs-theirs cover.
+    let book: Book
     /// Written into as fields are taken. The editor owns it.
     @Binding var draft: MetadataDraft
     /// The book as loaded — the baseline "is this field carrying a change?"
     /// is measured against, and where Undo puts a field back to.
     let loaded: MetadataDraft
-    /// Runs as the sheet closes, with a line about what it staged (or `nil`).
-    var onClose: (String?) -> Void
+    /// Hands back the record the cover write returned, so the editor's own
+    /// header stops rendering the plate. A cover is not a draft change — this
+    /// must not touch `draft` or `loaded`, or the Save bar would report one.
+    var onCoverApplied: (Book) -> Void
+    /// The line about what this sheet staged, published so the editor can show
+    /// it however the sheet was dismissed — including a swipe-down, which runs
+    /// none of this view's own teardown.
+    @Binding var stagedNote: String?
 
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
@@ -47,31 +54,46 @@ struct MetadataFetchSheet: View {
     /// lands the compare screen is showing the thinner search hit, so nothing
     /// on it may be taken.
     @State private var isHydrating = false
+    /// Set when the detail fetch failed rather than missing. The compare
+    /// screen still shows the thin hit — there is nothing better — but says
+    /// so, since "we couldn't ask" must not read as "this source has none".
+    @State private var hydrateFailure: String?
     @State private var showAllFields = false
 
-    /// Which fields *this sheet* took, so the closing note counts what it did
-    /// rather than every edit the form is carrying.
-    @State private var taken: Set<MetadataFetchField> = []
-    @State private var takenFrom: MetadataProvider?
+    /// Which fields *this sheet* took, and from which source — so the closing
+    /// note counts what it did rather than every edit the form is carrying,
+    /// and can attribute honestly when two candidates each contributed.
+    @State private var taken: [MetadataFetchField: MetadataProvider] = [:]
 
     @State private var coverStatus: String?
     @State private var isApplyingCover = false
     /// Bumped after a cover applies so the thumbnail is re-read rather than
-    /// served from the image cache it is already sitting in.
+    /// served from the image cache it is already sitting in. Still needed
+    /// alongside `coverIdentity`: the thumb path doesn't change across a cover
+    /// replacement, so only this forces `RemoteImage` to refetch.
     @State private var coverRevision = 0
+    /// Replaced when a cover write lands. `CoverIdentity.hasCover` is what
+    /// gates `BookCover`'s whole image layer, so a book that had no art needs
+    /// a *new* identity before any thumbnail request is made at all — busting
+    /// the cache alone changes nothing for exactly the books this flow exists
+    /// to fix.
+    @State private var coverIdentity: CoverIdentity
 
     init(
         uuid: String,
-        identity: CoverIdentity,
+        book: Book,
         draft: Binding<MetadataDraft>,
         loaded: MetadataDraft,
-        onClose: @escaping (String?) -> Void
+        onCoverApplied: @escaping (Book) -> Void,
+        stagedNote: Binding<String?>
     ) {
         self.uuid = uuid
-        self.identity = identity
+        self.book = book
         _draft = draft
         self.loaded = loaded
-        self.onClose = onClose
+        self.onCoverApplied = onCoverApplied
+        _stagedNote = stagedNote
+        _coverIdentity = State(initialValue: CoverIdentity(book))
         // Seeded from the draft, including its ISBN, because that is what the
         // book says. It does narrow the search hard — every provider goes to
         // its exact-identifier lookup — but that is the honest answer to the
@@ -114,8 +136,9 @@ struct MetadataFetchSheet: View {
                 edition: edition,
                 draft: $draft,
                 loaded: loaded,
-                identity: identity,
+                identity: coverIdentity,
                 isHydrating: isHydrating,
+                hydrateFailure: hydrateFailure,
                 showAllFields: showAllFields,
                 coverStatus: coverStatus,
                 isApplyingCover: isApplyingCover,
@@ -453,16 +476,17 @@ struct MetadataFetchSheet: View {
     private func take(_ field: MetadataFetchField, from edition: ProviderEdition) {
         withAnimation(Motion.snap) {
             field.apply(to: &draft, from: edition)
-            taken.insert(field)
+            taken[field] = edition.source
         }
-        takenFrom = edition.source
+        publishNote()
     }
 
     private func undo(_ field: MetadataFetchField) {
         withAnimation(Motion.snap) {
             field.undo(in: &draft, to: loaded)
-            taken.remove(field)
+            taken.removeValue(forKey: field)
         }
+        publishNote()
     }
 
     private func takeAll(_ edition: ProviderEdition) {
@@ -471,17 +495,31 @@ struct MetadataFetchSheet: View {
             for field in MetadataFetchField.allCases where field.isAvailable(edition) {
                 guard field.differs(draft: draft, edition: edition) else { continue }
                 field.apply(to: &draft, from: edition)
-                taken.insert(field)
+                taken[field] = edition.source
             }
         }
-        takenFrom = edition.source
+        publishNote()
+    }
+
+    /// Republish what this sheet has staged, after every take and undo.
+    ///
+    /// Written on each change rather than once on the way out, because a
+    /// swipe-down dismissal runs none of this view's teardown — the editor
+    /// reads the binding on `onDismiss` and needs it already current.
+    ///
+    /// The count is what is *still* staged, not what was pressed: `apply` can
+    /// write a value identical to the baseline when the reader edited that
+    /// field in the form first, and a note claiming staged fields beside a
+    /// disabled Save asks for something they cannot do.
+    private func publishNote() {
+        let live = taken.filter { $0.key.isStaged(draft: draft, loaded: loaded) }
+        stagedNote = MetadataFetchFlow.stagedNote(
+            count: live.count, sources: Set(live.values)
+        )
     }
 
     private func close() {
-        let note = takenFrom.flatMap {
-            MetadataFetchFlow.stagedNote(count: taken.count, source: $0)
-        }
-        onClose(note)
+        publishNote()
         dismiss()
     }
 
@@ -524,22 +562,38 @@ struct MetadataFetchSheet: View {
     private func select(_ edition: ProviderEdition) async {
         Haptics.tap()
         coverStatus = nil
+        hydrateFailure = nil
         showAllFields = false
         isHydrating = true
         withAnimation(Motion.settle) { stage = .compare(edition) }
 
-        let fetched: ProviderEdition? = try? await APIClient.shared.post(
-            "/api/metadata/editions/hydrate",
-            body: EditionHydrateRequest(
-                source: edition.source,
-                providerRef: edition.providerRef,
-                isbn13: edition.isbn13
+        var fetched: ProviderEdition?
+        var failure: String?
+        do {
+            fetched = try await APIClient.shared.post(
+                "/api/metadata/editions/hydrate",
+                body: EditionHydrateRequest(
+                    source: edition.source,
+                    providerRef: edition.providerRef,
+                    isbn13: edition.isbn13
+                )
             )
-        )
+        } catch {
+            // Both a clean miss and a failure leave the thin search hit on
+            // screen — there is nothing better to show either way. But the
+            // server keeps them apart deliberately (200 `null` vs 502), and
+            // collapsing them here would let "we couldn't ask" render as
+            // "this source has no publisher", which is the exact confusion
+            // the per-source strip exists to prevent one screen earlier.
+            failure = message(error)
+        }
         let showingOurs = MetadataFetchFlow.hydrateShouldApply(stage: stage, asked: edition)
-        if showingOurs, let fetched {
-            withAnimation(Motion.settle) {
-                stage = .compare(MetadataFetchFlow.merged(fetched: fetched, thinner: edition))
+        if showingOurs {
+            hydrateFailure = failure
+            if let fetched {
+                withAnimation(Motion.settle) {
+                    stage = .compare(MetadataFetchFlow.merged(fetched: fetched, thinner: edition))
+                }
             }
         }
         // Left alone only while a *newer* selection is in flight — that
@@ -564,22 +618,44 @@ struct MetadataFetchSheet: View {
         coverStatus = "Applying cover\u{2026}"
         defer { isApplyingCover = false }
         do {
-            let _: Book = try await APIClient.shared.post(
+            // The record the write returns is the point, not a courtesy: a book
+            // that had no art has `hasCover == false`, and `BookCover` gates its
+            // whole image layer on that — so without a fresh identity no
+            // thumbnail request is ever made and the plate survives a
+            // successful apply.
+            let updated: Book = try await APIClient.shared.post(
                 "/api/ebooks/\(uuid)/cover/from-url", body: CoverFromURLRequest(url: url)
             )
             // Every thumb size is regenerated server-side, so every cached one
             // is stale — including the sizes this screen isn't showing, which
-            // the grid behind it is.
+            // the grid behind it is. Unconditional: the write has landed, and
+            // those caches are wrong whatever the sheet is showing by now.
             for size in [ThumbSize.sm, .md, .lg] {
                 await ImageCache.shared.invalidate("/api/thumbs/\(uuid)/\(size.rawValue)")
             }
             await OfflineStore.shared.cacheDelete(CacheKey.book(uuid))
-            Haptics.success()
+            onCoverApplied(updated)
+            coverIdentity = CoverIdentity(updated)
+            // The thumb path is unchanged across a replacement, so the new
+            // identity alone would still be served the cached bytes.
             coverRevision += 1
-            coverStatus = "Cover updated \u{b7} saved already"
+            Haptics.success()
+            report("Cover updated \u{b7} saved already", for: edition)
         } catch {
-            coverStatus = message(error)
+            report(message(error), for: edition)
         }
+    }
+
+    /// Write a cover status only while the edition it belongs to is still the
+    /// one on screen.
+    ///
+    /// `coverStatus` is sheet-level but rendered per-candidate, and this write
+    /// happens after a server-side image fetch — long enough for the reader to
+    /// go Back and pick another. Without the guard, A's "Cover updated" prints
+    /// on B's card and attributes A's art to B.
+    private func report(_ status: String, for edition: ProviderEdition) {
+        guard MetadataFetchFlow.hydrateShouldApply(stage: stage, asked: edition) else { return }
+        coverStatus = status
     }
 
     private func message(_ error: Error) -> String {
@@ -600,6 +676,8 @@ private struct CompareScreen: View {
     let loaded: MetadataDraft
     let identity: CoverIdentity
     let isHydrating: Bool
+    /// Non-nil when the detail fetch failed rather than missed.
+    let hydrateFailure: String?
     let showAllFields: Bool
     let coverStatus: String?
     let isApplyingCover: Bool
@@ -641,6 +719,8 @@ private struct CompareScreen: View {
                         .accessibilityAddTraits(.updatesFrequently)
                     MetadataFetchSkeleton(rows: 3, showsCover: false)
                 } else {
+                    if let hydrateFailure { fetchFailureNote(hydrateFailure) }
+
                     if sourceCoverURL != nil || showAllFields {
                         EditionCoverCard(
                             identity: identity,
@@ -683,6 +763,29 @@ private struct CompareScreen: View {
             .padding(.bottom, Spacing.lg)
         }
         .scrollIndicators(.hidden)
+    }
+
+    /// Says the full record never arrived, so the thinner list row the reader
+    /// is looking at doesn't read as the provider's complete answer.
+    private func fetchFailureNote(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 12))
+                .foregroundStyle(palette.warnColor)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Couldn't load the full record")
+                    .font(.ui(13, weight: .medium))
+                    .foregroundStyle(palette.ink1Color)
+                Text("\(message) Showing what the search returned, which may be missing fields this source has.")
+                    .font(.ui(12))
+                    .foregroundStyle(palette.ink2Color)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 2)
+        .accessibilityElement(children: .combine)
     }
 
     private var header: some View {

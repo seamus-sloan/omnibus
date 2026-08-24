@@ -160,10 +160,16 @@ struct CoverPlate: View {
 ///
 /// The web picker lays a field out as two side-by-side columns with an arrow
 /// between them, which needs a desktop's width to read. On a phone the same
-/// information is two labelled blocks down the card — yours, then theirs — so
-/// nothing is truncated and the attribution stays attached to the value it
-/// belongs to. Once taken, the two swap roles: the card states what the field
-/// *is* now, with what it was underneath.
+/// information is labelled blocks down the card, so nothing is truncated and
+/// the attribution stays attached to the value it belongs to.
+///
+/// A card carrying an unsaved change grows a third block — what the book had —
+/// but **keeps showing the source's value and its Take control**.
+/// `MetadataFetchField.isStaged` is baseline-relative by design, so it is true
+/// for any unsaved edit: one typed into the form before this sheet opened, or
+/// one taken from a different candidate. Reading it as "this card is finished"
+/// hid the very value the reader opened this candidate to see — while the bar's
+/// "Take all", which is driven by `differs`, still counted and wrote it.
 struct EditionFieldCard: View {
     let field: MetadataFetchField
     let sourceName: String
@@ -183,20 +189,25 @@ struct EditionFieldCard: View {
     @Environment(\.palette) private var palette
     @State private var expanded = false
 
-    private var canTake: Bool { !offered.isEmpty && !isBusy }
+    /// Whether the source's value is worth offering: it has one, the record has
+    /// settled, and it isn't already what the draft holds.
+    private var canTake: Bool { !offered.isEmpty && !isBusy && offered != current }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
             VStack(alignment: .leading, spacing: 9) {
-                if isStaged {
-                    // Taken: the new value leads, and what it replaced stays
-                    // underneath so the change is auditable without leaving.
-                    value(marker: "Now", text: current, emphasis: true)
+                value(marker: isStaged ? "Now" : "Yours", text: current, emphasis: isStaged)
+                // Only once it differs from what the book had — otherwise this
+                // is the same string twice under two markers.
+                if isStaged, original != current {
                     value(marker: "Was", text: original, emphasis: false)
-                } else {
-                    value(marker: "Yours", text: current, emphasis: false)
-                    value(marker: sourceName, text: offered, emphasis: true)
+                }
+                // Always rendered. A staged field's card used to drop this
+                // block, which left the candidate's value unreadable and
+                // untakeable on exactly the row a reader had come to compare.
+                if offered != current {
+                    value(marker: sourceName, text: offered, emphasis: !isStaged)
                 }
             }
         }
@@ -232,39 +243,62 @@ struct EditionFieldCard: View {
 
             Spacer(minLength: Spacing.sm)
 
-            takeButton
+            // Two independent controls, not one that changes meaning: a field
+            // can simultaneously carry an unsaved edit *and* have a value on
+            // offer from this candidate, and both actions have to stay
+            // reachable.
+            HStack(spacing: 6) {
+                if isStaged { undoButton }
+                if canTake || !isStaged { takeButton }
+            }
         }
     }
 
-    /// One control, two meanings, so a card's state is readable from it alone:
-    /// take the source's value, and — once the field carries a change — the
-    /// way back to what the book had.
     private var takeButton: some View {
         Button {
             Haptics.select()
-            if isStaged { onUndo() } else { onTake() }
+            onTake()
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: isStaged ? "arrow.uturn.backward" : "arrow.down")
+                Image(systemName: "arrow.down")
                     .font(.system(size: 10, weight: .bold))
-                Text(isStaged ? "Undo" : "Take")
+                Text("Take")
             }
             .font(.ui(12.5, weight: .semibold))
-            .foregroundStyle(isStaged ? palette.ink1Color : palette.accentInkColor)
+            .foregroundStyle(palette.accentInkColor)
             .padding(.horizontal, 11)
             .padding(.vertical, 6)
-            .background(Capsule().fill(isStaged ? palette.bg2Color : palette.accentColor))
-            .opacity(canTake || isStaged ? 1 : 0.4)
+            .background(Capsule().fill(palette.accentColor))
+            .opacity(canTake ? 1 : 0.4)
         }
         .buttonStyle(.plain)
         // A provider not knowing a field must never blank out a value you
         // have — and neither must a card about to be replaced.
-        .disabled(isStaged ? isBusy : !canTake)
-        .accessibilityLabel(
-            isStaged
-                ? "Undo the change to \(field.label)"
-                : "Take \(field.label) from \(sourceName)"
-        )
+        .disabled(!canTake)
+        .accessibilityLabel("Take \(field.label) from \(sourceName)")
+    }
+
+    /// Back to what the book had. Present only while the field carries an
+    /// unsaved change, whoever made it.
+    private var undoButton: some View {
+        Button {
+            Haptics.select()
+            onUndo()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 10, weight: .bold))
+                Text("Undo")
+            }
+            .font(.ui(12.5, weight: .semibold))
+            .foregroundStyle(palette.ink1Color)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(palette.bg2Color))
+        }
+        .buttonStyle(.plain)
+        .disabled(isBusy)
+        .accessibilityLabel("Undo the change to \(field.label)")
     }
 
     private func value(marker: String, text: String, emphasis: Bool) -> some View {

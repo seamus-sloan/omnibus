@@ -51,6 +51,10 @@ struct MetadataEditView: View {
     /// What the fetch sheet staged on its way out, so the reader can see that
     /// something happened without hunting the form for accent dots.
     @State private var fetchNote: String?
+    /// Kept current by the sheet as it stages, and published to `fetchNote`
+    /// once it is actually gone — a note animating in behind a sheet that is
+    /// still on screen is a note nobody reads.
+    @State private var pendingFetchNote: String?
 
     /// Autocomplete pools for the chip and series fields, filled best-effort
     /// while the editor is up — an empty pool just means no dropdown.
@@ -91,7 +95,10 @@ struct MetadataEditView: View {
         .task { await load() }
         .task { await loadSuggestionPools() }
         .task { await checkProviders() }
-        .sheet(isPresented: $showFetch) { fetchSheet }
+        // `onDismiss` rather than a callback off the sheet's Done button: a
+        // swipe-down tears the sheet down without running any of its own
+        // teardown, and that is how an iOS reader usually closes one.
+        .sheet(isPresented: $showFetch, onDismiss: revealFetchNote) { fetchSheet }
     }
 
     /// Presented rather than pushed: finding an edition is a detour off the
@@ -99,17 +106,29 @@ struct MetadataEditView: View {
     /// here" on iOS.
     @ViewBuilder
     private var fetchSheet: some View {
-        if let book {
+        // Bound under another name so `book` stays the assignable `@State` the
+        // cover callback writes back into.
+        if let loadedBook = book {
             MetadataFetchSheet(
                 uuid: uuid,
-                identity: CoverIdentity(book),
+                book: loadedBook,
                 draft: $draft,
-                loaded: loaded
-            ) { note in
-                guard let note else { return }
-                withAnimation(Motion.settle) { fetchNote = note }
-            }
+                loaded: loaded,
+                // A cover write lands immediately and outside the draft, so
+                // the editor takes the fresh record rather than re-reading:
+                // `book` is what the header's `CoverIdentity` comes from, and
+                // its `hasCover` is what gates the thumbnail request at all.
+                // Deliberately not touching `draft`/`loaded` — a cover is not
+                // a draft change and must not register as one.
+                onCoverApplied: { book = $0 },
+                stagedNote: $pendingFetchNote
+            )
         }
+    }
+
+    private func revealFetchNote() {
+        guard let note = pendingFetchNote else { return }
+        withAnimation(Motion.settle) { fetchNote = note }
     }
 
     private var content: some View {
@@ -294,6 +313,9 @@ struct MetadataEditView: View {
         Button {
             Haptics.tap()
             fetchNote = nil
+            // The sheet keeps its own tally; a second visit starts it fresh
+            // rather than re-reporting what the first one staged.
+            pendingFetchNote = nil
             showFetch = true
         } label: {
             HStack(spacing: 11) {

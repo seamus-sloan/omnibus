@@ -4,10 +4,10 @@
 //  provider field would change about the draft.
 //
 //  Kept out of the view for the same reason `MetadataDraft` is: the copyable
-//  fields are *data* here, so the compare screen renders `EditionField.allCases`
-//  and no row is written by hand. Adding a field is one case plus the arms the
-//  compiler then demands — not three edits across three files, one of which is
-//  silently forgotten.
+//  fields are *data* here, so the compare screen renders
+//  `MetadataFetchField.allCases` and no row is written by hand. Adding a field
+//  is one case plus the arms the compiler then demands — not three edits across
+//  three files, one of which is silently forgotten.
 
 import Foundation
 
@@ -115,7 +115,16 @@ enum MetadataFetchField: String, CaseIterable, Identifiable, Sendable {
         case .isbn10: return text(edition.isbn10)
         // A provider reporting 0 pages is normalized to `nil` upstream, so
         // anything here is a real count.
-        case .printPages: return edition.pages.map(String.init) ?? ""
+        // Bounded to what `MetadataOverrides` will accept. Providers only
+        // filter `> 0`, and `save()` validates before it does anything else —
+        // so one absurd page count staged from a candidate would refuse the
+        // whole save, discarding every other field taken with it. Out of range
+        // is treated as "this source has nothing", which the rest of the
+        // screen already knows how to render.
+        case .printPages:
+            return edition.pages
+                .flatMap { (1...MetadataDraft.printPagesMax).contains($0) ? String($0) : nil }
+                ?? ""
         case .genres: return Self.list(edition.genres)
         case .description: return text(edition.description)
         }
@@ -243,14 +252,27 @@ enum MetadataFetchFlow {
         let author = author.nilIfBlank
         let isbn = isbn.nilIfBlank
         guard title != nil || author != nil || isbn != nil else { return nil }
+        // Truncated because `EditionSearchRequest::validate` caps `query` and
+        // checks it *first* — so a long historical title 400s with "query
+        // exceeds 200 characters", naming a field this three-field form has no
+        // control for. Safe: nothing reads `query` back. `search_query` on the
+        // server ignores it entirely whenever the structured fields are
+        // present, and they always are here.
+        let composed = [title, author].compactMap { $0 }.joined(separator: " ")
         return EditionSearchRequest(
-            query: [title, author].compactMap { $0 }.joined(separator: " "),
+            query: String(composed.prefix(searchQueryMaxLength)),
             title: title,
             author: author,
             isbn: isbn,
             providers: providers
         )
     }
+
+    /// `omnibus_shared::scan::SEARCH_QUERY_MAX_LEN`, which
+    /// `EditionSearchRequest::validate` measures in Unicode scalar values.
+    /// Duplicated rather than fetched — it is a compile-time constant on a type
+    /// this app never sees, and the server still enforces it if the two drift.
+    static let searchQueryMaxLength = 200
 
     /// A slow hydrate must not overwrite a candidate the reader has since
     /// replaced, or reappear after they went back to the list.
@@ -504,12 +526,19 @@ enum MetadataFetchFlow {
         }
     }
 
-    /// What the editor says after the sheet closes, or `nil` when nothing was
-    /// staged while it was open. Names the source, because "4 fields changed"
-    /// with no attribution is the state a reader can't audit.
-    static func stagedNote(count: Int, source: MetadataProvider) -> String? {
+    /// What the editor says after the sheet closes, or `nil` when nothing is
+    /// staged.
+    ///
+    /// Attributed, because "4 fields changed" with no source is the state a
+    /// reader can't audit — and attributed *honestly*: fields can be taken
+    /// from several candidates in one session, so a single name is only
+    /// claimed when a single source actually supplied them all.
+    static func stagedNote(count: Int, sources: Set<MetadataProvider>) -> String? {
         guard count > 0 else { return nil }
         let fields = count == 1 ? "1 field" : "\(count) fields"
-        return "Staged \(fields) from \(source.displayName). Press Save to keep them."
+        guard let only = sources.count == 1 ? sources.first : nil else {
+            return "Staged \(fields) from \(sources.count) sources. Press Save to keep them."
+        }
+        return "Staged \(fields) from \(only.displayName). Press Save to keep them."
     }
 }

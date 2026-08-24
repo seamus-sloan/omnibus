@@ -265,6 +265,44 @@ struct MetadataFetchFieldTests {
         #expect(current.printPages == "412")
     }
 
+    @Test func printPagesRefusesACountTheSaveWouldThenReject() throws {
+        // `save()` validates before it does anything else, so one out-of-range
+        // page count staged from a candidate would refuse the whole save and
+        // discard every other field taken with it. Providers only filter
+        // `> 0`; the bound has to be applied here.
+        var current = draft()
+        var candidate = edition()
+        candidate.pages = MetadataDraft.printPagesMax + 1
+
+        #expect(!MetadataFetchField.printPages.isAvailable(candidate))
+        #expect(!MetadataFetchField.printPages.differs(draft: current, edition: candidate))
+        MetadataFetchField.printPages.apply(to: &current, from: candidate)
+        #expect(current.printPages == "")
+
+        // The bound is inclusive at the top, so a real count still comes over.
+        candidate.pages = MetadataDraft.printPagesMax
+        MetadataFetchField.printPages.apply(to: &current, from: candidate)
+        #expect(current.printPages == String(MetadataDraft.printPagesMax))
+        // And what it stages is what the save's own parser accepts, which is
+        // the property this bound exists to hold.
+        let parsed = try MetadataDraft.parsePrintPages(current.printPages)
+        #expect(parsed == MetadataDraft.printPagesMax)
+    }
+
+    @Test func aComposedQueryIsCappedToWhatTheServerAccepts() {
+        // `EditionSearchRequest::validate` checks `query` first, so an
+        // over-long composition 400s with a message naming a field the sheet
+        // has no control for.
+        let request = MetadataFetchFlow.searchRequest(
+            title: String(repeating: "a", count: 400), author: "Frank Herbert", isbn: "",
+            providers: nil
+        )
+        #expect(request?.query.count == MetadataFetchFlow.searchQueryMaxLength)
+        // The structured fields are untouched — they have their own cap, and
+        // they are what the providers are actually asked with.
+        #expect(request?.title?.count == 400)
+    }
+
     @Test func changeCountIgnoresFieldsThatAlreadyAgree() {
         var current = draft(title: "Dune", publisher: "Ace")
         // Everything the source is silent on is stripped, so the count under
@@ -365,6 +403,32 @@ struct MetadataFetchHydrateTests {
         #expect(merged.seriesIndex == nil)
     }
 
+    @Test func mergingRestoresTheFieldsAWorkLevelDetailRecordDoesNotCarry() {
+        // `openlibrary::by_ref` answers a work record: a title, with
+        // `authors: []`, `pages: nil`, `publisher: nil`, `isbn13: nil`. That is
+        // the path `hydrate_edition` takes for any candidate with no ISBN —
+        // routine for pre-ISBN works and translations — so without these
+        // restores the compare screen would show a dash for fields the list row
+        // had just displayed, and their Take controls would go inert.
+        var thin = edition(title: "Dune", isbn13: "9780441013593")
+        thin.authors = ["Frank Herbert"]
+        thin.pages = 412
+
+        var fetched = edition(title: "", isbn13: nil)
+        fetched.authors = []
+        fetched.pages = nil
+        fetched.publisher = nil
+        fetched.year = nil
+
+        let merged = MetadataFetchFlow.merged(fetched: fetched, thinner: thin)
+        #expect(merged.title == "Dune")
+        #expect(merged.authors == ["Frank Herbert"])
+        #expect(merged.pages == 412)
+        #expect(merged.isbn13 == "9780441013593")
+        #expect(merged.publisher == "Chilton Books")
+        #expect(merged.year == "1965")
+    }
+
     @Test func aBlankFieldOnTheThinnerRecordIsNotFilledIn() {
         // Filling an absent field with a blank one turns "this source didn't
         // say" into "this source said nothing", which renders as a
@@ -401,17 +465,30 @@ struct MetadataFetchDecodingTests {
             {"provider": "google_books", "display_name": "Google Books",
              "status": {"kind": "failed", "message": "timed out"}},
             {"provider": "hardcover", "display_name": "Hardcover",
-             "status": {"kind": "not_configured"}}
+             "status": {"kind": "not_configured"}},
+            {"provider": "open_library", "display_name": "Throttled Source",
+             "status": {"kind": "throttled", "retry_after_secs": 540}},
+            {"provider": "book_brainz", "display_name": "Future Source",
+             "status": {"kind": "invented_later"}}
           ]
         }
         """
         let response = try JSONDecoder().decode(
             EditionSearchResponse.self, from: Data(json.utf8)
         )
-        #expect(response.sources.count == 3)
+        #expect(response.sources.count == 5)
         #expect(response.sources[0].status == .answered(count: 8))
         #expect(response.sources[1].status == .failed(message: "timed out"))
         #expect(response.sources[2].status == .notConfigured)
+        // The one arm with a hand-written CodingKey and a UInt64 payload, so
+        // the one where a decode can actually go wrong.
+        #expect(response.sources[3].status == .throttled(retryAfterSecs: 540))
+        // And an arm this build has never heard of. `init(from:)` throws, and
+        // one bad status row would fail the whole response — losing the
+        // results every other provider did return.
+        #expect(response.sources[4].status == .unknown)
+        #expect(MetadataFetchFlow.sourceStatus(.unknown).text == MetadataFetchFlow.empty)
+        #expect(!MetadataFetchFlow.sourceStatus(.unknown).isProblem)
     }
 
     @Test func anUnknownProviderStillDecodesAndStillNamesItself() throws {
@@ -527,12 +604,25 @@ struct MetadataFetchCandidateTests {
         #expect(MetadataFetchFlow.takeAllLabel(changes: 0) == nil)
         #expect(MetadataFetchFlow.takeAllLabel(changes: 1) == "Take 1 field")
         #expect(MetadataFetchFlow.takeAllLabel(changes: 4) == "Take all 4 fields")
-        #expect(MetadataFetchFlow.stagedNote(count: 0, source: .hardcover) == nil)
+        #expect(MetadataFetchFlow.stagedNote(count: 0, sources: [.hardcover]) == nil)
         // Named, because "4 fields changed" with no attribution is the state a
         // reader can't audit.
         #expect(
-            MetadataFetchFlow.stagedNote(count: 2, source: .googleBooks)?
+            MetadataFetchFlow.stagedNote(count: 2, sources: [.googleBooks])?
                 .contains("Google Books") == true
         )
+    }
+
+    @Test func theStagedNoteRefusesToNameOneSourceWhenSeveralContributed() {
+        // Fields can be taken from several candidates in one session — Back
+        // returns to the list without clearing what was staged — so naming the
+        // last one touched would attribute the others to a source that never
+        // supplied them.
+        let note = MetadataFetchFlow.stagedNote(
+            count: 3, sources: [.openLibrary, .googleBooks]
+        )
+        #expect(note?.contains("2 sources") == true)
+        #expect(note?.contains("Google Books") == false)
+        #expect(note?.contains("Open Library") == false)
     }
 }
