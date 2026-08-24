@@ -10704,3 +10704,17 @@ html {
 }
 .bdw4 .bd-immersive-cta:hover { background: var(--bg-1); color: var(--ink-0); }
 .bdw4 .bd-immersive-cta .bd-immersive-mark { color: inherit; }
+
+/* Physical + wishlist rows share the copies list's grid, so their editor and
+   note sit in the body column alongside the file rows. */
+.bdw4 .rx-copy.wish .rx-ic { border-style: dashed; background: transparent; color: var(--ink-3); }
+.bdw4 .rx-copy .rx-copy-editor { grid-column: 2; margin-top: 8px; }
+.bdw4 .rx-copy .bd-phys-copy-note { font-size: 13px; color: var(--ink-1); margin-top: 6px; }
+.bdw4 .bd-physical-panel-w4 { display: contents; }
+
+/* The green "on your shelf" dot the design puts before a physical copy's
+   check-in line. */
+.bdw4 .rx-statusdot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ok); margin-right: 6px; vertical-align: 1px;
+}

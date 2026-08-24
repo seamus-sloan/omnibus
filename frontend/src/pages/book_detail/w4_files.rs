@@ -26,34 +26,14 @@ pub(super) fn W4FilesStop(
     is_fileless: bool,
 ) -> Element {
     let uuid = b.unique_identifier.clone().unwrap_or_default();
-    let on_wishlist = phys.wishlist.read().is_some();
     rsx! {
         div { class: "bdw4-k", "Every way you hold this book" }
-        if !b.formats.is_empty() || b.has_physical || on_wishlist {
-            div { class: "bd-format-badges bdw4-badges",
-                for f in b.formats.iter() {
-                    super::BdFormatBadge { key: "{f}", fmt: f.clone() }
-                }
-                if b.has_physical {
-                    span {
-                        class: "bd-fmt-badge bd-fmt-badge--physical",
-                        "data-testid": "format-badge-physical",
-                        title: "In your physical collection",
-                        "Physical"
-                    }
-                }
-                if on_wishlist {
-                    span {
-                        class: "bd-fmt-badge bd-fmt-badge--physical",
-                        "data-testid": "format-badge-wishlist",
-                        title: "On your physical wishlist",
-                        "Physical Wishlist"
-                    }
-                }
-            }
-        }
-        if !b.formats.is_empty() {
-            div { class: "bdw4-copies",
+        // One list, one row per way you hold the book — file formats first,
+        // then the physical copies and the wishlist. The design has no
+        // separate badge row or physical panel here: a copy row *is* the
+        // statement that you hold it that way.
+        div { class: "bdw4-copies rx-copies",
+            if !b.formats.is_empty() {
                 FormatSwitcher {
                     w4: true,
                     formats: b.formats.clone(),
@@ -66,22 +46,24 @@ pub(super) fn W4FilesStop(
                     },
                 }
             }
-        }
-        BdPhysicalPanel {
-            uuid: uuid.clone(),
-            is_fileless,
-            refresh,
-            phys,
-        }
-        BdWishlistRailSlot {
-            identity: BdBookIdentity {
+            BdPhysicalPanel {
                 uuid: uuid.clone(),
-                has_physical: b.has_physical,
-                isbn: b.isbn13.clone(),
-                title: view.title.clone(),
-                author: view.primary_author.clone(),
-            },
-            phys,
+                is_fileless,
+                refresh,
+                phys,
+                w4: true,
+            }
+            BdWishlistRailSlot {
+                identity: BdBookIdentity {
+                    uuid: uuid.clone(),
+                    has_physical: b.has_physical,
+                    isbn: b.isbn13.clone(),
+                    title: view.title.clone(),
+                    author: view.primary_author.clone(),
+                },
+                phys,
+                w4: true,
+            }
         }
         div { class: "divider bdw4-files-div" }
         table { class: "rx-kv bd-meta-table mono",
