@@ -10594,6 +10594,12 @@ html {
   flex: 0 0 98px; min-width: 0; max-width: 98px;
 }
 .bdw4-tight .suggest-stack > .cover-link { margin-left: -78px; }
+/* The overlap pulls each card back over the previous one, so the FIRST card
+   must sit flush at the panel's content edge — without this it inherits the
+   negative margin and drags the whole row out from under the panel, over the
+   cover. (Base `.suggest-stack > .cover-link:first-child` ties on specificity
+   and loses on source order to the rule above, so restate it here.) */
+.bdw4-tight .suggest-stack > .cover-link:first-child { margin-left: 0; }
 .bdw4-tight .suggest-stack:hover > .cover-link { margin-left: 14px; }
 .bdw4-tight .suggest-stack:hover > .cover-link:first-child { margin-left: 0; }
 .bdw4-tight .cover-link .cover-wrap { width: 100%; aspect-ratio: 2/3; }
