@@ -22,6 +22,10 @@ fn bd_insight_values_formats_started_time_read_sessions_and_pace() {
         started_at: 1_700_000_000, // 2023-11-14
         seconds_total: 5400,       // 1h 30m across 3 sessions
         sessions: 3,
+        longest_seconds: 3600,
+        longest_started_at: 1_700_000_000,
+        daily: Vec::new(),
+        as_of_day: "2023-11-14".into(),
     };
     // `dates_ready: false` pins the deterministic UTC day (offset 0), same
     // as SSR and the first client paint.
@@ -41,6 +45,10 @@ fn bd_insight_values_guards_against_a_zero_session_count() {
         started_at: 0,
         seconds_total: 0,
         sessions: 0,
+        longest_seconds: 0,
+        longest_started_at: 0,
+        daily: Vec::new(),
+        as_of_day: String::new(),
     };
     assert_eq!(
         bd_insight_values(Some(insights), false),
