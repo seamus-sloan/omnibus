@@ -10172,9 +10172,15 @@ html {
 /* ── Content panel ── */
 .bdw4-panel {
   position: absolute; top: 0; bottom: 0; right: 0; width: 57%;
-  background: color-mix(in oklch, var(--bg-0) 70%, transparent);
+  /* The scrim ramps up from the left edge so the cover dissolves into the
+     panel instead of hitting a hard 70% wall; the blur still covers the whole
+     panel, so text near the seam stays readable over busy cover art. */
+  background: linear-gradient(90deg,
+    color-mix(in oklch, var(--bg-0) 38%, transparent) 0,
+    color-mix(in oklch, var(--bg-0) 68%, transparent) 20px,
+    color-mix(in oklch, var(--bg-0) 74%, transparent) 40px,
+    color-mix(in oklch, var(--bg-0) 74%, transparent) 100%);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  border-left: 1px solid var(--line-2);
   padding: 56px 60px;
   display: flex; flex-direction: column;
   z-index: 1;
