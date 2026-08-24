@@ -78,37 +78,25 @@ pub(super) fn BdHighlightsSection(uuid: String, quote_meta: BdQuoteMeta) -> Elem
     }
 }
 
-/// Passages listed before the reader expands the section. A heavily
-/// highlighted book runs to hundreds of rows, and this is one section of
-/// several on the page.
-const COLLAPSED_PASSAGES: usize = 5;
-
-/// The passage list, capped at [`COLLAPSED_PASSAGES`] rows until the reader
-/// expands it. Both renders start collapsed so SSR and hydration match
-/// (rule 07).
+/// Every saved passage, in one list. A heavily highlighted book runs to
+/// hundreds of rows, so the W4 stop scrolls the list inside the stage
+/// (`.bdw4 .bd-hl-list`) rather than holding rows back behind a control.
 #[component]
 fn BdHighlightList(
     highlights: Signal<Vec<Highlight>>,
     server_url: String,
     quote_target: Signal<Option<Highlight>>,
 ) -> Element {
-    let mut expanded = use_signal(|| false);
     // Hoisted once for the whole list rather than once per card — a heavily
     // highlighted book runs to hundreds of rows, and each row resolves its
     // own offset from its own `created_at` via `local_date_offset` (see
     // `dates.rs`), so sharing this signal doesn't share a stale offset.
     let dates_ready = use_local_dates_ready();
     let list = highlights();
-    let total = list.len();
-    let visible = if expanded() {
-        total
-    } else {
-        total.min(COLLAPSED_PASSAGES)
-    };
 
     rsx! {
         div { class: "bd-hl-list", "data-testid": "highlights-list",
-            for h in list.iter().take(visible) {
+            for h in list.iter() {
                 BdHighlightCard {
                     key: "{h.id}",
                     highlight: h.clone(),
@@ -117,16 +105,6 @@ fn BdHighlightList(
                     quote_target,
                     dates_ready,
                 }
-            }
-        }
-        if total > visible {
-            button {
-                r#type: "button",
-                class: "btn ghost sm bd-hl-show-more",
-                "data-testid": "highlights-show-more",
-                "aria-expanded": "{expanded()}",
-                onclick: move |_| expanded.set(true),
-                "Show {total - visible} more \u{2193}"
             }
         }
     }

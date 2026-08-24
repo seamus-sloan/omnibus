@@ -18,6 +18,11 @@ use super::BdSectionHead;
 mod composer;
 mod entry_card;
 
+// The ladder row and its excerpt helper are web-stage-only, so the suite is
+// too — the mobile feature build has neither.
+#[cfg(all(test, not(feature = "mobile")))]
+mod tests;
+
 use composer::BdJournalComposer;
 use entry_card::BdJournalEntryCard;
 
@@ -135,8 +140,8 @@ fn journal_kicker(list: &[JournalEntry]) -> String {
 }
 
 /// Stop 05 · Journals for the W4 stage: header (entry/reader counts + the
-/// reader avatar stack), the composer, and the excerpt ladder — one line per
-/// entry, tap to open the full entry card over the stop. Wishlist-only books
+/// reader avatar stack), the composer, and the excerpt ladder — a two-line
+/// row per entry that opens the full card over the stop. Wishlist-only books
 /// render the design's empty state instead.
 #[cfg(not(feature = "mobile"))]
 #[component]
@@ -221,12 +226,9 @@ pub(super) fn W4JournalStop(uuid: String, wish_mode: bool) -> Element {
                     p { class: "mono", "No journal entries yet \u{2014} be the first to write one." }
                 }
             } else {
-                p { class: "mono bdw4-ladderhint", aria_hidden: "true",
-                    "one line each \u{2014} tap to open the full entry"
-                }
                 div { class: "bdw4-ladder", "data-testid": "journal-list",
                     for entry in list.iter() {
-                        {render_ladder_row(entry, open_entry)}
+                        {render_ladder_row(entry, current_user().map(|u| u.id), dates_ready, open_entry)}
                     }
                 }
             }
@@ -259,19 +261,29 @@ pub(super) fn W4JournalStop(uuid: String, wish_mode: bool) -> Element {
     }
 }
 
-/// One excerpt-ladder row: avatar · first name · (draft chip) · first line ·
-/// progress percent.
+/// One excerpt-ladder row, in the design's two-line shape: avatar, then a
+/// header line (author · you · draft chip · date · progress) over the
+/// excerpt, which ends in the `read →` affordance. The whole row is the
+/// button that opens the full entry, so the affordance stays reachable by
+/// keyboard without nesting a second control inside it.
 #[cfg(not(feature = "mobile"))]
-fn render_ladder_row(entry: &JournalEntry, mut open_entry: Signal<Option<i64>>) -> Element {
+fn render_ladder_row(
+    entry: &JournalEntry,
+    current_user_id: Option<i64>,
+    dates_ready: ReadSignal<bool>,
+    mut open_entry: Signal<Option<i64>>,
+) -> Element {
     let id = entry.id;
     let is_draft = entry.status == omnibus_shared::JournalStatus::Draft;
-    let first_name = entry
-        .author_name
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let is_owner = current_user_id == Some(entry.author_id);
+    let author = entry.author_name.clone();
     let excerpt = journal_excerpt(&entry.body_md);
+    let offset = super::dates::local_date_offset(dates_ready(), entry.created_at);
+    let date = super::dates::fmt_long_date(entry.created_at, offset);
+    let meta_line = match entry.progress {
+        Some(p) => format!("{date} \u{b7} at {p}%"),
+        None => date,
+    };
     rsx! {
         button {
             key: "{id}",
@@ -285,13 +297,21 @@ fn render_ladder_row(entry: &JournalEntry, mut open_entry: Signal<Option<i64>>) 
                 has_avatar: entry.author_has_avatar,
                 class: "bdw4-lrow-avatar".to_string(),
             }
-            span { class: "nm", "{first_name}" }
-            if is_draft {
-                span { class: "bdw4-draftchip", "data-testid": "journal-draft-chip-row", "Draft" }
-            }
-            span { class: "ex", "{excerpt}" }
-            if let Some(p) = entry.progress {
-                span { class: "at", "{p}%" }
+            span { class: "bdw4-lrow-body",
+                span { class: "bdw4-lrow-head",
+                    span { class: "nm", "{author}" }
+                    if is_owner {
+                        span { class: "nm bdw4-lrow-you", "\u{b7} you" }
+                    }
+                    if is_draft {
+                        span { class: "bdw4-draftchip", "data-testid": "journal-draft-chip-row", "Draft" }
+                    }
+                    span { class: "at", "{meta_line}" }
+                }
+                span { class: "ex",
+                    "{excerpt} "
+                    span { class: "bdw4-lrow-read", "read \u{2192}" }
+                }
             }
         }
     }
@@ -319,8 +339,13 @@ fn w4_journal_kicker(published: usize, readers: usize, drafts: usize, wish_mode:
     out
 }
 
+/// How much of an entry's first line a ladder row carries — the design's
+/// slice, sized to land on the row's second line rather than a third.
+#[cfg(not(feature = "mobile"))]
+const LADDER_EXCERPT_CHARS: usize = 170;
+
 /// First non-empty line of a markdown body, markup stripped and spoilers
-/// masked, capped for the one-line ladder row.
+/// masked, capped at [`LADDER_EXCERPT_CHARS`] for the ladder row.
 #[cfg(not(feature = "mobile"))]
 fn journal_excerpt(md: &str) -> String {
     let line = md
@@ -343,8 +368,8 @@ fn journal_excerpt(md: &str) -> String {
         .filter(|c| !matches!(c, '*' | '_' | '>' | '#' | '`'))
         .collect();
     let stripped = stripped.trim_start_matches("- ").trim().to_string();
-    let mut out: String = stripped.chars().take(160).collect();
-    if stripped.chars().count() > 160 {
+    let mut out: String = stripped.chars().take(LADDER_EXCERPT_CHARS).collect();
+    if stripped.chars().count() > LADDER_EXCERPT_CHARS {
         out.push('\u{2026}');
     }
     out
