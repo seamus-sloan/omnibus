@@ -379,6 +379,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: seamus-sloan/gh-actions/ci-gate@v1
+      - uses: seamus-sloan/gh-actions/ci-gate@ci-gate-v1
         with:
           needs: ${{ toJSON(needs) }}

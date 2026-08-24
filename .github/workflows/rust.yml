@@ -445,7 +445,7 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: seamus-sloan/gh-actions/ci-gate@v1
+      - uses: seamus-sloan/gh-actions/ci-gate@ci-gate-v1
         with:
           needs: ${{ toJSON(needs) }}
 
@@ -455,7 +455,7 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: seamus-sloan/gh-actions/ci-gate@v1
+      - uses: seamus-sloan/gh-actions/ci-gate@ci-gate-v1
         with:
           needs: ${{ toJSON(needs) }}
 
@@ -465,7 +465,7 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: seamus-sloan/gh-actions/ci-gate@v1
+      - uses: seamus-sloan/gh-actions/ci-gate@ci-gate-v1
         with:
           needs: ${{ toJSON(needs) }}
 
@@ -475,6 +475,6 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: seamus-sloan/gh-actions/ci-gate@v1
+      - uses: seamus-sloan/gh-actions/ci-gate@ci-gate-v1
         with:
           needs: ${{ toJSON(needs) }}
