@@ -108,12 +108,14 @@ test("renders the book detail layout", async ({ page, request }) => {
     new RegExp(`/read/${uuid}$`),
   );
 
-  // Hero — breadcrumb landmark with Home link.
-  const crumb = page.getByRole("navigation", { name: "breadcrumb" });
-  await expect(crumb).toBeVisible();
-  await expect(crumb.getByRole("link", { name: "Home" })).toBeVisible();
+  // W4 stage — the dot-rail TOC renders one row per stop, with the first
+  // stop active on load.
+  const dots = page.getByTestId("bdw4-dots");
+  await expect(dots).toBeVisible();
+  await expect(dots.getByRole("button")).toHaveCount(7);
+  await expect(page.getByTestId("bdw4-dot-0")).toHaveClass(/\bon\b/);
 
-  // Body — "Passages you saved" section is always rendered. Only its
+  // Stops — "Passages you saved" (stop 04) is always rendered. Only its
   // presence is asserted here: `journal.spec.ts` seeds a highlight on this
   // same book, so whether the list or the empty state fills it depends on
   // run order. The empty and populated states are covered by the
@@ -123,15 +125,27 @@ test("renders the book detail layout", async ({ page, request }) => {
   ).toBeVisible();
   await expect(page.getByTestId("highlights-section")).toBeVisible();
 
-  // Body — "From the same hand" section heading is always rendered.
+  // Stops — "From the same hand" (stop 07) heading is always rendered.
   await expect(
     page.getByRole("heading", { name: "From the same hand" }),
   ).toBeVisible();
+});
 
-  // Footer — Back to library link.
-  await expect(
-    page.getByRole("link", { name: "Back to library" }),
-  ).toBeVisible();
+test("dot rail jumps between stops and tracks the active section", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  // Jumping to stop 06 via the rail scrolls the snap container and moves
+  // the active marker. The scroll is smooth, so poll for the class flip.
+  await page.getByTestId("bdw4-dot-5").click();
+  await expect(page.getByTestId("bdw4-dot-5")).toHaveClass(/\bon\b/);
+  await expect(page.getByTestId("bdw4-dot-0")).not.toHaveClass(/\bon\b/);
+
+  // The files stop's content is on screen once the snap settles.
+  await expect(page.getByTestId("format-switcher")).toBeInViewport();
 });
 
 // ---------------------------------------------------------------------------
@@ -246,16 +260,13 @@ test("navigates from a landing row to the detail page and back", async ({
   // `/books/:uuid` — UUIDv5 in canonical 8-4-4-4-12 hyphenated form.
   await expect(page).toHaveURL(/\/books\/[0-9a-fA-F-]{36}$/);
 
-  // The detail page should render the standard "Book #<id>" heading and the
-  // shared back-to-library affordance.
+  // The detail page should render the marquee title heading.
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-  const backLink = page.getByRole("link", { name: "Back to library" });
-  await expect(backLink).toBeVisible();
 
-  // The back link must return us to the landing route, not just visually
-  // re-render — assert URL plus that the table view (persisted above) comes
-  // back.
-  await backLink.click();
+  // The topbar's Library link is the way back on the W4 stage (the old
+  // footer link is gone). Assert URL plus that the table view (persisted
+  // above) comes back.
+  await page.getByRole("link", { name: "Library", exact: true }).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByTestId("ebook-table")).toBeVisible();
 });
@@ -282,13 +293,6 @@ test("renders the detail contents for the selected book", async ({
   await expect(page.getByTestId("book-authors")).toContainText(
     TARGET.authors[0]!,
   );
-
-  // Breadcrumb navigation: "Home" link must be present inside the breadcrumb nav
-  await expect(
-    page
-      .getByRole("navigation", { name: "breadcrumb" })
-      .getByRole("link", { name: "Home" }),
-  ).toBeVisible();
 
   // Format switcher renders one row per available format (F1.4).
   const switcher = page.getByTestId("format-switcher");
@@ -340,12 +344,13 @@ test("renders the detail contents for the selected book", async ({
   await expect(koboExport).toBeEnabled();
   // The audiobook download only appears for books with an audio file; the
   // ebook-only seed must not render it. Close the menu again via the scrim.
-  // The scrim fills the viewport, so click a corner clear of the panel
-  // (a center click lands on the panel and is intercepted).
+  // The scrim fills the viewport, so click a spot clear of the panel — below
+  // the sticky topbar (which sits above the scrim and intercepts a corner
+  // click) and left of the dropdown.
   await expect(exportPanel.getByTestId("export-download-audio")).toHaveCount(0);
   await page
     .getByTestId("hero-export-scrim")
-    .click({ position: { x: 10, y: 10 } });
+    .click({ position: { x: 10, y: 300 } });
   await expect(page.getByTestId("hero-export-panel")).toHaveCount(0);
 
   // No M4B fixture in the ebook seed — the per-format Listen CTA must NOT
@@ -364,10 +369,8 @@ test("renders the detail contents for the selected book", async ({
     page.getByRole("heading", { name: "Suggested for you" }),
   ).toBeVisible();
 
-  // Back link still navigates to landing (default Grid view)
-  const backLink = page.getByRole("link", { name: "Back to library" });
-  await expect(backLink).toBeVisible();
-  await backLink.click();
+  // The topbar Library link still navigates to landing (default Grid view).
+  await page.getByRole("link", { name: "Library", exact: true }).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByTestId("lib-grid")).toBeVisible();
 });
@@ -997,36 +1000,28 @@ test("collapses a long passage list behind a show-more control", async ({
   }
 });
 
-test("breadcrumb author segment links to the author page", async ({
-  page,
-  request,
-}) => {
-  // `alpha` has a single author (Ada Lovelace) and no series, so the
-  // breadcrumb shape is Home > Ada Lovelace > Alpha and the author segment
-  // must be a router link to /authors/:id.
+test("authors line links to the author page", async ({ page, request }) => {
+  // `alpha` has a single author (Ada Lovelace); the "by …" line renders the
+  // name as a router link to /authors/:id.
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
-  const crumb = page.getByRole("navigation", { name: "breadcrumb" });
-  const authorLink = crumb.getByRole("link", { name: TARGET.authors[0] });
+  const authorLink = page
+    .getByTestId("book-authors")
+    .getByRole("link", { name: TARGET.authors[0] });
   await expect(authorLink).toBeVisible();
   await authorLink.click();
   await expect(page).toHaveURL(/\/authors\/\d+$/);
 });
 
-test("breadcrumb series segment links to the series page", async ({
-  page,
-  request,
-}) => {
-  // `beta` is "Beta in the Series" #1 of "Pioneers" — so the breadcrumb is
-  // Home > Grace Hopper > Pioneers #1 > Beta in the Series. The series
-  // segment must be a router link to /series/:id.
+test("series kicker links to the series page", async ({ page, request }) => {
+  // `beta` is "Beta in the Series" #1 of "Pioneers" — the Home stop's kicker
+  // leads with the series name as a router link to /series/:id.
   const beta = FIXTURE_BOOKS.find((b) => b.slug === "beta")!;
   const uuid = await fetchBookUuidByTitle(request, beta.title);
   await gotoReady(page, `/books/${uuid}`);
 
-  const crumb = page.getByRole("navigation", { name: "breadcrumb" });
-  const seriesLink = crumb.getByRole("link", { name: /Pioneers/ });
+  const seriesLink = page.getByRole("link", { name: /Pioneers/ }).first();
   await expect(seriesLink).toBeVisible();
   await seriesLink.click();
   await expect(page).toHaveURL(/\/series\/\d+$/);

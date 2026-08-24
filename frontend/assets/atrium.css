@@ -15,6 +15,9 @@
  */
 
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
+/* W4 book-detail voice (T3 Cormorant): scoped under `.bdw4` via the token
+   overrides in the "Book detail · W4 marquee" block near the end of this file. */
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400..700;1,400..700&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
 
 /* ── Tokens · dark (default) ─────────────────────────────────────── */
 :root {
@@ -10108,3 +10111,462 @@ html {
 .cleanup-card-primary { font-size: 20px; font-weight: 600; margin: 0; }
 .cleanup-card-secondary { font-size: 13px; color: var(--ink-1); margin: 6px 0 0; }
 .cleanup-card-books { font-size: 12px; color: var(--ink-1); margin: 12px 0 0; }
+
+/* ══ Book detail · W4 marquee ═══════════════════════════════════════
+   The chosen book-detail direction (design: `Omnibus - Book Detail.html`,
+   W4 · T3 Cormorant): huge cover pinned left under a soft parallax, content
+   in a 70%-opacity blurred panel, seven snap-scrolled stops with a
+   hover-expanding dot-rail TOC. Scoped under `.bdw4`; scroll mechanics in
+   `frontend/src/pages/book_detail/w4.js`. */
+
+.bdw4 {
+  --serif: 'Cormorant Garamond', Georgia, serif;
+  --sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+  --mono: 'Space Mono', ui-monospace, 'SF Mono', monospace;
+  font-family: var(--sans);
+}
+/* Modals hosted inside the stage (quote-card editor, merge/delete dialogs)
+   are app-wide surfaces — the reader opens the same quote editor — so they
+   keep the Atrium voice rather than inheriting the W4 page fonts. */
+.bdw4 .mg-modal {
+  --serif: 'Instrument Serif', 'EB Garamond', Georgia, serif;
+  --sans: 'Geist', ui-sans-serif, -apple-system, system-ui, sans-serif;
+  --mono: 'Geist Mono', ui-monospace, 'SF Mono', monospace;
+  font-family: var(--sans);
+}
+
+/* The stage fills the viewport below the sticky topbar; `--bdw4-top` is
+   measured from the real topbar by w4.js (fallback ≈ its natural height). */
+.bdw4-stage {
+  position: fixed;
+  top: var(--bdw4-top, 61px);
+  left: 0; right: 0; bottom: 0;
+  overflow: hidden;
+  /* Above the sticky topbar (z 5): the snap container and blurred panel are
+     stacking contexts, so any overlay inside them (journal overlay, quote /
+     merge / delete modals, toasts) is capped at the stage's own level — and
+     the topbar would otherwise sit over full-viewport backdrops and swallow
+     clicks near the top edge. The stage never overlaps the topbar
+     geometrically, and 6 stays under the mini dock (40) and the app modals
+     mounted outside the stage (100+). */
+  z-index: 6;
+  background:
+    radial-gradient(70% 90% at 78% 15%, color-mix(in oklch, var(--accent) 14%, transparent), transparent 60%),
+    radial-gradient(60% 80% at 12% 85%, color-mix(in oklch, var(--accent) 10%, transparent), transparent 55%),
+    var(--bg-0);
+}
+
+/* ── Cover side ── */
+.bdw4-coverwrap {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 50%;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 0;
+}
+.bdw4-coverwrap .cover-wrap {
+  filter: drop-shadow(0 40px 60px oklch(0 0 0 / .6))
+          drop-shadow(0 4px 0 oklch(0 0 0 / .3));
+}
+.bdw4-coverpx { height: 125%; aspect-ratio: 2/3; flex: 0 0 auto; will-change: transform; }
+.bdw4-coverpx .cover-wrap { width: 100%; height: 100%; }
+
+/* ── Content panel ── */
+.bdw4-panel {
+  position: absolute; top: 0; bottom: 0; right: 0; width: 57%;
+  background: color-mix(in oklch, var(--bg-0) 70%, transparent);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-left: 1px solid var(--line-2);
+  padding: 56px 60px;
+  display: flex; flex-direction: column;
+  z-index: 1;
+  overflow: hidden auto;
+  scrollbar-width: thin;
+}
+/* Centers short content, lets tall content scroll from its top. */
+.bdw4-panel-inner { margin: auto 0; position: relative; min-height: 0; }
+
+.bdw4-seclab {
+  position: absolute; left: calc(43% + 32px); top: 20px; z-index: 2;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .24em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.bdw4-seclab b { color: var(--ink-0); font-weight: 500; }
+
+.bdw4-editcorner { position: absolute; top: 0; right: 0; z-index: 3; }
+
+.bdw4-danger:hover {
+  color: var(--bad);
+  background: color-mix(in oklch, var(--bad) 12%, transparent);
+  border-color: color-mix(in oklch, var(--bad) 45%, transparent);
+}
+
+.bdw4-next {
+  position: absolute; right: 60px; bottom: 26px; z-index: 3;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .18em;
+  text-transform: uppercase; color: var(--ink-3);
+  display: flex; align-items: center; gap: 10px;
+  pointer-events: none;
+}
+.bdw4-next .arr { animation: bdw4bob 1.6s ease-in-out infinite; }
+@keyframes bdw4bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(4px); }
+}
+
+/* ── Snap container ── */
+.bdw4-snap {
+  position: absolute; inset: 0;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+  z-index: 1;
+  scrollbar-width: none;
+}
+.bdw4-snap::-webkit-scrollbar { display: none; }
+.bdw4-sec {
+  height: 100%;
+  scroll-snap-align: start; scroll-snap-stop: always;
+  position: relative;
+}
+
+/* ── Dot rail TOC ── */
+.bdw4-dots {
+  position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+  z-index: 6;
+  display: flex; flex-direction: column; gap: 6px; align-items: stretch;
+  padding: 10px 7px;
+  background: color-mix(in oklch, var(--bg-0) 55%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line-2); border-radius: 999px;
+  transition: border-radius .22s, padding .22s;
+}
+.bdw4-dots:hover {
+  border-radius: 14px; padding: 10px;
+  background: color-mix(in oklch, var(--bg-0) 82%, transparent);
+}
+.bdw4-dotrow {
+  display: flex; align-items: center;
+  border: 0; background: transparent; padding: 3px; border-radius: 6px;
+  cursor: pointer; color: var(--ink-2); font: inherit;
+}
+.bdw4-dotrow i {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--bg-3);
+  flex: 0 0 auto; display: block;
+  transition: background .2s, transform .2s;
+}
+.bdw4-dotrow:hover { background: var(--bg-2); color: var(--ink-0); }
+.bdw4-dotrow:hover i { background: var(--ink-2); }
+.bdw4-dotrow.on { color: var(--ink-0); }
+.bdw4-dotrow.on i { background: var(--accent); transform: scale(1.3); }
+.bdw4-dotrow .lb {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; white-space: nowrap;
+  max-width: 0; opacity: 0; overflow: hidden; text-align: left;
+  transition: max-width .24s, opacity .18s, margin .24s;
+}
+.bdw4-dots:hover .bdw4-dotrow .lb { max-width: 250px; opacity: 1; margin-left: 9px; }
+
+/* ── Shared stop typography ── */
+.bdw4-k {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .26em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 18px;
+}
+.bdw4-k-link { color: inherit; cursor: pointer; }
+.bdw4-k-link:hover { text-decoration: underline; }
+
+.bdw4 h1.bdw4-title {
+  font-family: var(--serif); font-weight: 600;
+  font-size: clamp(44px, 6vw, 86px); line-height: .98; letter-spacing: -0.005em;
+  font-style: normal;
+}
+.bdw4-titlerow { display: flex; align-items: flex-start; gap: 14px; }
+.bdw4-by { margin-top: 12px; font-size: 16px; color: var(--ink-1); }
+.bdw4-by .bd-author-link:hover { color: var(--accent); }
+
+.bdw4-chips { display: flex; gap: 8px 10px; margin-top: 16px; flex-wrap: wrap; align-items: center; }
+.bdw4-desc { margin-top: 18px; font-size: 15px; color: var(--ink-1); line-height: 1.6; max-width: 560px; }
+/* Long blurbs must not push the CTA row off the stop. */
+.bdw4-desc {
+  display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.bdw4-ctarow { display: flex; gap: 10px; margin-top: 24px; flex-wrap: wrap; align-items: center; }
+.bdw4-statusrow { display: flex; align-items: center; gap: 16px; margin-top: 20px; flex-wrap: wrap; }
+.bdw4-statusrow .bd-readstatus { display: flex; align-items: center; gap: 12px; }
+.bdw4-statusnote { font-size: 10.5px; color: var(--ink-3); }
+
+/* ── Position ruler (rx-ruler, from the design's redux kit) ── */
+.bdw4-rulerwrap { margin-top: 30px; max-width: 560px; }
+.rx-ruler { position: relative; height: 14px; border-radius: 4px; background: var(--bg-3); }
+.rx-ruler .rx-fill {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  background: color-mix(in oklch, var(--accent) 85%, var(--bg-3));
+  border-radius: 4px 0 0 4px;
+}
+.rx-ruler .rx-fill.done { border-radius: 4px; }
+.rx-caret {
+  position: absolute; top: -6px; bottom: -6px; width: 2px;
+  background: var(--ink-0); border-radius: 1px; transform: translateX(-1px);
+}
+.rx-caret i {
+  position: absolute; bottom: 100%; left: 50%; transform: translate(-50%, -5px);
+  font-family: var(--mono); font-style: normal; font-size: 10px;
+  letter-spacing: .02em; line-height: 1; padding: 3px 7px; border-radius: 4px;
+  background: var(--ink-0); color: var(--bg-0); white-space: nowrap;
+}
+.rx-caret i::after {
+  content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  border: 4px solid transparent; border-top-color: var(--ink-0);
+}
+.rx-ruler-axis {
+  display: flex; justify-content: space-between; margin-top: 8px;
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); letter-spacing: .04em;
+}
+.bdw4-lastopened { font-size: 10.5px; color: var(--ink-3); margin-top: 12px; }
+.bdw4 .bd-sync-panel { margin-top: 14px; max-width: 560px; }
+
+/* ── Stats stop (rx-stat grid + spark) ── */
+.bdw4-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 26px 34px; max-width: 560px; }
+.rx-stat .k {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.rx-stat .v { font-family: var(--serif); font-size: 44px; line-height: 1.05; margin-top: 5px; color: var(--ink-0); }
+.rx-stat .s { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); margin-top: 4px; letter-spacing: .02em; }
+.bdw4-statsnote { font-size: 11px; color: var(--ink-2); margin: 26px 0 20px; }
+.rx-spark { display: flex; align-items: flex-end; gap: 3px; height: 34px; max-width: 560px; }
+.rx-spark i { flex: 1; border-radius: 1px; background: var(--bg-3); min-height: 2px; }
+.rx-spark i.on { background: color-mix(in oklch, var(--accent) 80%, var(--bg-3)); }
+.rx-spark-axis {
+  display: flex; justify-content: space-between; margin-top: 6px; max-width: 560px;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; color: var(--ink-3);
+}
+.bdw4-ratingrow { margin-top: 30px; }
+.bdw4-bigquiet {
+  font-family: var(--serif); font-style: italic; font-size: 24px;
+  color: var(--ink-2); line-height: 1.4; max-width: 480px;
+}
+.bdw4-quiet-body { font-size: 15px; color: var(--ink-2); margin-top: 14px; max-width: 440px; line-height: 1.6; }
+.bdw4-quiet-hint { font-size: 10.5px; color: var(--ink-3); margin-top: 18px; font-family: var(--mono); }
+.bdw4-no-stats-note { margin-top: 12px; }
+
+/* ── Highlights stop: restyle the saved-passage cards as kept lines ── */
+.bdw4 .bd-highlights .bd-section-head { margin-bottom: 4px; }
+.bdw4 .bd-hl-list {
+  overflow-y: auto; max-height: min(430px, 56vh); padding-right: 12px;
+  -webkit-mask-image: linear-gradient(180deg, #000 90%, transparent);
+  mask-image: linear-gradient(180deg, #000 90%, transparent);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--accent) 75%, var(--bg-3)) var(--bg-2);
+}
+.bdw4 .bd-hl-list::-webkit-scrollbar { display: block; width: 6px; }
+.bdw4 .bd-hl-list::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--accent) 75%, var(--bg-3)); border-radius: 99px;
+}
+.bdw4 .bd-hl-list::-webkit-scrollbar-track { background: var(--bg-2); border-radius: 99px; }
+.bdw4 .bd-hl-card {
+  background: transparent; border: 0; border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--line-2); border-radius: 0;
+  padding: 12px 0 12px 10px; box-shadow: none;
+}
+.bdw4 .bd-hl-card[data-color] { border-left-color: var(--line-2); }
+.bdw4 .bd-hl-quote {
+  font-family: var(--serif); font-style: italic; font-size: 17px;
+  line-height: 1.5; color: var(--ink-0);
+}
+.bdw4 .bd-hl-note {
+  font-family: var(--sans); font-size: 12.5px; line-height: 1.5;
+  color: var(--ink-2); margin-top: 6px;
+}
+.bdw4 .bd-hl-meta {
+  font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3);
+}
+
+/* ── Journal stop: excerpt ladder + overlay ── */
+.bdw4-journalhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bdw4-journalhead .bdw4-k { margin-bottom: 0; }
+.bdw4-avatarstack { display: inline-flex; align-items: center; }
+.bdw4-stack-avatar {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: inline-grid; place-items: center; overflow: hidden;
+  background: var(--bg-3); color: var(--ink-1);
+  font-family: var(--mono); font-size: 9px; font-weight: 700;
+  box-shadow: 0 0 0 2px var(--bg-1);
+}
+.bdw4-avatarstack .bdw4-stack-avatar + .bdw4-stack-avatar { margin-left: -7px; }
+.bdw4-stack-avatar-photo, .bdw4-lrow-avatar-photo { width: 100%; height: 100%; object-fit: cover; }
+.bdw4-journal .bd-journal-blurb { display: none; }
+.bdw4-journal .bd-journal-composer, .bdw4 .bd-journal-open { margin-top: 14px; }
+.bdw4-ladderhint {
+  font-size: 10px; color: var(--ink-3); margin: 10px 0 8px; letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.bdw4-ladder {
+  overflow-y: auto; max-height: min(400px, 50vh); padding-right: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--accent) 75%, var(--bg-3)) var(--bg-2);
+}
+.bdw4-ladder::-webkit-scrollbar { display: block; width: 6px; }
+.bdw4-ladder::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--accent) 75%, var(--bg-3)); border-radius: 99px;
+}
+.bdw4-ladder::-webkit-scrollbar-track { background: var(--bg-2); border-radius: 99px; }
+.bdw4-lrow {
+  display: flex; gap: 10px; align-items: center; width: 100%;
+  padding: 8px 0; border: 0; border-bottom: 1px solid var(--line-2);
+  background: transparent; cursor: pointer; font: inherit; color: inherit;
+  text-align: left; border-radius: 0;
+}
+.bdw4-lrow:hover { background: color-mix(in oklch, var(--bg-2) 55%, transparent); }
+.bdw4-lrow .nm { font-family: var(--mono); font-size: 10px; color: var(--ink-2); flex: 0 0 60px; letter-spacing: .04em; }
+.bdw4-lrow .ex {
+  flex: 1; min-width: 0;
+  font-family: var(--serif); font-style: italic; font-size: 15.5px; color: var(--ink-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bdw4-lrow:hover .ex { color: var(--ink-0); }
+.bdw4-lrow .at { font-family: var(--mono); font-size: 10px; color: var(--ink-3); flex: 0 0 auto; }
+.bdw4-lrow-avatar {
+  width: 22px; height: 22px; border-radius: 50%; flex: 0 0 auto;
+  display: inline-grid; place-items: center; overflow: hidden;
+  background: var(--bg-3); color: var(--ink-1);
+  font-family: var(--mono); font-size: 9px; font-weight: 700;
+}
+.bdw4-lrow.draft {
+  border: 1px dashed color-mix(in oklch, var(--accent) 45%, transparent);
+  border-radius: 8px; padding: 8px 10px; margin: 2px 0;
+}
+.bdw4-draftchip {
+  font-family: var(--mono); font-size: 8.5px; letter-spacing: .12em;
+  text-transform: uppercase; border: 1px solid var(--accent); color: var(--accent);
+  border-radius: 3px; padding: 1px 5px; flex: 0 0 auto;
+}
+.bdw4-overlay {
+  position: fixed; inset: var(--bdw4-top, 61px) 0 0 0; z-index: 8;
+  display: grid; place-items: center;
+  background: oklch(0 0 0 / .55);
+  backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+  padding: 36px; cursor: pointer;
+}
+.bdw4-ocard {
+  background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px;
+  max-width: 640px; width: 100%; max-height: min(560px, 78vh); overflow-y: auto;
+  padding: 24px 28px; cursor: auto;
+  box-shadow: 0 30px 80px oklch(0 0 0 / .5);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--accent) 75%, var(--bg-3)) var(--bg-2);
+}
+.bdw4-ocard::-webkit-scrollbar { display: block; width: 6px; }
+.bdw4-ocard::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--accent) 75%, var(--bg-3)); border-radius: 99px;
+}
+.bdw4-ocard .bd-journal-entry { border: 0; background: transparent; padding: 0; box-shadow: none; }
+.bdw4-ocard-close { margin-top: 12px; }
+
+/* ── Files stop ── */
+.bdw4-badges { margin-bottom: 14px; }
+.bdw4-copies { max-width: 620px; }
+.bdw4 .format-switcher { display: flex; flex-direction: column; gap: 0; }
+.bdw4 .format-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 0; border-bottom: 1px solid var(--line-2);
+}
+.bdw4 .format-badge {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-0);
+  border: 1px solid var(--line-2); border-radius: 6px; padding: 8px 10px;
+  background: var(--bg-2);
+}
+.bdw4-files-div { margin: 14px 0; max-width: 620px; }
+.bdw4 .rx-kv, .bdw4 .bd-meta-table { width: 100%; max-width: 620px; border-collapse: collapse; }
+.bdw4 .bd-meta-table td { padding: 5px 0; font-family: var(--mono); font-size: 11px; vertical-align: top; }
+.bdw4 .bd-meta-table td:first-child { color: var(--ink-3); width: 92px; letter-spacing: .03em; }
+.bdw4 .bd-meta-table td:last-child { color: var(--ink-1); word-break: break-word; }
+.bdw4-files-actions { display: flex; gap: 6px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
+/* The merge/delete openers reuse the old rail's block styling — inline them. */
+.bdw4-files-actions .bd-rail-edit { display: inline-flex; width: auto; margin: 0; }
+.bdw4 .bd-physical-panel { max-width: 620px; margin-top: 4px; }
+.bdw4 .bd-physical-panel .bd-section-head { display: none; }
+.bdw4 .bd-wishlist-head { margin-top: 14px; }
+
+/* ── Shelf stop (series shelf) ── */
+.rx-shelf {
+  display: flex; gap: 30px; align-items: flex-end;
+  padding: 14px 2px 16px; border-bottom: 2px solid var(--bg-3);
+  overflow-x: auto; scrollbar-width: thin;
+}
+.rx-shelf-item { width: 132px; flex: 0 0 auto; position: relative; }
+.rx-shelf-item .rx-upnext {
+  position: absolute; top: -11px; left: 50%; transform: translateX(-50%); z-index: 3;
+  font-family: var(--mono); font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
+  background: var(--accent); color: var(--accent-ink);
+  padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+}
+.rx-shelf-cap { margin-top: 12px; }
+.rx-shelf-cap .t {
+  font-size: 13px; font-weight: 500; color: var(--ink-0);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rx-shelf-item.current .rx-shelf-cap .t { color: var(--accent); }
+.rx-shelf-cap .u { font-family: var(--mono); font-size: 10px; color: var(--ink-3); margin-top: 3px; letter-spacing: .03em; }
+.bdw4-shelfchips { margin-bottom: 8px; }
+.bdw4-shelfchip.first { border-color: var(--accent); }
+
+/* ── Recommendations stop (tightened, per the design) ── */
+.bdw4-tight .suggest-stack > .cover-link { flex: 0 0 98px; margin-left: -78px; }
+.bdw4-tight .suggest-stack:hover > .cover-link { margin-left: 14px; }
+.bdw4-tight .suggest-stack:hover > .cover-link:first-child { margin-left: 0; }
+.bdw4-tight .suggest-static > .cover-link { flex: 0 0 98px; }
+.bdw4-tight .author-lead { flex: 0 0 150px; }
+.bdw4-tight .author-lead-card {
+  height: 147px; gap: 7px; padding: 12px 10px 8px; border-radius: 6px;
+  box-shadow: 0 8px 12px oklch(0 0 0 / .35);
+}
+.bdw4-tight .author-portrait { width: 52px; height: 52px; }
+.bdw4-tight .author-portrait .glyph { font-size: 23px; }
+.bdw4-tight .author-portrait .hint { display: none; }
+.bdw4-tight .author-lead-name { font-size: 12.5px; line-height: 1.15; }
+.bdw4-tight .author-lead-count { margin-top: 2px; font-size: 8px; }
+.bdw4-tight .sh-title { font-size: 11.5px; }
+.bdw4-tight .sh-sub { font-size: 10px; margin-top: 1px; }
+.bdw4-tight .suggest-stack { padding: 8px 0 4px; }
+.bdw4-tight .bd-same-hand-hint { display: none; }
+.bdw4-tight .divider { display: none; }
+.bdw4-tight .bd-section-head h3 { font-size: 20px; }
+.bdw4-tight .bd-section-head { margin-bottom: 8px; }
+
+/* ── Reused-section voice inside the panel ── */
+.bdw4 .bd-section-head .bd-section-kicker {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .26em; color: var(--accent);
+}
+.bdw4 .bd-section-title { font-family: var(--serif); }
+.bdw4 .label, .bdw4 .mono { font-family: var(--mono); }
+.bdw4 .bd-readstatus-seg {
+  display: flex; background: var(--bg-2); border: 1px solid var(--line-2);
+  border-radius: 9px; padding: 3px; gap: 2px; width: 250px;
+}
+.bdw4 .bd-readstatus-btn {
+  flex: 1; padding: 5px 8px; border: 0; background: transparent;
+  color: var(--ink-2); border-radius: 6px; font: inherit; font-size: 12px;
+  cursor: pointer; white-space: nowrap;
+  transition: background .15s, color .15s;
+}
+.bdw4 .bd-readstatus-btn:hover { color: var(--ink-0); }
+.bdw4 .bd-readstatus-btn.active { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.bdw4 .bd-readstatus-meta { font-size: 10.5px; color: var(--ink-3); }
+
+/* ── Responsive: below ~940px the cover recedes behind a full-width panel ── */
+@media (max-width: 940px) {
+  .bdw4-coverwrap { width: 100%; opacity: .22; }
+  .bdw4-panel { width: 100%; border-left: 0; padding: 40px 28px; }
+  .bdw4-seclab { left: 28px; }
+  .bdw4-next { right: 28px; }
+}
+
+/* ── Reduced motion: no parallax (w4.js pins the cover), no bob, no smooth
+   snap animation. ── */
+@media (prefers-reduced-motion: reduce) {
+  .bdw4-snap { scroll-behavior: auto; }
+  .bdw4-next .arr { animation: none; }
+  .bdw4-dots, .bdw4-dotrow i, .bdw4-dotrow .lb { transition: none; }
+}

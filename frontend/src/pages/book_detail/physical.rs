@@ -659,7 +659,7 @@ fn add_to_wishlist(
 
 /// Remove the book from the caller's wishlist. Same signal-taking shape as
 /// [`add_to_wishlist`].
-fn remove_from_wishlist(
+pub(super) fn remove_from_wishlist(
     mut wishlist: Signal<Option<WishlistEntry>>,
     mut busy: Signal<bool>,
     mut err: Signal<Option<String>>,
@@ -704,7 +704,7 @@ fn checked_in_label(now: i64, ts: i64) -> String {
 }
 
 /// Human phrase for where a wishlist entry originated.
-fn source_label(source: WishlistSource) -> &'static str {
+pub(super) fn source_label(source: WishlistSource) -> &'static str {
     match source {
         WishlistSource::Scan => "a scan",
         WishlistSource::Detail => "this page",
@@ -714,7 +714,7 @@ fn source_label(source: WishlistSource) -> &'static str {
 
 /// "Find a copy" target URL: an Amazon search on the ISBN when present, else
 /// on title + author.
-fn find_a_copy_url(isbn: Option<&str>, title: &str, author: &str) -> String {
+pub(super) fn find_a_copy_url(isbn: Option<&str>, title: &str, author: &str) -> String {
     let query = match isbn {
         Some(i) if !i.trim().is_empty() => i.trim().to_string(),
         _ => format!("{title} {author}").trim().to_string(),

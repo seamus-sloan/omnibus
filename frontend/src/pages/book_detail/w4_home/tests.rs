@@ -1,20 +1,41 @@
+use omnibus_shared::EbookMetadata;
+
 use super::*;
+
+fn facts(has_ebook: bool, has_audio: bool, has_comic: bool) -> W4ViewFacts {
+    W4ViewFacts {
+        title: "Book".into(),
+        primary_author: "Author".into(),
+        author_id: None,
+        authors_line: "Author".into(),
+        series: None,
+        has_ebook,
+        has_audio,
+        has_comic,
+    }
+}
+
+fn book() -> EbookMetadata {
+    EbookMetadata {
+        unique_identifier: Some("book-uuid".into()),
+        ..Default::default()
+    }
+}
+
+fn no_progress() -> W4Progress {
+    W4Progress {
+        reading: None,
+        listening: None,
+    }
+}
 
 /// SSR-render the CTA row for a book with the given format availability.
 fn render_cta_row(has_ebook: bool, has_audio: bool) -> String {
-    render_cta_row_with_comic(has_ebook, has_audio, false)
-}
-
-fn render_cta_row_with_comic(has_ebook: bool, has_audio: bool, has_comic: bool) -> String {
     dioxus::ssr::render_element(rsx! {
-        BdCtaRow {
-            has_ebook,
-            has_audio,
-            has_comic,
-            meta: BookActionMeta {
-                uuid: "book-uuid".to_string(),
-                ..Default::default()
-            },
+        W4CtaRow {
+            b: book(),
+            view: facts(has_ebook, has_audio, false),
+            progress: no_progress(),
         }
     })
 }
@@ -42,7 +63,6 @@ fn immersive_cta_absent_when_book_has_audio_only() {
 fn fileless_book_shows_no_files_disclaimer_and_hides_reading_ctas() {
     let html = render_cta_row(false, false);
     assert!(html.contains("data-testid=\"no-files-disclaimer\""));
-    // No reading CTAs and no export menu for a book with no files.
     assert!(!html.contains("data-testid=\"start-reading\""));
     assert!(!html.contains("data-testid=\"start-listening\""));
 }
@@ -65,14 +85,10 @@ enum ComicOnlyRoute {
 #[component]
 fn ComicOnlyHost() -> Element {
     rsx! {
-        BdCtaRow {
-            has_ebook: false,
-            has_audio: false,
-            has_comic: true,
-            meta: BookActionMeta {
-                uuid: "book-uuid".to_string(),
-                ..Default::default()
-            },
+        W4CtaRow {
+            b: book(),
+            view: facts(false, false, true),
+            progress: no_progress(),
         }
     }
 }
@@ -86,14 +102,10 @@ enum EpubAndComicRoute {
 #[component]
 fn EpubAndComicHost() -> Element {
     rsx! {
-        BdCtaRow {
-            has_ebook: true,
-            has_audio: false,
-            has_comic: true,
-            meta: BookActionMeta {
-                uuid: "book-uuid".to_string(),
-                ..Default::default()
-            },
+        W4CtaRow {
+            b: book(),
+            view: facts(true, false, true),
+            progress: no_progress(),
         }
     }
 }
@@ -130,16 +142,46 @@ fn epub_primary_wins_over_the_comic_cta_when_both_formats_exist() {
     );
 }
 
-#[test]
-fn phys_badge_renders_its_testid_and_label() {
-    let html = dioxus::ssr::render_element(rsx! { BdPhysBadge {} });
-    assert!(html.contains("data-testid=\"format-badge-physical\""));
-    assert!(html.contains("Physical"));
+// The single-file picker renders a `Link`, so the resume-verb variant mounts
+// behind a one-route test router like the comic hosts above.
+#[derive(Clone, Debug, PartialEq, dioxus_router::Routable)]
+enum ResumeRoute {
+    #[route("/")]
+    ResumeHost {},
+}
+
+#[component]
+fn ResumeHost() -> Element {
+    use omnibus_shared::progress::{ProgressFormat, ProgressRecord};
+    let progress = W4Progress {
+        reading: Some(ProgressRecord {
+            book_uuid: "book-uuid".into(),
+            format: ProgressFormat::Epub,
+            epub_cfi: None,
+            audio_position_seconds: None,
+            progress_percent: Some(40),
+            kobo_location: None,
+            book_file_id: None,
+            updated_at: 0,
+            client_updated_at: 0,
+        }),
+        listening: None,
+    };
+    rsx! {
+        W4CtaRow {
+            b: book(),
+            view: facts(true, false, false),
+            progress,
+        }
+    }
 }
 
 #[test]
-fn wishlist_badge_renders_its_testid_and_label() {
-    let html = dioxus::ssr::render_element(rsx! { BdWishlistBadge {} });
-    assert!(html.contains("data-testid=\"format-badge-wishlist\""));
-    assert!(html.contains("Physical Wishlist"));
+fn resume_verbs_take_over_once_a_position_exists() {
+    let html = crate::test_support::render_in_vdom(|| {
+        rsx! {
+            dioxus_router::Router::<ResumeRoute> {}
+        }
+    });
+    assert!(html.contains("Resume reading"), "{html}");
 }
