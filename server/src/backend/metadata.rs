@@ -1,10 +1,8 @@
 //! Metadata-provider REST handlers — mobile-facing; web hits the analogous
-//! `/api/rpc/metadata/*` server fns, which mirror these gates. The catalog
-//! (`GET /api/metadata/providers`) is readable by any authenticated user and
-//! carries no key material, only `configured: bool`; the fan-out edition
-//! search (`POST /api/metadata/editions/search`) and the follow-up detail
-//! fetch (`POST /api/metadata/editions/hydrate`) are `can_edit`-gated, since
-//! they make outbound provider calls.
+//! `/api/rpc/metadata/*` server fns, which mirror these gates. The catalog is
+//! readable by any authenticated user and carries no key material; the edition
+//! search and hydrate are `can_edit`-gated, since they spend outbound provider
+//! calls.
 
 use axum::{
     extract::State,
