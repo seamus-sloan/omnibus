@@ -11059,7 +11059,10 @@ html {
 .lmq .lib-sort-select, .lmq .lib-sort-dir { border-radius: 999px; }
 
 /* ── The cover wall ──────────────────────────────────────────────── */
-.lmq .lib-grid { grid-template-columns: repeat(auto-fill, minmax(126px, 1fr)); gap: 26px 22px; }
+/* 170px is chosen, not inherited: with the 22px column gap it is the widest
+   minimum that still fits ten covers across a laptop-width window, and the
+   narrowest that cannot fit eleven. Moving either number moves the count. */
+.lmq .lib-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 30px 22px; }
 .lmq .lib-tile .cover-wrap { filter: drop-shadow(0 14px 18px oklch(0 0 0 / .45)); }
 .lmq .lib-tile-art {
   display: block;
