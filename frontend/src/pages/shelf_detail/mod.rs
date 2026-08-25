@@ -34,7 +34,7 @@ pub fn ShelfDetailPage(id: i64) -> Element {
     let loading = use_signal(|| true);
     let error = use_signal(|| None::<String>);
     crate::use_page_title(move || shelf.read().as_ref().map(|s| s.name.clone()));
-    let sort_key = use_signal(|| SortKey::Title);
+    let sort_key = use_signal(|| SortKey::RecentlyInteracted);
     let show_add = use_signal(|| false);
     let edit_shelf = use_signal(|| false);
     // Bumped to force a refetch after a membership edit.
@@ -290,7 +290,7 @@ fn render_page_state(id: i64, inner: Element) -> Element {
 /// for the date axes, ascending otherwise.
 fn default_dir_for(key: SortKey) -> SortDir {
     match key {
-        SortKey::NewestAdded | SortKey::LastUpdated => SortDir::Desc,
+        SortKey::NewestAdded | SortKey::LastUpdated | SortKey::RecentlyInteracted => SortDir::Desc,
         _ => SortDir::Asc,
     }
 }
@@ -303,6 +303,7 @@ mod tests {
     fn default_dir_for_dates_is_desc() {
         assert_eq!(default_dir_for(SortKey::NewestAdded), SortDir::Desc);
         assert_eq!(default_dir_for(SortKey::LastUpdated), SortDir::Desc);
+        assert_eq!(default_dir_for(SortKey::RecentlyInteracted), SortDir::Desc);
         assert_eq!(default_dir_for(SortKey::Title), SortDir::Asc);
     }
 }

@@ -80,6 +80,10 @@ fn row_key(book: &EbookMetadata, key: SortKey) -> RowKey {
             plain: book.added_at.clone(),
             series: None,
         },
+        SortKey::RecentlyInteracted => RowKey {
+            plain: book.last_interacted_at.clone(),
+            series: None,
+        },
     }
 }
 
@@ -153,18 +157,19 @@ pub(crate) fn toggle_dir(d: SortDir) -> SortDir {
 /// The direction a freshly-picked sort key starts in — descending for the
 /// two recency keys, ascending otherwise.
 pub(crate) fn default_dir_for(key: SortKey) -> SortDir {
-    // "Newest Added" / "Last Updated" feel natural with newest first.
+    // The recency keys feel natural with newest first.
     match key {
-        SortKey::NewestAdded | SortKey::LastUpdated => SortDir::Desc,
+        SortKey::NewestAdded | SortKey::LastUpdated | SortKey::RecentlyInteracted => SortDir::Desc,
         _ => SortDir::Asc,
     }
 }
 
 /// The sort axes the toolbar dropdown offers, in display order.
-pub(crate) const SORT_KEYS: [SortKey; 5] = [
+pub(crate) const SORT_KEYS: [SortKey; 6] = [
     SortKey::Title,
     SortKey::Author,
     SortKey::Series,
+    SortKey::RecentlyInteracted,
     SortKey::LastUpdated,
     SortKey::NewestAdded,
 ];
@@ -185,6 +190,7 @@ pub(crate) fn sort_key_label(key: SortKey) -> &'static str {
         SortKey::Series => "Series",
         SortKey::LastUpdated => "Last Updated",
         SortKey::NewestAdded => "Newest Added",
+        SortKey::RecentlyInteracted => "Recently Interacted",
     }
 }
 

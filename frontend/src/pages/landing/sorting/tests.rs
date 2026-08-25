@@ -231,6 +231,29 @@ fn sort_books_by_newest_added_desc() {
 }
 
 #[test]
+fn sort_books_by_recently_interacted_desc_picks_the_latest_signal_first() {
+    // Set the axis directly rather than widening `BookSpec`: the server
+    // projects this field, and the client only ever reads it back.
+    let mut s = sample();
+    s[0].last_interacted_at = Some("2025-04-01T00:00:00".into());
+    s[1].last_interacted_at = Some("2026-02-01T00:00:00".into());
+    s[2].last_interacted_at = Some("2025-11-01T00:00:00".into());
+    let desc = sort_books(s, SortKey::RecentlyInteracted, SortDir::Desc);
+    // beta 2026-02 > gamma 2025-11 > alpha 2025-04
+    assert_eq!(ids(&desc), vec![2, 3, 1]);
+}
+
+#[test]
+fn sort_books_by_recently_interacted_pushes_an_untouched_book_last() {
+    let mut s = sample();
+    s[0].last_interacted_at = Some("2025-04-01T00:00:00".into());
+    s[1].last_interacted_at = None;
+    s[2].last_interacted_at = Some("2025-11-01T00:00:00".into());
+    let desc = sort_books(s, SortKey::RecentlyInteracted, SortDir::Desc);
+    assert_eq!(ids(&desc), vec![3, 1, 2]);
+}
+
+#[test]
 fn sort_books_missing_timestamps_always_sort_last_even_on_desc() {
     // Two timestamped books + one with no `modified` value. In descending
     // order the most-recent timestamp comes first, but the missing-value

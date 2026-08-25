@@ -8,6 +8,8 @@ use base64::engine::{general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use omnibus_shared::{EbookMetadata, SortDir, SortKey, ViewFilters};
 use sqlx::{Row, SqlitePool};
 
+use crate::interaction::INTERACTED_AT_ISO;
+
 use super::projection::{
     backfill_creator_ids, merge_overrides_into_books, row_to_ebook, BOOK_COLUMNS,
     MAX_BOOKS_RETURNED,
@@ -233,6 +235,7 @@ fn axis_sort_columns(sort: SortKey) -> (&'static str, Option<&'static str>) {
             None,
         ),
         SortKey::Series => ("b.series_sort", Some("b.series_index")),
+        SortKey::RecentlyInteracted => (INTERACTED_AT_ISO, None),
     }
 }
 

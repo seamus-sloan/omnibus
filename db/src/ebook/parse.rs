@@ -175,6 +175,7 @@ fn build_opf_metadata<R: std::io::Read + std::io::Seek>(
         // parse time — this struct is written before that derivation runs.
         has_physical: false,
         added_at: None,
+        last_interacted_at: None,
         error: None,
         has_override: false,
         has_cover_override: false,

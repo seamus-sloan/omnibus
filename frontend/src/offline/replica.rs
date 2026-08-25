@@ -240,6 +240,9 @@ fn sort_books(books: &mut [EbookMetadata], sort_key: SortKey, sort_dir: SortDir)
             SortKey::LastUpdated | SortKey::NewestAdded => date_key(a)
                 .cmp(&date_key(b))
                 .then_with(|| title_key(a).cmp(&title_key(b))),
+            SortKey::RecentlyInteracted => interacted_key(a)
+                .cmp(&interacted_key(b))
+                .then_with(|| title_key(a).cmp(&title_key(b))),
         };
         match sort_dir {
             SortDir::Asc => ord,
@@ -278,6 +281,13 @@ fn series_key(b: &EbookMetadata) -> (bool, String, i64) {
 
 /// ISO-ish date strings compare lexicographically; empty dates sort first
 /// so `Desc` (the common "newest" direction) puts them last.
+/// Unlike [`date_key`], this is the server's own axis value rather than an
+/// approximation — `last_interacted_at` is projected onto every listing, so
+/// the replica reproduces the server ordering exactly.
+fn interacted_key(b: &EbookMetadata) -> String {
+    b.last_interacted_at.clone().unwrap_or_default()
+}
+
 fn date_key(b: &EbookMetadata) -> String {
     b.added_at
         .clone()

@@ -9,12 +9,13 @@ use super::*;
 /// the new one. (A `SortKey::ALL` const or an exhaustive `match` in
 /// `as_wire` would make this automatic; the tests just mirror the current
 /// shape.)
-const ALL_SORT_KEYS: [SortKey; 5] = [
+const ALL_SORT_KEYS: [SortKey; 6] = [
     SortKey::Title,
     SortKey::Author,
     SortKey::Series,
     SortKey::LastUpdated,
     SortKey::NewestAdded,
+    SortKey::RecentlyInteracted,
 ];
 
 #[test]
@@ -38,6 +39,7 @@ fn sort_key_as_wire_uses_snake_case_tokens() {
     assert_eq!(SortKey::Series.as_wire(), "series");
     assert_eq!(SortKey::LastUpdated.as_wire(), "last_updated");
     assert_eq!(SortKey::NewestAdded.as_wire(), "newest_added");
+    assert_eq!(SortKey::RecentlyInteracted.as_wire(), "recently_interacted");
 }
 
 #[test]

@@ -782,3 +782,21 @@ pub async fn seed_epub_book_at(pool: &SqlitePool, lib: &Path) -> (i64, String) {
 pub fn clear_error_ring() {
     crate::error_ring::clear();
 }
+
+// ---------------------------------------------------------------------------
+// Users
+// ---------------------------------------------------------------------------
+
+/// Insert a non-admin user and return its id. Enough for the per-user data
+/// tables (ratings, journals, read status), which only need the FK to resolve
+/// — the hash is a deliberately unusable placeholder.
+pub async fn seed_user(pool: &SqlitePool, username: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>(
+        "INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
+         VALUES (?, '!x', 0, 0, 0, 1) RETURNING id",
+    )
+    .bind(username)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}

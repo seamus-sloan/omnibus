@@ -248,7 +248,7 @@ impl PageQuery {
         self.sort
             .as_deref()
             .and_then(SortKey::from_wire)
-            .unwrap_or(SortKey::NewestAdded)
+            .unwrap_or(SortKey::RecentlyInteracted)
     }
 
     fn sort_dir(&self) -> SortDir {

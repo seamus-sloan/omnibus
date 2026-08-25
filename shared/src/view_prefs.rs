@@ -28,6 +28,10 @@ pub enum SortKey {
     Series,
     LastUpdated,
     NewestAdded,
+    /// Most recent moment *anyone* touched the book — rated it, published a
+    /// journal entry, changed its read status, added it to the library,
+    /// edited its metadata or cover, or checked in a physical copy.
+    RecentlyInteracted,
 }
 
 impl SortKey {
@@ -42,6 +46,7 @@ impl SortKey {
             SortKey::Series => "series",
             SortKey::LastUpdated => "last_updated",
             SortKey::NewestAdded => "newest_added",
+            SortKey::RecentlyInteracted => "recently_interacted",
         }
     }
 
@@ -54,6 +59,7 @@ impl SortKey {
             "series" => SortKey::Series,
             "last_updated" => SortKey::LastUpdated,
             "newest_added" => SortKey::NewestAdded,
+            "recently_interacted" => SortKey::RecentlyInteracted,
             _ => return None,
         })
     }
