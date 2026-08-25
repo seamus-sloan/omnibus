@@ -339,6 +339,90 @@ async fn googlebooks_fetch_bails_after_retries_on_persistent_503() {
     assert!(err.to_string().contains("google books unavailable"));
 }
 
+/// The same config with a key configured — the leak surface, since this is the
+/// only Google Books client that authenticates on the summary path.
+fn keyed_gb_config(server: &MockServer) -> GoogleBooksSummaryConfig {
+    GoogleBooksSummaryConfig {
+        api_key: Some("super-secret-key".to_string()),
+        ..gb_config(server)
+    }
+}
+
+#[tokio::test]
+async fn googlebooks_summary_sends_the_key_as_a_header_and_not_in_the_url() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/books/v1/volumes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [{ "volumeInfo": { "description": "A clever fox outwits three farmers." } }]
+        })))
+        .mount(&server)
+        .await;
+
+    googlebooks::fetch(
+        &keyed_gb_config(&server),
+        &["9780140328721".to_string()],
+        "Fantastic Mr Fox",
+        None,
+    )
+    .await
+    .unwrap()
+    .expect("the fixture volume must resolve");
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("the mock server records requests");
+    let request = requests.first().expect("fetch must have asked");
+    // Assert it still authenticates, not merely that the URL is clean.
+    assert_eq!(
+        request
+            .headers
+            .get("x-goog-api-key")
+            .and_then(|v| v.to_str().ok()),
+        Some("super-secret-key")
+    );
+    assert!(
+        !request.url.as_str().contains("key="),
+        "url must carry no credential: {}",
+        request.url
+    );
+}
+
+#[tokio::test]
+async fn googlebooks_summary_decode_failure_never_renders_the_api_key() {
+    // This client's decode site stripped nothing at all, so its error object
+    // carried the key. Asserting over `{err:?} {err:#}` is deliberately
+    // stricter than the `%e` sinks this path actually reaches today — the
+    // point is that no future sink can turn that into a leak.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/books/v1/volumes"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("<html><title>Quota exceeded</title>"),
+        )
+        .mount(&server)
+        .await;
+
+    let err = googlebooks::fetch(
+        &keyed_gb_config(&server),
+        &["9780140328721".to_string()],
+        "Fantastic Mr Fox",
+        None,
+    )
+    .await
+    .expect_err("an undecodable body must surface as an error");
+    let rendered = format!("{err:?} {err:#}");
+    assert!(
+        rendered.contains("not valid json"),
+        "must report a decode failure, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("super-secret-key"),
+        "api key leaked into the error chain: {rendered}"
+    );
+}
+
 // ── orchestrator (fetch_summary_with, via the pool) ──────────────
 
 #[tokio::test]

@@ -13,6 +13,7 @@ use super::super::query::SearchQuery;
 use super::super::{MetadataLookupConfig, SEARCH_LIMIT};
 use super::http::{
     base_url, client, get_json_best_effort, paired_isbn10, publication_year, sanitize_genres,
+    strip_url,
 };
 
 /// The `jscmd=data` response is a map keyed `"ISBN:<isbn>"`; a missing key means
@@ -86,13 +87,16 @@ pub async fn by_isbn(
         .timeout(config.timeout)
         .send()
         .await
+        .map_err(strip_url)
         .context("open library request failed")?
         .error_for_status()
+        .map_err(strip_url)
         .context("open library returned an error status")?;
 
     let mut body: std::collections::HashMap<String, OlBook> = resp
         .json()
         .await
+        .map_err(strip_url)
         .context("open library response was not valid json")?;
 
     let Some(book) = body.remove(&key) else {
@@ -221,12 +225,15 @@ pub async fn search(
         .timeout(config.timeout)
         .send()
         .await
+        .map_err(strip_url)
         .context("open library request failed")?
         .error_for_status()
+        .map_err(strip_url)
         .context("open library returned an error status")?;
     let body: OlSearchResponse = resp
         .json()
         .await
+        .map_err(strip_url)
         .context("open library response was not valid json")?;
     Ok(body.docs.into_iter().filter_map(map_search_doc).collect())
 }

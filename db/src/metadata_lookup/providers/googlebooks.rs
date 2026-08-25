@@ -2,7 +2,7 @@
 //! this directory implements. Reachable without a key, but only just — keyless
 //! requests share Google's anonymous daily quota, which a self-hosted instance
 //! exhausts almost immediately. A configured key is what makes it the ladder's
-//! primary rung.
+//! primary rung, and it travels as a header — see [`API_KEY_HEADER`].
 
 use std::time::Duration;
 
@@ -22,6 +22,17 @@ use super::http::{
 /// short: a check-in scan is waiting on a spinner, and the failures this
 /// covers come back fast.
 const RETRY_BACKOFF: [Duration; 2] = [Duration::from_millis(200), Duration::from_millis(600)];
+
+/// The header Google accepts the API key in, and the reason no URL in this
+/// module carries a `key=` parameter.
+///
+/// `reqwest::Error` renders the request URL in its `Display` but never a
+/// header, so a key that is never in a URL cannot reach a log — from any
+/// fallible step, including ones added later. `strip_url` had to be remembered
+/// at each call site to hold the same line, and was missed on all three
+/// `json()` sites until #2129; this removes the leak class rather than
+/// patching its instances.
+const API_KEY_HEADER: &str = "X-goog-api-key";
 
 #[derive(Debug, Deserialize)]
 struct GbResponse {
@@ -89,6 +100,9 @@ fn is_retryable(status: reqwest::StatusCode) -> bool {
 
 /// GET, retrying a retryable status a couple of times.
 ///
+/// Every request this module makes goes through here, which is what makes
+/// [`API_KEY_HEADER`] the single place the key is attached.
+///
 /// Only a *received status* is retried — a timeout or transport error is not,
 /// since those already cost the full per-request budget and retrying them
 /// would leave the scan flow spinning for half a minute.
@@ -97,9 +111,11 @@ async fn get(config: &MetadataLookupConfig, url: &str) -> anyhow::Result<reqwest
     // `Some(retry_after)` once a 429 has been seen in this call.
     let mut throttled: Option<Option<Duration>> = None;
     for attempt in 0..=RETRY_BACKOFF.len() {
-        let resp = client()?
-            .get(url)
-            .timeout(config.timeout)
+        let mut request = client()?.get(url).timeout(config.timeout);
+        if let Some(key) = config.keys.googlebooks.as_deref() {
+            request = request.header(API_KEY_HEADER, key);
+        }
+        let resp = request
             .send()
             .await
             .map_err(strip_url)
@@ -140,7 +156,7 @@ async fn get(config: &MetadataLookupConfig, url: &str) -> anyhow::Result<reqwest
     // `reqwest::Error` — so unlike the other two providers, nothing
     // downstream could infer the refusal from the error chain.
     record_throttle(config, throttled);
-    // Status only — never the URL, which carries the API key.
+    // Status only: the URL diagnoses nothing the status doesn't.
     anyhow::bail!(
         "google books unavailable after {} attempts (last status {})",
         RETRY_BACKOFF.len() + 1,
@@ -150,8 +166,8 @@ async fn get(config: &MetadataLookupConfig, url: &str) -> anyhow::Result<reqwest
 
 /// Build the volumes URL for an `isbn:`-scoped query.
 ///
-/// Kept separate so a test can assert the key is attached (and absent when
-/// unset) without a live request.
+/// Kept separate — like every other builder here — so a test can assert its
+/// shape, and that it carries no credential, without a live request.
 pub(in crate::metadata_lookup) fn isbn_url(config: &MetadataLookupConfig, isbn13: &str) -> String {
     volumes_url(config, &format!("isbn:{isbn13}"))
 }
@@ -164,12 +180,10 @@ pub(in crate::metadata_lookup) fn bare_url(config: &MetadataLookupConfig, isbn13
 
 /// `q` here is always server-built (`isbn:<digits>` or bare digits), never
 /// user text — [`search_url`] is the percent-encoding path for that.
+///
+/// The key is not appended: it rides on [`API_KEY_HEADER`] instead.
 fn volumes_url(config: &MetadataLookupConfig, q: &str) -> String {
-    let base = format!("{}/books/v1/volumes?q={q}", config.googlebooks_base);
-    match config.keys.googlebooks.as_deref() {
-        Some(key) => format!("{base}&key={key}"),
-        None => base,
-    }
+    format!("{}/books/v1/volumes?q={q}", config.googlebooks_base)
 }
 
 /// Look up an ISBN-13 against `volumes?q=isbn:`, falling back to a bare-text
@@ -341,7 +355,8 @@ pub(in crate::metadata_lookup) fn search_url(
     volumes_url_checked(config, &term)
 }
 
-/// Build the volumes URL for an already-composed `q` term.
+/// Build the volumes URL for an already-composed `q` term. Carries no key —
+/// see [`API_KEY_HEADER`].
 fn volumes_url_checked(config: &MetadataLookupConfig, query: &str) -> anyhow::Result<String> {
     let mut url = base_url(
         &config.googlebooks_base,
@@ -352,9 +367,6 @@ fn volumes_url_checked(config: &MetadataLookupConfig, query: &str) -> anyhow::Re
         .append_pair("q", query)
         .append_pair("printType", "books")
         .append_pair("maxResults", &SEARCH_LIMIT.to_string());
-    if let Some(key) = config.keys.googlebooks.as_deref() {
-        url.query_pairs_mut().append_pair("key", key);
-    }
     Ok(url.into())
 }
 
@@ -390,6 +402,23 @@ fn is_volume_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
 }
 
+/// Build the single-volume URL [`by_ref`] hydrates from. `id` is shape-checked
+/// by [`is_volume_id`] before it reaches here, since it lands in the path.
+///
+/// Extracted from `by_ref` so the no-credential-in-a-URL test covers this path
+/// too — it was the third `key=` site, and the one a test could not see.
+pub(in crate::metadata_lookup) fn volume_url(
+    config: &MetadataLookupConfig,
+    id: &str,
+) -> anyhow::Result<String> {
+    let url = base_url(
+        &config.googlebooks_base,
+        &format!("/books/v1/volumes/{id}"),
+        "google books",
+    )?;
+    Ok(url.into())
+}
+
 /// Re-fetch one candidate by its Google Books volume id — the hydrate path for
 /// a candidate with no ISBN. `Ok(None)` when the id isn't addressable or the
 /// volume is gone.
@@ -400,15 +429,8 @@ pub async fn by_ref(
     if !is_volume_id(id) {
         return Ok(None);
     }
-    let mut url = base_url(
-        &config.googlebooks_base,
-        &format!("/books/v1/volumes/{id}"),
-        "google books",
-    )?;
-    if let Some(key) = config.keys.googlebooks.as_deref() {
-        url.query_pairs_mut().append_pair("key", key);
-    }
-    let resp = match get(config, url.as_str()).await {
+    let url = volume_url(config, id)?;
+    let resp = match get(config, &url).await {
         Ok(resp) => resp,
         // A volume Google has withdrawn or merged answers 404. That is the
         // clean miss `hydrate_edition` documents — the caller keeps the row it

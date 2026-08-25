@@ -576,13 +576,12 @@ fn with_check_digit(prefix12: &str) -> String {
 }
 
 #[test]
-fn search_urls_percent_encode_the_query_and_carry_the_key() {
+fn search_urls_percent_encode_the_query() {
     let keyed = offline_config(Some("sekret"));
     let gb = googlebooks::search_url(&keyed, &title_query("war & peace")).unwrap();
-    assert!(
-        gb.contains("q=war+%26+peace") && gb.ends_with("&key=sekret"),
-        "got: {gb}"
-    );
+    // No `&key=`, even keyed: Google's key travels as a header. The credential
+    // property itself is asserted in `googlebooks_provider`.
+    assert!(gb.contains("q=war+%26+peace"), "got: {gb}");
     let ol = openlibrary::search_url(&keyed, &title_query("war & peace")).unwrap();
     assert!(
         ol.starts_with("http://ol.test/search.json?title=war+%26+peace"),

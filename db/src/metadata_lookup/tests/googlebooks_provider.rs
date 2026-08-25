@@ -11,8 +11,8 @@ use super::super::providers;
 use super::super::providers::{googlebooks, publication_year};
 use super::super::*;
 use super::{
-    config_for, gb_hit, keyed_config_for, mount_gb, mount_ol, offline_config, title_query_isbn,
-    GB_PATH, ISBN10, ISBN13,
+    config_for, gb_hit, keyed_config_for, mount_gb, mount_ol, offline_config, title_query,
+    title_query_isbn, GB_PATH, ISBN10, ISBN13,
 };
 
 #[tokio::test]
@@ -34,27 +34,107 @@ async fn googlebooks_lookup_errors_when_response_body_is_invalid_json() {
 }
 
 #[test]
-fn googlebooks_url_appends_the_key_only_when_configured() {
+fn googlebooks_urls_are_the_same_shape_with_or_without_a_key() {
+    // The key moved to a header (#2131), so a configured one changes nothing
+    // about the URL — that identity is the whole guarantee.
     assert_eq!(
         googlebooks::isbn_url(&offline_config(None), ISBN13),
         format!("http://gb.test/books/v1/volumes?q=isbn:{ISBN13}")
     );
     assert_eq!(
         googlebooks::isbn_url(&offline_config(Some("sekret")), ISBN13),
-        format!("http://gb.test/books/v1/volumes?q=isbn:{ISBN13}&key=sekret")
+        format!("http://gb.test/books/v1/volumes?q=isbn:{ISBN13}")
+    );
+}
+
+/// Every URL this provider builds, with a key configured. Kept in one place so
+/// a new builder is one line away from being covered by the property below.
+fn all_google_books_urls(config: &MetadataLookupConfig) -> Vec<String> {
+    vec![
+        googlebooks::isbn_url(config, ISBN13),
+        googlebooks::bare_url(config, ISBN13),
+        googlebooks::search_url(config, &title_query("war & peace")).unwrap(),
+        googlebooks::search_url(config, &title_query_isbn(ISBN13)).unwrap(),
+        googlebooks::volume_url(config, "AQk_EAAAQBAJ").unwrap(),
+    ]
+}
+
+#[test]
+fn no_google_books_url_carries_the_api_key() {
+    // AC1/AC3: the property, not the instances. `strip_url` used to be the only
+    // thing between a failed request and a key in `omnibus.log`, and it was
+    // opt-in per call site — so it was missing from all three `json()` sites
+    // (#2129). With no key in any URL, a fallible step added later has nothing
+    // to leak.
+    for url in all_google_books_urls(&offline_config(Some("sekret"))) {
+        assert!(!url.contains("sekret"), "api key in a request url: {url}");
+        assert!(
+            !url.contains("key="),
+            "key parameter in a request url: {url}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn googlebooks_sends_the_key_as_a_header_and_not_in_the_url() {
+    let server = MockServer::start().await;
+    mount_gb(&server, gb_hit()).await;
+
+    googlebooks::by_isbn(&keyed_config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the fixture volume must resolve");
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("the mock server records requests");
+    let request = requests.first().expect("by_isbn must have asked");
+    // The move is only safe if it still authenticates: assert the header
+    // arrived, not merely that the URL is clean.
+    assert_eq!(
+        request
+            .headers
+            .get("x-goog-api-key")
+            .and_then(|v| v.to_str().ok()),
+        Some("k")
+    );
+    assert!(
+        !request.url.as_str().contains("key="),
+        "url must carry no credential: {}",
+        request.url
     );
 }
 
 #[tokio::test]
+async fn googlebooks_sends_no_key_header_when_none_is_configured() {
+    // Keyless is a supported mode (the shared anonymous quota), so an empty or
+    // literal-`None` header would be a request Google rejects outright.
+    let server = MockServer::start().await;
+    mount_gb(&server, gb_hit()).await;
+
+    googlebooks::by_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the fixture volume must resolve");
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("the mock server records requests");
+    let request = requests.first().expect("by_isbn must have asked");
+    assert!(request.headers.get("x-goog-api-key").is_none());
+}
+
+#[tokio::test]
 async fn googlebooks_failure_never_renders_the_api_key() {
-    // The key rides in the query string, and a `reqwest::Error` renders the
-    // request URL in its Display — so an un-stripped error would write the key
-    // into the on-disk JSON log on every 429. Call the provider directly: under
-    // the key-dependent ladder a keyed Google Books is the *primary*, so its
-    // error is swallowed to a warn and a full `search_provider_by_isbn` would fall through
-    // to Open Library instead of returning it. This error object is what both
-    // the warn log and any terminal Provider error render, so it's the leak
-    // surface to guard.
+    // Belt and braces over the header move: this is the error object both the
+    // warn log and any terminal Provider error render, so it stays guarded even
+    // though there is no longer a URL carrying the key for it to print. Call
+    // the provider directly — under the key-dependent ladder a keyed Google
+    // Books is the *primary*, so its error is swallowed to a warn and a full
+    // `search_provider_by_isbn` would fall through to Open Library instead of
+    // returning it.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(GB_PATH))
@@ -76,6 +156,50 @@ async fn googlebooks_failure_never_renders_the_api_key() {
         !rendered.contains("super-secret-key"),
         "api key leaked into the error chain: {rendered}"
     );
+}
+
+#[tokio::test]
+async fn googlebooks_decode_failure_never_renders_the_api_key() {
+    // AC2. The specific shape that leaked before #2129: a keyed instance that
+    // has exhausted its quota gets 200 with an HTML page, `Response::json`
+    // fails, and that decode error carries the request URL just as a transport
+    // error does. Asserted rather than inspected, on every rung a decode can
+    // fail: the ISBN query, the search, and the `by_ref` hydrate.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("<html><title>Quota exceeded</title>"),
+        )
+        .mount(&server)
+        .await;
+
+    let config = MetadataLookupConfig {
+        keys: ProviderKeys {
+            googlebooks: Some("super-secret-key".into()),
+            ..ProviderKeys::default()
+        },
+        ..config_for(&server)
+    };
+    let failures = [
+        googlebooks::by_isbn(&config, ISBN13).await.unwrap_err(),
+        googlebooks::search(&config, &title_query("effective java"))
+            .await
+            .unwrap_err(),
+        googlebooks::by_ref(&config, "AQk_EAAAQBAJ")
+            .await
+            .unwrap_err(),
+    ];
+    for err in failures {
+        let rendered = format!("{err:?} {err:#}");
+        assert!(
+            rendered.contains("not valid json"),
+            "must report a decode failure, got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("super-secret-key"),
+            "api key leaked into the error chain: {rendered}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -270,10 +394,22 @@ async fn googlebooks_bare_query_failure_degrades_to_a_clean_miss() {
 }
 
 #[test]
-fn googlebooks_bare_url_drops_the_field_restriction_and_keeps_the_key() {
+fn googlebooks_bare_url_drops_the_field_restriction() {
     assert_eq!(
         googlebooks::bare_url(&offline_config(Some("sekret")), ISBN13),
-        format!("http://gb.test/books/v1/volumes?q={ISBN13}&key=sekret")
+        format!("http://gb.test/books/v1/volumes?q={ISBN13}")
+    );
+}
+
+#[test]
+fn googlebooks_volume_url_addresses_the_single_volume_endpoint() {
+    // The credential property above says only what this URL must *not* contain.
+    // Its three sibling builders each assert their shape as well, and this one
+    // is reached only through `by_ref`, whose tests mount a path-agnostic mock —
+    // so without this, a typo in the path would pass the whole suite.
+    assert_eq!(
+        googlebooks::volume_url(&offline_config(Some("sekret")), "AQk_EAAAQBAJ").unwrap(),
+        "http://gb.test/books/v1/volumes/AQk_EAAAQBAJ"
     );
 }
 
