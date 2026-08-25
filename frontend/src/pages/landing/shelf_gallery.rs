@@ -1,86 +1,59 @@
-//! Horizontal shelf gallery below the landing hero, mirroring the iOS
-//! `ShelvesRail`/`ShelfCard` look: 2:3 cover-mosaic tiles with name + count
-//! captions, a dashed "New shelf" tile, and — web-specific — an "All Books"
-//! first tile plus a glowing outline on the selected tile. Selecting filters
-//! the landing book list in place; nothing here navigates.
+//! The shelves row below the stack, drawn text first: names as type on a
+//! hairline rule with up to three member covers peeking in above the name on
+//! hover, which costs ~110px instead of the 170px the cover-mosaic tiles took.
+//! Selecting filters the landing book list in place; nothing here navigates.
+//! Horizontal paging (the `‹`/`›` arrows) is driven by `marquee.js`.
 
 use dioxus::prelude::*;
 use omnibus_shared::{ShelfKind, ShelfSummary, Visibility};
 
-use crate::components::shelves_rail::{all_books_icon, cog_icon, heart_icon};
+use crate::components::shelves_rail::{cog_icon, heart_icon};
 use crate::components::CreateShelfModal;
 use crate::shelf_selection::ShelfSelection;
 
-/// How the 2:3 mosaic arranges its cover cells; mirrors the iOS
-/// `ShelfMosaic` so no arrangement leaves a blank quadrant.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(super) enum MosaicLayout {
-    Empty,
-    One,
-    Two,
-    Three,
-    Four,
-}
+/// How many member covers peek in above a shelf name on hover. Three reads as
+/// a hint of the shelf without becoming a mosaic again.
+pub(super) const PEEK_COVERS: usize = 3;
 
-/// Arrangement for `cover_count` covers (counts above four clamp to four —
-/// the backend caps `cover_uuids` there anyway).
-pub(super) fn mosaic_layout(cover_count: usize) -> MosaicLayout {
-    match cover_count {
-        0 => MosaicLayout::Empty,
-        1 => MosaicLayout::One,
-        2 => MosaicLayout::Two,
-        3 => MosaicLayout::Three,
-        _ => MosaicLayout::Four,
-    }
-}
-
-/// djb2 hash of the shelf name folded to a hue, so accent-less shelves get a
-/// stable plate color. Mirrors the iOS fallback (`hash % 360`).
-pub(super) fn fallback_hue(name: &str) -> u32 {
-    let mut hash: u32 = 5381;
-    for b in name.bytes() {
-        hash = hash.wrapping_mul(33) ^ u32::from(b);
-    }
-    hash % 360
-}
-
-/// CSS background for the empty-mosaic plate: a diagonal dark gradient from
-/// the shelf accent when set, else from the name-hash hue (iOS
-/// `ShelfMosaic.emptyPlate` equivalent).
-pub(super) fn plate_gradient(accent: Option<&str>, name: &str) -> String {
-    match accent {
-        Some(accent) if !accent.trim().is_empty() => format!(
-            "linear-gradient(135deg, color-mix(in oklch, {accent} 55%, black), \
-             color-mix(in oklch, {accent} 28%, black))"
-        ),
-        _ => {
-            let h = fallback_hue(name);
-            format!("linear-gradient(135deg, oklch(0.38 0.05 {h}), oklch(0.22 0.035 {h}))")
-        }
-    }
-}
-
-/// Caption meta line: `"N books"` joined with `Smart`/`Public` markers, the
-/// same composition as the iOS card meta.
-pub(super) fn shelf_meta_line(count: i64, kind: ShelfKind, visibility: Visibility) -> String {
+/// Caption meta line: `"N books"`, plus `Public` when the shelf is shared.
+/// Kind is carried by the badge glyph beside it rather than a second word.
+pub(super) fn shelf_meta_line(count: i64, visibility: Visibility) -> String {
     let books = if count == 1 {
         "1 book".to_string()
     } else {
         format!("{count} books")
     };
-    let mut parts = vec![books];
-    if kind == ShelfKind::Smart {
-        parts.push("Smart".to_string());
-    }
     if visibility == Visibility::Public {
-        parts.push("Public".to_string());
+        format!("{books} \u{00b7} Public")
+    } else {
+        books
     }
-    parts.join(" \u{00b7} ")
 }
 
-/// Per-render snapshot of the gallery's data + selection state: the shelf
-/// list, which one is picked, the "All books" tile's count/covers, the
-/// server URL for thumbnails, and the select/create callbacks.
+/// Spoken label for a shelf entry. The kind badge is a decorative glyph, so
+/// "Smart" / "Wishlist" has to reach a screen reader through the label.
+pub(super) fn shelf_aria_label(name: &str, count: i64, kind: ShelfKind, vis: Visibility) -> String {
+    let kind_word = match kind {
+        ShelfKind::Smart => "Smart shelf ",
+        ShelfKind::Wishlist => "Wishlist ",
+        ShelfKind::Manual => "",
+    };
+    format!("{kind_word}{name}, {}", shelf_meta_line(count, vis))
+}
+
+/// The slab line above the row, which doubles as the receipt for what the
+/// current pick is doing to the list below.
+pub(super) fn slab_line(filtering: bool) -> &'static str {
+    if filtering {
+        "Shelves \u{2014} filtering the list below"
+    } else {
+        "Shelves \u{2014} showing everything"
+    }
+}
+
+/// Per-render snapshot of the row's data + selection state: the shelf list,
+/// which one is picked, the "All Books" entry's count/covers, the server URL
+/// for thumbnails, and the select/create callbacks.
 #[derive(Clone, PartialEq, Props)]
 pub(super) struct ShelfGalleryProps {
     pub shelves: Vec<ShelfSummary>,
@@ -92,8 +65,8 @@ pub(super) struct ShelfGalleryProps {
     pub on_created: EventHandler<()>,
 }
 
-/// The gallery. Tiles are toggle buttons (`aria-pressed` marks the pick);
-/// the create-shelf modal mounts locally, same wiring as the shelf rail.
+/// The row. Entries are toggle buttons (`aria-pressed` marks the pick); the
+/// create-shelf modal mounts locally, same wiring as the shelf rail.
 #[component]
 pub(super) fn ShelfGallery(props: ShelfGalleryProps) -> Element {
     let ShelfGalleryProps {
@@ -112,49 +85,63 @@ pub(super) fn ShelfGallery(props: ShelfGalleryProps) -> Element {
         Some(n) => format!("{n} books"),
         None => "Your whole library".to_string(),
     };
-    let all_plate = plate_gradient(None, "All Books");
     rsx! {
         section {
-            class: "sg-gallery",
+            class: "lmq-shelves",
             "data-testid": "shelf-gallery",
             aria_label: "Shelves",
-            div { class: "sg-head",
-                span { class: "label", "Shelves" }
+            div { class: "lmq-slab",
+                span { class: "k", "{slab_line(!all_active)}" }
                 button {
                     r#type: "button",
-                    class: "shelf-rail-new",
+                    class: "lmq-slink",
                     "data-testid": "new-shelf",
                     onclick: move |_| show_create.set(true),
                     "\u{FF0B} New shelf"
                 }
             }
-            div { class: "sg-track",
+            div { class: "lmq-shwrap",
+                // Both arrows are always in the DOM and always inert until
+                // `marquee.js` arms the end that has more to show — a
+                // conditionally-rendered arrow would change the row's element
+                // count between SSR and hydration (rule 07).
                 button {
                     r#type: "button",
-                    class: if all_active { "sg-card sg-card--active" } else { "sg-card" },
-                    "data-testid": "gallery-all-books",
-                    aria_pressed: all_active,
-                    onclick: move |_| on_select.call(ShelfSelection::All),
-                    {mosaic(&all_cover_uuids, &server_url, &all_plate, Some(all_books_icon()))}
-                    span { class: "sg-name", "All Books" }
-                    span { class: "sg-meta mono", "{all_meta}" }
+                    class: "lmq-shnav lmq-shnav--l",
+                    "data-testid": "shelf-row-prev",
+                    aria_label: "Earlier shelves",
+                    tabindex: "-1",
+                    "\u{2039}"
                 }
-                for s in shelves.iter() {
-                    ShelfCardTile {
-                        key: "{s.id}",
-                        shelf: s.clone(),
-                        active: selection == ShelfSelection::Shelf(s.id),
-                        server_url: server_url.clone(),
-                        on_select,
+                button {
+                    r#type: "button",
+                    class: "lmq-shnav lmq-shnav--r",
+                    "data-testid": "shelf-row-next",
+                    aria_label: "More shelves",
+                    tabindex: "-1",
+                    "\u{203A}"
+                }
+                div { class: "lmq-shtx", id: "lmq-shelf-row",
+                    button {
+                        r#type: "button",
+                        class: "lmq-shent",
+                        "data-testid": "gallery-all-books",
+                        aria_pressed: all_active,
+                        aria_label: "All Books, {all_meta}",
+                        onclick: move |_| on_select.call(ShelfSelection::All),
+                        {peek(&all_cover_uuids, &server_url, None)}
+                        span { class: "lmq-shent-name", "All Books" }
+                        span { class: "lmq-shent-meta", "{all_meta}" }
                     }
-                }
-                button {
-                    r#type: "button",
-                    class: "sg-new",
-                    "data-testid": "gallery-new-shelf",
-                    onclick: move |_| show_create.set(true),
-                    span { class: "sg-new-plate", "\u{FF0B}" }
-                    span { class: "sg-meta", "New shelf" }
+                    for s in shelves.iter() {
+                        ShelfRowEntry {
+                            key: "{s.id}",
+                            shelf: s.clone(),
+                            active: selection == ShelfSelection::Shelf(s.id),
+                            server_url: server_url.clone(),
+                            on_select,
+                        }
+                    }
                 }
             }
         }
@@ -171,17 +158,17 @@ pub(super) fn ShelfGallery(props: ShelfGalleryProps) -> Element {
     }
 }
 
-/// One shelf tile: mosaic (or accent plate), kind badge, name, meta line.
+/// One shelf entry: hover peek, name, kind badge + meta line.
 #[component]
-fn ShelfCardTile(
+fn ShelfRowEntry(
     shelf: ShelfSummary,
     active: bool,
     server_url: String,
     on_select: EventHandler<ShelfSelection>,
 ) -> Element {
     let id = shelf.id;
-    let plate = plate_gradient(shelf.accent.as_deref(), &shelf.name);
-    let meta = shelf_meta_line(shelf.book_count, shelf.kind, shelf.visibility);
+    let meta = shelf_meta_line(shelf.book_count, shelf.visibility);
+    let label = shelf_aria_label(&shelf.name, shelf.book_count, shelf.kind, shelf.visibility);
     let badge = match shelf.kind {
         ShelfKind::Smart => Some(cog_icon()),
         ShelfKind::Wishlist => Some(heart_icon()),
@@ -190,35 +177,31 @@ fn ShelfCardTile(
     rsx! {
         button {
             r#type: "button",
-            class: if active { "sg-card sg-card--active" } else { "sg-card" },
+            class: "lmq-shent",
             "data-testid": "gallery-shelf-{id}",
             aria_pressed: active,
+            aria_label: "{label}",
             onclick: move |_| on_select.call(ShelfSelection::Shelf(id)),
-            span { class: "sg-mosaic-wrap",
-                {mosaic(&shelf.cover_uuids, &server_url, &plate, badge.clone())}
+            {peek(&shelf.cover_uuids, &server_url, badge.clone())}
+            span { class: "lmq-shent-name", "{shelf.name}" }
+            span { class: "lmq-shent-meta",
                 if let Some(glyph) = badge {
-                    span { class: "sg-badge", {glyph} }
+                    {glyph}
                 }
+                "{meta}"
             }
-            span { class: "sg-name", "{shelf.name}" }
-            span { class: "sg-meta mono", "{meta}" }
         }
     }
 }
 
-/// The 2:3 collage: cover cells per [`mosaic_layout`], or the accent plate
-/// (with the shelf-kind glyph) when no member has a cover.
-fn mosaic(
-    cover_uuids: &[String],
-    server_url: &str,
-    plate: &str,
-    glyph: Option<Element>,
-) -> Element {
-    let layout = mosaic_layout(cover_uuids.len());
-    if layout == MosaicLayout::Empty {
+/// The covers that slide in above a name on hover — or, for a shelf with no
+/// cover-bearing member, a single dashed plate carrying the kind glyph so the
+/// row keeps its rhythm.
+fn peek(cover_uuids: &[String], server_url: &str, glyph: Option<Element>) -> Element {
+    if cover_uuids.is_empty() {
         return rsx! {
-            span { class: "sg-mosaic sg-mosaic--empty",
-                span { class: "sg-plate", style: "background: {plate};",
+            span { class: "lmq-shent-peek", aria_hidden: true,
+                span { class: "lmq-shent-none",
                     if let Some(glyph) = glyph {
                         {glyph}
                     }
@@ -226,22 +209,16 @@ fn mosaic(
             }
         };
     }
-    let n = match layout {
-        MosaicLayout::One => 1,
-        MosaicLayout::Two => 2,
-        MosaicLayout::Three => 3,
-        _ => 4,
-    };
     rsx! {
-        span { class: "sg-mosaic sg-mosaic--{n}",
-            for uuid in cover_uuids.iter().take(n) {
-                img {
-                    key: "{uuid}",
-                    class: "sg-cell",
-                    src: crate::thumb_url(server_url, uuid, "sm"),
-                    alt: "",
-                    loading: "lazy",
-                    draggable: false,
+        span { class: "lmq-shent-peek", aria_hidden: true,
+            for uuid in cover_uuids.iter().take(PEEK_COVERS) {
+                span { key: "{uuid}",
+                    img {
+                        src: crate::thumb_url(server_url, uuid, "sm"),
+                        alt: "",
+                        loading: "lazy",
+                        draggable: false,
+                    }
                 }
             }
         }

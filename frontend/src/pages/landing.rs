@@ -22,11 +22,11 @@ mod filters;
 #[cfg(not(feature = "mobile"))]
 mod grid;
 #[cfg(not(feature = "mobile"))]
-mod hero;
-#[cfg(not(feature = "mobile"))]
 mod sections;
 #[cfg(not(feature = "mobile"))]
 mod shelf_gallery;
+#[cfg(not(feature = "mobile"))]
+mod stack;
 #[cfg(not(feature = "mobile"))]
 mod table;
 #[cfg(not(feature = "mobile"))]

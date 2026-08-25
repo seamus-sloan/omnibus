@@ -10719,3 +10719,413 @@ html {
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;
   background: var(--ok); margin-right: 6px; vertical-align: 1px;
 }
+
+/* ══ Library home · marquee ══════════════════════════════════════════
+   The chosen landing direction (design: `Omnibus - Library.html`, artboard
+   LIVE): the open books fanned on a centred stage at its tight height, a
+   text-first shelves row, and a cover wall whose captions arrive on hover.
+   Sibling of the book-detail `.bdmq` block above — same type voice, same
+   idea that the page takes the accent of the book you are in. Scoped under
+   `.lmq`; scroll mechanics in `frontend/src/pages/landing/marquee.js`. */
+
+.lmq {
+  --serif: 'Cormorant Garamond', Georgia, serif;
+  --sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+  --mono: 'Space Mono', ui-monospace, 'SF Mono', monospace;
+  font-family: var(--sans);
+  position: relative;
+  gap: 0;
+  padding-top: 0;
+}
+/* The accent wash. The design paints it on a fixed stage because its artboard
+   scrolls internally; a real page scrolls the document, so the wash is a
+   fixed layer behind the column instead — same picture, and `scroll_restore`
+   plus the load-more IntersectionObserver keep working on the window. */
+.lmq::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(64% 78% at 18% 0%, color-mix(in oklch, var(--accent) 17%, transparent), transparent 62%),
+    radial-gradient(52% 70% at 92% 12%, color-mix(in oklch, var(--accent) 9%, transparent), transparent 58%);
+}
+.lmq > * { position: relative; z-index: 1; }
+
+/* ── The stack: the open books, fanned ───────────────────────────── */
+.lmq-stack {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  padding: 14px 0 22px;
+}
+.lmq-stack-side { max-width: 720px; }
+.lmq-kicker {
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.26em;
+  text-transform: uppercase; color: var(--accent);
+}
+.lmq .lmq-title {
+  font-family: var(--serif); font-size: 38px; font-weight: 600;
+  line-height: 0.94; letter-spacing: -0.012em; color: var(--ink-0);
+  margin: 8px 0 0; text-wrap: pretty;
+}
+.lmq-title-link { color: inherit; text-decoration: none; }
+.lmq-title-link:hover .lmq-title { color: var(--accent); }
+.lmq-by { margin-top: 6px; font-size: 15px; color: var(--ink-1); }
+.lmq-where {
+  margin-top: 3px; font-family: var(--mono); font-size: 11.5px;
+  color: var(--ink-3); letter-spacing: 0.01em;
+}
+/* The lead book's cross-format affordances live beside the type, never on
+   the cover — the cover belongs to the resume verb alone. */
+.lmq-alts {
+  margin-top: 14px; display: flex; justify-content: center;
+  align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.lmq-alt {
+  display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+  height: 32px; padding: 0 14px; border-radius: 999px;
+  border: 1px solid var(--line-2); background: transparent;
+  color: var(--ink-1); font: inherit; font-size: 12.5px;
+  text-decoration: none; cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.lmq-alt:hover {
+  color: var(--ink-0);
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+  background: color-mix(in oklch, var(--accent) 8%, transparent);
+}
+.lmq-alt svg { flex: 0 0 auto; }
+.lmq-alt--invite { color: var(--ink-2); font-size: 12px; white-space: normal; }
+
+.lmq-stack-keys {
+  margin-top: 10px; display: flex; justify-content: center; gap: 22px;
+  flex-wrap: wrap;
+}
+.lmq-key {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.lmq-key kbd {
+  font-family: var(--mono); font-size: 10px; color: var(--ink-1);
+  border: 1px solid var(--line-2); border-radius: 5px; padding: 3px 7px;
+  background: var(--bg-1);
+}
+
+.lmq-fan {
+  display: flex; align-items: flex-end; justify-content: center;
+  padding: 4px 0 12px;
+}
+.lmq-fcard {
+  flex: 0 0 132px; width: 132px; margin-left: -74px;
+  position: relative; isolation: isolate; cursor: pointer;
+  padding: 0; border: 0; background: none; color: inherit;
+  transform-origin: bottom center;
+  transform: rotate(var(--rot)) translateY(var(--dy));
+  transition: transform .3s cubic-bezier(.2,.7,.2,1), margin .42s cubic-bezier(.2,.7,.2,1);
+}
+.lmq-fcard:first-child { margin-left: 0; }
+.lmq-fcard .cover-wrap { filter: drop-shadow(0 26px 34px oklch(0 0 0 / .6)); }
+.lmq-fcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+/* Pointing anywhere at the fan spreads it; pointing at one cover tilts that
+   one forward in 3-D. Both are hover-only affordances — the same states are
+   reachable from the keyboard through `:focus-visible` above plus the arrow
+   keys, which move the lead. */
+@media (hover: hover) {
+  .lmq-fan:hover .lmq-fcard { margin-left: 16px; transform: rotate(0deg) translateY(0); }
+  .lmq-fan:hover .lmq-fcard:first-child { margin-left: 0; }
+  /* Qualified by `.lmq-fan:hover` so it outranks the spread rule above it —
+     a bare `.lmq-fcard:hover` is one class less specific and loses, which
+     silently kills the tilt. You cannot hover a card without hovering the
+     fan, so the extra qualifier costs nothing. */
+  .lmq-fan:hover .lmq-fcard:hover {
+    transform: perspective(1000px) rotateY(-13deg) rotateX(6deg) translateY(-16px) scale(1.05);
+    z-index: 12;
+  }
+}
+
+/* The veil: the lead cover *is* the button, so the verb lands on the art
+   rather than on a pill floating beside it. */
+.lmq-veil {
+  position: absolute; inset: 0; z-index: 3;
+  display: grid; place-items: center; align-content: center; gap: 10px;
+  background: color-mix(in oklch, black 58%, transparent);
+  backdrop-filter: blur(1.5px);
+  opacity: 0; transition: opacity .24s;
+  border-radius: 2px 4px 4px 2px;
+  /* Decorative: the whole card is the link, so the veil must not hit-test.
+     The fan overlaps by design, and an opacity-0 veil on the front card sits
+     over its neighbours — without this it swallows every click meant for the
+     books behind it. */
+  pointer-events: none;
+}
+.lmq-fcard:hover .lmq-veil,
+.lmq-fcard:focus-visible .lmq-veil { opacity: 1; }
+.lmq-veil-mark {
+  width: 46px; height: 46px; border-radius: 999px;
+  border: 1px solid color-mix(in oklch, white 55%, transparent);
+  display: grid; place-items: center; color: #fff;
+}
+.lmq-veil-lab {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.2em;
+  text-transform: uppercase; color: #fff;
+}
+.lmq-veil-bar {
+  position: absolute; left: 14px; right: 14px; bottom: 16px; height: 2px;
+  border-radius: 999px; background: color-mix(in oklch, white 26%, transparent);
+  overflow: hidden;
+}
+.lmq-veil-bar i { display: block; height: 100%; background: var(--accent); }
+
+/* ── Shelves, text first ─────────────────────────────────────────── */
+.lmq-shelves { padding: 6px 0 30px; }
+.lmq-slab {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; margin-bottom: 14px;
+}
+.lmq-slab .k {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.lmq-slink {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--ink-2);
+  background: transparent; border: 0; cursor: pointer; padding: 0;
+}
+.lmq-slink:hover { color: var(--accent); }
+
+.lmq-shwrap { position: relative; display: flex; align-items: stretch; }
+/* The peek needs room INSIDE the scroller: `overflow-x: auto` clips the block
+   axis too, so without the top padding the covers slide up into a clip
+   instead of into view. */
+.lmq-shtx {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: stretch;
+  overflow-x: auto; overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity; scrollbar-width: none;
+  padding-top: 46px;
+}
+.lmq-shtx::-webkit-scrollbar { display: none; }
+.lmq-shent {
+  scroll-snap-align: start; position: relative; flex: 0 0 auto;
+  border: 0; background: none; cursor: pointer; text-align: left;
+  padding: 10px 26px 12px; border-left: 1px solid var(--line-2);
+  color: inherit; font: inherit;
+}
+.lmq-shent:first-child { padding-left: 0; border-left: 0; }
+.lmq-shent:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.lmq-shent-name {
+  display: block;
+  font-family: var(--serif); font-size: 23px; line-height: 1.1;
+  color: var(--ink-1); white-space: nowrap; transition: color .18s;
+}
+.lmq-shent-meta {
+  margin-top: 5px; display: flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.lmq-shent-peek {
+  position: absolute; left: 26px; top: -42px;
+  display: flex; gap: 5px;
+  opacity: 0; transform: translateY(10px) scale(.94); transform-origin: bottom left;
+  transition: opacity .18s, transform .26s cubic-bezier(.2,.7,.2,1);
+  pointer-events: none;
+}
+.lmq-shent:first-child .lmq-shent-peek { left: 0; }
+.lmq-shent-peek span { width: 25px; display: block; }
+.lmq-shent-peek img {
+  display: block; width: 100%; aspect-ratio: 2/3; object-fit: cover;
+  border-radius: 2px; filter: drop-shadow(0 6px 10px oklch(0 0 0 / .5));
+}
+.lmq-shent-none {
+  display: grid; place-items: center; width: 25px; height: 37px;
+  border: 1px dashed var(--line); border-radius: 3px; color: var(--ink-3);
+}
+.lmq-shent:hover .lmq-shent-name { color: var(--ink-0); }
+.lmq-shent:hover .lmq-shent-peek,
+.lmq-shent:focus-visible .lmq-shent-peek { opacity: 1; transform: translateY(0) scale(1); }
+.lmq-shent:hover .lmq-shent-peek span:nth-child(2) { transition-delay: .03s; }
+.lmq-shent:hover .lmq-shent-peek span:nth-child(3) { transition-delay: .06s; }
+.lmq-shent[aria-pressed="true"] .lmq-shent-name { color: var(--ink-0); }
+.lmq-shent[aria-pressed="true"] .lmq-shent-meta { color: color-mix(in oklch, var(--accent) 80%, var(--ink-2)); }
+.lmq-shent[aria-pressed="true"]::after {
+  content: ''; position: absolute; left: 26px; right: 26px; bottom: 0;
+  height: 2px; border-radius: 999px; background: var(--accent);
+}
+.lmq-shent[aria-pressed="true"]:first-child::after { left: 0; }
+
+/* Paging the row: each arrow fades in only at an end that still has more,
+   with a matching gradient masking the overflow on that side. */
+.lmq-shnav {
+  align-self: center; flex: 0 0 28px; margin-top: 40px; z-index: 4;
+  width: 28px; height: 28px; display: grid; place-items: center;
+  padding: 0 0 2px; border-radius: 999px; border: 1px solid var(--line-2);
+  background: color-mix(in oklch, var(--bg-1) 82%, transparent);
+  backdrop-filter: blur(7px); color: var(--ink-1);
+  font-size: 17px; line-height: 1; cursor: pointer;
+  opacity: 0; pointer-events: none; transform: scale(.9);
+  transition: opacity .18s, transform .18s, color .18s, border-color .18s;
+}
+.lmq-shnav.on { opacity: 1; pointer-events: auto; transform: scale(1); }
+.lmq-shnav:hover { color: var(--ink-0); border-color: color-mix(in oklch, var(--accent) 60%, transparent); }
+.lmq-shnav--l { margin-right: 8px; }
+.lmq-shnav--r { margin-left: 8px; order: 3; }
+.lmq-shwrap::before, .lmq-shwrap::after {
+  content: ''; position: absolute; top: 40px; bottom: 0; width: 40px;
+  pointer-events: none; z-index: 3; opacity: 0; transition: opacity .2s;
+}
+.lmq-shwrap::after {
+  right: 36px;
+  background: linear-gradient(270deg, color-mix(in oklch, var(--bg-0) 92%, transparent), transparent);
+}
+.lmq-shwrap::before {
+  left: 36px;
+  background: linear-gradient(90deg, color-mix(in oklch, var(--bg-0) 92%, transparent), transparent);
+}
+.lmq-shwrap:has(.lmq-shnav--r.on)::after { opacity: 1; }
+.lmq-shwrap:has(.lmq-shnav--l.on)::before { opacity: 1; }
+
+/* ── The section header and its tools ────────────────────────────── */
+.lmq .lib-header { padding: 0 0 20px; gap: 10px; }
+.lmq .lib-header-kicker-title.lib-header-kicker-title,
+.lmq .lib-header-path {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.lmq .lib-header-title {
+  font-family: var(--serif); font-size: 44px; font-weight: 600;
+  line-height: 1; letter-spacing: -0.015em;
+}
+.lmq .lib-header-title em { font-style: normal; }
+.lmq .lib-header-count { color: var(--ink-2); }
+.lmq .lib-header-hidden { color: var(--ink-3); }
+.lmq .lib-toolbar { gap: 10px; }
+.lmq .lib-view-toggle {
+  display: inline-flex; padding: 2px; gap: 2px;
+  background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 999px;
+}
+.lmq .lib-toggle-btn {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--ink-2);
+  background: transparent; border: 0; border-radius: 999px;
+  height: auto; padding: 6px 12px;
+}
+.lmq .lib-toggle-btn[aria-pressed="true"] { background: var(--bg-3); color: var(--ink-0); border-color: transparent; }
+.lmq .lib-sort-label, .lmq .lib-sort-select, .lmq .lib-sort-dir {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.lmq .lib-sort-select, .lmq .lib-sort-dir { border-radius: 999px; }
+
+/* ── The cover wall ──────────────────────────────────────────────── */
+.lmq .lib-grid { grid-template-columns: repeat(auto-fill, minmax(126px, 1fr)); gap: 26px 22px; }
+.lmq .lib-tile .cover-wrap { filter: drop-shadow(0 14px 18px oklch(0 0 0 / .45)); }
+.lmq .lib-tile-art {
+  display: block;
+  transition: transform .26s cubic-bezier(.2,.7,.2,1);
+}
+@media (hover: hover) {
+  .lmq .lib-tile:hover .lib-tile-art { transform: translateY(-7px) scale(1.02); }
+}
+/* Caption over the cover, not under it: the wall is covers, and the words
+   arrive only for the one you are pointing at. */
+.lmq .lib-tile-cap {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: grid; gap: 2px; padding: 24px 9px 9px;
+  background: linear-gradient(to top, oklch(0.08 0.01 70 / .95) 26%, transparent);
+  border-radius: 0 0 3px 3px;
+  opacity: 0; transform: translateY(6px);
+  transition: opacity .2s, transform .24s cubic-bezier(.2,.7,.2,1);
+  pointer-events: none;
+}
+.lmq .lib-tile:hover .lib-tile-cap,
+.lmq .lib-tile:focus-visible .lib-tile-cap { opacity: 1; transform: translateY(0); }
+.lmq .lib-tile-title {
+  margin-top: 0; font-family: var(--serif); font-size: 13px; font-weight: 600;
+  line-height: 1.15; color: #fff; white-space: normal;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.lmq .lib-tile-author {
+  margin-top: 0; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+  color: color-mix(in oklch, white 62%, transparent);
+}
+
+/* ── Resume, once the stack has scrolled away ─────────────────────
+   Not a docked bar — a full-width strip pinned under the chrome reads as the
+   audiobook mini-player. A ribbon caught in the page edge instead, widening
+   into the control when you point at it (or tab into it). */
+.lmq-edge {
+  position: fixed; right: 0; top: 46%; z-index: 7;
+  display: flex; align-items: stretch;
+  width: 34px; height: 132px; overflow: hidden;
+  border-radius: 8px 0 0 8px;
+  background: color-mix(in oklch, var(--accent) 90%, black 6%);
+  color: var(--accent-ink);
+  box-shadow: -10px 12px 26px oklch(0 0 0 / .45);
+  transform: translateX(34px); opacity: 0; pointer-events: none;
+  transition: width .3s cubic-bezier(.2,.7,.2,1), height .3s cubic-bezier(.2,.7,.2,1),
+              transform .3s cubic-bezier(.2,.7,.2,1), opacity .25s;
+}
+.lmq--past .lmq-edge { transform: translateX(0); opacity: 1; pointer-events: auto; }
+.lmq--past .lmq-edge:hover, .lmq--past .lmq-edge:focus-within { width: 296px; height: 96px; }
+.lmq-edge-strip { flex: 0 0 34px; display: grid; place-items: center; }
+.lmq-edge-vert {
+  writing-mode: vertical-rl; font-family: var(--mono); font-size: 9.5px;
+  letter-spacing: 0.18em; text-transform: uppercase; white-space: nowrap;
+}
+.lmq-edge-card {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 12px;
+  padding: 0 16px 0 4px; opacity: 0; transition: opacity .2s;
+}
+.lmq--past .lmq-edge:hover .lmq-edge-card,
+.lmq--past .lmq-edge:focus-within .lmq-edge-card { opacity: 1; transition-delay: .1s; }
+.lmq-edge-card .ec { width: 40px; flex: 0 0 40px; }
+.lmq-edge-card .ec .cover-wrap { filter: none; }
+.lmq-edge-card .et { min-width: 0; }
+.lmq-edge-card .et b {
+  display: block; font-size: 13px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lmq-edge-card .et span {
+  display: block; font-family: var(--mono); font-size: 9.5px; opacity: .8;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lmq-edge-go {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 13px; border: 0; border-radius: 999px;
+  background: color-mix(in oklch, var(--accent-ink) 88%, transparent);
+  color: var(--accent); font: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer;
+}
+
+.lmq-scrollhint {
+  position: fixed; right: clamp(1.25rem, 4vw, 3.5rem); bottom: 22px; z-index: 6;
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--ink-3);
+  pointer-events: none; transition: opacity .25s;
+}
+.lmq--past .lmq-scrollhint { opacity: 0; }
+.lmq-scrollhint .arr { animation: lmqbob 1.6s ease-in-out infinite; }
+@keyframes lmqbob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(4px); } }
+
+@media (max-width: 720px) {
+  .lmq .lmq-title { font-size: 30px; }
+  .lmq .lib-header-title { font-size: 32px; }
+  .lmq-fcard { flex-basis: 104px; width: 104px; margin-left: -58px; }
+  .lmq-edge, .lmq-scrollhint { display: none; }
+}
+
+/* No fan spread, no tilt, no bob, no widening ribbon — the states still
+   reach every control, they just arrive without the motion. */
+@media (prefers-reduced-motion: reduce) {
+  .lmq-fcard, .lmq-veil, .lmq-shent-peek, .lmq-edge, .lmq-edge-card,
+  .lmq .lib-tile-art, .lmq .lib-tile-cap, .lmq-shnav { transition: none; }
+  .lmq-fan:hover .lmq-fcard,
+  .lmq-fan:hover .lmq-fcard:hover { transform: rotate(var(--rot)) translateY(var(--dy)); }
+  .lmq .lib-tile:hover .lib-tile-art { transform: none; }
+  .lmq-scrollhint .arr { animation: none; }
+}
