@@ -1,6 +1,11 @@
-//! The "Recently Interacted" axis: that each of the seven signals moves a
-//! book, that a private journal draft does not, and that keyset paging over
-//! the derived expression stays consistent with an unpaged read.
+//! The "Recently Interacted" axis: that each signal moves a book, that a
+//! private journal draft does not, and that keyset paging over the derived
+//! expression stays consistent with an unpaged read.
+//!
+//! Six cases cover the seven signals: metadata edits and cover replacements
+//! share one clock (both land on `books.last_modified` via
+//! `touch_book_last_modified`), so one test covers the pair rather than
+//! pretending they are independently observable here.
 
 use omnibus_shared::{SortDir, SortKey, ViewFilters};
 use sqlx::SqlitePool;
