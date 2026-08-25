@@ -10951,9 +10951,14 @@ html {
 }
 .lmq-shent:first-child { padding-left: 0; border-left: 0; }
 .lmq-shent:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+/* The shelf row is the quieter tier under the section header, so the name
+   stays 400 while the display tier went to 600 in the type promotion — the
+   weight and `--ink-1` are one decision, and the hover/pick brightening to
+   `--ink-0` needs both to carry it. Stated explicitly so the next type sweep
+   reads a choice rather than a missing declaration. */
 .lmq-shent-name {
   display: block;
-  font-family: var(--serif); font-weight: 600; font-size: 23px; line-height: 1.1;
+  font-family: var(--serif); font-weight: 400; font-size: 23px; line-height: 1.1;
   color: var(--ink-1); white-space: nowrap; transition: color .18s;
 }
 .lmq-shent-meta {
