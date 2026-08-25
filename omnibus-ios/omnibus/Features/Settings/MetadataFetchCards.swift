@@ -57,7 +57,7 @@ struct EditionCandidateCard: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(edition.title)
-                        .font(.display(18))
+                        .font(.display(21))
                         .foregroundStyle(palette.ink0Color)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -148,7 +148,7 @@ struct CoverPlate: View {
             .aspectRatio(2.0 / 3.0, contentMode: .fit)
             .overlay {
                 Text(title.prefix(1).uppercased())
-                    .font(.display(24))
+                    .font(.display(27))
                     .foregroundStyle(palette.coverFallbackInk.color.opacity(0.5))
             }
     }
@@ -309,7 +309,7 @@ struct EditionFieldCard: View {
                 .foregroundStyle(palette.ink3Color.opacity(0.85))
 
             Text(text.isEmpty ? MetadataFetchFlow.empty : text)
-                .font(field.isProse ? .display(15.5) : .ui(14.5, weight: emphasis ? .medium : .regular))
+                .font(field.isProse ? .display(18) : .ui(14.5, weight: emphasis ? .medium : .regular))
                 .foregroundStyle(valueInk(text: text, emphasis: emphasis))
                 .lineLimit(expanded ? nil : (field.isProse ? 3 : 3))
                 .multilineTextAlignment(.leading)

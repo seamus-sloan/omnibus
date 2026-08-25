@@ -156,7 +156,7 @@ struct MetadataFetchSheet: View {
             VStack(alignment: .leading, spacing: Spacing.xl) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Find this edition")
-                        .font(.display(27))
+                        .font(.display(30))
                         .foregroundStyle(palette.ink0Color)
                     Text(
                         "Every source you've set up gets asked at once. Nothing is written until you take a field and press Save."
@@ -762,7 +762,7 @@ private struct CompareScreen: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(edition.title)
-                    .font(.display(21))
+                    .font(.display(24))
                     .foregroundStyle(palette.ink0Color)
                     .lineLimit(3)
                 Text(MetadataFetchFlow.authorsLine(edition))

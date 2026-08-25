@@ -105,7 +105,7 @@ struct AuthorsView: View {
     private func letterHeader(_ letter: String) -> some View {
         HStack(spacing: Spacing.md) {
             Text(letter)
-                .font(.display(15, weight: .semibold))
+                .font(.display(17, weight: .semibold))
                 .foregroundStyle(palette.accentColor)
                 .frame(width: 16, alignment: .leading)
 
@@ -195,7 +195,7 @@ struct AuthorAvatar: View {
         ZStack {
             palette.bg3Color
             Text(name.prefix(1).uppercased())
-                .font(.display(size * 0.42, weight: .semibold))
+                .font(.display(size * 0.47, weight: .semibold))
                 .foregroundStyle(palette.ink2Color)
         }
     }
@@ -232,7 +232,7 @@ struct AuthorDetailView: View {
                             )
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(detail.name)
-                                    .font(.display(27))
+                                    .font(.display(30))
                                     .foregroundStyle(palette.ink0Color)
                                 Text("\(detail.bookCount) book\(detail.bookCount == 1 ? "" : "s")")
                                     .font(.ui(13))

@@ -217,7 +217,7 @@ struct PlayerView: View {
     private var titles: some View {
         VStack(spacing: 4) {
             Text(book.displayTitle)
-                .font(.display(25))
+                .font(.display(28))
                 .foregroundStyle(palette.ink0Color)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)

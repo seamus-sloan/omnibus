@@ -276,8 +276,12 @@ omnibusApp.swift    — @main OmnibusApp: audio session + appearance bootstrap
 App/                — AppState (server URL, auth, theme), RootView phase router
                       (launching → connect → login → tabs), MainTabView shell +
                       destination routing + global reader/player presentation
-Design/             — Theme (Atrium tokens), OKLCH↔sRGB conversion for
-                      server-provided accents, Motion (shared curves), and
+Design/             — Theme (Atrium tokens + the type scale), OKLCH↔sRGB
+                      conversion for server-provided accents, Fonts/ (static
+                      cuts of Cormorant Garamond / Instrument Sans / Space Mono,
+                      the three families the web pulls from Google Fonts, each
+                      with its OFL licence and every file listed in
+                      `Info.plist`'s `UIAppFonts`), Motion (shared curves), and
                       Components/ (BookCover, RemoteImage, Plate, SearchField,
                       OmnibusTabBar, Masthead, BrandMark — the stoat, a copy of
                       the web's omnibus-stoat.png — FlowLayout, TopEdgeScrim,

@@ -57,7 +57,7 @@ struct UserAvatar: View {
         )
         .overlay {
             Text(Self.initials(for: name))
-                .font(.display(size * 0.45, weight: .semibold))
+                .font(.display(size * 0.50, weight: .semibold))
                 .foregroundStyle(palette.accentInk.color)
         }
     }

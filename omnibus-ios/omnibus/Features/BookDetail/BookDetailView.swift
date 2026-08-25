@@ -412,13 +412,13 @@ struct BookDetailView: View {
     /// that reads as a rendering fault rather than as typography.
     private func setBlurb(_ text: String) -> AttributedString {
         var body = AttributedString(isProse(text) ? String(text.dropFirst()) : text)
-        body.font = .display(17.5)
+        body.font = .display(20)
         body.foregroundColor = palette.ink1Color
 
         guard isProse(text) else { return body }
 
         var initial = AttributedString(String(text.prefix(1)))
-        initial.font = .display(44)
+        initial.font = .display(50)
         initial.foregroundColor = palette.accentColor
         return initial + body
     }
@@ -451,7 +451,7 @@ struct BookDetailView: View {
             HStack(spacing: Spacing.sm) {
                 if model.rating > 0 {
                     Text(model.rating.formatted())
-                        .font(.display(19))
+                        .font(.display(22))
                         .foregroundStyle(palette.ink1Color)
                         .contentTransition(.numericText())
 
@@ -796,7 +796,7 @@ struct BookDetailView: View {
         } label: {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Start a journal")
-                    .font(.display(17))
+                    .font(.display(20))
                     .foregroundStyle(palette.ink1Color)
                 Text("Notes, quotes, and what you made of it — kept with the book.")
                     .font(.ui(13))
@@ -850,7 +850,7 @@ struct BookDetailView: View {
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
             Text(model.book?.displayTitle ?? "")
-                .font(.display(16, weight: .medium))
+                .font(.display(18, weight: .medium))
                 .foregroundStyle(palette.ink0Color)
                 .lineLimit(1)
                 .opacity(barTitleOpacity)
@@ -926,7 +926,7 @@ struct HighlightsList: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if let text = highlight.text?.nilIfBlank {
                         Text(text)
-                            .font(.display(15))
+                            .font(.display(18))
                             .foregroundStyle(palette.ink0Color)
                             .lineLimit(4)
                     }
@@ -975,7 +975,7 @@ struct DisclosureSection<Content: View>: View {
             } label: {
                 HStack {
                     Text(title)
-                        .font(.display(20))
+                        .font(.display(23))
                         .foregroundStyle(palette.ink0Color)
                     Spacer()
                     Image(systemName: "chevron.down")

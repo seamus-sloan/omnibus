@@ -204,7 +204,7 @@ struct ShelfDetailView: View {
             } label: {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Add the first book")
-                        .font(.display(17))
+                        .font(.display(20))
                         .foregroundStyle(palette.ink1Color)
                     Text("Search your library and pick as many as you like.")
                         .font(.ui(13))
@@ -251,7 +251,7 @@ struct ShelfDetailView: View {
                             .frame(width: 24, height: 1.5)
 
                         Text(shelf.name)
-                            .font(.display(27))
+                            .font(.display(30))
                             .foregroundStyle(palette.ink0Color)
                             .fixedSize(horizontal: false, vertical: true)
 
@@ -263,7 +263,7 @@ struct ShelfDetailView: View {
 
                         if let description = shelf.description?.nilIfBlank {
                             Text(description)
-                                .font(.display(15))
+                                .font(.display(18))
                                 .foregroundStyle(palette.ink2Color)
                                 .padding(.top, 2)
                         }

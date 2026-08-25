@@ -368,7 +368,7 @@ private struct StatTile: View {
             // divider rather than as "no value". The mono face keeps the
             // placeholder the size of a character.
             Text(value)
-                .font(isEmpty ? .monoUI(22) : .display(25))
+                .font(isEmpty ? .monoUI(22) : .display(28))
                 .foregroundStyle(isEmpty ? palette.ink3Color : palette.ink0Color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)

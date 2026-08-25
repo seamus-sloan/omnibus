@@ -17,7 +17,7 @@ struct ShelvesRail: View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Shelves")
-                    .font(.display(24))
+                    .font(.display(27))
                     .foregroundStyle(palette.ink0Color)
 
                 Spacer(minLength: 0)

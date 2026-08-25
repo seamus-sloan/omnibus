@@ -37,7 +37,7 @@ struct JournalCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             Text(rendered)
-                .font(.display(16.5))
+                .font(.display(19))
                 .foregroundStyle(palette.ink0Color)
                 .lineSpacing(5)
                 .lineLimit(expanded ? nil : 6)
@@ -199,7 +199,7 @@ struct JournalComposer: View {
     /// is what you get rather than sans in, serif out.
     private var editor: some View {
         TextEditor(text: $body_)
-            .font(.display(16.5))
+            .font(.display(19))
             .lineSpacing(5)
             .foregroundStyle(palette.ink0Color)
             .tint(palette.accentColor)
@@ -210,7 +210,7 @@ struct JournalComposer: View {
             .overlay(alignment: .topLeading) {
                 if body_.isEmpty {
                     Text("What did you think?")
-                        .font(.display(16.5))
+                        .font(.display(19))
                         .foregroundStyle(palette.ink3Color)
                         .padding(.horizontal, Spacing.screen)
                         .padding(.top, Spacing.md)

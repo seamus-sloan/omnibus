@@ -24,7 +24,7 @@ struct SectionLabel: View {
 
     var body: some View {
         Text(title)
-            .font(.display(20))
+            .font(.display(23))
             .foregroundStyle(palette.ink0Color)
             .accessibilityAddTraits(.isHeader)
     }
@@ -196,7 +196,7 @@ struct PlateField: View {
                 }
 
                 TextField("", text: $text, axis: multiline ? .vertical : .horizontal)
-                    .font(multiline ? .display(15.5) : .ui(15))
+                    .font(multiline ? .display(18) : .ui(15))
                     .foregroundStyle(palette.ink0Color)
                     .textInputAutocapitalization(multiline ? .sentences : .words)
                     .autocorrectionDisabled(!multiline)
