@@ -202,7 +202,7 @@ pub struct EbookMetadata {
 | `AccentNoChroma` | all-black or pure-grayscale cover | Hue-bucket pass finds zero weight | inline `None` return | Default accent |
 | `MigrationFailed` | sqlx column add fails | `sqlx::migrate!` returns Err on boot | Server fails to start; rollback previous binary | 503 |
 | `ThemeStorageWriteFailed` | localStorage quota / private mode / mobile r/o fs | `Result::Err` from set call | In-memory only for session; log warn | Toggle works but doesn't persist |
-| `AtriumCssMissing` | static file removed | Playwright smoke asserts computed font-family includes "Geist" (now "Instrument Sans") | CI fails; deploy blocked | (would be) unstyled |
+| `AtriumCssMissing` | static file removed | Playwright asserts the quote-card preview's computed `font-family` (`book_detail.spec.ts`) — currently Cormorant Garamond and Instrument Sans; F1.7 shipped it as Geist | CI fails; deploy blocked | (would be) unstyled |
 | `FontLoadBlocked` | CSP blocks self-hosted font | DevTools console; `font.load()` rejects | `font-display: swap` → system fallback renders | Mild FOUT |
 
 ---
