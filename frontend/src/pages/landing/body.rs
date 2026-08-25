@@ -105,10 +105,15 @@ pub(super) fn web_landing_body(
     // than inside either of them. Hooks stay unconditional: this helper is on
     // the web build's only render path.
     let lead = use_signal(|| 0usize);
-    // Read (not held) so a cover edit elsewhere re-renders the stack with a
-    // fresh thumb URL, without carrying a signal guard across the rsx below.
-    let cover_bust = crate::contexts::use_cover_cache_bust().0.read().clone();
-    let entries = stack_entries(&hero_points, &server_url, &cover_bust);
+    // Borrowed inside its own scope, so the guard is dropped before the rsx
+    // below (never held across other signal reads) without copying the map.
+    // Reading it here is what re-renders the stack with a fresh thumb URL
+    // after a cover edit elsewhere.
+    let cover_bust = crate::contexts::use_cover_cache_bust().0;
+    let entries = {
+        let cover_bust = cover_bust.read();
+        stack_entries(&hero_points, &server_url, &cover_bust)
+    };
     let accent_style = lead_accent_style(&entries, lead());
     let show_stack = !view.is_search && !entries.is_empty();
     // The glue binds elements the shelves row and the stack only mount once

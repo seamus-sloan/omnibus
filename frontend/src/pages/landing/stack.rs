@@ -311,10 +311,12 @@ fn StackAlts(front: StackEntry) -> Element {
     }
 }
 
-/// One cover in the fan. Every card is a `button` on every target and in
-/// every position — swapping element types between lead and non-lead would
-/// make the diff replace the node and drop the handlers on its siblings
-/// (rule 07). The lead's click resumes; the rest bring themselves forward.
+/// One cover in the fan. Every card is a `Link` on every target and in every
+/// position — swapping element types between lead and non-lead would make the
+/// diff replace the node and drop the handlers on its siblings (rule 07), and
+/// the `href` is what keeps middle-click and open-in-new-tab working on the
+/// resume affordance. The lead's click resumes; the rest suppress the
+/// navigation (`onclick_only`) and bring themselves forward instead.
 #[component]
 fn FanCard(entry: StackEntry, index: usize, is_lead: bool, mut lead: Signal<usize>) -> Element {
     let StackEntry {
