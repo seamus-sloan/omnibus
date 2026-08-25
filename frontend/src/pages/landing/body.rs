@@ -1,6 +1,7 @@
 //! Presentation branches of [`super::LandingPage`]: the mobile compact-grid
-//! body and the web hero/gallery/header/content/bulk-edit body, plus the
-//! bulk-edit list-merge helpers they share with the modal's save handler.
+//! body and the web marquee body — the stack, the shelves row, the section
+//! header, the cover wall, and the edge resume ribbon — plus the bulk-edit
+//! list-merge helpers they share with the modal's save handler.
 
 #[cfg(not(feature = "mobile"))]
 use std::collections::BTreeSet;
@@ -11,8 +12,6 @@ use omnibus_shared::EbookMetadata;
 
 #[cfg(not(feature = "mobile"))]
 use super::bulk_edit;
-#[cfg(not(feature = "mobile"))]
-use super::hero::ContinueHero;
 #[cfg(feature = "mobile")]
 use super::mobile;
 #[cfg(feature = "mobile")]
@@ -25,6 +24,8 @@ use super::sections::{
 #[cfg(not(feature = "mobile"))]
 use super::shelf_gallery::ShelfGallery;
 use super::signals::LandingSignals;
+#[cfg(not(feature = "mobile"))]
+use super::stack::{lead_accent_style, stack_entries, EdgeResume, ResumeStack};
 #[cfg(not(feature = "mobile"))]
 use super::table::BookTableContext;
 use super::view::{LandingHandlers, LandingViewState};
@@ -99,15 +100,53 @@ pub(super) fn web_landing_body(
     let tag_pool: ReadSignal<Vec<SuggestionItem>> = sigs.pools.tags.into();
     let genre_pool: ReadSignal<Vec<SuggestionItem>> = sigs.pools.genres.into();
     let all_cover_uuids = derive_all_cover_uuids(sigs);
+    // Which open book the stack has out front. The whole page takes its
+    // accent, and the edge ribbon resumes it — so it is owned here rather
+    // than inside either of them. Hooks stay unconditional: this helper is on
+    // the web build's only render path.
+    let lead = use_signal(|| 0usize);
+    // Borrowed inside its own scope, so the guard is dropped before the rsx
+    // below (never held across other signal reads) without copying the map.
+    // Reading it here is what re-renders the stack with a fresh thumb URL
+    // after a cover edit elsewhere.
+    let cover_bust = crate::contexts::use_cover_cache_bust().0;
+    let entries = {
+        let cover_bust = cover_bust.read();
+        stack_entries(&hero_points, &server_url, &cover_bust)
+    };
+    let accent_style = lead_accent_style(&entries, lead());
+    let show_stack = !view.is_search && !entries.is_empty();
+    // The glue binds elements the shelves row and the stack only mount once
+    // their fetches land, so it re-runs when either appears or disappears.
+    let glue_key = (show_stack, !view.is_search, (sigs.shelves)().len());
+    use_effect(use_reactive!(|glue_key| {
+        let _ = glue_key;
+        let _ = dioxus::document::eval(MARQUEE_JS);
+    }));
     rsx! {
-        div { class: "landing-col",
-            {render_hero_and_gallery(sigs, view.is_search, hero_points, all_cover_uuids, server_url.clone(), on_select_shelf, on_shelf_created)}
+        div { class: "landing-col lmq", id: "lmq-root", style: "{accent_style}",
+            if show_stack {
+                ResumeStack { entries: entries.clone(), lead }
+            }
+            {render_gallery(sigs, view.is_search, all_cover_uuids, server_url.clone(), on_select_shelf, on_shelf_created)}
             {render_header_and_content(sigs, view, prefs(), server_url, selected_shelf.clone(), edit_shelf, bulk_selected, LandingContentHandlers { on_prefs_change: on_prefs_change_content, on_load_more, on_clear_filters }, on_prefs_change_header)}
             {render_bulk_overlay(bulk, bulk_modal_open, bulk_selected, books_sig, shelf_books_sig, author_pool, tag_pool, genre_pool)}
             {render_edit_shelf_overlay(edit_shelf, selected_shelf, shelves_tick)}
+            if show_stack {
+                EdgeResume { entries, lead }
+                div { class: "lmq-scrollhint", aria_hidden: true,
+                    "scroll \u{2014} the books take over"
+                    span { class: "arr", "\u{2193}" }
+                }
+            }
         }
     }
 }
+
+/// Scroll + shelves-row paging glue, installed post-mount so SSR and the
+/// first WASM paint render identical markup (rule 07).
+#[cfg(not(feature = "mobile"))]
+const MARQUEE_JS: &str = include_str!("marquee.js");
 
 /// Section header + grid/table content for [`web_landing_body`]. See
 /// [`render_bulk_overlay`] for why this is a plain helper, not a component.
@@ -169,27 +208,19 @@ fn render_header_and_content(
     }
 }
 
-/// Continue-reading hero + shelf gallery for [`web_landing_body`], hidden
-/// entirely while a search is active. See [`render_bulk_overlay`] for why
-/// this is a plain helper, not a component.
+/// The shelves row for [`web_landing_body`], hidden entirely while a search
+/// is active. See [`render_bulk_overlay`] for why this is a plain helper, not
+/// a component.
 #[cfg(not(feature = "mobile"))]
-#[allow(clippy::too_many_arguments)]
-fn render_hero_and_gallery(
+fn render_gallery(
     sigs: &LandingSignals,
     is_search: bool,
-    hero_points: Vec<omnibus_shared::ResumePoint>,
     all_cover_uuids: Vec<String>,
     server_url: String,
     on_select_shelf: EventHandler<crate::shelf_selection::ShelfSelection>,
     on_shelf_created: EventHandler<()>,
 ) -> Element {
     rsx! {
-        if !is_search && !hero_points.is_empty() {
-            ContinueHero {
-                points: hero_points,
-                server_url: server_url.clone(),
-            }
-        }
         if !is_search {
             ShelfGallery {
                 shelves: (sigs.shelves)(),

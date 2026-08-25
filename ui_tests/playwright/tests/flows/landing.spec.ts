@@ -27,13 +27,36 @@ test("renders the landing page layout", async ({ page }) => {
   // Grid is the default view mode; the table is opt-in via the toolbar.
   await expect(page.getByTestId("lib-grid")).toBeVisible();
   await expect(page.getByTestId("lib-toolbar")).toBeVisible();
-  // The shelf gallery replaced the left rail on the landing: an "All Books"
-  // tile (selected by default) plus a New-shelf tile. In-place selection is
-  // covered by shelf_gallery.spec.ts; shelf CRUD by shelves.spec.ts.
+  // The shelves row replaced the left rail on the landing: an "All Books"
+  // entry (selected by default) plus a New-shelf action, with paging buttons
+  // that `marquee.js` arms only at an end that has more to show. In-place
+  // selection and paging are covered by shelf_gallery.spec.ts; shelf CRUD by
+  // shelves.spec.ts.
   await expect(page.getByTestId("shelf-gallery")).toBeVisible();
   await expect(page.getByTestId("gallery-all-books")).toBeVisible();
   await expect(page.getByTestId("new-shelf")).toBeVisible();
+  await expect(page.getByTestId("shelf-row-prev")).toBeAttached();
+  await expect(page.getByTestId("shelf-row-next")).toBeAttached();
   await expectNavVisible(page);
+});
+
+test("the cover wall keeps its captions off the covers until hover", async ({
+  page,
+}) => {
+  await gotoReady(page, "/");
+
+  // Read-only: any book will do, so this takes the first tile rather than
+  // reserving a fixture.
+  const tile = page.getByTestId(/^ebook-tile-/).first();
+  await expect(tile).toBeVisible();
+  const caption = tile.locator(".lib-tile-cap");
+
+  // The wall is covers; the words are a layer over the cover's foot that is
+  // transparent until pointed at. `toBeHidden` would not catch this — an
+  // opacity-0 element is still "visible" to Playwright.
+  await expect(caption).toHaveCSS("opacity", "0");
+  await tile.hover();
+  await expect(caption).toHaveCSS("opacity", "1");
 });
 
 test("renders every fixture book with the expected metadata", async ({

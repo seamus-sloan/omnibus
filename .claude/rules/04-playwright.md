@@ -45,6 +45,30 @@ tile (`components/cover_tile.rs`) is a router `Link` that also overrides
 matches nothing and times out. Use `bookTile()` from `utils/shelves.ts`
 (`getByRole("listitem", …)`) or the per-book `ebook-tile-<ident>` testid.
 
+**The landing's continue surface is a fan, not a carousel.** `landing/stack.rs`
+replaced the hero carousel, so `continue-hero`, `continue-hero-track`,
+`hero-dot-<n>` and `hero-card-<uuid>` no longer exist. The section is
+`continue-stack`; **every** card in the fan is `hero-resume-<uuid>`, whichever
+position it holds, and the front one additionally carries the `lead` class and
+the `.lmq-veil` verb. Three consequences for a spec:
+
+- **A card's centre is not its own.** The fan overlaps by ~74px at rest, so
+  `click()` on a card behind the front one hits its neighbour. Hover
+  `.lmq-fan` first (which spreads it) and click the left sliver —
+  `click({ position: { x: 12, y: 60 } })`.
+- **The cross-format chips describe the front book only.** `hero-immersive-*`,
+  `hero-crossformat-*` and `hero-link-invite-*` render for the lead card alone,
+  so a spec that asserts them must bring its book forward first — clicking a
+  card that is *already* lead navigates, so guard on the `lead` class.
+- **`continue-stack` carries the synced marker**, not the card: the stack has
+  no per-card eyebrow, so `Continue · synced` became one kicker line above the
+  front book.
+
+`standalone-island` / `standalone-garden` are reserved for the bring-forward
+spec on the usual grounds: it needs two books on the stack at once, and
+`db::progress::recent_progress` drops `unread` and `finished`, so any book
+another spec sets read status on could be filtered off the fan mid-run.
+
 ## Navigation — only routes the UI can actually reach
 
 A spec must arrive at a page the way a user does. `page.goto` is for entry

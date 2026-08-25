@@ -764,6 +764,67 @@ async fn list_visible_scopes_by_owner_public_and_admin() {
 }
 
 #[tokio::test]
+async fn list_visible_shelves_orders_the_viewers_own_shelves_before_other_owners() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = make_user(&pool, "alice", false).await;
+    let bob = make_user(&pool, "bob", false).await;
+
+    // Alice's public shelf is created first, so it wins on `position, id`
+    // alone — only the owner term can pull Bob's own shelves ahead of it.
+    let mut alice_public = manual_req("Alice public", vec![]);
+    alice_public.visibility = Visibility::Public;
+    create_shelf(&pool, alice, &alice_public).await.unwrap();
+    create_shelf(&pool, bob, &manual_req("Bob first", vec![]))
+        .await
+        .unwrap();
+    create_shelf(&pool, bob, &manual_req("Bob second", vec![]))
+        .await
+        .unwrap();
+
+    let names: Vec<String> = list_visible_shelves(&pool, bob, false)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(names, ["Bob first", "Bob second", "Alice public"]);
+
+    // Alice sees her own first for the same reason, and `position, id` still
+    // orders within each group.
+    let names: Vec<String> = list_visible_shelves(&pool, alice, false)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(names, ["Alice public"]);
+}
+
+#[tokio::test]
+async fn list_visible_shelves_orders_an_admins_own_shelves_first_across_the_whole_instance() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = make_user(&pool, "alice", false).await;
+    let admin = make_user(&pool, "admin", true).await;
+
+    create_shelf(&pool, alice, &manual_req("Alice private", vec![]))
+        .await
+        .unwrap();
+    create_shelf(&pool, admin, &manual_req("Admin shelf", vec![]))
+        .await
+        .unwrap();
+
+    // The admin read is unscoped, so it is the one place where a stranger's
+    // *private* shelf could outrank the viewer's own without this ordering.
+    let names: Vec<String> = list_visible_shelves(&pool, admin, true)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(names, ["Admin shelf", "Alice private"]);
+}
+
+#[tokio::test]
 async fn get_shelf_carries_owner_username() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let alice = make_user(&pool, "alice", false).await;

@@ -54,17 +54,22 @@ async fn fetch_visible_shelf_rows(
     viewer_id: i64,
     is_admin: bool,
 ) -> Result<(Vec<VisibleShelfRow>, ShelfIdGroups), ShelfError> {
+    // Viewer-first ordering: the landing shelf row reads All Books -> your
+    // shelves -> everyone else's, so someone else's public shelf can never be
+    // interleaved among your own. `owner_user_id <> ?` is 0 for the viewer and
+    // 1 for anyone else; `position, id` still breaks ties inside each group.
     let rows = sqlx::query(
         "SELECT s.id, s.owner_user_id, COALESCE(u.display_name, u.username) AS owner_username,
                 s.kind, s.name, s.visibility, s.accent, s.match_mode
            FROM shelves s
            JOIN users u ON u.id = s.owner_user_id
           WHERE s.owner_user_id = ? OR s.visibility = 'public' OR ?
-          ORDER BY s.position, s.id
+          ORDER BY s.owner_user_id <> ?, s.position, s.id
           LIMIT ?",
     )
     .bind(viewer_id)
     .bind(is_admin)
+    .bind(viewer_id)
     .bind(LIST_SHELVES_LIMIT)
     .fetch_all(pool)
     .await?;

@@ -247,17 +247,17 @@ async function seedProgressAndOpenLanding(
         });
         expect(resp.status(), "POST /api/progress failed").toBe(200);
         await gotoReady(page, "/");
-        return page.getByTestId(`hero-card-${uuid}`).count();
+        return page.getByTestId(`hero-resume-${uuid}`).count();
       },
       {
         timeout: 30_000,
-        message: `book ${uuid} never reached the continue-reading rail`,
+        message: `book ${uuid} never reached the continue-reading stack`,
       },
     )
     .toBeGreaterThan(0);
 }
 
-test("shows the continue-reading hero once a book has progress", async ({
+test("shows the continue-reading stack once a book has progress", async ({
   page,
   request,
 }) => {
@@ -270,16 +270,16 @@ test("shows the continue-reading hero once a book has progress", async ({
   const uuid = await fetchBookUuidByTitle(request, "Berg der Beweise");
   await seedProgressAndOpenLanding(page, request, uuid);
 
-  await expect(page.getByTestId("continue-hero")).toBeVisible();
-  await expect(page.getByTestId(`hero-card-${uuid}`)).toBeVisible();
-  // The epub CTA deep-links into the reader.
-  await expect(page.getByTestId(`hero-resume-${uuid}`)).toHaveAttribute(
-    "href",
-    `/read/${uuid}`,
-  );
+  await expect(page.getByTestId("continue-stack")).toBeVisible();
+  const card = page.getByTestId(`hero-resume-${uuid}`);
+  await expect(card).toBeVisible();
+  // Every card in the fan keeps a real href to its own resume route, whether
+  // or not it is the one out front — that is what preserves middle-click and
+  // open-in-new-tab on the resume affordance.
+  await expect(card).toHaveAttribute("href", `/read/${uuid}`);
 });
 
-test("drops a book from the continue-reading hero once it is finished", async ({
+test("drops a book from the continue-reading stack once it is finished", async ({
   page,
   request,
 }) => {
@@ -300,7 +300,7 @@ test("drops a book from the continue-reading hero once it is finished", async ({
   expect(reading.status(), "PUT /api/read-status failed").toBe(200);
 
   await seedProgressAndOpenLanding(page, request, uuid);
-  await expect(page.getByTestId(`hero-card-${uuid}`)).toBeVisible();
+  await expect(page.getByTestId(`hero-resume-${uuid}`)).toBeVisible();
 
   const finished = await request.put("/api/read-status", {
     data: { book_uuid: uuid, status: "finished" },
@@ -308,10 +308,129 @@ test("drops a book from the continue-reading hero once it is finished", async ({
   expect(finished.status(), "PUT /api/read-status failed").toBe(200);
 
   await gotoReady(page, "/");
-  // Anchor on a landing element that is always present: the hero hides itself
-  // when it has no cards, and whether it has others depends on specs running
-  // in parallel — so asserting the page rendered has to come from elsewhere,
-  // or a card missing because nothing loaded would read as a pass.
+  // Anchor on a landing element that is always present: the stack hides
+  // itself when it has no cards, and whether it has others depends on specs
+  // running in parallel — so asserting the page rendered has to come from
+  // elsewhere, or a card missing because nothing loaded would read as a pass.
   await expect(page.getByTestId("lib-section-title")).toBeVisible();
-  await expect(page.getByTestId(`hero-card-${uuid}`)).toBeHidden();
+  await expect(page.getByTestId(`hero-resume-${uuid}`)).toBeHidden();
+});
+
+test("the shelves row pages horizontally and arms only the end with more", async ({
+  page,
+  request,
+}) => {
+  // Enough shelves to overflow the row at any sane viewport. They are this
+  // test's own, created per-run, so nothing else reads them.
+  const stamp = Date.now();
+  for (let i = 0; i < 8; i++) {
+    await createManualShelf(request, `E2E Paging ${stamp}-${i}`, []);
+  }
+  await gotoReady(page, "/");
+
+  const row = page.getByTestId("shelf-gallery").locator("#lmq-shelf-row");
+  const prev = page.getByTestId("shelf-row-prev");
+  const next = page.getByTestId("shelf-row-next");
+
+  // At the left end only the forward arrow is armed. `marquee.js` toggles the
+  // `on` class and the tabindex together, so an un-armed arrow is also out of
+  // the tab order rather than a focusable no-op.
+  await expect(next).toHaveClass(/\bon\b/);
+  await expect(prev).not.toHaveClass(/\bon\b/);
+  await expect(prev).toHaveAttribute("tabindex", "-1");
+
+  await next.click();
+  // The nudge is a smooth scroll, so poll rather than asserting the frame
+  // the click returned on.
+  await expect
+    .poll(async () => row.evaluate((n) => n.scrollLeft), { timeout: 5_000 })
+    .toBeGreaterThan(0);
+  await expect(prev).toHaveClass(/\bon\b/);
+  await expect(prev).toHaveAttribute("tabindex", "0");
+
+  await prev.click();
+  await expect
+    .poll(async () => row.evaluate((n) => n.scrollLeft), { timeout: 5_000 })
+    .toBe(0);
+  await expect(prev).not.toHaveClass(/\bon\b/);
+});
+
+test("a book behind the front one comes forward instead of navigating", async ({
+  page,
+  request,
+}) => {
+  // `standalone-island` and `standalone-garden` are reserved for this test and
+  // read by no other spec: it needs two books on the stack at once, and any
+  // book another spec asserts read status on could be filtered off the rail
+  // mid-run (`db::progress::recent_progress` drops `unread` and `finished`).
+  const island = await fetchBookUuidByTitle(request, "The Isle of Functions");
+  const garden = await fetchBookUuidByTitle(request, "The Garden of Closures");
+  await seedProgressAndOpenLanding(page, request, island);
+  await seedProgressAndOpenLanding(page, request, garden);
+
+  const stack = page.getByTestId("continue-stack");
+  const cards = stack.locator(".lmq-fcard");
+  await expect.poll(async () => cards.count()).toBeGreaterThan(1);
+
+  // Which book is out front depends on second-granularity ordering with the
+  // uuid as tiebreak, and on whatever the parallel suite has stamped — so
+  // read the fan rather than assuming, exactly as the rail specs do.
+  const front = stack.locator(".lmq-fcard.lead");
+  const behind = stack.locator(".lmq-fcard:not(.lead)").first();
+  const frontId = await front.getAttribute("data-testid");
+  const behindId = await behind.getAttribute("data-testid");
+  expect(frontId, "the fan must have a front card").toBeTruthy();
+  expect(behindId, "the fan must have a card behind it").toBeTruthy();
+
+  // Pointing at the fan spreads it, which is what makes a card behind the
+  // front one reachable at all: the cards overlap by ~74px at rest, so a back
+  // card's centre is under its neighbour. Hover first, then click the left
+  // sliver that is always the back card's own — the click a person makes.
+  await stack.locator(".lmq-fan").hover();
+  // Clicking a card behind the front one means "come forward", not "open" —
+  // the card is a real link, but the router navigation is suppressed for it.
+  await behind.click({ position: { x: 12, y: 60 } });
+  await expect(stack.locator(`[data-testid="${behindId}"]`)).toHaveClass(
+    /\blead\b/,
+  );
+  await expect(stack.locator(`[data-testid="${frontId}"]`)).not.toHaveClass(
+    /\blead\b/,
+  );
+  await expect(page).toHaveURL(/\/$/);
+
+  // The veil — the resume verb — travels with the front card.
+  await expect(
+    stack.locator(`[data-testid="${behindId}"] .lmq-veil-lab`),
+  ).toBeAttached();
+  await expect(
+    stack.locator(`[data-testid="${frontId}"] .lmq-veil-lab`),
+  ).toHaveCount(0);
+});
+
+test("resume stays reachable as an edge ribbon once the stack scrolls away", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, "Berg der Beweise");
+  await seedProgressAndOpenLanding(page, request, uuid);
+
+  const root = page.locator("#lmq-root");
+  const ribbon = page.getByTestId("resume-edge");
+  // Off-screen and inert while the stack itself is still on screen — the
+  // ribbon exists in the DOM from the first paint so SSR and hydration agree
+  // (rule 07), and `marquee.js` reveals it on scroll.
+  await expect(ribbon).toBeAttached();
+  await expect(root).not.toHaveClass(/lmq--past/);
+  await expect(ribbon).toHaveCSS("opacity", "0");
+
+  await page.evaluate(() => window.scrollTo(0, 600));
+  await expect(root).toHaveClass(/lmq--past/);
+  await expect(ribbon).toHaveCSS("opacity", "1");
+  // Widening on hover is what exposes the control; the collapsed strip is
+  // just the marker.
+  await ribbon.hover();
+  await expect(page.getByTestId(`resume-edge-go-${uuid}`)).toBeVisible();
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expect(root).not.toHaveClass(/lmq--past/);
 });

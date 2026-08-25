@@ -2,7 +2,9 @@
 //!
 //! Renders the hydrated book list as Atrium `Cover` tiles, linking each to
 //! the book-detail page. Used by [`super::LandingPage`] when the view-mode
-//! toggle is set to grid.
+//! toggle is set to grid. Under the marquee layout the tiles read as a cover
+//! wall: the caption is a layer over the cover's foot that arrives on hover
+//! (`.lmq .lib-tile-cap` in `atrium.css`) rather than a block beneath it.
 
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
@@ -72,18 +74,25 @@ fn GridTile(book: EbookMetadata, server_url: String, index: usize) -> Element {
                     nav.push(Route::BookDetail { uuid: uuid_key.clone() });
                 }
             },
-            crate::components::atrium::Cover {
-                book,
-                src_override: thumb_src,
-                srcset: thumb_srcset,
-                sizes: Some(
-                    "(max-width: 640px) 160px, (max-width: 1280px) 200px, 240px"
-                        .to_string(),
-                ),
+            // The art and the caption are separate layers: the wall lifts the
+            // cover on hover and floats the words over its foot, so they can't
+            // share one box.
+            span { class: "lib-tile-art",
+                crate::components::atrium::Cover {
+                    book,
+                    src_override: thumb_src,
+                    srcset: thumb_srcset,
+                    sizes: Some(
+                        "(max-width: 640px) 160px, (max-width: 1280px) 200px, 240px"
+                            .to_string(),
+                    ),
+                }
             }
-            div { class: "lib-tile-title", "{display_title}" }
-            if !authors.is_empty() {
-                div { class: "lib-tile-author", "{authors}" }
+            span { class: "lib-tile-cap",
+                span { class: "lib-tile-title", "{display_title}" }
+                if !authors.is_empty() {
+                    span { class: "lib-tile-author", "{authors}" }
+                }
             }
         }
     }

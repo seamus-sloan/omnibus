@@ -150,11 +150,11 @@ test("a linked book resolves silently on the player — no prompt, mapped seek",
     .toBeGreaterThan(0);
 });
 
-test("the hero shows one synced card with the counterpart affordance", async ({
+test("the stack shows one synced card with the counterpart affordance", async ({
   page,
   request,
 }) => {
-  // The rail holds the five newest positions and drops finished books —
+  // The stack holds the five newest positions and drops finished books —
   // and the 2-second fixture MP3 finishes on any playback, which flips
   // read status to `finished`. Reset to `reading`, re-stamp, and reload
   // until the card lands (the established hero-spec pattern).
@@ -174,7 +174,7 @@ test("the hero shows one synced card with the counterpart affordance", async ({
         await writeEpubPercent(request, 80);
         await gotoReady(page, "/");
         return page
-          .getByTestId(`hero-card-${uuid}`)
+          .getByTestId(`hero-resume-${uuid}`)
           .waitFor({ state: "visible", timeout: 3_000 })
           .then(() => true)
           .catch(() => false);
@@ -183,9 +183,21 @@ test("the hero shows one synced card with the counterpart affordance", async ({
     )
     .toBe(true);
 
-  const cards = page.getByTestId(`hero-card-${uuid}`);
+  const cards = page.getByTestId(`hero-resume-${uuid}`);
   await expect(cards).toHaveCount(1);
-  await expect(cards).toContainText("synced");
+
+  // The cross-format affordances describe the book that is out front, so
+  // bring this one forward if a parallel spec stamped a newer position while
+  // the poll above was converging. Clicking the front card would navigate, so
+  // only a card that is behind gets clicked.
+  if (!(await cards.getAttribute("class"))?.includes("lead")) {
+    await cards.click();
+  }
+  await expect(cards).toHaveClass(/\blead\b/);
+
+  // The stack has no per-card eyebrow, so the synced state is reported once,
+  // in the kicker above the front book.
+  await expect(page.getByTestId("continue-stack")).toContainText("synced");
   await expect(page.getByTestId(`hero-crossformat-${uuid}`)).toBeVisible();
 
   // The linked dual-format card also carries the Immersive pill, which
