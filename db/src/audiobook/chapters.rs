@@ -43,13 +43,10 @@ fn extract_nero_chapters(file: &mut std::fs::File, moov: &BoxInfo) -> Option<Vec
     parse_chpl_payload(file, chpl.data_offset, chpl.data_size)
 }
 
-/// Upper bound on chapters returned from either MP4 path, matching the
-/// `chpl` cap so a corrupt sample table can't be turned into an allocation.
+/// Upper bound on chapters from any MP4 path, and on the sample-table
+/// entries that produce them — a chapter track has one sample per chapter, so
+/// a table claiming more than this is corrupt and must not size a `Vec`.
 const MAX_CHAPTERS: usize = 10_000;
-
-/// Upper bound on entries in a sample table. Generous — a chapter track has
-/// one sample per chapter — but keeps a bogus count from sizing a `Vec`.
-const MAX_TABLE_ENTRIES: usize = 1_000_000;
 
 /// Longest text sample we read; titles are short and the rest of a sample is
 /// trailing atoms we ignore.
@@ -74,10 +71,25 @@ fn find_child_box(
     parent_size: u64,
     target: &BoxType,
 ) -> Option<BoxInfo> {
-    list_child_boxes(file, parent_offset, parent_size)
-        .into_iter()
-        .find(|(box_type, _)| box_type == target)
-        .map(|(_, info)| info)
+    // Streams rather than going through `list_child_boxes`: this is the hot
+    // lookup — several calls land on the same `mdia`/`stbl` — so it must stop
+    // at the match instead of allocating and walking every sibling first.
+    let end = parent_offset.checked_add(parent_size)?;
+    let mut pos = parent_offset;
+
+    while let Some((box_type, info, box_size)) = read_box_header(file, pos, end) {
+        if &box_type == target {
+            return Some(info);
+        }
+        pos = advance(pos, box_size)?;
+    }
+    None
+}
+
+/// Step to the next sibling. `None` when the offset would overflow or fail to
+/// advance, either of which would otherwise loop forever.
+fn advance(pos: u64, box_size: u64) -> Option<u64> {
+    pos.checked_add(box_size).filter(|next| *next > pos)
 }
 
 /// List every child box within a parent box's data region, in file order.
@@ -96,12 +108,10 @@ fn list_child_boxes(
 
     while let Some((box_type, info, box_size)) = read_box_header(file, pos, end) {
         boxes.push((box_type, info));
-        // `box_size` is always at least the header length, so this advances;
-        // the guard is belt-and-braces against an infinite walk.
-        match pos.checked_add(box_size) {
-            Some(next) if next > pos => pos = next,
-            _ => break,
-        }
+        let Some(next) = advance(pos, box_size) else {
+            break;
+        };
+        pos = next;
     }
     boxes
 }
@@ -185,7 +195,7 @@ fn parse_chpl_payload(file: &mut std::fs::File, offset: u64, size: u64) -> Optio
         u32::from_be_bytes(buf) as usize
     };
 
-    if count == 0 || count > 10_000 {
+    if count == 0 || count > MAX_CHAPTERS {
         return None;
     }
 
@@ -230,20 +240,31 @@ fn extract_chapter_track(file: &mut std::fs::File, moov: &BoxInfo) -> Option<Vec
         .map(|(_, info)| info)
         .collect();
 
-    let referenced = chapter_track_ref(file, &traks)?;
-    let mut chapter_trak = None;
-    for trak in &traks {
-        if track_id(file, trak) == Some(referenced) {
-            chapter_trak = Some(trak);
-            break;
+    // Every reference is tried: a dangling id, or one naming a track that
+    // turns out not to be text, must not end the search while another `chap`
+    // still names a readable chapter track.
+    for referenced in chapter_track_refs(file, &traks) {
+        let mut chapter_trak = None;
+        for (i, trak) in traks.iter().enumerate() {
+            if track_id(file, trak) == Some(referenced) {
+                chapter_trak = Some(i);
+                break;
+            }
+        }
+        let Some(i) = chapter_trak else {
+            continue;
+        };
+        if let Some(chapters) = read_chapter_track(file, &traks[i]) {
+            return Some(chapters);
         }
     }
-    read_chapter_track(file, chapter_trak?)
+    None
 }
 
-/// The track id named by the first `tref`/`chap` reference found. A `chap`
-/// box may list several ids; the first is the chapter track.
-fn chapter_track_ref(file: &mut std::fs::File, traks: &[BoxInfo]) -> Option<u32> {
+/// Every track id named by a `tref`/`chap` box, in file order. A `chap` box
+/// may list several ids, and more than one track may carry one.
+fn chapter_track_refs(file: &mut std::fs::File, traks: &[BoxInfo]) -> Vec<u32> {
+    let mut refs = Vec::new();
     for trak in traks {
         let Some(tref) = find_child_box(file, trak.data_offset, trak.data_size, b"tref") else {
             continue;
@@ -251,11 +272,15 @@ fn chapter_track_ref(file: &mut std::fs::File, traks: &[BoxInfo]) -> Option<u32>
         let Some(chap) = find_child_box(file, tref.data_offset, tref.data_size, b"chap") else {
             continue;
         };
-        if let Some(id) = read_u32_in_box(file, &chap, 0) {
-            return Some(id);
+        // Bounded by the box's own size: `read_u32_in_box` refuses an offset
+        // the payload can't cover.
+        let mut offset = 0u64;
+        while let Some(id) = read_u32_in_box(file, &chap, offset) {
+            refs.push(id);
+            offset += 4;
         }
     }
-    None
+    refs
 }
 
 /// A track's id from its `tkhd`. Version 1 carries 64-bit creation and
@@ -297,7 +322,7 @@ fn read_chapter_track(file: &mut std::fs::File, trak: &BoxInfo) -> Option<Vec<Ra
     }
 
     let mut chapters = Vec::with_capacity(count);
-    for (&(start_ms, end_ms), &(offset, size)) in times.iter().zip(locations.iter()).take(count) {
+    for (&(start_ms, end_ms), &(offset, size)) in times.iter().zip(locations.iter()) {
         chapters.push(RawChapter {
             title: read_text_sample(file, offset, size).unwrap_or_default(),
             start_ms,
@@ -329,7 +354,7 @@ fn media_timescale(file: &mut std::fs::File, mdia: &BoxInfo) -> Option<u32> {
 /// Per-sample `(start_ms, end_ms)` from `stts`, whose entries are
 /// run-length-encoded `(count, delta)` pairs in the track's timescale. Each
 /// sample ends where the next begins, so chapters tile the timeline; the last
-/// one ends at the track's total duration.
+/// carries the `end_ms == 0` sentinel (see below).
 fn sample_times(
     file: &mut std::fs::File,
     stbl: &BoxInfo,
@@ -340,14 +365,15 @@ fn sample_times(
 
     let mut starts = Vec::new();
     let mut cursor = 0u64;
-    for entry in table.chunks_exact(8) {
+    'entries: for entry in table.chunks_exact(8) {
         let count = be_u32(&entry[0..4]);
         let delta = u64::from(be_u32(&entry[4..8]));
         for _ in 0..count {
             // Bounded here rather than by `count`, which a corrupt table can
-            // set to u32::MAX.
+            // set to u32::MAX. Truncating beats discarding: a partial
+            // timeline still beats falling back to synthetic chapters.
             if starts.len() >= MAX_CHAPTERS {
-                return None;
+                break 'entries;
             }
             starts.push(cursor);
             cursor = cursor.checked_add(delta)?;
@@ -356,8 +382,20 @@ fn sample_times(
 
     let mut times = Vec::with_capacity(starts.len());
     for (i, &start) in starts.iter().enumerate() {
-        let end = starts.get(i + 1).copied().unwrap_or(cursor);
-        times.push((ticks_to_ms(start, timescale)?, ticks_to_ms(end, timescale)?));
+        let start_ms = ticks_to_ms(start, timescale)?;
+        // The final chapter takes the `end_ms == 0` sentinel rather than the
+        // track's total duration. A chapter track routinely stops short of
+        // the audio it describes, and the sync layer's fallbacks — bridge to
+        // the next part's first chapter, else extend to the book's total
+        // duration — are what keep the timeline gapless across a part
+        // boundary and at the end of the book. A real end here satisfies
+        // `end_ms > start_ms` and silently disables both. `chpl` leans on the
+        // same sentinel; the two paths must agree.
+        let Some(&next) = starts.get(i + 1) else {
+            times.push((start_ms, 0));
+            continue;
+        };
+        times.push((start_ms, ticks_to_ms(next, timescale)?));
     }
     Some(times)
 }
@@ -381,15 +419,17 @@ fn sample_locations(file: &mut std::fs::File, stbl: &BoxInfo) -> Option<Vec<(u64
 
     let mut locations = Vec::new();
     let mut index = 0usize;
+    let mut run = 0usize;
     for (i, &chunk_offset) in chunks.iter().enumerate() {
-        // `stsc` runs are 1-based and sparse: an entry holds until the next
-        // one's `first_chunk`, so this chunk's count is the last run starting
-        // at or before it.
-        let per_chunk = runs
-            .iter()
-            .take_while(|(first, _)| u64::from(*first) <= i as u64 + 1)
-            .last()
-            .map(|(_, n)| *n)?;
+        // `stsc` runs are 1-based, ascending and sparse: an entry holds until
+        // the next one's `first_chunk`, so this chunk's count is the last run
+        // starting at or before it. The cursor only moves forward, keeping
+        // the walk linear in chunks + runs rather than rescanning per chunk.
+        let chunk_num = u64::try_from(i).ok()?.checked_add(1)?;
+        while run + 1 < runs.len() && u64::from(runs[run + 1].0) <= chunk_num {
+            run += 1;
+        }
+        let per_chunk = runs.get(run).map(|(_, n)| *n)?;
 
         let mut offset = chunk_offset;
         for _ in 0..per_chunk {
@@ -415,7 +455,7 @@ fn sample_sizes(file: &mut std::fs::File, stbl: &BoxInfo) -> Option<Vec<u64>> {
     let stsz = find_child_box(file, stbl.data_offset, stbl.data_size, b"stsz")?;
     let uniform = read_u32_in_box(file, &stsz, 4)?;
     let count = usize::try_from(read_u32_in_box(file, &stsz, 8)?).ok()?;
-    if count > MAX_TABLE_ENTRIES {
+    if count > MAX_CHAPTERS {
         return None;
     }
     if uniform > 0 {
@@ -458,7 +498,7 @@ fn chunk_offsets(file: &mut std::fs::File, stbl: &BoxInfo) -> Option<Vec<u64>> {
 /// too small to hold, so a corrupt value can't size an allocation.
 fn read_table(file: &mut std::fs::File, info: &BoxInfo, entry_size: usize) -> Option<Vec<u8>> {
     let count = usize::try_from(read_u32_in_box(file, info, 4)?).ok()?;
-    if count > MAX_TABLE_ENTRIES {
+    if count > MAX_CHAPTERS {
         return None;
     }
     let wanted = count.checked_mul(entry_size)?;
@@ -490,16 +530,25 @@ fn read_text_sample(file: &mut std::fs::File, offset: u64, size: u64) -> Option<
     Some(decode_text_sample(&buf[2..end]))
 }
 
-/// UTF-16 when the sample carries a byte-order mark, UTF-8 otherwise — the
-/// two encodings QuickTime text samples use in practice.
+/// UTF-16 when the sample carries a byte-order mark, UTF-8 otherwise.
+///
+/// A sample may instead declare its encoding in a trailing `encd` atom, which
+/// this deliberately ignores: ffmpeg's own chapter reader notes the samples
+/// are only ever UTF-8 or UTF-16 in practice and distinguishes them by BOM
+/// alone, so honoring `encd` would add a path no real file exercises.
 fn decode_text_sample(bytes: &[u8]) -> String {
     match bytes {
         [0xFE, 0xFF, rest @ ..] => decode_utf16(rest, true),
         [0xFF, 0xFE, rest @ ..] => decode_utf16(rest, false),
-        _ => String::from_utf8_lossy(bytes).to_string(),
+        _ => {
+            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+            String::from_utf8_lossy(&bytes[..end]).to_string()
+        }
     }
 }
 
+/// Decode UTF-16 code units, stopping at a NUL terminator. Shared with the
+/// ID3 text decoder, which frames its input differently but decodes the same.
 fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
     let units: Vec<u16> = bytes
         .chunks_exact(2)
@@ -510,6 +559,7 @@ fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
                 u16::from_le_bytes([p[0], p[1]])
             }
         })
+        .take_while(|&unit| unit != 0)
         .collect();
     String::from_utf16_lossy(&units)
 }
@@ -667,30 +717,13 @@ fn decode_id3_text(encoding: u8, data: &[u8]) -> String {
             .take_while(|&&b| b != 0)
             .map(|&b| b as char)
             .collect(),
-        1 | 2 => {
-            if data.len() < 2 {
-                return String::new();
-            }
-            let (is_be, skip) = if data[0] == 0xFF && data[1] == 0xFE {
-                (false, 2)
-            } else if data[0] == 0xFE && data[1] == 0xFF {
-                (true, 2)
-            } else {
-                (encoding == 2, 0)
-            };
-            let codepoints: Vec<u16> = data[skip..]
-                .chunks_exact(2)
-                .map(|p| {
-                    if is_be {
-                        u16::from_be_bytes([p[0], p[1]])
-                    } else {
-                        u16::from_le_bytes([p[0], p[1]])
-                    }
-                })
-                .take_while(|&c| c != 0)
-                .collect();
-            String::from_utf16_lossy(&codepoints)
-        }
+        // A BOM wins; without one, encoding 2 is UTF-16BE by definition and
+        // encoding 1 falls back to little-endian.
+        1 | 2 => match data {
+            [0xFF, 0xFE, rest @ ..] => decode_utf16(rest, false),
+            [0xFE, 0xFF, rest @ ..] => decode_utf16(rest, true),
+            _ => decode_utf16(data, encoding == 2),
+        },
         3 => {
             let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
             String::from_utf8_lossy(&data[..end]).to_string()

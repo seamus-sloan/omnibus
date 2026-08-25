@@ -435,23 +435,35 @@ fn full_box(box_type: &[u8; 4], version: u8, body: &[u8]) -> Vec<u8> {
     box_with(box_type, &payload)
 }
 
-fn tkhd_box(track_id: u32) -> Vec<u8> {
+fn tkhd_box(track_id: u32, version: u8) -> Vec<u8> {
     let mut body = Vec::new();
-    body.extend_from_slice(&0u32.to_be_bytes()); // creation time
-    body.extend_from_slice(&0u32.to_be_bytes()); // modification time
+    if version == 1 {
+        body.extend_from_slice(&0u64.to_be_bytes()); // creation time
+        body.extend_from_slice(&0u64.to_be_bytes()); // modification time
+    } else {
+        body.extend_from_slice(&0u32.to_be_bytes());
+        body.extend_from_slice(&0u32.to_be_bytes());
+    }
     body.extend_from_slice(&track_id.to_be_bytes());
     body.extend_from_slice(&[0u8; 60]); // reserved + geometry, unread
-    full_box(b"tkhd", 0, &body)
+    full_box(b"tkhd", version, &body)
 }
 
-fn mdhd_box(timescale: u32, duration: u32) -> Vec<u8> {
+fn mdhd_box(timescale: u32, duration: u32, version: u8) -> Vec<u8> {
     let mut body = Vec::new();
-    body.extend_from_slice(&0u32.to_be_bytes()); // creation time
-    body.extend_from_slice(&0u32.to_be_bytes()); // modification time
-    body.extend_from_slice(&timescale.to_be_bytes());
-    body.extend_from_slice(&duration.to_be_bytes());
+    if version == 1 {
+        body.extend_from_slice(&0u64.to_be_bytes()); // creation time
+        body.extend_from_slice(&0u64.to_be_bytes()); // modification time
+        body.extend_from_slice(&timescale.to_be_bytes());
+        body.extend_from_slice(&u64::from(duration).to_be_bytes());
+    } else {
+        body.extend_from_slice(&0u32.to_be_bytes());
+        body.extend_from_slice(&0u32.to_be_bytes());
+        body.extend_from_slice(&timescale.to_be_bytes());
+        body.extend_from_slice(&duration.to_be_bytes());
+    }
     body.extend_from_slice(&[0u8; 4]); // language + quality
-    full_box(b"mdhd", 0, &body)
+    full_box(b"mdhd", version, &body)
 }
 
 fn hdlr_box(handler: &[u8; 4]) -> Vec<u8> {
@@ -483,7 +495,11 @@ pub(crate) struct TrackLayout {
     pub(crate) samples_per_chunk: usize,
     pub(crate) co64: bool,
     pub(crate) handler: [u8; 4],
-    pub(crate) chap_ref: u32,
+    /// Track ids the `tref`/`chap` box lists, in order.
+    pub(crate) chap_refs: &'static [u32],
+    /// Version byte for `tkhd`/`mdhd`; version 1 widens the creation and
+    /// modification times to 64 bits and shifts every field after them.
+    pub(crate) box_version: u8,
     /// When set, the fixture also carries a Nero `chpl` atom with this title.
     pub(crate) chpl_title: Option<&'static str>,
 }
@@ -495,7 +511,8 @@ impl Default for TrackLayout {
             samples_per_chunk: 1,
             co64: false,
             handler: *b"text",
-            chap_ref: 2,
+            chap_refs: &[2],
+            box_version: 0,
             chpl_title: None,
         }
     }
@@ -574,7 +591,7 @@ pub(crate) fn make_chapter_track_fixture(
     let mdia = box_with(
         b"mdia",
         &[
-            mdhd_box(layout.timescale, total),
+            mdhd_box(layout.timescale, total, layout.box_version),
             hdlr_box(&layout.handler),
             minf,
         ]
@@ -582,11 +599,16 @@ pub(crate) fn make_chapter_track_fixture(
     );
 
     let audio_trak = {
-        let chap = box_with(b"chap", &layout.chap_ref.to_be_bytes());
+        let ids: Vec<u8> = layout
+            .chap_refs
+            .iter()
+            .flat_map(|id| id.to_be_bytes())
+            .collect();
+        let chap = box_with(b"chap", &ids);
         let tref = box_with(b"tref", &chap);
-        box_with(b"trak", &[tkhd_box(1), tref].concat())
+        box_with(b"trak", &[tkhd_box(1, layout.box_version), tref].concat())
     };
-    let text_trak = box_with(b"trak", &[tkhd_box(2), mdia].concat());
+    let text_trak = box_with(b"trak", &[tkhd_box(2, layout.box_version), mdia].concat());
 
     let mut moov_children = vec![audio_trak, text_trak];
     if let Some(title) = layout.chpl_title {
@@ -626,9 +648,10 @@ fn extract_chapters_parses_quicktime_chapter_track() {
     assert_eq!(result[1].end_ms, 4_958_224);
     assert_eq!(result[2].title, "Chapter 1");
     assert_eq!(result[2].start_ms, 4_958_224);
-    // The last chapter ends at the track's total duration, which `stts`
-    // gives us — unlike `chpl`, which carries no duration at all.
-    assert_eq!(result[2].end_ms, 5_975_443);
+    // The last chapter carries the `end_ms == 0` sentinel, same as `chpl`, so
+    // the sync layer extends it to the book's duration rather than to the
+    // chapter track's — which routinely stops short of the audio.
+    assert_eq!(result[2].end_ms, 0);
 }
 
 #[test]
@@ -650,7 +673,7 @@ fn extract_chapters_scales_chapter_track_times_by_the_track_timescale() {
     assert_eq!(result.len(), 3);
     assert_eq!((result[0].start_ms, result[0].end_ms), (0, 1_000));
     assert_eq!((result[1].start_ms, result[1].end_ms), (1_000, 2_500));
-    assert_eq!((result[2].start_ms, result[2].end_ms), (2_500, 3_000));
+    assert_eq!((result[2].start_ms, result[2].end_ms), (2_500, 0));
 }
 
 #[test]
@@ -727,7 +750,7 @@ fn extract_chapters_prefers_nero_chpl_over_a_chapter_track() {
 fn extract_chapters_returns_empty_when_chapter_track_reference_is_dangling() {
     // `tref`/`chap` names a track the file doesn't contain.
     let layout = TrackLayout {
-        chap_ref: 99,
+        chap_refs: &[99],
         ..TrackLayout::default()
     };
     let file = temp_with_bytes(&make_chapter_track_fixture(&sample_chapters(), &layout));
@@ -824,5 +847,104 @@ fn extract_chapters_handles_chapter_track_offsets_past_end_of_file() {
     }
     let file = temp_with_bytes(&bytes);
     let result = extract_chapters(file.path(), "M4B");
+    // Assert the count first: `all` over an empty vec is vacuously true, so
+    // without this the test would still pass if extraction returned nothing.
+    assert_eq!(result.len(), 3);
     assert!(result.iter().all(|c| c.title.is_empty()));
+    assert_eq!(result[0].start_ms, 0);
+    assert_eq!(result[1].start_ms, 16_415);
+}
+
+#[test]
+fn extract_chapters_reads_version_1_tkhd_and_mdhd_field_offsets() {
+    // Version 1 widens the creation and modification times to 64 bits, so the
+    // track id and timescale sit 8 bytes later than in version 0. Getting
+    // either offset wrong yields a track id that matches no trak, which would
+    // silently drop the book back to synthetic chapters.
+    let chapters: Vec<(u32, &[u8])> = vec![(44_100, b"One".as_slice()), (88_200, b"Two")];
+    let layout = TrackLayout {
+        timescale: 44_100,
+        box_version: 1,
+        ..TrackLayout::default()
+    };
+    let file = temp_with_bytes(&make_chapter_track_fixture(&chapters, &layout));
+
+    let result = extract_chapters(file.path(), "M4B");
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].title, "One");
+    // Correct only if the timescale was read from offset 20, not 12.
+    assert_eq!((result[0].start_ms, result[0].end_ms), (0, 1_000));
+    assert_eq!(result[1].title, "Two");
+    assert_eq!(result[1].start_ms, 1_000);
+}
+
+#[test]
+fn extract_chapters_falls_past_a_dangling_reference_to_a_readable_chapter_track() {
+    // A `chap` box lists ids in order; the first here names no track. The
+    // walk must keep going rather than treating one bad id as the answer.
+    let layout = TrackLayout {
+        chap_refs: &[99, 2],
+        ..TrackLayout::default()
+    };
+    let file = temp_with_bytes(&make_chapter_track_fixture(&sample_chapters(), &layout));
+
+    let result = extract_chapters(file.path(), "M4B");
+    assert_eq!(result.len(), 3);
+    assert_eq!(result[0].title, "Opening Credits");
+    assert_eq!(result[2].title, "Chapter 1");
+}
+
+#[test]
+fn extract_chapters_trims_nul_terminated_chapter_titles() {
+    // Some muxers NUL-terminate inside the declared u16 length. The
+    // terminator must not reach `file_chapters` and render in the UI.
+    let mut utf16 = vec![0xFE, 0xFF];
+    for unit in "Prologue".encode_utf16() {
+        utf16.extend_from_slice(&unit.to_be_bytes());
+    }
+    utf16.extend_from_slice(&[0x00, 0x00]); // UTF-16 NUL
+    let chapters: Vec<(u32, &[u8])> = vec![
+        (1_000, b"Opening Credits\0".as_slice()),
+        (1_000, utf16.as_slice()),
+    ];
+    let file = temp_with_bytes(&make_chapter_track_fixture(
+        &chapters,
+        &TrackLayout::default(),
+    ));
+
+    let result = extract_chapters(file.path(), "M4B");
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].title, "Opening Credits");
+    assert_eq!(result[1].title, "Prologue");
+}
+
+#[test]
+fn extract_chapters_truncates_a_chapter_track_with_more_samples_than_the_cap() {
+    // Over the cap the walk truncates rather than discarding everything: a
+    // partial timeline still beats falling back to synthetic chapters.
+    let stts_entry = {
+        let mut entries = Vec::new();
+        entries.extend_from_slice(&u32::MAX.to_be_bytes()); // sample count
+        entries.extend_from_slice(&1_000u32.to_be_bytes()); // delta
+        entries
+    };
+    let mut bytes = make_chapter_track_fixture(&sample_chapters(), &TrackLayout::default());
+    let pos = bytes
+        .windows(4)
+        .position(|w| w == b"stts")
+        .expect("fixture has stts");
+    // Collapse the three run-length entries into one claiming u32::MAX
+    // samples, keeping the box size intact by zero-filling the remainder.
+    bytes[pos + 8..pos + 12].copy_from_slice(&1u32.to_be_bytes()); // entry count
+    bytes[pos + 12..pos + 20].copy_from_slice(&stts_entry);
+    for b in &mut bytes[pos + 20..pos + 36] {
+        *b = 0;
+    }
+    let file = temp_with_bytes(&bytes);
+
+    let result = extract_chapters(file.path(), "M4B");
+    // `stts` alone would yield MAX_CHAPTERS starts; the sample tables cap it
+    // at the three samples that actually exist.
+    assert_eq!(result.len(), 3);
+    assert_eq!(result[0].title, "Opening Credits");
 }

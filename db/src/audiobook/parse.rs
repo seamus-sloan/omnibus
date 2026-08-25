@@ -567,18 +567,25 @@ mod tests {
             mtime_epoch: 0,
             duration_seconds,
         };
-        let parts = vec![part(0, "01.m4b", 3.0), part(1, "02.m4b", 5.0)];
+        // Part one's audio runs 3.5 s while its chapter track only covers
+        // 3.0 s — the ordinary case of a muxer leaving trailing audio
+        // unchaptered, and the reason the last chapter must not carry a real
+        // end. With one, `sync::audiobooks` would take its `end_ms > start_ms`
+        // branch and leave 3.0-3.5 s in no chapter at all.
+        let parts = vec![part(0, "01.m4b", 3.5), part(1, "02.m4b", 5.0)];
 
         let result = apply_chapters(&parts, dir.path(), "M4B");
         assert_eq!(result.len(), 3);
         // Part one, from its chapter track, at the head of the timeline.
         assert_eq!(result[0].title, "One");
         assert_eq!((result[0].start_ms, result[0].end_ms), (0, 1_000));
+        // Its last chapter keeps the sentinel, so the sync layer bridges it to
+        // the next part's first chapter rather than stopping at 3.0 s.
         assert_eq!(result[1].title, "Two");
-        assert_eq!((result[1].start_ms, result[1].end_ms), (1_000, 3_000));
-        // Part two, from its `chpl`, shifted by part one's 3 s duration.
+        assert_eq!((result[1].start_ms, result[1].end_ms), (1_000, 0));
+        // Part two, from its `chpl`, shifted by part one's full 3.5 s of audio.
         assert_eq!(result[2].title, "Three");
-        assert_eq!(result[2].start_ms, 3_000);
+        assert_eq!(result[2].start_ms, 3_500);
     }
 
     #[test]
