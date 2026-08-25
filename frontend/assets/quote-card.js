@@ -28,9 +28,9 @@
   // Canvas mirrors of the editor's `font` tokens. `primary` is the single
   // family document.fonts.load() is asked for; `stack` is what ctx.font gets.
   var FONTS = {
-    serif: { primary: "'Instrument Serif'", stack: "'Instrument Serif', 'EB Garamond', Georgia, serif" },
-    sans: { primary: "'Geist'", stack: "'Geist', ui-sans-serif, system-ui, sans-serif" },
-    mono: { primary: "'Geist Mono'", stack: "'Geist Mono', ui-monospace, monospace" },
+    serif: { primary: "'Cormorant Garamond'", stack: "'Cormorant Garamond', 'EB Garamond', Georgia, serif" },
+    sans: { primary: "'Instrument Sans'", stack: "'Instrument Sans', ui-sans-serif, system-ui, sans-serif" },
+    mono: { primary: "'Space Mono'", stack: "'Space Mono', ui-monospace, monospace" },
   };
   // Canvas mirrors of the editor's `size` tokens, relative to the card width.
   var SIZES = { s: 0.82, m: 1, l: 1.24 };

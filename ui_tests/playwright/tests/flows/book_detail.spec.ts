@@ -954,9 +954,9 @@ test("opens the quote-card editor in a modal and closes it again", async ({
   // assert the rendered card rather than a network contract.
   const preview = modal.getByTestId("quote-preview");
   const previewBody = modal.getByTestId("quote-preview-body");
-  await expect(preview).toHaveCSS("font-family", /Instrument Serif/);
+  await expect(preview).toHaveCSS("font-family", /Cormorant Garamond/);
   await modal.getByRole("button", { name: "Sans", exact: true }).click();
-  await expect(preview).toHaveCSS("font-family", /Geist/);
+  await expect(preview).toHaveCSS("font-family", /Instrument Sans/);
 
   await expect(previewBody).toHaveCSS("font-style", "italic");
   await modal.getByRole("button", { name: "Italic", exact: true }).click();

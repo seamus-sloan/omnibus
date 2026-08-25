@@ -4,6 +4,31 @@
 
 A cinematic-dark visual direction for Omnibus, sourced from a Claude Design handoff. The design system spans tokens, primitives, and a per-book cover-derived accent. This doc covers only the **foundation delivery** — tokens + primitives + Library reskin. Every other Atrium screen is tracked as its own roadmap initiative (see §9).
 
+> **The type system below is superseded.** This doc is the record of the F1.7
+> foundation delivery and describes the faces that shipped with it. The v1.0
+> redesign replaced them app-wide:
+>
+> | | F1.7 (this doc) | Current |
+> |---|---|---|
+> | `--serif` | Instrument Serif | **Cormorant Garamond** |
+> | `--sans` | Geist | **Instrument Sans** |
+> | `--mono` | Geist Mono | **Space Mono** |
+>
+> Two conventions came with the swap, and both are live in
+> [`frontend/assets/atrium.css`](../../frontend/assets/atrium.css):
+>
+> - **Headings are upright.** `font-style: italic` is reserved for inline
+>   emphasis (`em`, `.cm-em`, `.m-em`) and quoted / passage text (pull-quotes,
+>   highlight bodies, bookmark labels, placeholders). A title, section head, or
+>   wordmark never carries it — including an `<em>` nested inside one.
+> - **Figures are lining.** Cormorant's default numerals are oldstyle, where
+>   `0` sits at x-height and reads as a lowercase `o` ("0h 00m" → "oh oom"), so
+>   `.atrium` forces `font-variant-numeric: lining-nums` app-wide. The native
+>   iOS client forces the same via a font descriptor.
+>
+> The tokens, themes, accent extraction, and primitives described below are
+> otherwise unchanged.
+
 ---
 
 ## 1. Context
@@ -177,7 +202,7 @@ pub struct EbookMetadata {
 | `AccentNoChroma` | all-black or pure-grayscale cover | Hue-bucket pass finds zero weight | inline `None` return | Default accent |
 | `MigrationFailed` | sqlx column add fails | `sqlx::migrate!` returns Err on boot | Server fails to start; rollback previous binary | 503 |
 | `ThemeStorageWriteFailed` | localStorage quota / private mode / mobile r/o fs | `Result::Err` from set call | In-memory only for session; log warn | Toggle works but doesn't persist |
-| `AtriumCssMissing` | static file removed | Playwright smoke asserts computed font-family includes "Geist" | CI fails; deploy blocked | (would be) unstyled |
+| `AtriumCssMissing` | static file removed | Playwright smoke asserts computed font-family includes "Geist" (now "Instrument Sans") | CI fails; deploy blocked | (would be) unstyled |
 | `FontLoadBlocked` | CSP blocks self-hosted font | DevTools console; `font.load()` rejects | `font-display: swap` → system fallback renders | Mild FOUT |
 
 ---

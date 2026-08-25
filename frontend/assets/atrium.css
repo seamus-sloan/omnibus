@@ -9,14 +9,12 @@
  * `light`, and `sepia`. Per-book accent comes from `books.accent_color`,
  * set inline as `--accent` on the cover element.
  *
- * Fonts: pulled from Google Fonts for the foundation PR. Self-hosting
- * (`@font-face` under `frontend/assets/fonts/`) is tracked as a follow-up
- * inside F1.7 for offline / airgapped installs.
+ * Fonts: one editorial voice app-wide — Cormorant Garamond (display /
+ * serif), Instrument Sans (UI), Space Mono (labels, numerics). Pulled from
+ * Google Fonts; self-hosting (`@font-face` under `frontend/assets/fonts/`)
+ * is tracked as a follow-up for offline / airgapped installs.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
-/* Marquee book-detail voice (T3 Cormorant): scoped under `.bdmq` via the token
-   overrides in the "Book detail · marquee" block near the end of this file. */
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400..700;1,400..700&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
 
 /* ── Tokens · dark (default) ─────────────────────────────────────── */
@@ -51,9 +49,9 @@
      is seamless with the page itself. */
   --rd-page: #201e1b;
 
-  --serif: 'Instrument Serif', 'EB Garamond', Georgia, serif;
-  --sans:  'Geist', ui-sans-serif, -apple-system, system-ui, sans-serif;
-  --mono:  'Geist Mono', ui-monospace, 'SF Mono', monospace;
+  --serif: 'Cormorant Garamond', 'EB Garamond', Georgia, serif;
+  --sans:  'Instrument Sans', ui-sans-serif, -apple-system, system-ui, sans-serif;
+  --mono:  'Space Mono', ui-monospace, 'SF Mono', monospace;
 
   --r-sm: 6px;  --r-md: 10px;  --r-lg: 14px;  --r-xl: 22px;
   --pad: 28px;  --gap: 18px;
@@ -161,7 +159,14 @@ body.atrium,
   background: var(--bg-0);
   color: var(--ink-0);
   font-family: var(--sans);
-  font-feature-settings: 'ss01', 'cv11', 'cv02';
+  /* Cormorant's default figures are oldstyle: `0` sits at x-height and reads
+     as a lowercase `o`, so a duration renders as "oh oom" and a stat value
+     as "om". Forced app-wide rather than site-by-site — the UI is chrome and
+     numerals in it are data, and the one place oldstyle would genuinely read
+     better (a quoted passage) is not worth a split that every new serif
+     surface would have to remember. Instrument Sans and Space Mono carry
+     only lining figures, so this is a no-op outside the serif. */
+  font-variant-numeric: lining-nums;
   -webkit-font-smoothing: antialiased;
   font-size: 14px;
   line-height: 1.45;
@@ -193,14 +198,35 @@ html, body { overscroll-behavior: none; }
 .atrium *::before,
 .atrium *::after { box-sizing: border-box; }
 
-.atrium h1, .atrium h2, .atrium h3, .atrium h4, .atrium h5 {
-  font-family: var(--serif); font-weight: 400;
-  letter-spacing: -0.015em; margin: 0; color: var(--ink-0);
+/* Form controls don't inherit font properties — the UA sheet sets `font` on
+   them wholesale — so the lining-figure rule above stops at every input,
+   textarea, and button, including the serif ones (the search palette's field,
+   the metadata and note editors). `:where()` keeps this at (0,1,0) so the
+   per-class `tabular-nums` sites further down still outrank it. */
+.atrium :where(input, textarea, select, button) {
+  font-variant-numeric: inherit;
 }
-.atrium h1 { font-size: 64px; line-height: 1.0; letter-spacing: -0.025em; }
-.atrium h2 { font-size: 42px; line-height: 1.05; }
-.atrium h3 { font-size: 28px; line-height: 1.1;  }
-.atrium h4 { font-size: 20px; line-height: 1.2;  }
+
+/* Cormorant is a light, small-bodied face: at 400 with Instrument Serif's
+   -0.015em track it reads wispy and cramped at display sizes. The weight and
+   tracking here are the marquee title's calibration (`.bdmq h1.bdmq-title`),
+   and the sizes step up ~8% so each level holds its old optical weight. */
+.atrium h1, .atrium h2, .atrium h3, .atrium h4, .atrium h5 {
+  font-family: var(--serif); font-weight: 600;
+  letter-spacing: -0.005em; margin: 0; color: var(--ink-0);
+}
+.atrium h1 { font-size: 70px; line-height: 1.0; }
+.atrium h2 { font-size: 46px; line-height: 1.05; }
+.atrium h3 { font-size: 31px; line-height: 1.1;  }
+.atrium h4 { font-size: 22px; line-height: 1.2;  }
+/* `<em>` is italic by UA default, and headings use it to set one word of the
+   name apart ("Every <em>author</em>", "<em>Frankenstein</em>"). That is
+   naming a thing, not quoting a human, so it stays upright — genuine inline
+   emphasis (`.bd-desc em`, `.cm-em`, `.m-em`) re-declares italic for itself.
+   `.lib-header-title` is a `<p>`, hence the extra arm. */
+.atrium h1 em, .atrium h2 em, .atrium h3 em,
+.atrium h4 em, .atrium h5 em,
+.lib-header-title em { font-style: normal; }
 .atrium p  { margin: 0; }
 .atrium a  { color: inherit; text-decoration: none; }
 
@@ -232,22 +258,32 @@ html, body { overscroll-behavior: none; }
   width: 26px; height: 26px;
   object-fit: contain; display: block;
 }
+/* The wordmark is upright Cormorant 600 at 25px. No `padding-top` nudge —
+   that only existed to optically centre the old italic face. */
 .atrium-brand-word {
-  font-family: var(--serif); font-size: 22px; letter-spacing: -0.02em;
-  font-style: italic; line-height: 1; padding-top: 3px;
+  font-family: var(--serif); font-size: 25px; font-weight: 600;
+  letter-spacing: -0.01em; line-height: 1;
 }
-.atrium-nav { display: flex; align-items: center; gap: 4px; margin-left: 24px; }
+.atrium-nav { display: flex; align-items: center; gap: 2px; margin-left: 16px; }
+/* Nav links, topbar buttons, and the search affordance all speak mono
+   uppercase — the chrome steps back so the editorial serif carries the page.
+   `text-transform` is presentational only: the DOM text (and therefore the
+   accessible name Playwright matches on) stays "Library" / "Authors" / … */
 .atrium-nav a {
-  padding: 6px 12px; border-radius: 999px;
-  color: var(--ink-1); font-size: 13px;
+  padding: 6px 10px; border-radius: 999px; white-space: nowrap;
+  color: var(--ink-1);
+  font-family: var(--mono); font-size: 11px;
+  letter-spacing: .09em; text-transform: uppercase;
   text-decoration: none;
   transition: color .15s, background .15s; cursor: pointer;
 }
 @media (hover: hover) { .atrium-nav a:hover { color: var(--ink-0); background: var(--bg-1); } }
 .atrium-nav a.on    { color: var(--ink-0); background: var(--bg-2); }
 .atrium-nav .disabled {
-  padding: 6px 12px; border-radius: 999px;
-  color: var(--ink-3); font-size: 13px;
+  padding: 6px 10px; border-radius: 999px; white-space: nowrap;
+  color: var(--ink-3);
+  font-family: var(--mono); font-size: 11px;
+  letter-spacing: .09em; text-transform: uppercase;
   cursor: default; pointer-events: none;
 }
 
@@ -257,6 +293,22 @@ html, body { overscroll-behavior: none; }
 .atrium-actions {
   display: flex; align-items: center; gap: 6px;
   margin-left: auto;
+}
+/* Scoped to the topbar: only the chrome goes mono uppercase, page buttons
+   keep the sans voice. */
+/* `.btn.sm` also carries a `font-size` at (0,2,0) and sits later in the
+   file, so the `.sm` arm is spelled out to outrank it. `nowrap` because
+   uppercase Space Mono runs ~20% wider than the sentence-case sans it
+   replaced: "Check in" wraps to two lines inside a fixed-height 28px pill
+   the moment the bar gets tight. */
+.atrium-topbar .btn,
+.atrium-topbar .btn.sm {
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: .07em; text-transform: uppercase;
+  white-space: nowrap;
+}
+.atrium-topbar .sp-trigger > span {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .02em;
 }
 
 /* ── Search palette (F1.5) ──────────────────────────────────────── */
@@ -380,8 +432,8 @@ html, body { overscroll-behavior: none; }
   width: 36px; height: 36px; border-radius: 50%;
   background: var(--bg-3); display: flex;
   align-items: center; justify-content: center;
-  font-family: var(--serif); font-size: 16px;
-  font-style: italic; color: var(--ink-1); flex-shrink: 0;
+  font-family: var(--serif); font-weight: 600; font-size: 16px;
+  color: var(--ink-1); flex-shrink: 0;
 }
 .sp-tag-chip {
   display: inline-flex; align-items: center; gap: 6px;
@@ -414,11 +466,10 @@ html, body { overscroll-behavior: none; }
   gap: 24px; flex-wrap: wrap; margin-bottom: 4px;
 }
 .search-title {
-  font-family: var(--serif); font-weight: 400; color: var(--ink-0);
-  font-size: clamp(32px, 5vw, 52px); line-height: 1.0;
-  margin: 10px 0 0; letter-spacing: -0.01em;
+  font-family: var(--serif); font-weight: 600; color: var(--ink-0);
+  font-size: clamp(34px, 5vw, 56px); line-height: 1.0;
+  margin: 10px 0 0; letter-spacing: -0.005em;
 }
-.search-title-n { font-style: italic; }
 .search-hit { font-style: inherit; font-weight: 600; color: var(--accent); }
 .search-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .search-view-active { background: var(--bg-3); }
@@ -453,7 +504,7 @@ html, body { overscroll-behavior: none; }
 }
 .search-cover-fallback {
   display: grid; place-items: center;
-  font-family: var(--serif); font-style: italic; font-size: 30px;
+  font-family: var(--serif); font-weight: 600; font-size: 30px;
   color: var(--cover-fallback-ink);
 }
 @media (hover: hover) {
@@ -487,7 +538,7 @@ html, body { overscroll-behavior: none; }
 .search-avatar {
   flex: 0 0 44px; width: 44px; height: 44px; border-radius: 999px;
   background: var(--bg-3); display: grid; place-items: center;
-  font-family: var(--serif); font-style: italic; font-size: 20px; color: var(--ink-1);
+  font-family: var(--serif); font-weight: 600; font-size: 20px; color: var(--ink-1);
 }
 .search-avatar-series { border-radius: 8px; }
 .search-entity-body { flex: 1; min-width: 0; }
@@ -495,7 +546,7 @@ html, body { overscroll-behavior: none; }
   font-size: 16px; color: var(--ink-0);
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
-.search-entity-title-serif { font-family: var(--serif); font-style: italic; }
+.search-entity-title-serif { font-family: var(--serif); }
 .search-entity-sub {
   font-size: 11px; color: var(--ink-3); margin-top: 2px;
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
@@ -529,7 +580,7 @@ html, body { overscroll-behavior: none; }
   border: 1px solid var(--line-2); background: var(--bg-1);
 }
 .search-refine-title {
-  font-family: var(--serif); font-style: italic; font-size: 17px; color: var(--ink-0);
+  font-family: var(--serif); font-weight: 500; font-size: 17px; color: var(--ink-0);
 }
 .search-refine-body {
   font-size: 12.5px; color: var(--ink-2); margin-top: 6px; line-height: 1.5;
@@ -805,12 +856,11 @@ html, body { overscroll-behavior: none; }
   margin-top: 10px;
 }
 .atrium .bd-title {
-  font-size: clamp(44px, 7vw, 76px);
+  font-size: clamp(46px, 7vw, 84px);
   line-height: 0.95;
-  font-style: italic;
   margin-top: 0;
-  font-family: var(--serif);
-  letter-spacing: -0.025em;
+  font-family: var(--serif); font-weight: 600;
+  letter-spacing: -0.005em;
   text-wrap: balance;
   flex: 1;
   min-width: 0;
@@ -1099,9 +1149,9 @@ html, body { overscroll-behavior: none; }
 }
 .bd-section-kicker { margin-bottom: 6px; }
 .bd-section-title {
-  font-family: var(--serif);
-  font-size: 24px;
-  letter-spacing: -0.015em;
+  font-family: var(--serif); font-weight: 600;
+  font-size: 25px;
+  letter-spacing: -0.005em;
   color: var(--ink-0);
   margin: 0;
 }
@@ -1365,7 +1415,7 @@ html, body { overscroll-behavior: none; }
 }
 .bd-journal-progress-val {
   font-size: 12px; color: var(--ink-1); width: 36px; text-align: right;
-  flex-shrink: 0; font-variant-numeric: tabular-nums;
+  flex-shrink: 0; font-variant-numeric: lining-nums tabular-nums;
 }
 /* Coarse pointers (touch) get a bigger thumb + taller track so dragging the
    reading-progress slider on iOS WebView doesn't need pixel-precise contact. */
@@ -1602,8 +1652,8 @@ button.spoiler {
 }
 .bd-insight-label { font-size: 10px; color: var(--ink-3); }
 .bd-insight-value {
-  font-family: var(--serif);
-  font-size: 22px; line-height: 1;
+  font-family: var(--serif); font-weight: 600;
+  font-size: 23px; line-height: 1;
   margin-top: 4px;
   color: var(--ink-0);
 }
@@ -1661,14 +1711,13 @@ button.spoiler {
   .disc-stat-block { display: none; }
 }
 .disc-hero-title {
-  font-family: var(--serif);
-  font-size: clamp(48px, 6vw, 84px);
+  font-family: var(--serif); font-weight: 600;
+  font-size: clamp(50px, 6vw, 90px);
   line-height: 0.92;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.005em;
   margin: 8px 0 0;
   color: var(--ink-0);
 }
-.disc-hero-title em { font-style: italic; }
 .disc-hero-info { min-width: 0; }
 
 /* Avatar — 120px circle, serif initial */
@@ -1681,9 +1730,8 @@ button.spoiler {
   display: grid;
   place-items: center;
   overflow: hidden;
-  font-family: var(--serif);
+  font-family: var(--serif); font-weight: 600;
   font-size: 56px;
-  font-style: italic;
   color: var(--ink-1);
 }
 @media (max-width: 720px) {
@@ -1728,8 +1776,8 @@ button.spoiler {
 .disc-stat-block { text-align: right; }
 .disc-stat-label { display: block; margin-bottom: 6px; }
 .disc-stat {
-  font-family: var(--serif);
-  font-size: 56px;
+  font-family: var(--serif); font-weight: 600;
+  font-size: 58px;
   line-height: 1;
   color: var(--ink-0);
 }
@@ -1743,8 +1791,8 @@ button.spoiler {
   margin-bottom: 16px;
 }
 .disc-section-title {
-  font-family: var(--serif);
-  font-size: 24px;
+  font-family: var(--serif); font-weight: 600;
+  font-size: 25px;
   margin-top: 4px;
   color: var(--ink-0);
 }
@@ -1969,10 +2017,9 @@ a.idx-letter-on:focus-visible {
 .idx-letter-rail {
   position: sticky;
   top: 80px;
-  font-family: var(--serif);
-  font-size: 72px;
+  font-family: var(--serif); font-weight: 600;
+  font-size: 76px;
   line-height: 0.9;
-  font-style: italic;
   color: var(--ink-3);
 }
 @media (max-width: 600px) {
@@ -2028,9 +2075,8 @@ a.idx-letter-on:focus-visible {
   display: grid;
   place-items: center;
   overflow: hidden;
-  font-family: var(--serif);
+  font-family: var(--serif); font-weight: 600;
   font-size: 36px;
-  font-style: italic;
   color: var(--ink-1);
 }
 
@@ -2049,16 +2095,15 @@ a.idx-letter-on:focus-visible {
 
 .idx-card-body { min-width: 0; }
 .idx-card-title {
-  font-family: var(--serif);
-  font-size: 22px;
+  font-family: var(--serif); font-weight: 600;
+  font-size: 23px;
   line-height: 1.05;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.005em;
   color: var(--ink-0);
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .idx-card-name-rest { color: var(--ink-1); }
-.idx-card-name-last { font-style: italic; }
 
 .idx-card-stats {
   margin-top: 12px;
@@ -2073,8 +2118,8 @@ a.idx-letter-on:focus-visible {
   color: var(--ink-3);
 }
 .idx-stat-value {
-  font-family: var(--serif);
-  font-size: 20px;
+  font-family: var(--serif); font-weight: 600;
+  font-size: 21px;
   line-height: 1;
   margin-top: 3px;
   color: var(--ink-0);
@@ -2131,11 +2176,11 @@ a.idx-letter-on:focus-visible {
   /* Fluid rather than fixed: at 38px a two-word title plus its author breaks
      across three ragged lines on a phone, with the author landing alone under
      the title at a size that reads as a second heading. */
-  font-size: clamp(26px, 6.5vw, 38px);
+  font-size: clamp(28px, 6.5vw, 42px);
+  font-weight: 600;
   line-height: 1.05;
   margin-top: 4px;
 }
-.me-page-title-book { font-style: italic; }
 .me-page-title-author {
   color: var(--ink-2);
   font-family: var(--sans);
@@ -2270,7 +2315,7 @@ a.idx-letter-on:focus-visible {
   border: 1px solid var(--line-2);
   border-radius: 10px;
   color: var(--ink-0);
-  font-family: var(--serif);
+  font-family: var(--serif); font-weight: 500;
   font-size: 15px;
   line-height: 1.55;
   outline: none;
@@ -2704,8 +2749,8 @@ a.idx-letter-on:focus-visible {
   box-shadow: 0 24px 48px color-mix(in oklch, #000 35%, transparent);
 }
 .author-delete-modal__title {
-  font-family: var(--serif);
-  font-size: 22px;
+  font-family: var(--serif); font-weight: 600;
+  font-size: 23px;
   line-height: 1.2;
   margin: 0;
 }
@@ -2754,8 +2799,8 @@ a.idx-letter-on:focus-visible {
   border-bottom: 1px solid var(--line-2);
 }
 .author-photo-modal__title {
-  font-family: var(--serif);
-  font-size: 26px;
+  font-family: var(--serif); font-weight: 600;
+  font-size: 27px;
   line-height: 1.1;
   margin: 0;
 }
@@ -2857,7 +2902,7 @@ a.idx-letter-on:focus-visible {
 }
 .worker-status-label {
   flex: 1;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 .worker-status-icon {
   font-weight: 700;
@@ -2881,13 +2926,13 @@ a.idx-letter-on:focus-visible {
 .worker-status-item {
   font-size: 0.8125rem;
   color: var(--ink-2);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
   overflow-wrap: anywhere;
 }
 .worker-status-tallies {
   font-size: 0.8125rem;
   color: var(--ink-2);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 .worker-status-dismiss {
   background: transparent;
@@ -3018,7 +3063,7 @@ a.idx-letter-on:focus-visible {
 }
 .um-nr-meta { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; min-width: 0; }
 .um-nr-info { display: flex; flex-direction: column; gap: 4px; text-decoration: none; color: inherit; }
-.um-nr-title { font-family: var(--serif); font-style: italic; color: var(--ink-0); font-size: 14px; }
+.um-nr-title { font-family: var(--serif); font-weight: 500; color: var(--ink-0); font-size: 14px; }
 .um-nr-author { color: var(--ink-2); font-size: 12px; }
 .um-nr-action {
   margin-top: auto;
@@ -3167,9 +3212,9 @@ a.idx-letter-on:focus-visible {
 .lp-booklink:hover .lp-title { text-decoration: underline; text-underline-offset: 6px; }
 
 .lp-title {
-  font-family: var(--serif); font-style: italic;
-  font-size: clamp(36px, 5vw, 64px);
-  line-height: 0.95; letter-spacing: -0.025em;
+  font-family: var(--serif); font-weight: 600;
+  font-size: clamp(38px, 5vw, 70px);
+  line-height: 0.95; letter-spacing: -0.005em;
   margin: 12px 0 0; color: var(--ink-0);
 }
 
@@ -3178,8 +3223,8 @@ a.idx-letter-on:focus-visible {
 }
 
 .lp-chapter-sub {
-  margin-top: 6px; font-family: var(--serif);
-  font-style: italic; font-size: 22px; color: var(--ink-2);
+  margin-top: 6px; font-family: var(--serif); font-weight: 600;
+  font-size: 23px; color: var(--ink-2);
 }
 
 /* Scrubber */
@@ -3487,8 +3532,8 @@ a.idx-letter-on:focus-visible {
   color: var(--accent); font-weight: 500;
 }
 .lp-panel-title {
-  font-family: var(--serif); font-style: italic;
-  font-size: 30px; margin-top: 4px; color: var(--ink-0);
+  font-family: var(--serif); font-weight: 600;
+  font-size: 31px; margin-top: 4px; color: var(--ink-0);
 }
 
 /* Speed panel */
@@ -3635,8 +3680,8 @@ a.idx-letter-on:focus-visible {
   min-height: 200px;
 }
 .lp-drawer-empty-title {
-  font-family: var(--serif); font-style: italic;
-  font-size: 22px; color: var(--ink-1);
+  font-family: var(--serif); font-weight: 600;
+  font-size: 23px; color: var(--ink-1);
 }
 .lp-drawer-empty-detail {
   margin-top: 10px; font-size: 14px;
@@ -3737,7 +3782,7 @@ a.idx-letter-on:focus-visible {
   background: var(--bg-0); gap: 0.5rem;
 }
 .lp-overlay-title {
-  font-family: var(--serif); font-size: 1.2rem; color: var(--ink-1);
+  font-family: var(--serif); font-weight: 600; font-size: 1.3rem; color: var(--ink-1);
 }
 .lp-overlay-detail {
   font-family: var(--mono); font-size: 0.85rem; color: var(--ink-3);
@@ -4183,7 +4228,6 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   line-height: 1;
   margin: 0;
 }
-.auth-shell-headline-em { font-style: italic; }
 .auth-shell-blurb {
   margin-top: 1rem;
   color: var(--auth-ink-1);
@@ -4558,14 +4602,14 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-head-lead { display: flex; align-items: center; gap: 10px; }
 .m-head-back { width: 32px; height: 32px; flex: 0 0 32px; font-size: 14px; text-decoration: none; }
 .m-head-title {
-  font-family: var(--serif); font-weight: 400; font-size: 30px; line-height: 1.02;
-  letter-spacing: -0.015em; margin-top: 4px;
+  font-family: var(--serif); font-weight: 600; font-size: 32px; line-height: 1.02;
+  letter-spacing: -0.005em; margin-top: 4px;
 }
 
 /* Library */
 .m-lib { display: flex; flex-direction: column; }
 .m-lib-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.m-lib-brand { font-family: var(--serif); font-style: italic; font-size: 24px; letter-spacing: -0.02em; }
+.m-lib-brand { font-family: var(--serif); font-weight: 600; font-size: 25px; letter-spacing: -0.01em; }
 .m-lib-head-actions { display: flex; align-items: center; gap: 8px; }
 .m-lib-title {
   margin-bottom: 14px;
@@ -4738,14 +4782,14 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-search-cover { width: 40px; height: 60px; flex: 0 0 40px; border-radius: 3px; object-fit: cover; }
 .m-search-cover-fallback {
   height: 60px; display: grid; place-items: center; color: var(--accent-ink);
-  font-family: var(--serif); font-style: italic; font-size: 18px;
+  font-family: var(--serif); font-weight: 600; font-size: 18px;
 }
 .m-search-avatar {
   width: 40px; height: 40px; flex: 0 0 40px; border-radius: 50%;
   display: grid; place-items: center; color: var(--ink-0);
   background: radial-gradient(120% 120% at 32% 22%, color-mix(in oklch, var(--accent) 32%, var(--bg-2)), var(--bg-2));
   border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--line-2));
-  font-family: var(--serif); font-style: italic; font-size: 18px;
+  font-family: var(--serif); font-weight: 600; font-size: 18px;
 }
 .m-search-avatar-series { border-radius: 10px; }
 
@@ -4765,7 +4809,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-search-note { margin-top: 22px; font-size: 13px; color: var(--ink-2); }
 .m-search-note-initial { margin-top: 28px; text-align: center; }
 .m-search-empty { margin-top: 40px; text-align: center; }
-.m-search-empty-title { font-family: var(--serif); font-size: 20px; font-style: italic; color: var(--ink-0); }
+.m-search-empty-title { font-family: var(--serif); font-size: 20px; color: var(--ink-0); }
 .m-search-empty-sub { margin-top: 8px; font-size: 13px; color: var(--ink-2); }
 
 /* Shelves index */
@@ -4863,7 +4907,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .m-bd-cover { width: 150px; margin-top: 12px; }
 .m-bd-titlecol { text-align: center; padding: 14px 8px 4px; }
-.m-bd-title { font-family: var(--serif); font-weight: 400; font-size: 28px; line-height: 1.06; }
+.m-bd-title { font-family: var(--serif); font-weight: 600; font-size: 30px; line-height: 1.06; }
 .m-bd-meta { margin-top: 5px; font-size: 13px; color: var(--ink-2); }
 .m-bd-badges { margin-top: 12px; display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
 .m-bd-cta { display: flex; gap: 8px; padding: 16px 0 4px; }
@@ -5557,16 +5601,12 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   flex-wrap: wrap;
 }
 .lib-header-title {
-  font-family: var(--serif);
-  font-size: clamp(40px, 6vw, 64px);
+  font-family: var(--serif); font-weight: 600;
+  font-size: clamp(42px, 6vw, 70px);
   line-height: 1.0;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.005em;
   margin: 0;
   color: var(--ink-0);
-}
-.lib-header-title em {
-  font-style: italic;
-  font-feature-settings: 'lnum';
 }
 .lib-header-title-wrap { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .lib-header-hidden { color: var(--ink-3); }
@@ -5911,7 +5951,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 @media (hover: hover) { .rd-tool:hover { color: var(--ink-0); background: var(--bg-1); } }
 .rd-tool.on { color: var(--ink-0); background: var(--bg-2); border-color: var(--line-2); }
 .rd-tool .rd-badge { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
-.rd-aa { font-family: var(--serif); font-size: 19px; line-height: 1; padding-bottom: 2px; }
+.rd-aa { font-family: var(--serif); font-weight: 500; font-size: 19px; line-height: 1; padding-bottom: 2px; }
 /* Inset below the top bar and above the bottom bar, both safe-area-aware so
    the paginated prose never slides under the chrome (or the notch/home
    indicator). Matches the bar heights above; env insets are 0 on desktop. */
@@ -5998,7 +6038,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   pointer-events: none; transition: opacity .22s ease; }
 .rd-title-center { flex: 1; text-align: center; min-width: 0; overflow: hidden;
   white-space: nowrap; text-overflow: ellipsis; }
-.rd-title-book { font-family: var(--serif); font-style: italic; font-size: 16px;
+.rd-title-book { font-family: var(--serif); font-weight: 500; font-size: 16px;
   color: var(--ink-0); }
 .rd-title-sep { font-family: var(--mono); font-size: 11px; color: var(--ink-3);
   margin: 0 10px; }
@@ -6063,7 +6103,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .rd-typeface-chip:hover { border-color: var(--line); color: var(--ink-1); }
 }
 .rd-typeface-chip.on { border-color: var(--accent); color: var(--ink-0); }
-.rd-typeface-chip .preview { font-size: 20px; font-style: italic; }
+.rd-typeface-chip .preview { font-size: 20px; }
 .rd-typeface-chip .name { font-family: var(--sans); font-size: 10px; }
 .rd-size-track { flex: 1; height: 4px; background: var(--bg-2); border-radius: 999px;
   position: relative; }
@@ -6130,7 +6170,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-drawer-head { display: flex; align-items: center;
   justify-content: space-between; padding: 18px 20px 14px;
   border-bottom: 1px solid var(--line-2); }
-.rd-drawer-title { font-family: var(--serif); font-size: 22px; margin: 0;
+.rd-drawer-title { font-family: var(--serif); font-weight: 600; font-size: 23px; margin: 0;
   display: flex; align-items: baseline; gap: 10px; }
 .rd-drawer-count { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
 .rd-drawer-body { flex: 1; overflow: auto; padding: 12px 16px 24px;
@@ -6149,11 +6189,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-toc-row { display: block; width: 100%; text-align: left;
   padding: 8px 10px; border: 0; border-left: 2px solid transparent;
   border-radius: 8px; background: transparent; color: var(--ink-1);
-  font-family: var(--serif); font-size: 14px; cursor: pointer;
+  font-family: var(--serif); font-weight: 500; font-size: 14px; cursor: pointer;
   transition: background .14s, color .14s; }
 @media (hover: hover) { .rd-toc-row:hover { background: var(--bg-2); color: var(--ink-0); } }
 .rd-toc-row.current { background: var(--bg-2); color: var(--ink-0);
-  border-left-color: var(--accent); font-style: italic; }
+  border-left-color: var(--accent); }
 
 /* Highlights drawer: filter chips + rows. */
 .rd-filter-row { display: flex; gap: 6px; flex-wrap: wrap;
@@ -6198,7 +6238,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   color: var(--ink-2); margin-bottom: 10px; }
 .rd-note-input { width: 100%; min-height: 90px; resize: vertical;
   background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 9px;
-  padding: 11px 13px; font-family: var(--serif); font-size: 15px;
+  padding: 11px 13px; font-family: var(--serif); font-weight: 500; font-size: 15px;
   line-height: 1.5; color: var(--ink-0); }
 .rd-note-actions { display: flex; align-items: center;
   justify-content: space-between; margin-top: 12px; }
@@ -6249,7 +6289,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   padding-top: 10px; }
 .rd-quote-card-author { font-family: var(--sans); font-size: 9.5px;
   letter-spacing: .14em; text-transform: uppercase; opacity: .8; }
-.rd-quote-card-sub { font-size: 14px; font-style: italic; margin-top: 1px; }
+.rd-quote-card-sub { font-size: 14px; margin-top: 1px; }
 .rd-quote-controls { margin-top: 20px; }
 .rd-quote-label { font-family: var(--mono); font-size: 10px; color: var(--ink-3);
   margin: 16px 0 8px; }
@@ -6421,7 +6461,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   box-shadow: 0 40px 90px -20px color-mix(in oklch, #000 70%, transparent), 0 0 0 1px var(--line-2); }
 .mg-head { padding: 26px 30px 0; }
 .mg-kicker { color: var(--accent); margin-bottom: 8px; }
-.mg-title { margin: 0; font-family: var(--serif); font-style: italic; font-size: 38px; line-height: 1; }
+.mg-title { margin: 0; font-family: var(--serif); font-weight: 600; font-size: 40px; line-height: 1; }
 .mg-body { display: flex; flex-direction: column; gap: 16px; padding: 16px 30px 4px; overflow-y: auto; }
 .mg-intro { margin: 0; max-width: 540px; font-size: 15px; line-height: 1.5; color: var(--ink-1); }
 
@@ -6433,7 +6473,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .mg-target-main { flex: 1; min-width: 0; }
 .mg-target-kicker { margin-bottom: 3px; font-size: 9.5px; color: var(--ink-3); }
 .mg-target-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.mg-target-title { font-family: var(--serif); font-style: italic; font-size: 18px; color: var(--ink-0);
+.mg-target-title { font-family: var(--serif); font-weight: 500; font-size: 18px; color: var(--ink-0);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mg-target-sub { flex: 0 0 auto; font-size: 11px; color: var(--ink-3); white-space: nowrap; }
 .mg-target-note { flex: 0 0 auto; font-size: 10px; color: var(--ink-3); }
@@ -6493,7 +6533,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
  * selected-row highlight is the accent, matching the design's checkbox. */
 .del-modal { width: min(560px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; }
 .del-body { display: flex; flex-direction: column; gap: 14px; padding: 26px 28px 24px; }
-.del-title { margin: 0; font-family: var(--serif); font-size: 22px; line-height: 1.2;
+.del-title { margin: 0; font-family: var(--serif); font-weight: 600; font-size: 23px; line-height: 1.2;
   color: var(--ink-0); }
 .del-copy { margin: 0; font-size: 14px; line-height: 1.55; color: var(--ink-2); }
 .del-losses { color: var(--ink-3); }
@@ -7130,7 +7170,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   border: 1px solid color-mix(in oklch, var(--accent) 50%, var(--line-2));
   color: var(--ink-0); transition: transform .25s cubic-bezier(.2,.7,.2,1), box-shadow .25s;
 }
-.author-portrait .glyph { font-family: var(--serif); font-style: italic; font-size: 46px; line-height: 1; }
+.author-portrait .glyph { font-family: var(--serif); font-weight: 600; font-size: 46px; line-height: 1; }
 @media (hover: hover) {
   .author-portrait:hover { transform: translateY(-2px) scale(1.03);
     box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 42%, transparent); }
@@ -7143,7 +7183,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 @media (hover: hover) { .author-portrait:hover .hint { opacity: 1; transform: translateY(0); } }
 .author-lead-name {
-  display: inline-block; font-family: var(--serif); font-size: 17px; line-height: 1.14;
+  display: inline-block; font-family: var(--serif); font-weight: 500; font-size: 17px; line-height: 1.14;
   color: var(--ink-0); cursor: pointer; text-wrap: balance;
 }
 @media (hover: hover) { .author-lead-name:hover { color: var(--accent); } }
@@ -7625,8 +7665,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .ch-title-link { text-decoration: none; color: inherit; min-width: 0; }
 .ch-title {
   font-family: var(--serif);
-  font-size: 21px;
-  font-weight: 400;
+  font-size: 22px;
+  font-weight: 600;
   line-height: 1.15;
   margin: 0;
   color: var(--ink-0);
@@ -7896,14 +7936,14 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   display: grid; place-items: center;
   background: var(--accent-soft);
   color: var(--accent);
-  font-family: var(--serif);
+  font-family: var(--serif); font-weight: 600;
   font-size: 20px;
   letter-spacing: 0.02em;
 }
 .m-account-idcol { min-width: 0; }
 .m-account-name {
-  font-family: var(--serif);
-  font-size: 24px;
+  font-family: var(--serif); font-weight: 600;
+  font-size: 25px;
   color: var(--ink-0);
   line-height: 1.15;
 }
@@ -8246,7 +8286,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    the 64px hero size wins on specificity (0,1,1 vs 0,1,0), overflows the
    phone viewport, and collapses the whole centered layout. */
 .atrium .m-player-title {
-  font-family: var(--serif); font-weight: 400; font-size: 26px;
+  font-family: var(--serif); font-weight: 600; font-size: 27px;
   line-height: 1.05; margin-top: 10px;
   overflow: hidden; white-space: nowrap;
 }
@@ -8272,7 +8312,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .m-player-by { margin-top: 8px; color: var(--ink-1); font-size: 14px; }
 .m-player-chline {
-  margin-top: 6px; font-family: var(--serif); font-style: italic;
+  margin-top: 6px; font-family: var(--serif); font-weight: 500;
   font-size: 16px; color: var(--ink-1);
 }
 
@@ -8380,7 +8420,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-ch-row.current .m-ch-num { color: var(--accent); }
 .m-ch-body { flex: 1; min-width: 0; }
 .m-ch-title {
-  font-family: var(--serif); font-size: 15px; overflow: hidden;
+  font-family: var(--serif); font-weight: 500; font-size: 15px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
 }
 .m-ch-pbar { margin-top: 6px; }
@@ -8451,7 +8491,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   color: inherit; text-align: left; cursor: pointer;
 }
 .m-bm-title {
-  font-family: var(--serif); font-size: 15px; color: var(--ink-0);
+  font-family: var(--serif); font-weight: 500; font-size: 15px; color: var(--ink-0);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .m-bm-note {
@@ -8576,6 +8616,21 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    parity) but never shown — the top bar carries navigation. */
 .app-shell .m-tabbar { display: none; }
 
+/* The search trigger collapses to an icon-only circle to save width. This
+   fires a breakpoint *above* the phone one because the topbar's mono
+   uppercase chrome is wider than the sans it replaced: between 720px (where
+   the nav steps aside for the tab bar) and ~900px the brand + nav + search +
+   actions no longer fit, and the right cluster runs off the edge. Dropping
+   the trigger's label and ⌘K hint buys back ~94px, more than the type
+   change costs. */
+@media (max-width: 900px) {
+  .atrium-topbar .sp-trigger {
+    padding: 0; width: 36px; gap: 0; justify-content: center; flex: none;
+  }
+  .atrium-topbar .sp-trigger > span,
+  .atrium-topbar .sp-trigger .sp-trigger-kbd { display: none; }
+}
+
 @media (max-width: 720px) {
   /* ── Navigation: bottom tab bar takes over section switching ─── */
   .app-shell .m-tabbar { display: flex; }
@@ -8586,19 +8641,21 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
   /* Slim the top bar to brand + search + actions. The Library/Authors/
      Series links move into the tab bar, so hide them here. */
-  .atrium-topbar { padding: 12px 16px; gap: 10px; }
+  .atrium-topbar { padding: 12px 16px; gap: 7px; }
   .atrium-nav { display: none; }
 
-  /* Search trigger collapses to an icon-only circle to save width. */
-  .atrium-topbar .sp-trigger {
-    padding: 0; width: 36px; gap: 0; justify-content: center; flex: none;
-  }
-  .atrium-topbar .sp-trigger > span,
-  .atrium-topbar .sp-trigger .sp-trigger-kbd { display: none; }
+  /* The 25px wordmark and the mono uppercase buttons are a desktop-navbar
+     spec; at phone width they cost ~55px the bar does not have, and the
+     avatar runs off the right edge. Step both down here — the voice is the
+     same, only the scale gives. */
+  .atrium-brand-word { font-size: 21px; }
+  .atrium-topbar .btn,
+  .atrium-topbar .btn.sm { font-size: 9.5px; letter-spacing: .04em; }
 
-  .atrium-actions { gap: 8px; }
+  .atrium-actions { gap: 6px; }
   /* Keep the "Add books" CTA from crowding the avatar. */
-  .atrium-actions .btn.primary.sm { padding: 0 12px; }
+  .atrium-actions .btn.primary.sm { padding: 0 8px; }
+  .atrium-actions .btn.sm { padding: 0 8px; }
 
   /* User menu panel: never wider than the viewport. */
   .um-panel { width: min(360px, calc(100vw - 24px)); }
@@ -8677,7 +8734,6 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   gap: 0.28em;
 }
 .st-period-word {
-  font-style: italic;
   border-bottom: 2px solid var(--accent);
   padding-bottom: 2px;
 }
@@ -8782,8 +8838,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-period, .st-alltime { display: flex; flex-direction: column; gap: 16px; }
 
 .st-divider { border-top: 1px solid var(--line-2); padding-top: 16px; }
-.st-divider-title { margin: 0 0 4px; font-family: var(--serif); font-size: 22px; }
-.st-divider-em { font-style: italic; }
+.st-divider-title { margin: 0 0 4px; font-family: var(--serif); font-weight: 600; font-size: 23px; }
 .st-divider-sub { margin: 0; font-size: 12.5px; color: var(--ink-3); }
 
 /* ── Headline metric tiles ────────────────────────────────────────── */
@@ -8804,8 +8859,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   cursor: pointer;
 }
 .st-tile-value {
-  font-family: var(--serif);
-  font-size: 46px;
+  font-family: var(--serif); font-weight: 600;
+  font-size: 48px;
   line-height: 1;
   color: var(--ink-0);
 }
@@ -8850,7 +8905,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 14px;
 }
-.st-drill-head h4 { font-family: var(--serif); font-size: 20px; }
+.st-drill-head h4 { font-family: var(--serif); font-weight: 600; font-size: 21px; }
 .st-drill-close {
   width: 32px; height: 32px; border-radius: 999px; border: 1px solid var(--line-2);
   background: var(--bg-2); color: var(--ink-2); font-size: 14px; cursor: pointer;
@@ -8927,7 +8982,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   text-align: center;
   align-content: center;
 }
-.st-donut-count { font-family: var(--serif); font-size: 28px; line-height: 1; }
+.st-donut-count { font-family: var(--serif); font-weight: 600; font-size: 28px; line-height: 1; }
 .st-donut-count-label { font-size: 10px; color: var(--ink-3); margin-top: 2px; }
 .st-donut-legend {
   list-style: none;
@@ -8968,7 +9023,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-heatmap-sub { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
 .st-streak { text-align: right; }
 .st-streak-value {
-  font-family: var(--serif);
+  font-family: var(--serif); font-weight: 600;
   font-size: 40px;
   line-height: 1;
   color: var(--accent);
@@ -9194,7 +9249,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   margin: 0;
   font-size: 13px;
   color: var(--ink-2);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 .check-in-why {
   margin: 0;
@@ -9254,7 +9309,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .check-in-book-cover--empty { background: var(--bg-2); }
 .check-in-book-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.check-in-book-title { font-family: var(--serif); font-size: 16px; }
+.check-in-book-title { font-family: var(--serif); font-weight: 500; font-size: 16px; }
 .check-in-book-byline { font-size: 13px; color: var(--ink-2); }
 .check-in-book-series {
   font-size: 12px;
@@ -9425,7 +9480,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   border: 1px solid var(--line);
   background: var(--bg-2);
   font-size: 12px;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
   color: var(--ink-2);
 }
 .isbn-slot.filled {
@@ -9446,7 +9501,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   background: var(--bg-1);
   color: var(--ink-1);
   font-size: 20px;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
   cursor: pointer;
 }
 .isbn-key:disabled { opacity: 0.5; cursor: default; }
@@ -9722,9 +9777,8 @@ html {
 .al-head h3 {
   margin: 4px 0 6px;
   font-family: var(--serif);
-  font-style: italic;
-  font-weight: 400;
-  font-size: 38px;
+  font-weight: 600;
+  font-size: 40px;
   line-height: 1;
 }
 .al-kicker {
@@ -9945,7 +9999,6 @@ html {
   margin-top: 10px;
   font-size: 13px;
 }
-.al-identity-title { font-style: italic; }
 .al-identity-author { font-size: 11px; opacity: 0.6; }
 .al-identity-spacer { flex: 1; }
 .al-pair-mark { display: inline-flex; align-items: center; gap: 5px; opacity: 0.7; }
@@ -10115,14 +10168,8 @@ html {
    T3 Cormorant): huge cover pinned left under a soft parallax, content
    in a 70%-opacity blurred panel, seven snap-scrolled stops with a
    hover-expanding dot-rail TOC. Scoped under `.bdmq`; scroll mechanics in
-   `frontend/src/pages/book_detail/marquee.js`. */
-
-.bdmq {
-  --serif: 'Cormorant Garamond', Georgia, serif;
-  --sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
-  --mono: 'Space Mono', ui-monospace, 'SF Mono', monospace;
-  font-family: var(--sans);
-}
+   `frontend/src/pages/book_detail/marquee.js`. The type voice this page
+   introduced now lives in `:root`, so only the stage layout is scoped here. */
 /* Modals hosted inside the stage (quote-card editor, merge/delete dialogs)
    live inside the snap/panel stacking contexts, which paint below the sticky
    topbar — so keep their cards out of the topbar's strip: the backdrop pads
@@ -10134,15 +10181,6 @@ html {
 }
 .bdmq .mg-modal {
   max-height: calc(100vh - var(--bdmq-top, 61px) - 52px);
-}
-/* Modals hosted inside the stage are app-wide surfaces — the reader opens
-   the same quote editor — so they keep the Atrium voice rather than
-   inheriting the marquee page fonts. */
-.bdmq .mg-modal {
-  --serif: 'Instrument Serif', 'EB Garamond', Georgia, serif;
-  --sans: 'Geist', ui-sans-serif, -apple-system, system-ui, sans-serif;
-  --mono: 'Geist Mono', ui-monospace, 'SF Mono', monospace;
-  font-family: var(--sans);
 }
 
 /* The stage fills the viewport below the sticky topbar; `--bdmq-top` is
@@ -10729,10 +10767,6 @@ html {
    `.lmq`; scroll mechanics in `frontend/src/pages/landing/marquee.js`. */
 
 .lmq {
-  --serif: 'Cormorant Garamond', Georgia, serif;
-  --sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
-  --mono: 'Space Mono', ui-monospace, 'SF Mono', monospace;
-  font-family: var(--sans);
   position: relative;
   gap: 0;
   padding-top: 0;
@@ -10919,7 +10953,7 @@ html {
 .lmq-shent:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
 .lmq-shent-name {
   display: block;
-  font-family: var(--serif); font-size: 23px; line-height: 1.1;
+  font-family: var(--serif); font-weight: 600; font-size: 23px; line-height: 1.1;
   color: var(--ink-1); white-space: nowrap; transition: color .18s;
 }
 .lmq-shent-meta {
@@ -10999,7 +11033,6 @@ html {
   font-family: var(--serif); font-size: 44px; font-weight: 600;
   line-height: 1; letter-spacing: -0.015em;
 }
-.lmq .lib-header-title em { font-style: normal; }
 .lmq .lib-header-count { color: var(--ink-2); }
 .lmq .lib-header-hidden { color: var(--ink-3); }
 .lmq .lib-toolbar { gap: 10px; }
