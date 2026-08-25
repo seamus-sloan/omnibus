@@ -507,8 +507,13 @@ pub fn parse_audiobook_targets(targets: Vec<AudiobookParseTarget>) -> Vec<super:
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
+    use super::super::chapters::tests::{make_chapter_track_fixture, TrackLayout};
     use super::super::chapters::RawChapter;
-    use super::{offset_chapters, path_fallback, strip_creator_prefix};
+    use super::{
+        apply_chapters, offset_chapters, path_fallback, strip_creator_prefix, AudiobookPart,
+    };
 
     #[test]
     fn offset_chapters_shifts_start_and_end_by_offset() {
@@ -531,6 +536,49 @@ mod tests {
         assert_eq!(shifted[0].end_ms, 11_000);
         assert_eq!(shifted[1].start_ms, 11_000);
         assert_eq!(shifted[1].end_ms, 12_500);
+    }
+
+    #[test]
+    fn apply_chapters_lays_a_mixed_chpl_and_chapter_track_group_on_one_timeline() {
+        // A group's parts are read independently — one may carry a QuickTime
+        // chapter track and the next a Nero `chpl` — then each is shifted by
+        // the cumulative duration of the parts before it.
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let mut file = std::fs::File::create(dir.path().join(name)).unwrap();
+            file.write_all(bytes).unwrap();
+        };
+
+        let chapters: Vec<(u32, &[u8])> = vec![(1_000, b"One".as_slice()), (2_000, b"Two")];
+        write(
+            "01.m4b",
+            &make_chapter_track_fixture(&chapters, &TrackLayout::default()),
+        );
+        let chpl_only = TrackLayout {
+            chpl_title: Some("Three"),
+            ..TrackLayout::default()
+        };
+        write("02.m4b", &make_chapter_track_fixture(&chapters, &chpl_only));
+
+        let part = |ordinal: i64, filename: &str, duration_seconds: f64| AudiobookPart {
+            ordinal,
+            filename: filename.to_string(),
+            size_bytes: 0,
+            mtime_epoch: 0,
+            duration_seconds,
+        };
+        let parts = vec![part(0, "01.m4b", 3.0), part(1, "02.m4b", 5.0)];
+
+        let result = apply_chapters(&parts, dir.path(), "M4B");
+        assert_eq!(result.len(), 3);
+        // Part one, from its chapter track, at the head of the timeline.
+        assert_eq!(result[0].title, "One");
+        assert_eq!((result[0].start_ms, result[0].end_ms), (0, 1_000));
+        assert_eq!(result[1].title, "Two");
+        assert_eq!((result[1].start_ms, result[1].end_ms), (1_000, 3_000));
+        // Part two, from its `chpl`, shifted by part one's 3 s duration.
+        assert_eq!(result[2].title, "Three");
+        assert_eq!(result[2].start_ms, 3_000);
     }
 
     #[test]
