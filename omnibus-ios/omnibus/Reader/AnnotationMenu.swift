@@ -239,7 +239,7 @@ struct NoteComposer: View {
                         // you're writing about this sentence, so it should be
                         // in front of you.
                         Text(quote)
-                            .font(.display(16))
+                            .font(.display(19))
                             .foregroundStyle(palette.ink1Color)
                             .lineSpacing(5)
                             .padding(.leading, 14)

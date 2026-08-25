@@ -54,7 +54,7 @@ struct CheckInSuccessView: View {
                         .tracking(0.8)
                         .foregroundStyle(palette.accentColor)
                     Text(success.title)
-                        .font(.display(24))
+                        .font(.display(27))
                         .foregroundStyle(palette.ink0Color)
                         .multilineTextAlignment(.center)
                     if success.tone == .quiet {

@@ -84,7 +84,7 @@ struct ReaderContentsSheet: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(book.displayTitle)
-                    .font(.display(20))
+                    .font(.display(23))
                     .foregroundStyle(palette.ink0Color)
                     .lineLimit(2)
                 if let position = positionLabel {
@@ -310,7 +310,7 @@ struct ReaderContentsSheet: View {
             VStack(alignment: .leading, spacing: 5) {
                 if let text = highlight.text?.nilIfBlank {
                     Text(text)
-                        .font(.display(15))
+                        .font(.display(18))
                         .foregroundStyle(palette.ink1Color)
                         .lineLimit(3)
                         .multilineTextAlignment(.leading)

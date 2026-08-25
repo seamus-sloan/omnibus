@@ -237,7 +237,7 @@ struct MetadataEditView: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(book.displayTitle)
-                    .font(.display(19))
+                    .font(.display(22))
                     .foregroundStyle(palette.ink0Color)
                     .lineLimit(2)
 
@@ -258,7 +258,7 @@ struct MetadataEditView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             Text(title)
-                .font(.display(20))
+                .font(.display(23))
                 .foregroundStyle(palette.ink0Color)
             content()
         }

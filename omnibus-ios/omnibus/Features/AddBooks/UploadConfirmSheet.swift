@@ -103,7 +103,7 @@ struct UploadConfirmSheet: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(draft.batch.displayName)
-                .font(.display(20))
+                .font(.display(23))
                 .foregroundStyle(palette.ink0Color)
                 .lineLimit(2)
             Text(

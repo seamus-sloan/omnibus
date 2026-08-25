@@ -3,9 +3,9 @@
 //
 //  A stock `.navigationTitle` renders in system bold sans, which is the one
 //  place the app was loudest and least itself — the web build's identity is an
-//  italic Instrument Serif wordmark over warm neutrals. This is that identity,
-//  set as a masthead: wordmark line, the screen's name in the display face, and
-//  a rule with an accent lead-in.
+//  upright Cormorant Garamond wordmark over warm neutrals. This is that
+//  identity, set as a masthead: wordmark line, the screen's name in the display
+//  face, and a rule with an accent lead-in.
 
 import SwiftUI
 
@@ -21,8 +21,8 @@ struct Masthead<Trailing: View>: View {
                 OmnibusMark()
 
                 Text("Omnibus")
-                    .font(.displayItalic(14))
-                    .tracking(0.2)
+                    .font(.display(16, weight: .medium))
+                    .tracking(0.3)
                     .foregroundStyle(palette.ink2Color)
 
                 Spacer(minLength: Spacing.sm)
@@ -31,7 +31,7 @@ struct Masthead<Trailing: View>: View {
             }
 
             Text(title)
-                .font(.display(38))
+                .font(.display(42))
                 .foregroundStyle(palette.ink0Color)
 
             // The accent lead-in is the whole signature of the rule: a plain
@@ -80,7 +80,7 @@ struct FadingBarTitle: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .principal) {
             Text(title)
-                .font(.display(16, weight: .medium))
+                .font(.display(18, weight: .medium))
                 .foregroundStyle(palette.ink0Color)
                 .lineLimit(1)
                 .opacity(opacity)

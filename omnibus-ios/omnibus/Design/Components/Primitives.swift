@@ -148,7 +148,7 @@ struct SectionHeader<Trailing: View>: View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.display(23))
+                    .font(.display(26))
                     .foregroundStyle(palette.ink0Color)
                 if let subtitle {
                     Text(subtitle)
@@ -205,7 +205,7 @@ struct EmptyStateView: View {
                 .font(.system(size: 40, weight: .light))
                 .foregroundStyle(palette.ink3Color)
             Text(title)
-                .font(.display(21))
+                .font(.display(24))
                 .foregroundStyle(palette.ink0Color)
             if let message {
                 Text(message)

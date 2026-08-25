@@ -2,7 +2,9 @@
 //  The Atrium palette, ported token-for-token from `frontend/assets/atrium.css`.
 //  Values stay in OKLCH so a change on either side is a direct comparison.
 
+import CoreText
 import SwiftUI
+import UIKit
 
 enum ThemeName: String, CaseIterable, Codable, Sendable {
     case atrium
@@ -210,40 +212,107 @@ enum Spacing {
 // MARK: - Type scale
 
 extension Font {
-    /// PostScript names of the vendored faces — what `Font.custom` matches on,
-    /// and what `Info.plist`'s `UIAppFonts` must keep resolvable.
+    /// PostScript names of the vendored display cuts — what `Font.custom`
+    /// matches on, and what `Info.plist`'s `UIAppFonts` must keep resolvable.
     enum DisplayFace {
-        static let regular = "InstrumentSerif-Regular"
-        static let italic = "InstrumentSerif-Italic"
+        static let regular = "CormorantGaramond-Regular"
+        static let medium = "CormorantGaramond-Medium"
+        static let semibold = "CormorantGaramond-SemiBold"
+        static let italic = "CormorantGaramond-Italic"
+
+        /// The vendored cut for `weight`. Only 400/500/600 are bundled — the
+        /// range the scale asks for — so anything heavier resolves to SemiBold.
+        static func name(for weight: Font.Weight) -> String {
+            switch weight {
+            case .medium: medium
+            case .semibold, .bold, .heavy, .black: semibold
+            default: regular
+            }
+        }
     }
 
-    /// Instrument Serif, the display face shared with the web client.
+    /// PostScript names of the vendored UI-sans cuts.
+    enum UIFace {
+        static let regular = "InstrumentSans-Regular"
+        static let medium = "InstrumentSans-Medium"
+        static let semibold = "InstrumentSans-SemiBold"
+
+        static func name(for weight: Font.Weight) -> String {
+            switch weight {
+            case .medium: medium
+            case .semibold, .bold, .heavy, .black: semibold
+            default: regular
+            }
+        }
+    }
+
+    /// PostScript names of the vendored monospace cuts. Space Mono draws 400
+    /// and 700 only, so `.medium` resolves to Regular — the same match a
+    /// browser makes for `font-weight: 500` against this family.
+    enum MonoFace {
+        static let regular = "SpaceMono-Regular"
+        static let bold = "SpaceMono-Bold"
+
+        static func name(for weight: Font.Weight) -> String {
+            switch weight {
+            case .semibold, .bold, .heavy, .black: bold
+            default: regular
+            }
+        }
+    }
+
+    /// Cormorant Garamond, the display face shared with the web client.
     ///
-    /// `fixedSize:` rather than `size:` is deliberate: `Font.custom(_:size:)`
-    /// opts into Dynamic Type scaling, which `.system(size:)` never did, so the
-    /// plain initialiser would silently start resizing all ~40 call sites.
-    /// Supporting Dynamic Type is worth doing — but as its own change, with the
-    /// layouts checked.
+    /// A fixed size rather than a Dynamic Type one is deliberate:
+    /// `Font.custom(_:size:)` opts into Dynamic Type scaling, which
+    /// `.system(size:)` never did, so the plain initialiser would silently
+    /// start resizing all ~60 call sites. Supporting Dynamic Type is worth
+    /// doing — but as its own change, with the layouts checked. `Font(UIFont)`
+    /// below keeps that same fixed behaviour.
     ///
-    /// The family ships a single weight, matching the `ital@0;1`-only axis the
-    /// web requests (`atrium.css` pins `--serif` to 400). A non-regular `weight`
-    /// therefore gets a synthetic embolden from CoreText, not a real cut.
+    /// `weight` picks a real vendored cut rather than a CoreText embolden of
+    /// the regular one, so the drawing stays Cormorant's at every step.
     static func display(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .custom(DisplayFace.regular, fixedSize: size).weight(weight)
+        liningFigures(DisplayFace.name(for: weight), size)
     }
 
     /// The true italic cut. `display(_:).italic()` would skew the upright face
-    /// instead, and Instrument Serif's italic is a separate drawing — far more
-    /// than a slant — so the synthetic version reads as a different typeface.
+    /// instead, and Cormorant Garamond's italic is a separate drawing — far
+    /// more than a slant — so the synthetic version reads as a different
+    /// typeface. Reserved for quoted passage text: headers are upright.
     static func displayItalic(_ size: CGFloat) -> Font {
-        .custom(DisplayFace.italic, fixedSize: size)
+        liningFigures(DisplayFace.italic, size)
     }
 
+    /// Instrument Sans, the UI face shared with the web client. `fixedSize:`
+    /// and the real-cut weight selection carry over from `display`.
     static func ui(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .default)
+        .custom(UIFace.name(for: weight), fixedSize: size)
     }
 
+    /// Space Mono — numerals, keys, and the uppercase micro-labels.
     static func monoUI(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
+        .custom(MonoFace.name(for: weight), fixedSize: size)
+    }
+
+    /// Cormorant Garamond draws **oldstyle** figures by default: `0` sits at
+    /// x-height, so "Audiobook · 0h 06m" set in it reads as "oh o6m" and the
+    /// Stats hero's "0m" reads as "om". The family carries a real lining set,
+    /// so ask for it rather than keep figures out of the display face.
+    /// Instrument Sans and Space Mono are lining already and need none of this.
+    ///
+    /// Falls back to the plain fixed-size font if the name doesn't resolve —
+    /// which `ThemeFontTests` exists to make impossible.
+    private static func liningFigures(_ name: String, _ size: CGFloat) -> Font {
+        guard let base = UIFont(name: name, size: size) else {
+            return .custom(name, fixedSize: size)
+        }
+        let descriptor = base.fontDescriptor.addingAttributes([
+            .featureSettings: [[
+                UIFontDescriptor.FeatureKey.type: kNumberCaseType,
+                UIFontDescriptor.FeatureKey.selector: kUpperCaseNumbersSelector,
+            ]]
+        ])
+        return Font(UIFont(descriptor: descriptor, size: size))
     }
 }

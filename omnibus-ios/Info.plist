@@ -44,14 +44,25 @@
 	     hash rather than encryption. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<!-- Instrument Serif is the display face shared with the web client, which
-	     pulls it from Google Fonts; iOS has no CDN equivalent, so the files are
-	     vendored under omnibus/Design/Fonts/ (OFL-1.1, license alongside them).
+	<!-- The three families of the shared design voice — Cormorant Garamond
+	     (display), Instrument Sans (UI), Space Mono (numerals and labels) — plus
+	     the retired Instrument Serif. The web client pulls them from Google
+	     Fonts; iOS has no CDN equivalent, so static cuts are vendored under
+	     omnibus/Design/Fonts/ (OFL-1.1, a licence per family alongside them).
 	     A name listed here that doesn't resolve fails *silently* — UIFont(name:)
 	     returns nil and SwiftUI falls back to the system face — so
-	     ThemeFontTests asserts both PostScript names load. -->
+	     ThemeFontTests asserts every PostScript name the type scale asks for. -->
 	<key>UIAppFonts</key>
 	<array>
+		<string>CormorantGaramond-Regular.ttf</string>
+		<string>CormorantGaramond-Medium.ttf</string>
+		<string>CormorantGaramond-SemiBold.ttf</string>
+		<string>CormorantGaramond-Italic.ttf</string>
+		<string>InstrumentSans-Regular.ttf</string>
+		<string>InstrumentSans-Medium.ttf</string>
+		<string>InstrumentSans-SemiBold.ttf</string>
+		<string>SpaceMono-Regular.ttf</string>
+		<string>SpaceMono-Bold.ttf</string>
 		<string>InstrumentSerif-Regular.ttf</string>
 		<string>InstrumentSerif-Italic.ttf</string>
 	</array>

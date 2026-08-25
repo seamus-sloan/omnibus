@@ -545,7 +545,7 @@ struct CheckInView: View {
             .aspectRatio(2.0 / 3.0, contentMode: .fit)
             .overlay {
                 Text(title.prefix(1).uppercased())
-                    .font(.display(28))
+                    .font(.display(31))
                     .foregroundStyle(palette.coverFallbackInk.color.opacity(0.5))
             }
     }
@@ -582,7 +582,7 @@ struct CheckInView: View {
                     .tracking(0.7)
                     .foregroundStyle(tint)
                 Text(title)
-                    .font(.display(20))
+                    .font(.display(23))
                     .foregroundStyle(palette.ink0Color)
                 Text(authors.isEmpty ? "Unknown author" : authors.joined(separator: ", "))
                     .font(.ui(13))

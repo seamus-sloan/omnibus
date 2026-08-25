@@ -410,7 +410,7 @@ struct LibraryView: View {
     private var sectionHeading: some View {
         HStack(spacing: Spacing.sm) {
             Text(model.category == .all ? "All books" : model.category.label)
-                .font(.display(24))
+                .font(.display(27))
                 .foregroundStyle(palette.ink0Color)
 
             // The hidden-formats receipt: excluded books must never look

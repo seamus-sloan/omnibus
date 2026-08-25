@@ -45,7 +45,7 @@ struct CheckInLinkView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Which book is this?")
-                .font(.display(22))
+                .font(.display(25))
                 .foregroundStyle(palette.ink0Color)
             Text(
                 "Find it in your library and we'll file this copy against it — no new book, no duplicate to merge later."

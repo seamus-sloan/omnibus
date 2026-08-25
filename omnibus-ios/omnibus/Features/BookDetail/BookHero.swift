@@ -109,7 +109,7 @@ struct BookHero: View {
                 .padding(.bottom, 2)
 
             Text(book.displayTitle)
-                .font(.display(30))
+                .font(.display(33))
                 .foregroundStyle(palette.ink0Color)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)

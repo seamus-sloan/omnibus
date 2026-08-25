@@ -103,7 +103,7 @@ struct AccountView: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(app.user?.display ?? "Signed in")
-                    .font(.display(24))
+                    .font(.display(27))
                     .foregroundStyle(palette.ink0Color)
                     .lineLimit(1)
 

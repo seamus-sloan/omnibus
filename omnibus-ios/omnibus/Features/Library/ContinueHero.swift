@@ -164,7 +164,7 @@ private struct HeroCard: View {
                     onOpenDetail(book)
                 } label: {
                     Text(book.displayTitle)
-                        .font(.display(21))
+                        .font(.display(24))
                         .foregroundStyle(palette.ink0Color)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)

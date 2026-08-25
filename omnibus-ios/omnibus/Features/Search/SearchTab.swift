@@ -77,7 +77,7 @@ struct BrowseDirectory: View {
                 Spacer(minLength: Spacing.sm)
 
                 Text(label)
-                    .font(.display(19))
+                    .font(.display(22))
                     .foregroundStyle(palette.ink0Color)
 
                 Text(note)
