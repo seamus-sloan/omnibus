@@ -41,8 +41,10 @@ use tower_http::set_header::SetResponseHeaderLayer;
 ///   drops its `Function()` use and gains nonce support.
 /// - `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com` —
 ///   `'unsafe-inline'` because Dioxus emits inline `style=""` attributes;
-///   the Google Fonts host because `atrium.css` `@import`s the Geist /
-///   Instrument Serif stylesheet from it. Self-hosting the fonts (a
+///   the Google Fonts host because `atrium.css` `@import`s the Cormorant
+///   Garamond / Instrument Sans / Space Mono stylesheet from it. (The reader
+///   glue loads a second one for the in-iframe reading faces.) Self-hosting
+///   the fonts (a
 ///   follow-up tracked in `atrium.css`) would let both the CDN host here
 ///   and in `font-src` drop back to `'self'`.
 /// - `font-src 'self' data: https://fonts.gstatic.com` — Google serves the

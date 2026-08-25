@@ -63,7 +63,7 @@ test("renders the author page layout", async ({ page, request }) => {
 
   await gotoReady(page, `/authors/${authorId}`);
 
-  // H1 contains the author's name (split first/last with italic)
+  // H1 contains the author's name (split first/last, both upright)
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Ada");
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "Lovelace",
