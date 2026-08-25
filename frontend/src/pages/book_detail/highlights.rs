@@ -78,37 +78,25 @@ pub(super) fn BdHighlightsSection(uuid: String, quote_meta: BdQuoteMeta) -> Elem
     }
 }
 
-/// Passages listed before the reader expands the section. A heavily
-/// highlighted book runs to hundreds of rows, and this is one section of
-/// several on the page.
-const COLLAPSED_PASSAGES: usize = 5;
-
-/// The passage list, capped at [`COLLAPSED_PASSAGES`] rows until the reader
-/// expands it. Both renders start collapsed so SSR and hydration match
-/// (rule 07).
+/// Every saved passage, in one list. A heavily highlighted book runs to
+/// hundreds of rows, so the marquee stop scrolls the list inside the stage
+/// (`.bdmq .bd-hl-list`) rather than holding rows back behind a control.
 #[component]
 fn BdHighlightList(
     highlights: Signal<Vec<Highlight>>,
     server_url: String,
     quote_target: Signal<Option<Highlight>>,
 ) -> Element {
-    let mut expanded = use_signal(|| false);
     // Hoisted once for the whole list rather than once per card — a heavily
     // highlighted book runs to hundreds of rows, and each row resolves its
     // own offset from its own `created_at` via `local_date_offset` (see
     // `dates.rs`), so sharing this signal doesn't share a stale offset.
     let dates_ready = use_local_dates_ready();
     let list = highlights();
-    let total = list.len();
-    let visible = if expanded() {
-        total
-    } else {
-        total.min(COLLAPSED_PASSAGES)
-    };
 
     rsx! {
         div { class: "bd-hl-list", "data-testid": "highlights-list",
-            for h in list.iter().take(visible) {
+            for h in list.iter() {
                 BdHighlightCard {
                     key: "{h.id}",
                     highlight: h.clone(),
@@ -117,16 +105,6 @@ fn BdHighlightList(
                     quote_target,
                     dates_ready,
                 }
-            }
-        }
-        if total > visible {
-            button {
-                r#type: "button",
-                class: "btn ghost sm bd-hl-show-more",
-                "data-testid": "highlights-show-more",
-                "aria-expanded": "{expanded()}",
-                onclick: move |_| expanded.set(true),
-                "Show {total - visible} more \u{2193}"
             }
         }
     }
@@ -190,10 +168,9 @@ fn BdHighlightCard(
         .text
         .clone()
         .unwrap_or_else(|| "(highlighted passage)".to_string());
-    // Highlights created before the text column (migration 0030) have nothing
-    // to copy or put on a card; disable both actions rather than offer a
-    // silent no-op.
-    let copy_src = highlight.text.clone();
+    // Highlights created before the text column (migration 0030) have no
+    // text to put on a card; disable the action rather than offer a silent
+    // no-op.
     let quote_disabled = highlight.text.is_none();
     let quote_src = highlight.clone();
     let note = highlight.note.clone();
@@ -236,19 +213,21 @@ fn BdHighlightCard(
             if let Some(n) = note {
                 p { class: "bd-hl-note", "data-testid": "highlight-note", "{n}" }
             }
+            // One mono line, per the marquee design: locator · saved date · the
+            // actions as inline text links rather than a button row.
             div { class: "bd-hl-foot",
                 span { class: "mono bd-hl-meta", "data-testid": "highlight-meta", "{meta_line}" }
                 div { class: "bd-hl-actions",
                     if let Some(href) = open_href {
                         Link {
                             to: "{href}",
-                            class: "btn ghost sm",
+                            class: "bd-hl-act",
                             "data-testid": "highlight-open",
-                            "Open in reader"
+                            "open in book \u{2192}"
                         }
                     }
                     button {
-                        class: "btn ghost sm",
+                        class: "bd-hl-act",
                         r#type: "button",
                         "data-testid": "highlight-quote",
                         disabled: quote_disabled,
@@ -256,26 +235,14 @@ fn BdHighlightCard(
                             let mut quote_target = quote_target;
                             quote_target.set(Some(quote_src.clone()));
                         },
-                        "Quote"
+                        "quote card \u{2192}"
                     }
                     button {
-                        class: "btn ghost sm",
-                        r#type: "button",
-                        "data-testid": "highlight-copy",
-                        disabled: copy_src.is_none(),
-                        onclick: move |_| {
-                            if let Some(ref text) = copy_src {
-                                copy_to_clipboard(text);
-                            }
-                        },
-                        "Copy"
-                    }
-                    button {
-                        class: "btn ghost sm bd-hl-delete",
+                        class: "bd-hl-act bd-hl-delete",
                         r#type: "button",
                         "data-testid": "highlight-delete",
                         onclick: on_delete,
-                        "Delete"
+                        "delete"
                     }
                 }
             }
@@ -308,16 +275,4 @@ fn percent_encode(s: &str) -> String {
         }
     }
     out
-}
-
-/// Write `text` to the system clipboard (no-op on SSR, where there is none).
-#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(unused_variables))]
-fn copy_to_clipboard(text: &str) {
-    #[cfg(any(feature = "web", feature = "mobile"))]
-    {
-        let lit = crate::js_interop::json_literal(text);
-        let _ = dioxus::document::eval(&format!(
-            "navigator.clipboard && navigator.clipboard.writeText({lit});"
-        ));
-    }
 }

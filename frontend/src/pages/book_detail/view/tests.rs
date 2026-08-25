@@ -3,16 +3,6 @@
 use super::*;
 
 #[test]
-fn kicker_label_renders_year_when_present() {
-    assert_eq!(kicker_label("2021"), "Book · 2021");
-}
-
-#[test]
-fn kicker_label_falls_back_to_book_when_year_empty() {
-    assert_eq!(kicker_label(""), "Book");
-}
-
-#[test]
 fn series_label_formats_name_and_index() {
     assert_eq!(
         series_label(Some("Dune"), Some("2")),

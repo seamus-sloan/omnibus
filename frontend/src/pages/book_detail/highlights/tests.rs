@@ -242,12 +242,6 @@ mod render_tests {
         LongListHost {},
     }
 
-    #[derive(Clone, Debug, PartialEq, Routable)]
-    enum ShortListRoute {
-        #[route("/")]
-        ShortListHost {},
-    }
-
     /// `n` distinct passages, each id'd so the list's `key` stays unique.
     fn seeded_list(n: i64) -> Vec<Highlight> {
         (0..n)
@@ -281,40 +275,13 @@ mod render_tests {
     }
 
     #[test]
-    fn list_renders_only_the_collapsed_count_and_offers_the_rest() {
-        // A heavily highlighted book would otherwise push every other section
-        // off the page; the first COLLAPSED_PASSAGES rows show and the button
-        // names how many are held back.
+    fn list_renders_every_passage_without_a_show_more_control() {
+        // The marquee stop scrolls the list inside the stage, so a long list is
+        // bounded by the surface rather than by a load-more button.
         let html = render_in_vdom(render_long_list);
-        assert_eq!(count_cards(&html), COLLAPSED_PASSAGES);
+        assert_eq!(count_cards(&html), 8);
         assert!(html.contains("passage 0"));
-        assert!(html.contains("passage 4"));
-        assert!(!html.contains("passage 5"));
-        assert!(html.contains("data-testid=\"highlights-show-more\""));
-        assert!(html.contains("Show 3 more"));
-    }
-
-    #[component]
-    fn ShortListHost() -> Element {
-        rsx! {
-            BdHighlightList {
-                highlights: use_signal(|| seeded_list(COLLAPSED_PASSAGES as i64)),
-                server_url: String::new(),
-                quote_target: use_signal(|| None),
-            }
-        }
-    }
-
-    fn render_short_list() -> Element {
-        rsx! {
-            Router::<ShortListRoute> {}
-        }
-    }
-
-    #[test]
-    fn list_omits_the_show_more_button_when_nothing_is_held_back() {
-        let html = render_in_vdom(render_short_list);
-        assert_eq!(count_cards(&html), COLLAPSED_PASSAGES);
+        assert!(html.contains("passage 7"));
         assert!(!html.contains("data-testid=\"highlights-show-more\""));
     }
 
@@ -344,13 +311,12 @@ mod render_tests {
     }
 
     #[test]
-    fn card_disables_copy_and_quote_for_a_highlight_saved_before_the_text_column() {
-        // Pre-migration-0030 rows carry no prose, so Copy would be a silent
-        // no-op and a quote card would be blank; both controls are disabled.
+    fn card_disables_quote_for_a_highlight_saved_before_the_text_column() {
+        // Pre-migration-0030 rows carry no prose, so a quote card would come
+        // out blank; the control is disabled rather than offered.
         let html = render_in_vdom(render_plain_card);
         assert!(html.contains("(highlighted passage)"));
         assert!(!html.contains("data-testid=\"highlight-note\""));
-        assert_button_disabled(&html, "highlight-copy");
         assert_button_disabled(&html, "highlight-quote");
     }
 

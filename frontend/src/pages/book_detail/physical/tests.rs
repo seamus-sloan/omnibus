@@ -176,6 +176,51 @@ mod render_tests {
         assert!(html.contains("data-testid=\"copy-delete\""));
     }
 
+    /// The same copies, rendered as marquee rows in the book's copies list.
+    fn physical_rows_marquee_preview() -> Element {
+        let state = PhysPanelState {
+            copies: use_signal(|| {
+                vec![PhysicalCopy {
+                    id: 1,
+                    book_uuid: "u".to_string(),
+                    isbn: Some("978".to_string()),
+                    added_by_user_id: None,
+                    checked_in_at: 0,
+                    note: Some("First edition".to_string()),
+                }]
+            }),
+            wishlist: use_signal(|| None),
+            busy: use_signal(|| false),
+            err: use_signal(|| None),
+            editing: use_signal(|| None),
+            note_draft: use_signal(String::new),
+            delete_target: use_signal(|| None),
+            refresh: use_signal(|| 0u32),
+        };
+        render_physical_rows_marquee(state, "".to_string(), false, true)
+    }
+
+    #[test]
+    fn physical_rows_marquee_render_a_copy_row_with_its_status_dot_and_actions() {
+        let html = render_in_vdom(physical_rows_marquee_preview);
+        // A copy is a row in the copies list, not a panel of its own.
+        assert!(html.contains("class=\"rx-copy\""), "{html}");
+        assert!(
+            html.contains("data-testid=\"physical-copy-card\""),
+            "{html}"
+        );
+        // The pill's wording moves to the status dot's accessible name.
+        assert!(html.contains("data-testid=\"physical-pill\""), "{html}");
+        assert!(html.contains("In your physical collection"), "{html}");
+        assert!(
+            html.contains("data-testid=\"format-badge-physical\""),
+            "{html}"
+        );
+        assert!(html.contains("First edition"), "{html}");
+        assert!(html.contains("data-testid=\"copy-edit-note\""), "{html}");
+        assert!(html.contains("data-testid=\"copy-delete\""), "{html}");
+    }
+
     /// The rail slot for a wishlisted book (tracking card + actions).
     fn wishlisted_slot_preview() -> Element {
         rsx! {

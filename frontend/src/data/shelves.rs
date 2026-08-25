@@ -316,6 +316,16 @@ pub async fn get_shelf(_server_url: &str, id: i64) -> Result<Shelf, DataError> {
         .map_err(note_server_fn_err)
 }
 
+/// Ids of the visible hand-picked shelves holding this book. Web-only caller
+/// (the book page's shelf stop); mobile's book screen already consumes the
+/// REST twin directly.
+#[cfg(not(feature = "mobile"))]
+pub async fn shelves_containing(_server_url: &str, uuid: &str) -> Result<Vec<i64>, DataError> {
+    crate::rpc::rpc_shelves_containing(uuid.to_string())
+        .await
+        .map_err(note_server_fn_err)
+}
+
 /// Create a shelf.
 #[cfg(not(feature = "mobile"))]
 pub async fn create_shelf(_server_url: &str, req: CreateShelfRequest) -> Result<Shelf, DataError> {

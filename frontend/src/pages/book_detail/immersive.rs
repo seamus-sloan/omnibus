@@ -113,7 +113,12 @@ pub(crate) fn retarget_and_open_immersive(uuid: String) {
 /// together, via [`retarget_and_open_immersive`]. Renders identically on
 /// every target; only the handler internals differ per platform.
 #[component]
-pub(super) fn BdImmersiveButton(uuid: String) -> Element {
+pub(super) fn BdImmersiveButton(
+    uuid: String,
+    /// Button text — the marquee hero uses the design's terser "Immersive".
+    #[props(default = String::from("Immersive Read"))]
+    label: String,
+) -> Element {
     let on_click = {
         let uuid = uuid.clone();
         move |_: MouseEvent| retarget_and_open_immersive(uuid.clone())
@@ -126,7 +131,7 @@ pub(super) fn BdImmersiveButton(uuid: String) -> Element {
             title: "Open the ereader and audiobook together, kept in sync",
             onclick: on_click,
             {bd_immersive_mark()}
-            "Immersive Read"
+            "{label}"
         }
     }
 }

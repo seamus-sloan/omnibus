@@ -7,18 +7,28 @@
 use dioxus::prelude::*;
 use omnibus_shared::JournalEntry;
 
+#[cfg(not(feature = "mobile"))]
+use crate::components::user_avatar::UserAvatar;
 use crate::{data, use_server_url};
 
 use super::dates::use_local_dates_ready;
+#[cfg(feature = "mobile")]
 use super::BdSectionHead;
 
 mod composer;
 mod entry_card;
 
+// The ladder row and its excerpt helper are web-stage-only, so the suite is
+// too — the mobile feature build has neither.
+#[cfg(all(test, not(feature = "mobile")))]
+mod tests;
+
 use composer::BdJournalComposer;
 use entry_card::BdJournalEntryCard;
 
 /// Public reading-journal section: header, composer, and the entry feed.
+/// Mobile's single-column re-flow; the web stage uses [`MarqueeJournalStop`].
+#[cfg(feature = "mobile")]
 #[component]
 pub(super) fn BdJournalSection(uuid: String) -> Element {
     let server_url = use_server_url();
@@ -32,6 +42,7 @@ pub(super) fn BdJournalSection(uuid: String) -> Element {
 
     use_journal_entries_load(uuid.clone(), server_url.clone(), reload, entries);
     use_spoiler_reveal_binding();
+    let composer_open = use_signal(|| false);
 
     let list = entries();
     let kicker = journal_kicker(&list);
@@ -42,7 +53,12 @@ pub(super) fn BdJournalSection(uuid: String) -> Element {
             p { class: "mono bd-journal-blurb",
                 "A shared log — every reader's journal for this book lives here."
             }
-            BdJournalComposer { uuid: uuid.clone(), server_url: server_url.clone(), reload }
+            BdJournalComposer {
+                uuid: uuid.clone(),
+                server_url: server_url.clone(),
+                reload,
+                open: composer_open,
+            }
             BdJournalList { list, current_user: current_user(), server_url, reload }
         }
     }
@@ -100,6 +116,7 @@ fn use_spoiler_reveal_binding() {
 }
 
 /// The section-head kicker text: entry/reader counts, or an empty-state note.
+#[cfg(feature = "mobile")]
 fn journal_kicker(list: &[JournalEntry]) -> String {
     if list.is_empty() {
         return "Reading journal · no entries yet".to_string();
@@ -122,7 +139,249 @@ fn journal_kicker(list: &[JournalEntry]) -> String {
     )
 }
 
+/// Stop 05 · Journals for the marquee stage: header (entry/reader counts + the
+/// reader avatar stack), the composer, and the excerpt ladder — a two-line
+/// row per entry that opens the full card over the stop. Wishlist-only books
+/// render the design's empty state instead.
+#[cfg(not(feature = "mobile"))]
+#[component]
+pub(super) fn MarqueeJournalStop(uuid: String, wish_mode: bool) -> Element {
+    let server_url = use_server_url();
+    let entries = use_signal(Vec::<JournalEntry>::new);
+    let current_user = crate::use_current_user_summary();
+    let reload = use_signal(|| 0u32);
+    // The entry opened in the overlay, by id (not index — a reload after an
+    // edit must keep the same entry open or drop it if it went away).
+    let mut open_entry = use_signal(|| None::<i64>);
+
+    use_journal_entries_load(uuid.clone(), server_url.clone(), reload, entries);
+    use_spoiler_reveal_binding();
+    let dates_ready = use_local_dates_ready();
+    // The composer opens as a modal over the stop (design: "✎ New entry"),
+    // not as an inline card; the composer clears this on publish/cancel.
+    let mut composer_open = use_signal(|| false);
+
+    let list = entries();
+    let published = list
+        .iter()
+        .filter(|e| e.status != omnibus_shared::JournalStatus::Draft)
+        .count();
+    let drafts = list.len() - published;
+    let readers: Vec<&JournalEntry> = {
+        let mut seen = std::collections::HashSet::new();
+        list.iter().filter(|e| seen.insert(e.author_id)).collect()
+    };
+    let kicker = marquee_journal_kicker(published, readers.len(), drafts, wish_mode);
+    let opened = open_entry().and_then(|id| list.iter().find(|e| e.id == id).cloned());
+
+    rsx! {
+        div { id: "journal", class: "bd-journal bdmq-journal", "data-testid": "journal-section",
+        div { class: "bdmq-journalhead",
+            div { class: "bdmq-k", "{kicker}" }
+            span { class: "bdmq-headspacer" }
+            if !wish_mode {
+                button {
+                    r#type: "button",
+                    class: "btn sm",
+                    "data-testid": "journal-open-composer",
+                    onclick: move |_| composer_open.set(true),
+                    "\u{270e} New entry"
+                }
+            }
+            if readers.len() > 1 {
+                div { class: "bdmq-avatarstack", aria_hidden: "true",
+                    for e in readers.iter().take(5) {
+                        UserAvatar {
+                            key: "{e.author_id}",
+                            user_id: e.author_id,
+                            name: e.author_name.clone(),
+                            has_avatar: e.author_has_avatar,
+                            class: "bdmq-stack-avatar".to_string(),
+                        }
+                    }
+                }
+            }
+        }
+        if wish_mode {
+            div { class: "bdmq-bigquiet", "No entries yet \u{2014} the journal begins when you do." }
+            p { class: "mono bdmq-quiet-hint", "a shared log \u{2014} anyone reading this book can write here" }
+        } else {
+            if composer_open() {
+                // Deliberately not click-outside-dismissable: a stray click
+                // must not throw away an open draft.
+                div { class: "bdmq-overlay bdmq-overlay-static", "data-testid": "journal-composer-overlay",
+                    div { class: "bdmq-ocard bdmq-ocard-composer",
+                        BdJournalComposer {
+                            uuid: uuid.clone(),
+                            server_url: server_url.clone(),
+                            reload,
+                            open: composer_open,
+                            modal: true,
+                        }
+                    }
+                }
+            }
+            if list.is_empty() {
+                div { class: "bd-journal-empty card", "data-testid": "journal-empty",
+                    p { class: "mono", "No journal entries yet \u{2014} be the first to write one." }
+                }
+            } else {
+                div { class: "bdmq-ladder", "data-testid": "journal-list",
+                    for entry in list.iter() {
+                        {render_ladder_row(entry, current_user().map(|u| u.id), dates_ready, open_entry)}
+                    }
+                }
+            }
+        }
+        if let Some(entry) = opened {
+            div {
+                class: "bdmq-overlay",
+                "data-testid": "journal-overlay",
+                onclick: move |_| open_entry.set(None),
+                div {
+                    class: "bdmq-ocard",
+                    onclick: move |e| e.stop_propagation(),
+                    BdJournalEntryCard {
+                        entry,
+                        current_user: current_user(),
+                        server_url: server_url.clone(),
+                        reload,
+                        dates_ready,
+                    }
+                    button {
+                        class: "btn ghost sm bdmq-ocard-close",
+                        "data-testid": "journal-overlay-close",
+                        onclick: move |_| open_entry.set(None),
+                        "\u{2715} Close"
+                    }
+                }
+            }
+        }
+        }
+    }
+}
+
+/// One excerpt-ladder row, in the design's two-line shape: avatar, then a
+/// header line (author · you · draft chip · date · progress) over the
+/// excerpt, which ends in the `read →` affordance. The whole row is the
+/// button that opens the full entry, so the affordance stays reachable by
+/// keyboard without nesting a second control inside it.
+#[cfg(not(feature = "mobile"))]
+fn render_ladder_row(
+    entry: &JournalEntry,
+    current_user_id: Option<i64>,
+    dates_ready: ReadSignal<bool>,
+    mut open_entry: Signal<Option<i64>>,
+) -> Element {
+    let id = entry.id;
+    let is_draft = entry.status == omnibus_shared::JournalStatus::Draft;
+    let is_owner = current_user_id == Some(entry.author_id);
+    let author = entry.author_name.clone();
+    let excerpt = journal_excerpt(&entry.body_md);
+    let offset = super::dates::local_date_offset(dates_ready(), entry.created_at);
+    let date = super::dates::fmt_long_date(entry.created_at, offset);
+    let meta_line = match entry.progress {
+        Some(p) => format!("{date} \u{b7} at {p}%"),
+        None => date,
+    };
+    rsx! {
+        button {
+            key: "{id}",
+            r#type: "button",
+            class: if is_draft { "bdmq-lrow draft" } else { "bdmq-lrow" },
+            "data-testid": "journal-ladder-row",
+            onclick: move |_| open_entry.set(Some(id)),
+            UserAvatar {
+                user_id: entry.author_id,
+                name: entry.author_name.clone(),
+                has_avatar: entry.author_has_avatar,
+                class: "bdmq-lrow-avatar".to_string(),
+            }
+            span { class: "bdmq-lrow-body",
+                span { class: "bdmq-lrow-head",
+                    span { class: "nm", "{author}" }
+                    if is_owner {
+                        span { class: "nm bdmq-lrow-you", "\u{b7} you" }
+                    }
+                    if is_draft {
+                        span { class: "bdmq-draftchip", "data-testid": "journal-draft-chip-row", "Draft" }
+                    }
+                    span { class: "at", "{meta_line}" }
+                }
+                span { class: "ex",
+                    "{excerpt} "
+                    span { class: "bdmq-lrow-read", "read \u{2192}" }
+                }
+            }
+        }
+    }
+}
+
+/// The marquee journal kicker: `The journal · N entries from M readers · d draft`.
+#[cfg(not(feature = "mobile"))]
+fn marquee_journal_kicker(
+    published: usize,
+    readers: usize,
+    drafts: usize,
+    wish_mode: bool,
+) -> String {
+    if wish_mode {
+        return "The journal \u{b7} empty".to_string();
+    }
+    if published + drafts == 0 {
+        return "The journal \u{b7} no entries yet".to_string();
+    }
+    let entry_word = if published == 1 { "entry" } else { "entries" };
+    let reader_word = if readers == 1 { "reader" } else { "readers" };
+    let mut out =
+        format!("The journal \u{b7} {published} {entry_word} from {readers} {reader_word}");
+    if drafts > 0 {
+        out.push_str(&format!(
+            " \u{b7} {drafts} {}",
+            if drafts == 1 { "draft" } else { "drafts" }
+        ));
+    }
+    out
+}
+
+/// How much of an entry's first line a ladder row carries — the design's
+/// slice, sized to land on the row's second line rather than a third.
+#[cfg(not(feature = "mobile"))]
+const LADDER_EXCERPT_CHARS: usize = 170;
+
+/// First non-empty line of a markdown body, markup stripped and spoilers
+/// masked, capped at [`LADDER_EXCERPT_CHARS`] for the ladder row.
+#[cfg(not(feature = "mobile"))]
+fn journal_excerpt(md: &str) -> String {
+    let line = md
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    // `||spoiler||` spans must not leak into the always-visible excerpt —
+    // mask each span before stripping the remaining markers.
+    let mut masked = String::with_capacity(line.len());
+    for (i, seg) in line.split("||").enumerate() {
+        masked.push_str(if i % 2 == 0 {
+            seg
+        } else {
+            "\u{2588}\u{2588}\u{2588}"
+        });
+    }
+    let stripped: String = masked
+        .chars()
+        .filter(|c| !matches!(c, '*' | '_' | '>' | '#' | '`'))
+        .collect();
+    let stripped = stripped.trim_start_matches("- ").trim().to_string();
+    let mut out: String = stripped.chars().take(LADDER_EXCERPT_CHARS).collect();
+    if stripped.chars().count() > LADDER_EXCERPT_CHARS {
+        out.push('\u{2026}');
+    }
+    out
+}
+
 /// The empty-state card, or the feed of entry cards.
+#[cfg(feature = "mobile")]
 #[component]
 fn BdJournalList(
     list: Vec<JournalEntry>,

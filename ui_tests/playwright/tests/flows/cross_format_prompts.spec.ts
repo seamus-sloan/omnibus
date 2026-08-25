@@ -200,18 +200,13 @@ test("the hero shows one synced card with the counterpart affordance", async ({
 test("the book detail shows the newest-format progress row above the sync chip", async ({
   page,
 }) => {
-  // Linked and fresh: the "Your progress" block collapses to ONE row for
-  // the newest format (either side may be newest here — earlier tests
-  // leave wall-clock reader/player writes on both), with the per-format
-  // bars absent and the linked chip beneath.
+  // Linked and fresh: the marquee stage shows ONE position ruler for the book
+  // plus the linked sync readout naming the audio-timeline hand-off.
   await gotoReady(page, `/books/${uuid}`);
   const row = page.getByTestId("sync-link-row");
-  await expect(row.getByText("Your progress")).toBeVisible();
-  await expect(page.getByTestId("bd-progress-newest")).toBeVisible();
-  await expect(page.getByTestId("bd-progress-ebook")).toHaveCount(0);
-  await expect(page.getByTestId("bd-progress-audio")).toHaveCount(0);
+  await expect(page.getByTestId("bdmq-ruler")).toBeVisible();
   await expect(page.getByTestId("sync-link-manage")).toBeVisible();
-  // The one-spot footnote explains the mapped hand-off.
+  // The one-spot line explains the mapped hand-off.
   await expect(row.getByText("one spot, both formats")).toBeVisible();
 });
 

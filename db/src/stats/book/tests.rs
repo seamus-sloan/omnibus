@@ -153,3 +153,49 @@ async fn book_insights_propagates_sqlx_error_when_sessions_table_is_missing() {
     let err = book_insights(&pool, user, "uuid-1").await.unwrap_err();
     assert!(matches!(err, StatsError::Sqlx(_)), "got: {err:?}");
 }
+
+#[tokio::test]
+async fn book_insights_reports_longest_sit_breaking_ties_to_the_earliest() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    reading_session(&pool, user, "uuid-1", T0, 600).await;
+    listening_session(&pool, user, "uuid-1", T0 + 7_200, 1_800).await;
+    // Same length as the winner, but later — the earlier one must win.
+    reading_session(&pool, user, "uuid-1", T0 + 86_400, 1_800).await;
+
+    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+
+    assert_eq!(insights.longest_seconds, 1_800);
+    assert_eq!(insights.longest_started_at, T0 + 7_200);
+}
+
+#[tokio::test]
+async fn book_insights_buckets_daily_activity_by_utc_day_ascending() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    // T0 = 2023-11-14 22:13:20 UTC. Two sessions the same UTC day (reading +
+    // listening merge into one bucket), one two days later.
+    reading_session(&pool, user, "uuid-1", T0, 600).await;
+    listening_session(&pool, user, "uuid-1", T0 + 60, 300).await;
+    reading_session(&pool, user, "uuid-1", T0 + 2 * 86_400, 240).await;
+
+    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+
+    assert_eq!(
+        insights.daily,
+        vec![
+            DayActivity {
+                day: "2023-11-14".into(),
+                seconds: 900
+            },
+            DayActivity {
+                day: "2023-11-16".into(),
+                seconds: 240
+            },
+        ]
+    );
+    // Stamped from the server clock — only its shape is stable in a test.
+    assert_eq!(insights.as_of_day.len(), 10);
+}

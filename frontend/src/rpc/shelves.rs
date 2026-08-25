@@ -71,6 +71,19 @@ pub async fn rpc_get_shelf(id: i64) -> Result<Shelf> {
     shelf_for_view(&pool.0, id, &user).await
 }
 
+/// Ids of the caller-visible hand-picked shelves holding this book — the
+/// book page's "on your shelves" row (RPC twin of `GET
+/// /api/shelves/containing/{uuid}`). Smart shelves are excluded: their
+/// membership is rule-derived, not something the row can toggle.
+#[post("/api/rpc/shelves/containing", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_shelves_containing(uuid: String) -> Result<Vec<i64>> {
+    Ok(
+        db::shelves::manual_shelves_containing(&pool.0, user.id, user.is_admin, &uuid)
+            .await
+            .map_err(|e| map_shelf_error("shelves containing", e))?,
+    )
+}
+
 /// Create a shelf owned by the caller.
 #[post("/api/rpc/shelves/create", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_create_shelf(req: CreateShelfRequest) -> Result<Shelf> {

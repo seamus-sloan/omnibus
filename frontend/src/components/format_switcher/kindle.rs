@@ -23,7 +23,7 @@ use crate::platform_sleep::async_sleep_ms;
 /// renders a disabled placeholder. The cfg gate lives at the helper definition
 /// (rule 07: keep cfg out of rsx bodies).
 #[cfg(not(feature = "mobile"))]
-pub(super) fn send_to_kindle_action(uuid: &str, file_id: Option<i64>, size_bytes: i64) -> Element {
+pub(crate) fn send_to_kindle_action(uuid: &str, file_id: Option<i64>, size_bytes: i64) -> Element {
     // `u64::try_from` over an `as` cast so a negative size can't wrap into a
     // huge value; a bad size just falls through to the normal email button (the
     // backend still enforces the real cap).
@@ -46,7 +46,7 @@ pub(super) fn send_to_kindle_action(uuid: &str, file_id: Option<i64>, size_bytes
 }
 
 #[cfg(feature = "mobile")]
-pub(super) fn send_to_kindle_action(
+pub(crate) fn send_to_kindle_action(
     _uuid: &str,
     _file_id: Option<i64>,
     _size_bytes: i64,

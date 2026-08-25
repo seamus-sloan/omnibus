@@ -114,11 +114,17 @@ test("surfaces a server error in the dialog and leaves the book unchanged", asyn
     async () => page.getByTestId("merge-confirm").click(),
   );
 
-  // The dialog stays open with an alert; the book keeps its single badge.
+  // The dialog stays open with an alert; the book keeps its single format.
+  // The marquee files stop states a book's formats as the rows of its copies
+  // list — one row (and one badge tile) per format — so that is what a
+  // format count asserts against now.
   await expect(page.getByRole("alert")).toBeVisible();
   await page.getByTestId("merge-cancel").click();
-  await expect(page.getByTestId("bd-format-badge")).toHaveCount(1);
-  await expect(page.getByTestId("bd-format-badge")).toHaveText("EPUB");
+  await expect(page.getByTestId("format-badge")).toHaveCount(1);
+  await expect(page.getByTestId("format-badge")).toHaveAttribute(
+    "aria-label",
+    "EPUB",
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -146,10 +152,10 @@ test("merges an audiobook into the ebook and undoes it from the toast", async ({
     );
     expect(response.status()).toBe(200);
 
-    // Refetch lands: both format badges, both CTAs, and the undo toast.
-    await expect(page.getByTestId("bd-format-badge")).toHaveCount(2);
+    // Refetch lands: a copies row per format, both CTAs, and the undo toast.
+    await expect(page.getByTestId("format-badge")).toHaveCount(2);
     await expect(
-      page.getByTestId("bd-format-badge").filter({ hasText: SOURCE.format }),
+      page.locator(`[data-format="${SOURCE.format}"]`).first(),
     ).toBeVisible();
     await expect(page.getByTestId("start-reading")).toBeVisible();
     await expect(page.getByTestId("listen-secondary")).toBeVisible();
@@ -162,8 +168,11 @@ test("merges an audiobook into the ebook and undoes it from the toast", async ({
       { method: "POST", url: "/api/rpc/merge-books/undo", expectedStatus: 200 },
       async () => page.getByTestId("merge-undo").click(),
     );
-    await expect(page.getByTestId("bd-format-badge")).toHaveCount(1);
-    await expect(page.getByTestId("bd-format-badge")).toHaveText("EPUB");
+    await expect(page.getByTestId("format-badge")).toHaveCount(1);
+    await expect(page.getByTestId("format-badge")).toHaveAttribute(
+      "aria-label",
+      "EPUB",
+    );
     await expect(page.getByTestId("listen-secondary")).not.toBeVisible();
   });
 });

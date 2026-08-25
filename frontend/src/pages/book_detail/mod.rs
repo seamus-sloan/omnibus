@@ -1,11 +1,11 @@
-//! Book detail page — Atrium "Cinematic" shell.
+//! Book detail page — the marquee stage on web, single-column re-flow on
+//! mobile.
 //!
 //! Owns the data fetch and shared markup primitives; the loaded-book view
-//! composition lives in [`view`], and section bodies live in [`hero`],
-//! [`body`], and [`merge`].
+//! composition lives in [`view`], the web stage in [`marquee`] and its stop
+//! submodules, and shared discovery sections in [`body`].
 
 use dioxus::prelude::*;
-use dioxus_router::Link;
 use omnibus_shared::physical::WishlistEntry;
 use omnibus_shared::{EbookMetadata, MergeBooksResult, SuggestionsResponse};
 
@@ -26,9 +26,10 @@ mod read_status;
 mod sync_link;
 mod view;
 
-// Web renders the split hero + body-grid; mobile re-flows the same loaded-book
-// data into a single-column surface. The web-only sections aren't compiled on
-// the native shell. (Separate build → no impact on web SSR/WASM parity, rule 07.)
+// Web renders the marquee stage (seven snap-scrolled stops); mobile
+// re-flows the same loaded-book data into a single-column surface. The
+// web-only sections aren't compiled on the native shell. (Separate build →
+// no impact on web SSR/WASM parity, rule 07.)
 #[cfg(not(feature = "mobile"))]
 mod body;
 #[cfg(not(feature = "mobile"))]
@@ -36,9 +37,9 @@ mod chips;
 #[cfg(not(feature = "mobile"))]
 mod export_menu;
 #[cfg(not(feature = "mobile"))]
-mod hero;
-#[cfg(not(feature = "mobile"))]
 mod highlights;
+#[cfg(not(feature = "mobile"))]
+mod marquee;
 #[cfg(feature = "mobile")]
 mod mobile;
 #[cfg(feature = "mobile")]
@@ -559,45 +560,6 @@ fn poll_suggestions_until_resolved(
 // markup-only adapters so the page reads as a composition of named blocks
 // rather than nested rsx.
 
-/// One breadcrumb segment. When `target` is `Some`, the segment renders as a
-/// router `Link`; otherwise it's a plain `<span>` for the current page or a
-/// segment without a resolvable detail route.
-#[derive(Clone, PartialEq, Props)]
-pub struct BdCrumbItem {
-    pub text: String,
-    pub target: Option<Route>,
-}
-
-/// Atrium-styled breadcrumb. Segments with a `target` route render as Links,
-/// otherwise as plain spans. The final segment is always rendered as the
-/// "current page" span regardless of target.
-#[component]
-pub(super) fn BdCrumb(items: Vec<BdCrumbItem>) -> Element {
-    let last_idx = items.len().saturating_sub(1);
-    rsx! {
-        nav { class: "bd-crumb", "aria-label": "breadcrumb",
-            for (i, item) in items.iter().cloned().enumerate() {
-                Fragment { key: "{i}-{item.text}",
-                    if i > 0 {
-                        span { class: "bd-crumb-sep", "\u{203a}" }
-                    }
-                    if i == last_idx {
-                        span { class: "bd-crumb-curr", "{item.text}" }
-                    } else if let Some(route) = item.target.clone() {
-                        Link {
-                            to: route,
-                            class: if i == 0 { "bd-crumb-home" } else { "bd-crumb-step" },
-                            "{item.text}"
-                        }
-                    } else {
-                        span { class: "bd-crumb-step", "{item.text}" }
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Body section heading row — kicker label + serif title, with an optional
 /// right-aligned `action` slot (mirrors `screens/_shared.jsx#SectionHead`). The
 /// kicker stacks above the title; the action floats opposite via the flex
@@ -635,16 +597,6 @@ pub(super) fn BdMetaRow(k: String, v: String) -> Element {
         tr { class: "bd-meta-row",
             td { class: "bd-meta-k", "{k}" }
             td { class: "bd-meta-v", "{v}" }
-        }
-    }
-}
-
-#[component]
-pub(super) fn BdInsightCell(label: String, value: String) -> Element {
-    rsx! {
-        div { class: "bd-insight-cell",
-            div { class: "mono bd-insight-label", "{label}" }
-            div { class: "bd-insight-value", "{value}" }
         }
     }
 }

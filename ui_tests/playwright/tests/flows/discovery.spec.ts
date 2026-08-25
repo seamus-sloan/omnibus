@@ -115,22 +115,21 @@ test("author series section heading links to the series page", async ({
 // Book detail → series
 // ---------------------------------------------------------------------------
 
-test("book detail series rail link navigates to the series page", async ({
+test("book detail shelf stop links to the series page", async ({
   page,
   request,
 }) => {
-  // `beta` ("Beta in the Series") is Pioneers #1, so the book detail rail
-  // renders a Series card whose body is a Link to /series/:id. Both the rail
-  // link and the breadcrumb series segment share the "Pioneers #1" text, so
-  // scope to the rail link's dedicated `.bd-series-link` class to target the
-  // rail specifically (the contract this test covers).
+  // `beta` ("Beta in the Series") is Pioneers #1, so the marquee Shelf stop
+  // renders the whole series as covers with a dedicated "series page →"
+  // link under the shelf (the Home kicker's series link is covered by
+  // book_detail.spec.ts — this test owns the shelf-stop affordance).
   const beta = FIXTURE_BOOKS.find((b) => b.slug === "beta")!;
   const id = await fetchBookIdByTitle(request, beta.title);
   await gotoReady(page, `/books/${id}`);
 
-  const railLink = page.locator(".bd-series-link");
-  await expect(railLink).toHaveText("Pioneers #1");
-  await railLink.click();
+  await expect(page.getByTestId("bdmq-series-shelf")).toBeVisible();
+  const shelfLink = page.getByRole("link", { name: /series page/ });
+  await shelfLink.click();
 
   await expect(page).toHaveURL(/\/series\/\d+$/);
   await expect(page.getByRole("heading", { level: 1 })).toContainText(

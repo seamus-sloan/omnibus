@@ -15,7 +15,7 @@ use super::async_action::use_async_action_toast;
 /// 07: keep cfg out of rsx bodies), and SSR + first WASM paint emit the same
 /// enabled button so hydration holds.
 #[cfg(not(feature = "mobile"))]
-pub(super) fn send_to_kobo_action(uuid: &str, book_author: &str, book_title: &str) -> Element {
+pub(crate) fn send_to_kobo_action(uuid: &str, book_author: &str, book_title: &str) -> Element {
     rsx! {
         SendToKoboButton {
             uuid: uuid.to_string(),
@@ -26,7 +26,7 @@ pub(super) fn send_to_kobo_action(uuid: &str, book_author: &str, book_title: &st
 }
 
 #[cfg(feature = "mobile")]
-pub(super) fn send_to_kobo_action(_uuid: &str, _book_author: &str, _book_title: &str) -> Element {
+pub(crate) fn send_to_kobo_action(_uuid: &str, _book_author: &str, _book_title: &str) -> Element {
     rsx! {
         button {
             class: "btn",
