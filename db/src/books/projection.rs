@@ -8,6 +8,7 @@ use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 use sqlx::{Row, SqlitePool};
 
 use crate::helpers::format_series_index;
+use crate::interaction::interacted_at_iso_sql;
 use crate::metadata_overrides::{apply_overrides, load_overrides_bulk};
 
 use super::BooksError;
@@ -35,7 +36,8 @@ pub const MAX_BOOKS_RETURNED: i64 = 50_000;
 /// subqueries scanning the same table twice — mirroring the `json_object`
 /// shape already used for creators/identifiers. `row_to_ebook` decodes
 /// these blobs.
-pub(crate) const BOOK_COLUMNS: &str = r"
+pub(crate) const BOOK_COLUMNS: &str = concat!(
+    r"
     b.id, b.uuid,
     b.title, b.description, b.series_index, b.has_cover,
     b.pubdate,
@@ -97,8 +99,16 @@ pub(crate) const BOOK_COLUMNS: &str = r"
 
     -- CBZ page count, persisted at index time (migration 0063, #1593)
     -- instead of reparsing the archive on every detail read.
-    b.page_count                                   AS page_count
-";
+    b.page_count                                   AS page_count,
+
+    ",
+    // Projected on every listing, not just the Recently Interacted one: the
+    // landing re-sorts each fetched page client-side, and a row whose key is
+    // missing falls back to the id tiebreak and scrambles the server order.
+    interacted_at_iso_sql!(),
+    " AS last_interacted_at
+"
+);
 
 #[derive(serde::Deserialize)]
 pub(crate) struct CreatorRow {
@@ -265,6 +275,7 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
         formats: parse_json_array(r.get("formats_json"))?,
         has_physical: r.get::<i64, _>("has_physical") != 0,
         added_at: r.get("timestamp"),
+        last_interacted_at: r.get("last_interacted_at"),
         error: None,
         has_override: false,
         has_cover_override: false,

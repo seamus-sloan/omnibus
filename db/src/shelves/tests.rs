@@ -1900,3 +1900,52 @@ async fn shelf_exclusive_hidden_uuids_propagates_db_error_when_pool_is_closed() 
         .unwrap_err();
     assert!(matches!(err, ShelfError::Sqlx(_)));
 }
+
+#[tokio::test]
+async fn shelf_page_recently_interacted_orders_the_latest_signal_first() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Fiction", MatchMode::Any, vec![tag_rule("fiction")]),
+    )
+    .await
+    .unwrap();
+
+    // Flatten the fixture's clocks so the rating below is unambiguously the
+    // most recent thing that happened to either book.
+    sqlx::query("UPDATE books SET timestamp = 1000, last_modified = 1000")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let page = shelf_page(&pool, &shelf, SortKey::Title, SortDir::Asc)
+        .await
+        .unwrap();
+    let last_by_title = page
+        .books
+        .last()
+        .unwrap()
+        .unique_identifier
+        .clone()
+        .unwrap();
+
+    sqlx::query(
+        "INSERT INTO user_ratings (user_id, book_uuid, half_stars, updated_at)
+         VALUES (?, ?, 10, 9000)",
+    )
+    .bind(owner)
+    .bind(&last_by_title)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let page = shelf_page(&pool, &shelf, SortKey::RecentlyInteracted, SortDir::Desc)
+        .await
+        .unwrap();
+    assert_eq!(
+        page.books.first().unwrap().unique_identifier.as_deref(),
+        Some(last_by_title.as_str()),
+        "the freshly rated book must lead the shelf on this axis"
+    );
+}

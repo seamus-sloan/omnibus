@@ -9,6 +9,8 @@ use omnibus_shared::{
 };
 use sqlx::{Row, SqlitePool};
 
+use crate::interaction::INTERACTED_AT_EPOCH;
+
 use super::rules::{membership_predicate, Bind};
 use super::ShelfError;
 
@@ -104,6 +106,7 @@ fn order_by_sql(sort: SortKey, dir: SortDir) -> String {
         SortKey::Series => format!("b.series_sort {d}, b.series_index {d}, b.id {d}"),
         SortKey::LastUpdated => format!("b.last_modified {d}, b.id {d}"),
         SortKey::NewestAdded => format!("b.timestamp {d}, b.id {d}"),
+        SortKey::RecentlyInteracted => format!("{INTERACTED_AT_EPOCH} {d}, b.id {d}"),
     }
 }
 

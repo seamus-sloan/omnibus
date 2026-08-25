@@ -8,6 +8,8 @@ use base64::engine::{general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use omnibus_shared::{EbookMetadata, SortDir, SortKey, ViewFilters};
 use sqlx::{Row, SqlitePool};
 
+use crate::interaction::INTERACTED_AT_ISO;
+
 use super::projection::{
     backfill_creator_ids, merge_overrides_into_books, row_to_ebook, BOOK_COLUMNS,
     MAX_BOOKS_RETURNED,
@@ -141,7 +143,7 @@ pub async fn list_books_page(
     // "take everything" like the old `as usize` wrap did, rather than a
     // zero take that would underflow the `take - 1` index below.
     let take = rows.len().min(usize::try_from(limit).unwrap_or(usize::MAX));
-    let next = (rows.len() as i64 > limit).then(|| cursor_from_row(&rows[take - 1]));
+    let next = (rows.len() as i64 > limit).then(|| cursor_from_row(&rows[take - 1], sort));
 
     let mut books = Vec::with_capacity(take);
     for r in &rows[..take] {
@@ -187,15 +189,30 @@ fn build_page_sql(
     };
 
     let cursor_idx_sql = secondary.unwrap_or("NULL");
+    // `BOOK_COLUMNS` already projects the Recently Interacted axis, so
+    // re-selecting it as `cursor_sort` would evaluate four correlated
+    // subqueries a second time per row (~24% of the query at 20k books).
+    // Reuse that column instead — for the projection, which SQLite won't let
+    // us alias a second time, and for the ORDER BY, where an output alias
+    // *is* in scope. The keyset predicate still needs the full expression:
+    // aliases are not visible in `WHERE`.
+    let cursor_sort_sql = match sort {
+        SortKey::RecentlyInteracted => String::new(),
+        _ => format!("{primary} AS cursor_sort,"),
+    };
+    let order_col = match sort {
+        SortKey::RecentlyInteracted => cursor_sort_column(sort),
+        _ => primary,
+    };
     let order_by = match secondary {
-        Some(sec) => format!("{primary} {dir_sql}, {sec} {dir_sql}, b.id {dir_sql}"),
-        None => format!("{primary} {dir_sql}, b.id {dir_sql}"),
+        Some(sec) => format!("{order_col} {dir_sql}, {sec} {dir_sql}, b.id {dir_sql}"),
+        None => format!("{order_col} {dir_sql}, b.id {dir_sql}"),
     };
 
     let sql = format!(
         r"
         SELECT {BOOK_COLUMNS},
-               {primary} AS cursor_sort,
+               {cursor_sort_sql}
                {cursor_idx_sql} AS cursor_idx
           FROM books b
           JOIN scan_roots l ON l.id = b.library_id
@@ -233,6 +250,7 @@ fn axis_sort_columns(sort: SortKey) -> (&'static str, Option<&'static str>) {
             None,
         ),
         SortKey::Series => ("b.series_sort", Some("b.series_index")),
+        SortKey::RecentlyInteracted => (INTERACTED_AT_ISO, None),
     }
 }
 
@@ -251,9 +269,20 @@ fn axis_terms(sort: SortKey, cursor: &PageCursor) -> Vec<(String, KeyVal)> {
 
 /// Read the `(cursor_sort, cursor_idx, id)` aliases off a boundary row into
 /// the next-page cursor.
-fn cursor_from_row(row: &sqlx::sqlite::SqliteRow) -> PageCursor {
+/// The projected column a page row carries its axis value under. Every axis
+/// but Recently Interacted gets its own `cursor_sort` alias; that one reuses
+/// `BOOK_COLUMNS`' `last_interacted_at` rather than paying for the expression
+/// a second time.
+fn cursor_sort_column(sort: SortKey) -> &'static str {
+    match sort {
+        SortKey::RecentlyInteracted => "last_interacted_at",
+        _ => "cursor_sort",
+    }
+}
+
+fn cursor_from_row(row: &sqlx::sqlite::SqliteRow, sort: SortKey) -> PageCursor {
     PageCursor {
-        sort: row.get::<Option<String>, _>("cursor_sort"),
+        sort: row.get::<Option<String>, _>(cursor_sort_column(sort)),
         idx: row.get::<Option<f64>, _>("cursor_idx"),
         id: row.get::<i64, _>("id"),
     }

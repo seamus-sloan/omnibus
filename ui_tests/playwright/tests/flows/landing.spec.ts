@@ -138,6 +138,35 @@ test("sorts by title descending when the Title header is clicked", async ({
   ).toHaveText(lastTitle);
 });
 
+// The Recently Interacted axis is asserted here as a *markup contract* only —
+// the option exists, selecting it sticks, and it opens newest-first. Its
+// ordering semantics are covered by the Rust suite (`db/src/interaction`),
+// deliberately: every signal it reads (a rating, a read status, a journal
+// entry) is library-wide the moment it lands, so a spec that wrote one to
+// prove an order would be mutating state every other spec on this shared
+// server reads back. See rule 04 on reserved fixtures.
+test("offers Recently Interacted in the sort dropdown, newest first", async ({
+  page,
+}) => {
+  await gotoReady(page, "/");
+
+  const sort = page.getByTestId("lib-sort-select");
+  await expect(sort).toBeVisible();
+  await expect(
+    sort.getByRole("option", { name: "Recently Interacted" }),
+  ).toHaveAttribute("value", "recently_interacted");
+
+  await sort.selectOption("recently_interacted");
+  await expect(sort).toHaveValue("recently_interacted");
+  // A recency axis picks descending by default, so the toggle reads "down".
+  await expect(page.getByTestId("lib-sort-dir")).toHaveText("↓");
+
+  // The grid still renders the whole library on the new axis.
+  await switchToTableView(page);
+  const rowCount = await page.getByTestId(/^ebook-row-/).count();
+  expect(rowCount).toBeGreaterThanOrEqual(FIXTURE_BOOKS.length);
+});
+
 // F3.1 removed the home-page facet filters (format chips + author/series/tag
 // sidebar); their coverage retired with them. Slicing the library is now the
 // job of shelves — see shelves.spec.ts.

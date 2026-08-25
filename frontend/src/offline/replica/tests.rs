@@ -203,6 +203,38 @@ fn sort_books_orders_by_last_updated_and_newest_added_on_the_same_date_key() {
 }
 
 #[test]
+fn sort_books_orders_recently_interacted_on_its_own_key_not_the_date_fallback() {
+    let interacted = |title: &str, at: Option<&str>, added_at: Option<&str>| EbookMetadata {
+        title: Some(title.to_string()),
+        filename: format!("{title}.epub"),
+        added_at: added_at.map(str::to_string),
+        last_interacted_at: at.map(str::to_string),
+        unique_identifier: Some(format!("uuid-{title}")),
+        ..Default::default()
+    };
+    // Fixed-width ISO, as the projection emits it: the replica compares these
+    // lexicographically, which is only chronologically correct in that format.
+    // `added_at` runs opposite to `last_interacted_at`, so a comparator that
+    // fell back to the date key would produce the reverse of this order.
+    let mut books = vec![
+        interacted(
+            "Rated Today",
+            Some("2026-05-01T09:00:00Z"),
+            Some("2020-01-01T00:00:00Z"),
+        ),
+        interacted("Untouched", None, Some("2026-01-01T00:00:00Z")),
+        interacted(
+            "Rated Last Year",
+            Some("2025-05-01T09:00:00Z"),
+            Some("2023-01-01T00:00:00Z"),
+        ),
+    ];
+    sort_books(&mut books, SortKey::RecentlyInteracted, SortDir::Desc);
+    let titles: Vec<&str> = books.iter().map(|b| b.title.as_deref().unwrap()).collect();
+    assert_eq!(titles, vec!["Rated Today", "Rated Last Year", "Untouched"]);
+}
+
+#[test]
 fn series_key_truncates_the_float_cast_toward_zero_at_the_millesimal_boundary() {
     let just_under_two = book_with_series("A", Some("S"), Some("1.9999"));
     let exactly_two = book_with_series("B", Some("S"), Some("2.0"));

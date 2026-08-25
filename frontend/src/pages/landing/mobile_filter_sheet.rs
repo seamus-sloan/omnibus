@@ -9,6 +9,7 @@ use omnibus_shared::{SortDir, SortKey, ViewFilters, ViewPrefs};
 
 /// Sort axes offered on mobile, in sheet order, with their row labels.
 const SORT_ROWS: &[(SortKey, &str)] = &[
+    (SortKey::RecentlyInteracted, "Recently interacted"),
     (SortKey::NewestAdded, "Recently added"),
     (SortKey::LastUpdated, "Recently updated"),
     (SortKey::Title, "Title"),
@@ -24,6 +25,7 @@ const FORMAT_CHIPS: &[(&str, &[&str])] =
 /// Short label for the header's sort pill.
 pub(super) fn sort_pill_label(key: SortKey) -> &'static str {
     match key {
+        SortKey::RecentlyInteracted => "Interacted",
         SortKey::NewestAdded => "Added",
         SortKey::LastUpdated => "Updated",
         SortKey::Title => "Title",
@@ -44,7 +46,7 @@ pub(super) fn dir_arrow(dir: SortDir) -> &'static str {
 /// newest-first for the date axes, ascending otherwise.
 fn default_dir_for(key: SortKey) -> SortDir {
     match key {
-        SortKey::NewestAdded | SortKey::LastUpdated => SortDir::Desc,
+        SortKey::NewestAdded | SortKey::LastUpdated | SortKey::RecentlyInteracted => SortDir::Desc,
         _ => SortDir::Asc,
     }
 }
@@ -52,8 +54,14 @@ fn default_dir_for(key: SortKey) -> SortDir {
 /// Human direction label shown on the selected sort row.
 fn dir_label(key: SortKey, dir: SortDir) -> String {
     let text = match (key, dir) {
-        (SortKey::NewestAdded | SortKey::LastUpdated, SortDir::Desc) => "Newest first",
-        (SortKey::NewestAdded | SortKey::LastUpdated, SortDir::Asc) => "Oldest first",
+        (
+            SortKey::NewestAdded | SortKey::LastUpdated | SortKey::RecentlyInteracted,
+            SortDir::Desc,
+        ) => "Newest first",
+        (
+            SortKey::NewestAdded | SortKey::LastUpdated | SortKey::RecentlyInteracted,
+            SortDir::Asc,
+        ) => "Oldest first",
         (_, SortDir::Asc) => "A\u{2013}Z",
         (_, SortDir::Desc) => "Z\u{2013}A",
     };
@@ -244,7 +252,18 @@ mod tests {
     fn default_dir_for_dates_is_desc_and_text_asc() {
         assert_eq!(default_dir_for(SortKey::NewestAdded), SortDir::Desc);
         assert_eq!(default_dir_for(SortKey::LastUpdated), SortDir::Desc);
+        assert_eq!(default_dir_for(SortKey::RecentlyInteracted), SortDir::Desc);
         assert_eq!(default_dir_for(SortKey::Title), SortDir::Asc);
+    }
+
+    #[test]
+    fn sort_options_offer_recently_interacted() {
+        assert!(
+            SORT_ROWS
+                .iter()
+                .any(|(k, label)| *k == SortKey::RecentlyInteracted
+                    && *label == "Recently interacted")
+        );
     }
 
     #[test]

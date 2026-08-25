@@ -262,7 +262,7 @@ pub async fn preview_rule(
         owner_id,
         match_mode,
         rules,
-        &order_by_sql(SortKey::NewestAdded, SortDir::Desc),
+        &order_by_sql(SortKey::RecentlyInteracted, SortDir::Desc),
         PREVIEW_SAMPLE,
     )
     .await?;

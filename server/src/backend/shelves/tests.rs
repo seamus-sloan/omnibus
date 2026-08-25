@@ -5,7 +5,7 @@ use axum::{
     body::{to_bytes, Body},
     http::{header::AUTHORIZATION, Request, StatusCode},
 };
-use omnibus_shared::{Shelf, ShelfSummary};
+use omnibus_shared::{Shelf, ShelfSummary, SortDir, SortKey};
 use tower::ServiceExt;
 
 use crate::auth::test_support as auth_test_support;
@@ -493,4 +493,26 @@ async fn api_shelves_containing_requires_authentication() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn page_query_defaults_to_recently_interacted_descending() {
+    let q: super::PageQuery = serde_json::from_value(serde_json::json!({})).unwrap();
+    // The shelf surfaces used to disagree — this endpoint defaulted to
+    // NewestAdded while the web page defaulted to Title. Both are Recently
+    // Interacted now, so pin it here rather than let them drift apart again.
+    assert_eq!(q.sort_key(), SortKey::RecentlyInteracted);
+    assert_eq!(q.sort_dir(), SortDir::Desc);
+}
+
+#[test]
+fn page_query_honours_an_explicit_sort_and_falls_back_on_an_unknown_one() {
+    let explicit: super::PageQuery =
+        serde_json::from_value(serde_json::json!({"sort": "title", "dir": "asc"})).unwrap();
+    assert_eq!(explicit.sort_key(), SortKey::Title);
+    assert_eq!(explicit.sort_dir(), SortDir::Asc);
+
+    let bogus: super::PageQuery =
+        serde_json::from_value(serde_json::json!({"sort": "nonsense"})).unwrap();
+    assert_eq!(bogus.sort_key(), SortKey::RecentlyInteracted);
 }

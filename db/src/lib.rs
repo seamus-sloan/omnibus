@@ -32,6 +32,7 @@ pub mod hls;
 mod http_client;
 pub mod identity;
 pub mod indexer;
+pub mod interaction;
 pub mod journal_images;
 pub mod journals;
 pub mod kepub;

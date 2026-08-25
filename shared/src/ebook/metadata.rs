@@ -113,6 +113,14 @@ pub struct EbookMetadata {
     #[serde(default)]
     pub added_at: Option<String>,
 
+    /// Most recent moment *anyone* interacted with the book — rated it,
+    /// published a journal entry, changed its read status, added it to the
+    /// library, edited its metadata or cover, or checked in a physical copy.
+    /// Fixed-width ISO, so it sorts lexicographically. Drives the "Recently
+    /// Interacted" sort; `None` only for a book carrying no signal at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_interacted_at: Option<String>,
+
     pub error: Option<String>,
 
     /// True when user-supplied metadata overrides are active for this book.
