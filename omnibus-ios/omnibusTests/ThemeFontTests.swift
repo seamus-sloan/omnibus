@@ -66,9 +66,9 @@ struct ThemeFontTests {
     /// that reads as a lowercase `o` in "0h 06m". `Font.display` asks for the
     /// lining set; assert the family actually carries one, since a missing
     /// feature degrades silently back to oldstyle.
-    @Test func cormorantGaramondCarriesALiningFigureSet() {
-        let font = UIFont(name: Font.DisplayFace.regular, size: 17)
-        let features = CTFontCopyFeatures(font! as CTFont) as? [[String: Any]] ?? []
+    @Test func cormorantGaramondCarriesALiningFigureSet() throws {
+        let font = try #require(UIFont(name: Font.DisplayFace.regular, size: 17))
+        let features = CTFontCopyFeatures(font as CTFont) as? [[String: Any]] ?? []
         let numberCase = features.first {
             $0[kCTFontFeatureTypeIdentifierKey as String] as? Int == kNumberCaseType
         }
