@@ -110,8 +110,15 @@ body.flow{overflow:auto}
 /* hero — the one screen shown in perspective, bleeding off the right edge */
 .hero{display:grid;grid-template-columns:minmax(360px,42%) 1fr;align-items:center;gap:clamp(24px,4vw,72px)}
 .hero-copy{display:grid;gap:clamp(14px,2.2vh,28px);align-content:center;position:relative;z-index:2}
-.hero-shot{position:absolute;left:44%;right:calc(var(--pad) * -1.1);top:7%;bottom:auto;perspective:2200px}
-.hero-shot .frame{position:absolute;left:0;right:0;top:0;height:auto;width:auto;max-width:none;margin:0;background:transparent;border-bottom:0;border-radius:14px 14px 0 0;transform:rotateX(5deg) rotateY(-11deg) rotateZ(0.6deg) scale(1.04);transform-origin:left center;-webkit-mask-image:linear-gradient(to bottom,#000 0,#000 68%,rgba(0,0,0,.5) 87%,transparent 100%);mask-image:linear-gradient(to bottom,#000 0,#000 68%,rgba(0,0,0,.5) 87%,transparent 100%)}
+/* The slot spans the pane and centres the frame with grid — NOT with a
+   translate. It carries [data-anim], and `.pane.on [data-anim]` sets
+   `transform:none` at higher specificity, so any centring transform here
+   is silently dropped the moment the panel becomes active. Pinning it to
+   a top offset instead leaves it hanging: the slot has no height of its
+   own (the frame is absolute), so a narrower viewport shrinks the frame
+   and drops all the slack below it. */
+.hero-shot{position:absolute;left:44%;right:calc(var(--pad) * -1.1);top:0;bottom:0;display:grid;align-content:center;perspective:2200px}
+.hero-shot .frame{position:relative;width:100%;height:auto;max-width:none;margin:0;aspect-ratio:1440/900;background:transparent;border-bottom:0;border-radius:14px 14px 0 0;transform:rotateX(5deg) rotateY(-11deg) rotateZ(0.6deg) scale(1.04);transform-origin:left center;-webkit-mask-image:linear-gradient(to bottom,#000 0,#000 68%,rgba(0,0,0,.5) 87%,transparent 100%);mask-image:linear-gradient(to bottom,#000 0,#000 68%,rgba(0,0,0,.5) 87%,transparent 100%)}
 
 /* two-up: copy beside a screen */
 .split{display:grid;grid-template-columns:minmax(300px,34%) 1fr;gap:clamp(24px,3.6vw,64px);align-items:center;height:100%;padding:clamp(70px,11vh,120px) 0 clamp(48px,8vh,90px)}
@@ -174,8 +181,8 @@ body.flow .rail,body.flow .cue{display:none}
 body.flow [data-anim]{opacity:1;transform:none;transition:none}
 body.flow .site-top{position:sticky;background:color-mix(in oklch,var(--pg-bg) 88%,transparent);backdrop-filter:blur(10px)}
 body.flow .hero{grid-template-columns:1fr}
-body.flow .hero-shot{position:static;perspective:none;margin-top:28px}
-body.flow .hero-shot .frame{position:static;transform:none;mask-image:none;-webkit-mask-image:none;border-bottom:1px solid var(--pg-line);border-radius:14px;background:var(--pg-panel)}
+body.flow .hero-shot{position:static;display:block;perspective:none;margin-top:28px}
+body.flow .hero-shot .frame{transform:none;mask-image:none;-webkit-mask-image:none;border-bottom:1px solid var(--pg-line);border-radius:14px;background:var(--pg-panel)}
 body.flow .split,body.flow .split--flip{grid-template-columns:1fr;height:auto;padding:0;gap:28px}
 body.flow .split--flip .split-vis{order:2}
 body.flow .split-vis,body.flow .themes-vis{height:auto}
