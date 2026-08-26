@@ -119,7 +119,7 @@ force quit.
 
 > **Releasing needs a second provisioning profile.** One profile covers one
 > bundle ID, and the app now embeds `com.omnibus.mobile.OmnibusWidgets`, so
-> TestFlight wants `IOS_WIDGET_PROVISIONING_PROFILE_BASE64` beside the existing
+> TestFlight wants `IOS_WIDGETS_PROVISIONING_PROFILE_BASE64` beside the existing
 > secret — and both App IDs need the App Groups capability, so the app's own
 > profile must be *regenerated* rather than reused. `just ios-build` and
 > `just ios-test` cannot catch a mistake here: simulator builds sign ad-hoc.

@@ -430,7 +430,7 @@ books.
 
 **TestFlight release requires a second provisioning profile.** A profile is
 bound to one bundle ID and the app now embeds `com.omnibus.mobile.OmnibusWidgets`,
-so `IOS_WIDGET_PROVISIONING_PROFILE_BASE64` sits alongside
+so `IOS_WIDGETS_PROVISIONING_PROFILE_BASE64` sits alongside
 `IOS_PROVISIONING_PROFILE_BASE64` and `ExportOptions.plist` carries a
 `provisioningProfiles` entry per embedded bundle. Both App IDs must also carry
 the App Groups capability for `group.com.omnibus.mobile` — which means the

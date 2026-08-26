@@ -27,7 +27,7 @@ run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.mark
 #     ASC_ISSUER_ID                     App Store Connect API issuer ID
 #   Per-app (a profile is bound to one bundle ID):
 #     IOS_PROVISIONING_PROFILE_BASE64   App Store profile for com.omnibus.mobile
-#     IOS_WIDGET_PROVISIONING_PROFILE_BASE64
+#     IOS_WIDGETS_PROVISIONING_PROFILE_BASE64
 #                                       App Store profile for
 #                                       com.omnibus.mobile.OmnibusWidgets
 #
@@ -128,7 +128,7 @@ jobs:
           cert-p12-base64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
           cert-password: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
           profile-base64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
-          extension-profile-base64: ${{ secrets.IOS_WIDGET_PROVISIONING_PROFILE_BASE64 }}
+          extension-profile-base64: ${{ secrets.IOS_WIDGETS_PROVISIONING_PROFILE_BASE64 }}
           expected-team: ${{ env.DEVELOPMENT_TEAM }}
 
       # Archive unsigned. Signing settings passed on the xcodebuild command line
@@ -178,7 +178,7 @@ jobs:
           # the cause rather than letting -exportArchive report the appex as
           # simply unprovisioned.
           if [ -z "$WIDGET_PROFILE_NAME" ]; then
-            echo "::error::IOS_WIDGET_PROVISIONING_PROFILE_BASE64 is not set. The app embeds $WIDGET_BUNDLE_ID, and manual signing needs a profile per embedded bundle."
+            echo "::error::IOS_WIDGETS_PROVISIONING_PROFILE_BASE64 is not set. The app embeds $WIDGET_BUNDLE_ID, and manual signing needs a profile per embedded bundle."
             exit 1
           fi
           pb "Add :provisioningProfiles:$WIDGET_BUNDLE_ID string $WIDGET_PROFILE_NAME"
