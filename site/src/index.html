@@ -59,11 +59,10 @@
       <div class="sec-inner themes-in">
         <div class="themes-copy">
           <p class="kick" data-anim>Themes</p>
-          <h2 class="h2" data-anim style="--d:70ms">The same shelf, four ways.</h2>
-          <p class="lede" data-anim style="--d:130ms">Dark, black, white, sepia. Pick one and it follows you everywhere — library, reader, player, phone.</p>
+          <h2 class="h2" data-anim style="--d:70ms">Four cozy styles</h2>
         </div>
         <div class="themes-vis" data-anim style="--d:200ms">
-          <figure class="frame frame--fill" style="--ar:1442/1002">
+          <figure class="frame" style="--ar:1442/1002">
             <img class="shot" src="shots/dark/omnibus-themes-strip.webp" width="1442" height="1002" alt="One library screen sliced diagonally into four colour themes: dark, black, white and sepia.">
           </figure>
         </div>
@@ -76,15 +75,11 @@
         <div class="split">
           <div class="split-copy">
             <p class="kick" data-anim>Read</p>
-            <h2 class="h2" data-anim style="--d:70ms">A reader that keeps your place.</h2>
+            <h2 class="h2" data-anim style="--d:70ms">Saves your progress</h2>
             <ul class="pts" data-anim style="--d:130ms">
               <li><span><b>Progress lives on the server.</b> The page you left on the laptop is the page your phone opens.</span></li>
               <li><span><b>Highlight a passage</b> and share it as a quote card in a tap.</span></li>
-              <li><span><b>Send to your device.</b> Push any book to a Kobo or Kindle — no Calibre round-trip.</span></li>
             </ul>
-            <div class="cta" data-anim style="--d:190ms">
-              <a class="sbtn ghost" href="https://github.com/seamus-sloan/omnibus" target="_blank" rel="noreferrer">See the reader code</a>
-            </div>
           </div>
           <div class="split-vis" data-anim style="--d:230ms">
             <figure class="frame" style="--ar:1442/982">
@@ -106,7 +101,7 @@
           </div>
           <div class="split-copy">
             <p class="kick" data-anim style="--d:80ms">Listen</p>
-            <h2 class="h2" data-anim style="--d:140ms">Audiobooks with a chapter map.</h2>
+            <h2 class="h2" data-anim style="--d:140ms">Play Any Audiobook Format</h2>
             <ul class="pts" data-anim style="--d:200ms">
               <li><span><b>Streamed, not downloaded.</b> HLS transcode on the fly — start on the commute, finish in the kitchen.</span></li>
               <li><span><b>Chapter map, speed, sleep timer.</b> The controls you actually reach for, one row deep.</span></li>
@@ -123,11 +118,11 @@
         <div class="split">
           <div class="split-copy">
             <p class="kick" data-anim>Format sync</p>
-            <h2 class="h2" data-anim style="--d:70ms">One book, two formats, one position.</h2>
+            <h2 class="h2" data-anim style="--d:70ms">Sync Ebook and Audiobook Positions</h2>
             <ul class="pts" data-anim style="--d:130ms">
-              <li><span><b>Link the EPUB to its audiobook</b> and the book keeps a single place: read to chapter 14, the player opens at 4:12:38.</span></li>
-              <li><span><b>Chapter anchors when the files have them,</b> percentage when they don’t — and it says which one it used, and how confident it is.</span></li>
-              <li><span><b>One resume card instead of two,</b> led by whichever format you touched last.</span></li>
+              <li><span>Manually link formats together. You decide whether or not to opt into the feature and how the sync will work.</span></li>
+              <li><span>Sync based off of chapters when ebook and audiobook have the same chapter count.</span></li>
+              <li><span>Sync based off of completion percentage when chapters don’t line up.</span></li>
             </ul>
           </div>
           <div class="split-vis" data-anim style="--d:210ms">
@@ -153,11 +148,11 @@
           </div>
           <div class="split-copy">
             <p class="kick" data-anim style="--d:80ms">Kobo</p>
-            <h2 class="h2" data-anim style="--d:140ms">Your shelves, on your Kobo.</h2>
+            <h2 class="h2" data-anim style="--d:140ms">Kobo Sync</h2>
             <ul class="pts" data-anim style="--d:200ms">
-              <li><span><b>A shelf becomes a collection.</b> Flip sync on and the device sees that shelf — reading state comes back the same way.</span></li>
+              <li><span>Choose shelves to sync. Omnibus hosts Kobo endpoints for your device to talk to.</span></li>
               <li><span><b>KEPUB, not just EPUB.</b> Files convert through kepubify at sync time and stay cached until the book changes.</span></li>
-              <li><span><b>Kindle by email, OPDS for the rest,</b> and an OPF export of your metadata for the day you want out.</span></li>
+              <li><span>Progress, annotations, and reading stats sync directly to your server when your Kobo syncs.</span></li>
             </ul>
           </div>
         </div>
@@ -170,11 +165,9 @@
         <div class="split">
           <div class="split-copy">
             <p class="kick" data-anim>Kindle</p>
-            <h2 class="h2" data-anim style="--d:70ms">And the Kindle in your bag.</h2>
+            <h2 class="h2" data-anim style="--d:70ms">Sending to Kindle</h2>
             <ul class="pts" data-anim style="--d:130ms">
-              <li><span><b>The EPUB itself gets sent.</b></span></li>
               <li><span><b>Set SMTP once.</b> The admin configures it in settings, each reader saves their own send-to address, and every book page grows a Send button.</span></li>
-              <li><span><b>Sends run in the background.</b> The job queues on the worker, so the page never waits and the file on disk is never touched.</span></li>
             </ul>
           </div>
           <div class="split-vis" data-anim style="--d:210ms">
@@ -186,13 +179,38 @@
       </div>
     </section>
 
-    <!-- 8 · check-in -->
+    <!-- 8 · mobile -->
+    <section class="pane" id="mobile" data-label="Mobile">
+      <div class="sec-inner sec-inner--stack">
+        <div class="center-copy" style="max-width:680px">
+          <p class="kick" data-anim>Mobile</p>
+          <h2 class="h2" data-anim style="--d:70ms">Native iOS App with Swift</h2>
+          <p class="lede" data-anim style="--d:130ms;max-width:54ch;margin:0 auto">Native Swift iOS app open for testing. WebView shell on Android. Access your library wherever you go.</p>
+        </div>
+        <div class="phones">
+          <div>
+            <div class="phone" data-anim style="--ar:404/876;--d:190ms">
+              <img class="shot" src="shots/dark/omnibus-ios-book-detail.webp" width="404" height="876" alt="A book page in the native iOS app, resuming at chapter four.">
+            </div>
+            <p class="phone-cap" data-anim style="--d:250ms">iOS · native SwiftUI</p>
+          </div>
+          <div>
+            <div class="phone" data-anim style="--ar:382/802;--d:280ms">
+              <img class="shot" src="shots/dark/omnibus-android-library.webp" width="382" height="802" alt="The library on Android, with a continue card and a wall of covers.">
+            </div>
+            <p class="phone-cap" data-anim style="--d:340ms">Android · WebView shell</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 9 · check-in -->
     <section class="pane" id="checkin" data-label="Check-in">
       <div class="sec-inner sec-inner--stack">
         <div class="center-copy" style="max-width:720px">
           <p class="kick" data-anim>Check-in</p>
-          <h2 class="h2" data-anim style="--d:70ms">The shelf you can actually touch.</h2>
-          <p class="lede" data-anim style="--d:130ms;max-width:58ch;margin:0 auto">Scan the barcode of a physical book. Omnibus matches it against your library — ISBN first, then title and author. Own it in print? Check the copy in. Don’t own it yet? It lands on the wishlist with the day you found it, and no invented progress.</p>
+          <h2 class="h2" data-anim style="--d:70ms">Track your Physical Books</h2>
+          <p class="lede" data-anim style="--d:130ms;max-width:58ch;margin:0 auto">Scan an ISBN to say that you own the book or add it to your wishlist to buy later.</p>
         </div>
         <div class="trio">
           <div>
@@ -217,38 +235,13 @@
       </div>
     </section>
 
-    <!-- 9 · mobile -->
-    <section class="pane" id="mobile" data-label="Mobile">
-      <div class="sec-inner sec-inner--stack">
-        <div class="center-copy" style="max-width:680px">
-          <p class="kick" data-anim>Mobile</p>
-          <h2 class="h2" data-anim style="--d:70ms">In your pocket, on your server.</h2>
-          <p class="lede" data-anim style="--d:130ms;max-width:54ch;margin:0 auto">A native SwiftUI app on iOS and a WebView shell on Android, both speaking to the same backend. Same library, same progress, same theme.</p>
-        </div>
-        <div class="phones">
-          <div>
-            <div class="phone" data-anim style="--ar:404/876;--d:190ms">
-              <img class="shot" src="shots/dark/omnibus-ios-book-detail.webp" width="404" height="876" alt="A book page in the native iOS app, resuming at chapter four.">
-            </div>
-            <p class="phone-cap" data-anim style="--d:250ms">iOS · native SwiftUI</p>
-          </div>
-          <div>
-            <div class="phone" data-anim style="--ar:382/802;--d:280ms">
-              <img class="shot" src="shots/dark/omnibus-android-library.webp" width="382" height="802" alt="The library on Android, with a continue card and a wall of covers.">
-            </div>
-            <p class="phone-cap" data-anim style="--d:340ms">Android · WebView shell</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
     <!-- 10 · scanning -->
     <section class="pane" id="scan" data-label="Scanning">
       <div class="sec-inner sec-inner--stack">
         <div class="center-copy" style="max-width:900px">
           <p class="kick" data-anim>Scanning</p>
-          <h2 class="h2" data-anim style="--d:70ms">Point it at a folder. It walks the rest.</h2>
-          <p class="lede" data-anim style="--d:130ms;max-width:74ch;margin:0 auto">The scanner recurses through whatever you already have — nested author and series trees, loose files, mixed formats — and reads each book’s metadata out of the file itself. What you then edit lives in the database, not in your books: originals are never rewritten, and the current values ride along on anything you export or send to a device.</p>
+          <h2 class="h2" data-anim style="--d:70ms">Your Files; Untouched</h2>
+          <p class="lede" data-anim style="--d:130ms;max-width:74ch;margin:0 auto">The scanner recurses through whatever you already have — nested author and series trees, loose files, mixed formats — and reads each book’s metadata out of the file itself. Your metadata edits live in the Omnibus database and will be written to exported media.</p>
         </div>
         <div class="duo">
           <div>
@@ -283,7 +276,7 @@
             <p class="faq-a">Point Omnibus at the folder you already have. The <code>Author/Title</code> layout scans as-is, metadata is read from inside each EPUB rather than Calibre’s <code>metadata.opf</code> sidecar, and nothing on disk is moved or renamed.</p>
           </div>
           <div data-anim style="--d:220ms">
-            <p class="faq-q">Do I need a beefy server?</p>
+            <p class="faq-q">Do I need a high-end server?</p>
             <p class="faq-a">No. A 4GB Raspberry Pi is more than enough. One Rust binary, SQLite, and a bind-mount — it runs on the machine you already own. Audio is transcoded on demand, so leave a little CPU headroom if the whole house listens at once.</p>
           </div>
           <div data-anim style="--d:290ms">
@@ -303,7 +296,7 @@
       <div class="sec-inner">
         <div class="close-in">
           <p class="kick" data-anim>Open source</p>
-          <h2 class="h1" data-anim style="--d:70ms;max-width:20ch">Your books. Your machine. Your call.</h2>
+          <h2 class="h1" data-anim style="--d:70ms;max-width:20ch">Your book collection in one place.</h2>
           <p class="lede" data-anim style="--d:130ms;text-align:center;max-width:52ch">Point Omnibus at your existing digital library and try it out; Omnibus doesn’t tamper with any of your files or folder structure.</p>
           <p class="cmd" data-anim style="--d:190ms"><s>$</s>docker compose up -d</p>
           <div class="cta" data-anim style="--d:240ms;justify-content:center">

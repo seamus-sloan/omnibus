@@ -98,14 +98,19 @@ body.flow{overflow:auto}
 .cue.hide{opacity:0;pointer-events:none}
 
 /* ── framed screenshots ───────────────────────────────────────────
-   Every framed box declares its shot's aspect as --ar, so the BOX owns the
-   sizing and the image just fills it. Letting the image size itself instead
-   is the bug this replaced: `max-width` binds first, the height that implies
-   wins over `height:100%`, and a tall phone shot overflows its row. */
-.frame,.phone{aspect-ratio:var(--ar);height:100%;width:auto;max-width:100%;margin:0 auto}
-.frame{position:relative;border:1px solid var(--pg-line);border-radius:14px;overflow:hidden;background:var(--pg-panel);box-shadow:var(--pg-shadow)}
-.shot{display:block;width:100%;height:100%;object-fit:cover;object-position:center top}
-.frame--fill{width:100%;height:100%}
+   The IMAGE is the sized element and carries the frame's border: on a
+   replaced element, `max-width` + `max-height` with both dimensions `auto` is
+   the one construction that fits inside a box on BOTH axes while preserving
+   aspect. Sizing the wrapper instead pins both axes, which overrides the
+   declared aspect-ratio and lets `object-fit:cover` crop in silence — that
+   cost 78% of the sync inset and 40% of the theme strip before it was
+   measured. The wrapper now only positions and centres. */
+/* flex, not grid: a grid container's implicit row is auto-sized, so it grows
+   to the image and the image's own max-height:100% then resolves against
+   that row rather than the slot — constraining nothing. A flex item's
+   percentage max-height resolves against the container's real height. */
+.frame,.phone{position:relative;display:flex;align-items:center;justify-content:center;width:100%;height:100%;min-width:0;min-height:0;margin:0}
+.shot{display:block;max-width:100%;max-height:100%;width:auto;height:auto;border:1px solid var(--pg-line);border-radius:14px;background:var(--pg-panel);box-shadow:var(--pg-shadow)}
 
 /* hero — the one screen shown in perspective, bleeding off the right edge */
 .hero{display:grid;grid-template-columns:minmax(360px,42%) 1fr;align-items:center;gap:clamp(24px,4vw,72px)}
@@ -117,21 +122,22 @@ body.flow{overflow:auto}
    a top offset instead leaves it hanging: the slot has no height of its
    own (the frame is absolute), so a narrower viewport shrinks the frame
    and drops all the slack below it. */
+.hero-shot .shot{width:100%;height:100%;max-width:none;max-height:none;object-fit:cover;object-position:center top;border-bottom:0;border-radius:14px 14px 0 0;background:transparent}
 .hero-shot{position:absolute;left:44%;right:calc(var(--pad) * -1.1);top:0;bottom:0;display:grid;align-content:center;perspective:2200px}
-.hero-shot .frame{position:relative;width:100%;height:auto;max-width:none;margin:0;aspect-ratio:1440/900;background:transparent;border-bottom:0;border-radius:14px 14px 0 0;transform:rotateX(5deg) rotateY(-11deg) rotateZ(0.6deg) scale(1.04);transform-origin:left center;-webkit-mask-image:linear-gradient(to bottom,#000 0,#000 68%,rgba(0,0,0,.5) 87%,transparent 100%);mask-image:linear-gradient(to bottom,#000 0,#000 68%,rgba(0,0,0,.5) 87%,transparent 100%)}
+.hero-shot .frame{position:relative;display:block;width:100%;height:auto;aspect-ratio:1440/900;transform:rotateX(5deg) rotateY(-11deg) rotateZ(0.6deg) scale(1.04);transform-origin:left center;-webkit-mask-image:linear-gradient(to bottom,#000 0,#000 68%,rgba(0,0,0,.5) 87%,transparent 100%);mask-image:linear-gradient(to bottom,#000 0,#000 68%,rgba(0,0,0,.5) 87%,transparent 100%)}
 
 /* two-up: copy beside a screen */
 .split{display:grid;grid-template-columns:minmax(300px,34%) 1fr;gap:clamp(24px,3.6vw,64px);align-items:center;height:100%;padding:clamp(70px,11vh,120px) 0 clamp(48px,8vh,90px)}
 .split--flip{grid-template-columns:1fr minmax(300px,33%)}
 .split-copy{display:grid;gap:clamp(12px,2vh,24px);align-content:center}
 .split-vis{position:relative;height:100%;min-height:0;display:grid;place-items:center}
-.inset-shot{position:absolute;left:-5%;bottom:-4%;width:46%;z-index:5}
+.inset-shot{position:absolute;left:-5%;bottom:-4%;width:46%;height:auto;z-index:5}
 
 /* the theme strip is one image; its four labels are baked in */
 .themes-in{grid-template-rows:auto 1fr;align-content:stretch;padding:clamp(78px,12vh,124px) 0 clamp(26px,4.5vh,58px);gap:clamp(14px,2.4vh,30px)}
-.themes-copy{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:6px clamp(28px,4.5vw,80px);align-items:end}
-.themes-copy .kick{grid-column:1/-1}
-.themes-copy .lede{max-width:52ch;align-self:end}
+/* one column: the two-column split existed to seat a lede beside the heading,
+   and there is no lede on this panel any more */
+.themes-copy{display:grid;gap:6px}
 .themes-vis{position:relative;min-height:0;display:grid;place-items:center}
 
 /* phone rows */
@@ -140,8 +146,7 @@ body.flow{overflow:auto}
 .phones>div,.trio>div{min-width:0;height:100%;display:grid;grid-template-rows:1fr auto}
 .trio>div{flex:0 1 320px}
 .phones>div{flex:0 1 440px}
-.phone{min-height:0;overflow:hidden;border-radius:22px}
-.phone .shot{object-fit:contain;object-position:center}
+.phone .shot{border-radius:22px}
 .phone-cap{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--pg-ink3);text-align:center;margin-top:16px;min-height:2.4em}
 
 /* side-by-side desktop screens */
@@ -191,6 +196,7 @@ body.flow .themes-copy{grid-template-columns:1fr}
 body.flow .phones,body.flow .trio,body.flow .duo{flex-direction:column;height:auto;gap:36px}
 body.flow .phones>div,body.flow .trio>div,body.flow .duo>div{height:auto;flex:none;width:100%;max-width:380px;margin:0 auto}
 body.flow .frame,body.flow .phone{height:auto;width:100%}
+body.flow .shot{max-height:none}
 body.flow .duo>div{max-width:640px}
 body.flow .duo .frame{height:auto;width:100%}
 body.flow .faq{grid-template-columns:1fr}
