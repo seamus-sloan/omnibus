@@ -236,16 +236,23 @@ pub fn build_test_kepub(spine: &[(&str, &str)]) -> Vec<u8> {
 /// Minimal MP4/M4B carrying a Nero `chpl` atom with the given chapters,
 /// as `(start_100ns, title)` pairs. Just `ftyp` + `moov/udta/chpl` — enough
 /// for `audiobook::extract_chapters` to walk, with no media payload.
+///
+/// Panics on a title over 255 bytes: `chpl` gives each one a single-byte
+/// length prefix, and silently truncating it would emit a container that
+/// parses into garbage chapters rather than failing the test that built it.
 pub fn build_m4b_with_chapters(chapters: &[(u64, &str)]) -> Vec<u8> {
     let mut chpl_body = Vec::new();
     // version=0, flags=0x000000
     chpl_body.extend_from_slice(&[0u8; 4]);
     // chapter count (u32 BE for version 0)
-    chpl_body.extend_from_slice(&(chapters.len() as u32).to_be_bytes());
+    let count = u32::try_from(chapters.len()).expect("chpl chapter count must fit in u32");
+    chpl_body.extend_from_slice(&count.to_be_bytes());
     for (start_100ns, title) in chapters {
         chpl_body.extend_from_slice(&start_100ns.to_be_bytes());
         let title_bytes = title.as_bytes();
-        chpl_body.push(title_bytes.len() as u8);
+        let title_len =
+            u8::try_from(title_bytes.len()).expect("chpl chapter title must be <= 255 bytes");
+        chpl_body.push(title_len);
         chpl_body.extend_from_slice(title_bytes);
     }
 
@@ -264,10 +271,13 @@ pub fn build_m4b_with_chapters(chapters: &[(u64, &str)]) -> Vec<u8> {
 }
 
 /// Wrap `body` in an MP4 box header: 32-bit big-endian total size, then the
-/// four-byte type.
+/// four-byte type. Panics past 4 GiB rather than wrapping the size field into
+/// a header that claims less than it holds — this builder feeds a parser
+/// hardened against exactly that, so it must not be the one producing it.
 fn wrap_mp4_box(box_type: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    let size = u32::try_from(8 + body.len()).expect("mp4 box must be under 4 GiB");
     let mut out = Vec::with_capacity(8 + body.len());
-    out.extend_from_slice(&((8 + body.len()) as u32).to_be_bytes());
+    out.extend_from_slice(&size.to_be_bytes());
     out.extend_from_slice(box_type);
     out.extend_from_slice(body);
     out

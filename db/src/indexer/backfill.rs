@@ -63,21 +63,23 @@ async fn batch_update_books_column(
     Ok(())
 }
 
-/// Query the first-part filename (ordinal=0), format, and effective scan
-/// root for every book under `library_path` that needs chapter backfill (no
-/// `file_chapters` rows yet).
+/// Query the first-part filename (ordinal=0) and format for every book
+/// under `library_path` that needs chapter backfill (no `file_chapters`
+/// rows yet).
 ///
 /// Scoped on the file's own root (`COALESCE(bf.library_path, l.path)`, the
 /// shape `book_file_path` resolves with), not the book's: a merged
 /// audiobook's files hang off a target book whose `library_id` is the
 /// *target's* scan root, so scoping on the book's would drop every merged
-/// audiobook from the backfill.
+/// audiobook from the backfill. Because that same expression is what the
+/// filter equates to `library_path`, every row returned lives under
+/// `library_path` — the caller resolves paths against it directly.
 async fn fetch_backfill_candidates(
     pool: &SqlitePool,
     library_path: &str,
-) -> anyhow::Result<Vec<(i64, String, String, String)>> {
-    let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
-        "SELECT bf.id, bfp.filename, bf.format, COALESCE(bf.library_path, l.path) \
+) -> anyhow::Result<Vec<(i64, String, String)>> {
+    let rows: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT bf.id, bfp.filename, bf.format \
          FROM book_files bf \
          JOIN books b ON bf.book_id = b.id \
          JOIN scan_roots l ON b.library_id = l.id \
@@ -137,6 +139,10 @@ async fn bulk_fetch_parts(
     Ok(parts_by_id)
 }
 
+/// Books per chapter-backfill batch: one transaction and one set of file
+/// reads each, bounding both transaction size and peak `extracted` memory.
+const CHAPTER_BATCH: usize = 250;
+
 /// Fill `file_chapters` for audiobook `book_files` rows that have none.
 ///
 /// The chapter extraction pipeline was added after the initial audiobook
@@ -150,9 +156,9 @@ async fn bulk_fetch_parts(
 ///
 /// All `book_file_parts` rows for the backfill set are fetched in a single
 /// `WHERE book_file_id IN (…)` bulk query before the loop rather than one
-/// per book, and all chapter inserts are committed in batches of 250 books
-/// to avoid per-book WAL flushes (mirrors the sync/audiobooks.rs backfill
-/// pattern).
+/// per book, and all chapter inserts are committed in [`CHAPTER_BATCH`]-sized
+/// batches to avoid per-book WAL flushes (mirrors the sync/audiobooks.rs
+/// backfill pattern).
 pub(crate) async fn backfill_chapters(
     pool: &SqlitePool,
     library_path: &str,
@@ -169,41 +175,30 @@ pub(crate) async fn backfill_chapters(
         "backfilling chapters for existing audiobooks"
     );
 
-    let book_file_ids: Vec<i64> = rows.iter().map(|(id, ..)| *id).collect();
+    let book_file_ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
     let parts_by_id = bulk_fetch_parts(pool, &book_file_ids).await?;
 
-    // Process books in batches of 250 to bound transaction size (mirrors the
-    // sync/audiobooks.rs backfill pattern).
     let root_name = super::root_display_name(library_path);
-    for (batch_idx, chunk) in rows.chunks(250).enumerate() {
-        let mut tx = pool.begin().await?;
-        for (i, (book_file_id, first_part_filename, format, file_root)) in chunk.iter().enumerate()
-        {
-            // The row's own root, not the task's: a stat under the wrong
-            // root extracts nothing and writes the synthetic `Part N`
-            // fallback over the book's real chapters.
-            let abs = PathBuf::from(file_root).join(first_part_filename);
-            let fmt = format.clone();
-            let chapters =
-                tokio::task::spawn_blocking(move || audiobook::extract_chapters(&abs, &fmt))
-                    .await
-                    .unwrap_or_else(|join_err| {
-                        tracing::warn!(
-                            book_file_id,
-                            %join_err,
-                            is_panic = join_err.is_panic(),
-                            "chapter extraction task failed; using synthetic fallback"
-                        );
-                        Vec::new()
-                    });
+    let lib_root = PathBuf::from(library_path);
+    for (batch_idx, chunk) in rows.chunks(CHAPTER_BATCH).enumerate() {
+        // Read every file in the batch *before* opening the transaction. The
+        // first insert takes SQLite's write lock and holds it until commit,
+        // so extracting inside it would stall every other writer for the
+        // length of a whole batch of disk reads — past the 5s `busy_timeout`
+        // in `pool.rs` for large files, which surfaces as SQLITE_BUSY in the
+        // indexer and in readers saving progress.
+        let mut extracted = Vec::with_capacity(chunk.len());
+        for (i, (book_file_id, first_part_filename, format)) in chunk.iter().enumerate() {
+            extracted.push(
+                extract_chapters_off_thread(
+                    *book_file_id,
+                    lib_root.join(first_part_filename),
+                    format.clone(),
+                )
+                .await,
+            );
 
-            let parts = parts_by_id
-                .get(book_file_id)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            sync::insert_chapters(&mut tx, *book_file_id, &chapters, parts).await?;
-
-            let global_idx = batch_idx * 250 + i;
+            let global_idx = batch_idx * CHAPTER_BATCH + i;
             let progress = u32::try_from(global_idx)
                 .unwrap_or(u32::MAX)
                 .saturating_add(1);
@@ -213,10 +208,40 @@ pub(crate) async fn backfill_chapters(
                 &super::display_item(&root_name, first_part_filename),
             );
         }
+
+        let mut tx = pool.begin().await?;
+        for ((book_file_id, _, _), chapters) in chunk.iter().zip(&extracted) {
+            let parts = parts_by_id
+                .get(book_file_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            sync::insert_chapters(&mut tx, *book_file_id, chapters, parts).await?;
+        }
         tx.commit().await?;
     }
 
     Ok(())
+}
+
+/// Extract one file's chapters on the blocking pool. A panicked or cancelled
+/// extraction degrades to the synthetic fallback rather than failing the
+/// whole backfill.
+async fn extract_chapters_off_thread(
+    book_file_id: i64,
+    path: PathBuf,
+    format: String,
+) -> Vec<audiobook::RawChapter> {
+    tokio::task::spawn_blocking(move || audiobook::extract_chapters(&path, &format))
+        .await
+        .unwrap_or_else(|join_err| {
+            tracing::warn!(
+                book_file_id,
+                %join_err,
+                is_panic = join_err.is_panic(),
+                "chapter extraction task failed; using synthetic fallback"
+            );
+            Vec::new()
+        })
 }
 
 /// Fill `books.word_count` for EPUB-backed books under `library_path` that

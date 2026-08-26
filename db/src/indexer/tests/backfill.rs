@@ -167,11 +167,11 @@ async fn backfill_chapters_is_idempotent_after_all_books_have_chapters() {
 
 /// A merged audiobook — one whose `book_files` row was re-parented onto a
 /// book under a *different* scan root by `merge_books`, keeping its own
-/// `library_path`. Both halves of the resolution are under test at once: the
-/// candidate query must select the row by the file's root rather than the
-/// book's, and extraction must read the bytes at that same root. Failing the
-/// first yields no chapters at all; failing the second yields the synthetic
-/// `Part N` fallback over the book's real ones.
+/// `library_path`. Scoping the candidate query on the book's root instead of
+/// the file's drops the row, and the assertion sees no chapters at all.
+///
+/// Real titles rather than a row count, because the synthetic fallback would
+/// also write one row here: `Part 1` means the file was found but not parsed.
 #[tokio::test]
 async fn backfill_chapters_extracts_real_chapters_for_an_audiobook_merged_into_another_root() {
     let pool = init_db("sqlite::memory:").await.unwrap();
