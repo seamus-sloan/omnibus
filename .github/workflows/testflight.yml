@@ -157,12 +157,24 @@ jobs:
           # the same path explicitly, so one file serves both.
           KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
           # Created empty and locked down *before* any key material lands in
-          # it, so the bytes are never briefly world-readable. `printf %s`
-          # rather than `echo`, which mangles a value beginning with `-` and
-          # interprets backslashes in some shells.
+          # it, so the bytes are never briefly world-readable.
           : > "$KEY_PATH"
           chmod 600 "$KEY_PATH"
-          printf '%s' "$ASC_API_KEY_BASE64" | base64 -D > "$KEY_PATH"
+          # `echo`, not `printf '%s'`. base64 wraps at 76 columns, and this
+          # secret is stored wrapped; dropping the trailing newline left the
+          # final line unterminated and `base64 -D` decoded a truncated key,
+          # which xcodebuild reported as "Authentication failed ... bearer
+          # token" rather than as a malformed file.
+          echo "$ASC_API_KEY_BASE64" | base64 -D > "$KEY_PATH"
+
+          # Prove the decode produced a key before spending ten minutes on an
+          # archive that can only fail. Deliberately tests the PEM header
+          # only — never the contents.
+          if ! grep -q -- "-----BEGIN PRIVATE KEY-----" "$KEY_PATH"; then
+            echo "::error::ASC_API_KEY_BASE64 did not decode to a PEM private key. Re-store it as the base64 of the AuthKey_*.p8 file itself, e.g. base64 -i AuthKey_XXXX.p8 | gh secret set ASC_API_KEY_BASE64."
+            exit 1
+          fi
+          echo "App Store Connect key decoded ($(wc -c < "$KEY_PATH") bytes)."
 
       # Archive with **automatic** signing, letting Xcode fetch what it needs
       # from App Store Connect via the API key.
