@@ -27,6 +27,18 @@ run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.mark
 #     ASC_ISSUER_ID                     App Store Connect API issuer ID
 #   Per-app (a profile is bound to one bundle ID):
 #     IOS_PROVISIONING_PROFILE_BASE64   App Store profile for com.omnibus.mobile
+#     IOS_WIDGET_PROVISIONING_PROFILE_BASE64
+#                                       App Store profile for
+#                                       com.omnibus.mobile.OmnibusWidgets
+#
+# The app embeds a WidgetKit extension, and manual signing needs one profile
+# per embedded bundle — so both secrets are required, and both App IDs must
+# carry the App Groups capability with group.com.omnibus.mobile. A profile
+# minted before the app group was added does not include the entitlement and
+# fails export with a provisioning/entitlement mismatch, so the *existing*
+# com.omnibus.mobile profile has to be regenerated as well as the new one
+# created. Nothing before -exportArchive catches either: the archive is built
+# unsigned, and the simulator lanes sign ad-hoc.
 
 on:
   workflow_dispatch:
@@ -104,6 +116,8 @@ jobs:
       # The team the omnibus-ios project + the distribution cert belong to.
       DEVELOPMENT_TEAM: "D33VSDXHA6"
       BUNDLE_ID: com.omnibus.mobile
+      # Must match PRODUCT_BUNDLE_IDENTIFIER on the OmnibusWidgets target.
+      WIDGET_BUNDLE_ID: com.omnibus.mobile.OmnibusWidgets
     steps:
       - uses: actions/checkout@v4
 
@@ -114,6 +128,7 @@ jobs:
           cert-p12-base64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
           cert-password: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
           profile-base64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          extension-profile-base64: ${{ secrets.IOS_WIDGET_PROVISIONING_PROFILE_BASE64 }}
           expected-team: ${{ env.DEVELOPMENT_TEAM }}
 
       # Archive unsigned. Signing settings passed on the xcodebuild command line
@@ -144,6 +159,7 @@ jobs:
       - name: Write ExportOptions.plist
         env:
           PROFILE_NAME: ${{ steps.signing.outputs.profile-name }}
+          WIDGET_PROFILE_NAME: ${{ steps.signing.outputs.extension-profile-name }}
         run: |
           set -euo pipefail
           PLIST="$RUNNER_TEMP/ExportOptions.plist"
@@ -158,6 +174,14 @@ jobs:
           pb "Add :signingCertificate string Apple Distribution"
           pb "Add :provisioningProfiles dict"
           pb "Add :provisioningProfiles:$BUNDLE_ID string $PROFILE_NAME"
+          # One entry per embedded bundle. Fail here with something that names
+          # the cause rather than letting -exportArchive report the appex as
+          # simply unprovisioned.
+          if [ -z "$WIDGET_PROFILE_NAME" ]; then
+            echo "::error::IOS_WIDGET_PROVISIONING_PROFILE_BASE64 is not set. The app embeds $WIDGET_BUNDLE_ID, and manual signing needs a profile per embedded bundle."
+            exit 1
+          fi
+          pb "Add :provisioningProfiles:$WIDGET_BUNDLE_ID string $WIDGET_PROFILE_NAME"
           pb "Add :uploadSymbols bool true"
           pb "Add :destination string export"
 

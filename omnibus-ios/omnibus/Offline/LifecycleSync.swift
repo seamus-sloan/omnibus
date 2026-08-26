@@ -81,6 +81,8 @@ final class LifecycleSync {
         async let mirror: Void = LibraryIndex.shared.sync()
         async let resume: Void = refreshResumePoints()
         _ = await (mirror, resume)
+
+        await WidgetSnapshotWriter.shared.refresh()
     }
 
     /// A book was opened.
@@ -104,6 +106,10 @@ final class LifecycleSync {
         Task {
             await SyncEngine.shared.drain()
             await Connectivity.shared.refreshPendingCount()
+            // The end of a session is the moment the Home Screen is most likely
+            // to be wrong — the book just moved to the front of the rail, with
+            // a new position under it.
+            await WidgetSnapshotWriter.shared.refresh()
         }
     }
 
@@ -121,6 +127,11 @@ final class LifecycleSync {
             for hooks in openBooks.values { await hooks.flush() }
             await SyncEngine.shared.drain()
             await Connectivity.shared.refreshPendingCount()
+            // After the flush, so the position the reader wrote on its way out
+            // is the one the Home Screen shows — this is the pass that makes a
+            // widget correct while the app is closed, which is the only state
+            // anyone ever looks at one in.
+            await WidgetSnapshotWriter.shared.refresh()
             scheduleBackgroundRefresh()
         }
 
@@ -197,6 +208,10 @@ final class LifecycleSync {
             await SyncEngine.shared.drain()
             await refreshResumePoints()
             await Connectivity.shared.refreshPendingCount()
+            // The whole reason a widget can be right about a session that
+            // ended on another device: this pass runs without the app ever
+            // being opened, and the Home Screen redraws off the back of it.
+            await WidgetSnapshotWriter.shared.refresh()
         }
         task.expirationHandler = { work.cancel() }
         await work.value

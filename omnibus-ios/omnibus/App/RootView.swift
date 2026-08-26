@@ -7,6 +7,8 @@ struct RootView: View {
     @Environment(AppState.self) private var app
     @Environment(\.palette) private var palette
 
+    private var router: DeepLinkRouter { DeepLinkRouter.shared }
+
     var body: some View {
         ZStack {
             ScreenBackground()
@@ -26,6 +28,16 @@ struct RootView: View {
             }
         }
         .animation(Motion.glide, value: app.phase)
+        .onOpenURL { router.receive($0) }
+        // The router owns the delivery itself; this only tells it when the app
+        // is somewhere a book can be opened. Deliberately not a `.task(id:)`
+        // over the router's own state — SwiftUI cancels a view task whenever
+        // anything it observes changes, which cancelled the delivery the moment
+        // it started. `initial: true` covers the app launching straight into
+        // `.ready` from a cached identity.
+        .onChange(of: app.phase, initial: true) { _, phase in
+            router.setReady(phase == .ready)
+        }
     }
 }
 

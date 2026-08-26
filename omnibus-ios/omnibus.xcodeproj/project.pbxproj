@@ -8,9 +8,17 @@
 
 /* Begin PBXBuildFile section */
 		9FC0DEC3301436B1004AB003 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 9FC0DEC2301436B1004AB002 /* ZIPFoundation */; };
+		9FD1A00C301436B1004AB40C /* OmnibusWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9FD1A001301436B1004AB401 /* OmnibusWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		9FD1A00D301436B1004AB40D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 9F0BAC9E301436B0004AB339 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9FD1A002301436B1004AB402;
+			remoteInfo = OmnibusWidgets;
+		};
 		9F0BACB4301436B1004AB339 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 9F0BAC9E301436B0004AB339 /* Project object */;
@@ -31,12 +39,23 @@
 		9F0BACA6301436B0004AB339 /* omnibus.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = omnibus.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F0BACB3301436B1004AB339 /* omnibusTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = omnibusTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F0BACBD301436B1004AB339 /* omnibusUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = omnibusUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9FD1A001301436B1004AB401 /* OmnibusWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OmnibusWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		9F0BACA8301436B0004AB339 /* omnibus */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = omnibus;
+			sourceTree = "<group>";
+		};
+		9FD1A004301436B1004AB404 /* OmnibusShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = OmnibusShared;
+			sourceTree = "<group>";
+		};
+		9FD1A003301436B1004AB403 /* OmnibusWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = OmnibusWidgets;
 			sourceTree = "<group>";
 		};
 		9F0BACB6301436B1004AB339 /* omnibusTests */ = {
@@ -74,13 +93,36 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		9FD1A006301436B1004AB406 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		9FD1A00B301436B1004AB40B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				9FD1A00C301436B1004AB40C /* OmnibusWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXGroup section */
 		9F0BAC9D301436B0004AB339 = {
 			isa = PBXGroup;
 			children = (
 				9F0BACA8301436B0004AB339 /* omnibus */,
+				9FD1A004301436B1004AB404 /* OmnibusShared */,
+				9FD1A003301436B1004AB403 /* OmnibusWidgets */,
 				9F0BACB6301436B1004AB339 /* omnibusTests */,
 				9F0BACC0301436B1004AB339 /* omnibusUITests */,
 				9F0BACA7301436B0004AB339 /* Products */,
@@ -93,6 +135,7 @@
 				9F0BACA6301436B0004AB339 /* omnibus.app */,
 				9F0BACB3301436B1004AB339 /* omnibusTests.xctest */,
 				9F0BACBD301436B1004AB339 /* omnibusUITests.xctest */,
+				9FD1A001301436B1004AB401 /* OmnibusWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -107,13 +150,16 @@
 				9F0BACA2301436B0004AB339 /* Sources */,
 				9F0BACA3301436B0004AB339 /* Frameworks */,
 				9F0BACA4301436B0004AB339 /* Resources */,
+				9FD1A00B301436B1004AB40B /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				9FD1A00E301436B1004AB40E /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				9F0BACA8301436B0004AB339 /* omnibus */,
+				9FD1A004301436B1004AB404 /* OmnibusShared */,
 			);
 			name = omnibus;
 			packageProductDependencies = (
@@ -169,6 +215,29 @@
 			productReference = 9F0BACBD301436B1004AB339 /* omnibusUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		9FD1A002301436B1004AB402 /* OmnibusWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9FD1A008301436B1004AB408 /* Build configuration list for PBXNativeTarget "OmnibusWidgets" */;
+			buildPhases = (
+				9FD1A005301436B1004AB405 /* Sources */,
+				9FD1A006301436B1004AB406 /* Frameworks */,
+				9FD1A007301436B1004AB407 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				9FD1A003301436B1004AB403 /* OmnibusWidgets */,
+				9FD1A004301436B1004AB404 /* OmnibusShared */,
+			);
+			name = OmnibusWidgets;
+			packageProductDependencies = (
+			);
+			productName = OmnibusWidgets;
+			productReference = 9FD1A001301436B1004AB401 /* OmnibusWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -190,6 +259,9 @@
 						CreatedOnToolsVersion = 26.6;
 						TestTargetID = 9F0BACA5301436B0004AB339;
 					};
+					9FD1A002301436B1004AB402 = {
+						CreatedOnToolsVersion = 26.6;
+					};
 				};
 			};
 			buildConfigurationList = 9F0BACA1301436B0004AB339 /* Build configuration list for PBXProject "omnibus" */;
@@ -210,6 +282,7 @@
 			projectRoot = "";
 			targets = (
 				9F0BACA5301436B0004AB339 /* omnibus */,
+				9FD1A002301436B1004AB402 /* OmnibusWidgets */,
 				9F0BACB2301436B1004AB339 /* omnibusTests */,
 				9F0BACBC301436B1004AB339 /* omnibusUITests */,
 			);
@@ -232,6 +305,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		9F0BACBB301436B1004AB339 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9FD1A007301436B1004AB407 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -262,9 +342,21 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		9FD1A005301436B1004AB405 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		9FD1A00E301436B1004AB40E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9FD1A002301436B1004AB402 /* OmnibusWidgets */;
+			targetProxy = 9FD1A00D301436B1004AB40D /* PBXContainerItemProxy */;
+		};
 		9F0BACB5301436B1004AB339 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 9F0BACA5301436B0004AB339 /* omnibus */;
@@ -397,6 +489,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = omnibus.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = D33VSDXHA6;
@@ -445,6 +538,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = omnibus.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = D33VSDXHA6;
@@ -586,6 +680,72 @@
 			};
 			name = Release;
 		};
+		9FD1A009301436B1004AB409 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = OmnibusWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = D33VSDXHA6;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "OmnibusWidgets-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Omnibus;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.omnibus.mobile.OmnibusWidgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Debug;
+		};
+		9FD1A00A301436B1004AB40A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = OmnibusWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = D33VSDXHA6;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "OmnibusWidgets-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Omnibus;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.omnibus.mobile.OmnibusWidgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -621,6 +781,15 @@
 			buildConfigurations = (
 				9F0BACCE301436B1004AB339 /* Debug */,
 				9F0BACCF301436B1004AB339 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		9FD1A008301436B1004AB408 /* Build configuration list for PBXNativeTarget "OmnibusWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9FD1A009301436B1004AB409 /* Debug */,
+				9FD1A00A301436B1004AB40A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

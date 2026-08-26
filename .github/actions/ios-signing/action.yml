@@ -16,6 +16,17 @@ inputs:
   profile-base64:
     description: "base64 of the App Store .mobileprovision for the app being built"
     required: true
+  extension-profile-base64:
+    description: >
+      base64 of the App Store .mobileprovision for the embedded app extension,
+      when the app has one. A profile is bound to exactly one bundle ID, so an
+      appex needs its own — manual signing at -exportArchive time otherwise
+      fails with "OmnibusWidgets.appex requires a provisioning profile", and
+      nothing before that step can catch it because the archive is built
+      unsigned and simulator builds sign ad-hoc. Optional, so an app with no
+      extension needs no second secret.
+    required: false
+    default: ""
   expected-team:
     description: >
       Team ID the profile must belong to. Set it on any job that resolves the
@@ -44,6 +55,11 @@ outputs:
   profile-team:
     description: "Team ID the provisioning profile belongs to"
     value: ${{ steps.profile.outputs.team }}
+  extension-profile-name:
+    description: >
+      Name of the extension's provisioning profile, for the second
+      ExportOptions `provisioningProfiles` entry. Empty when none was supplied.
+    value: ${{ steps.extension-profile.outputs.name }}
 
 runs:
   using: composite
@@ -134,3 +150,40 @@ runs:
         echo "uuid=$UUID" >> "$GITHUB_OUTPUT"
         echo "name=$NAME" >> "$GITHUB_OUTPUT"
         echo "team=$TEAM" >> "$GITHUB_OUTPUT"
+
+    # Same again for the embedded extension. A separate step rather than a loop
+    # inside the one above because it is conditional: an app with no appex
+    # supplies no secret and this is skipped, leaving the output empty so the
+    # caller adds no second ExportOptions entry.
+    - name: Install extension provisioning profile
+      id: extension-profile
+      if: inputs.extension-profile-base64 != ''
+      shell: bash
+      env:
+        PROFILE_BASE64: ${{ inputs.extension-profile-base64 }}
+        EXPECTED_TEAM: ${{ inputs.expected-team }}
+      run: |
+        set -euo pipefail
+        PROFILE="$RUNNER_TEMP/omnibus-extension.mobileprovision"
+        echo "$PROFILE_BASE64" | base64 -D > "$PROFILE"
+
+        PLIST="$RUNNER_TEMP/extension-profile.plist"
+        security cms -D -i "$PROFILE" > "$PLIST"
+        UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PLIST")"
+        NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PLIST")"
+        TEAM="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PLIST")"
+
+        if [ -n "$EXPECTED_TEAM" ] && [ "$TEAM" != "$EXPECTED_TEAM" ]; then
+          echo "::error::Extension profile '$NAME' belongs to team $TEAM, but the build signs as $EXPECTED_TEAM."
+          exit 1
+        fi
+
+        for INSTALL_DIR in \
+          "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" \
+          "$HOME/Library/MobileDevice/Provisioning Profiles"; do
+          mkdir -p "$INSTALL_DIR"
+          cp "$PROFILE" "$INSTALL_DIR/$UUID.mobileprovision"
+        done
+
+        echo "Installed extension profile '$NAME' ($UUID), team $TEAM"
+        echo "name=$NAME" >> "$GITHUB_OUTPUT"
