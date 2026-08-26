@@ -53,7 +53,6 @@ jobs:
               - "flake.nix"
               - "scripts/fetch-fixtures.sh"
               - ".github/workflows/e2e.yml"
-              - ".github/actions/publish-playwright-report/**"
   # Compile the fullstack web bundle (native server binary + WASM client)
   # in release mode once and stash it in the GHA cache. Release mode strips
   # the Dioxus hot-reload client from the WASM bundle, which otherwise
@@ -254,7 +253,8 @@ jobs:
 
       - name: Run Playwright tests
         # `junit` (per-shard output file) feeds Codecov Test Analytics; `blob`
-        # feeds the merged HTML report; `list` is the console stream.
+        # is kept as a downloadable artifact so a CI-only failure still carries
+        # its trace and failure screenshot; `list` is the console stream.
         env:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-${{ matrix.shard }}.xml
         run: |
@@ -276,10 +276,10 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
-      # Blob reports (one per shard, attachments embedded) are the input the
-      # `publish-report` job stitches into a single hosted HTML report.
-      # Uploaded on every run — pass and fail — so the Pages report always
-      # reflects the latest run, not just failures.
+      # Blob reports (one per shard, attachments embedded). Nothing hosts them
+      # any more — gh-pages serves the marketing site — so this artifact is the
+      # only route to a failure's trace: download all shards and run
+      # `pnpm exec playwright merge-reports --reporter html <dir>` locally.
       - name: Upload blob report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -296,79 +296,10 @@ jobs:
           path: server.log
           retention-days: 7
 
-  # Merge the per-shard blob reports into one HTML report, then hand the merged
-  # report to the `publish-playwright-report` composite action to publish to the
-  # `gh-pages` branch (which GitHub Pages serves), so failures and passes are
-  # inspectable at a URL without downloading an artifact. Merging lives here (not
-  # in the action) so the action's sole job is publishing a ready report — no
-  # Node/Playwright dependency. This job supplies the caller-level policy — run
-  # whether or not the shards passed (but skip if a shard was cancelled or never
-  # ran), and serialize gh-pages pushes.
-  publish-report:
-    name: publish report
-    needs: playwright
-    if: ${{ always() && needs.playwright.result != 'skipped' && needs.playwright.result != 'cancelled' }}
-    runs-on: ubuntu-latest
-    # `contents: write` to push the report to gh-pages; `actions: read` for
-    # download-artifact@v4; `pull-requests: write` for the sticky report-URL
-    # comment. Declaring `permissions` zeroes every unlisted scope, so all
-    # three must be listed explicitly.
-    permissions:
-      contents: write
-      actions: read
-      pull-requests: write
-    # Serialize gh-pages pushes across all runs: each publish fetches the live
-    # branch, adds its folder, and pushes, so two in-flight jobs would race and
-    # one push would reject. A single-slot group (no cancel) queues them.
-    concurrency:
-      group: gh-pages-publish
-      cancel-in-progress: false
-    steps:
-      # Checkout so the local composite action is on disk and `pnpm install`
-      # can find the Playwright project. This job runs on the runner's own
-      # Node (not the Nix shell), so pnpm is provisioned via pnpm/action-setup
-      # (reads the `packageManager` pin in ui_tests/playwright/package.json).
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          package_json_file: ui_tests/playwright/package.json
-
-      # Node 22 (matches the flake's nodejs_22): the pinned pnpm 11.1.2
-      # requires Node >= 22.13 and pulls in `node:sqlite`, so Node 20 crashes
-      # with ERR_UNKNOWN_BUILTIN_MODULE before it can merge the reports.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Download all blob reports
-        uses: actions/download-artifact@v4
-        with:
-          path: all-blob-reports
-          pattern: blob-report-*
-          merge-multiple: true
-
-      - name: Merge blob reports into one HTML report
-        env:
-          # merge-reports needs @playwright/test but no browser binaries; skip
-          # the ~150 MB Chromium download the postinstall would otherwise run.
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
-        run: |
-          cd ui_tests/playwright
-          pnpm install --frozen-lockfile
-          pnpm exec playwright merge-reports --reporter html "$GITHUB_WORKSPACE/all-blob-reports"
-
-      - uses: ./.github/actions/publish-playwright-report
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          pages-base-url: https://seamus-sloan.github.io/omnibus
-          report-dir: ui_tests/playwright/playwright-report
-
   # The required status check for this workflow. Always runs (no paths filter +
   # `if: always()`), so branch protection gets a resolved status on every PR —
   # green when bundle + playwright passed or were skipped, red when either
-  # failed. `publish-report` is intentionally NOT gated on: report publishing
-  # failing must not block a merge. Mark ONLY `🔒 Playwright Required` as
+  # failed. Mark ONLY `🔒 Playwright Required` as
   # required in branch protection; do not require `bundle` / the `playwright`
   # shards (they skip on non-E2E PRs and would hang the merge).
   playwright-required:
