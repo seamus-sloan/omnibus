@@ -3,13 +3,20 @@
 //! null/stale rows and idempotent once caught up.
 
 use crate::pool::init_db;
-use crate::test_support::{build_stored_zip, make_test_dir, EnvVarGuard};
+use crate::test_support::{build_m4b_with_chapters, build_stored_zip, make_test_dir, EnvVarGuard};
 
 use super::super::*;
 
+/// Seed one audiobook `book_files` row with a part but no chapters.
+///
+/// `file_root` is the file's own `book_files.library_path`. `None` is the
+/// unmerged shape (the file lives under its book's scan root); `Some(root)`
+/// is what `merge_books` leaves behind — the row re-parented onto a book in
+/// `library_path` while the bytes stay under `root`.
 async fn seed_audiobook_for_backfill(
     pool: &SqlitePool,
     library_path: &str,
+    file_root: Option<&str>,
     uuid: &str,
     first_part_filename: &str,
     format: &str,
@@ -44,12 +51,13 @@ async fn seed_audiobook_for_backfill(
     .unwrap();
 
     let book_file_id: i64 = sqlx::query_scalar(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch) \
-         VALUES (?, ?, ?, 100, 100) RETURNING id",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch, library_path) \
+         VALUES (?, ?, ?, 100, 100, ?) RETURNING id",
     )
     .bind(book_id)
     .bind(format)
     .bind(uuid)
+    .bind(file_root)
     .fetch_one(pool)
     .await
     .unwrap();
@@ -73,8 +81,10 @@ async fn backfill_chapters_inserts_synthetic_chapters_for_all_books_in_batch() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let lib = "/tmp/backfill_test_lib";
 
-    let bfid_a = seed_audiobook_for_backfill(&pool, lib, "book-a", "book-a/part.m4b", "M4B").await;
-    let bfid_b = seed_audiobook_for_backfill(&pool, lib, "book-b", "book-b/part.m4b", "M4B").await;
+    let bfid_a =
+        seed_audiobook_for_backfill(&pool, lib, None, "book-a", "book-a/part.m4b", "M4B").await;
+    let bfid_b =
+        seed_audiobook_for_backfill(&pool, lib, None, "book-b", "book-b/part.m4b", "M4B").await;
 
     let mut progress_calls: Vec<(u32, u32)> = Vec::new();
     let mut items: Vec<String> = Vec::new();
@@ -129,7 +139,8 @@ async fn backfill_chapters_is_idempotent_after_all_books_have_chapters() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let lib = "/tmp/backfill_idempotent_lib";
 
-    let bfid = seed_audiobook_for_backfill(&pool, lib, "book-c", "book-c/part.m4b", "M4B").await;
+    let bfid =
+        seed_audiobook_for_backfill(&pool, lib, None, "book-c", "book-c/part.m4b", "M4B").await;
 
     sqlx::query(
         "INSERT INTO file_chapters \
@@ -151,6 +162,61 @@ async fn backfill_chapters_is_idempotent_after_all_books_have_chapters() {
     assert_eq!(
         progress_calls, 0,
         "on_progress must not be called when all books already have chapters"
+    );
+}
+
+/// A merged audiobook — one whose `book_files` row was re-parented onto a
+/// book under a *different* scan root by `merge_books`, keeping its own
+/// `library_path`. Both halves of the resolution are under test at once: the
+/// candidate query must select the row by the file's root rather than the
+/// book's, and extraction must read the bytes at that same root. Failing the
+/// first yields no chapters at all; failing the second yields the synthetic
+/// `Part N` fallback over the book's real ones.
+#[tokio::test]
+async fn backfill_chapters_extracts_real_chapters_for_an_audiobook_merged_into_another_root() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let audio_root = make_test_dir("backfill-merged-audio");
+    let ebook_root = make_test_dir("backfill-merged-ebook");
+    let audio_lib = audio_root.to_str().unwrap();
+    let ebook_lib = ebook_root.to_str().unwrap();
+
+    // The real file lands under the AUDIO root; nothing is written under the
+    // ebook root, so a stat there can only come back empty.
+    let part = "merged/part.m4b";
+    let abs = audio_root.join(part);
+    std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+    std::fs::write(
+        &abs,
+        build_m4b_with_chapters(&[(0, "Opening"), (30_000_000, "Descent")]),
+    )
+    .unwrap();
+
+    let book_file_id = seed_audiobook_for_backfill(
+        &pool,
+        ebook_lib,
+        Some(audio_lib),
+        "merged-book",
+        part,
+        "M4B",
+    )
+    .await;
+
+    backfill_chapters(&pool, audio_lib, |_, _, _| {})
+        .await
+        .unwrap();
+
+    let titles: Vec<String> = sqlx::query_scalar(
+        "SELECT title FROM file_chapters WHERE book_file_id = ? ORDER BY ordinal",
+    )
+    .bind(book_file_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        titles,
+        vec!["Opening".to_string(), "Descent".to_string()],
+        "a merged audiobook must be selected by the backfill and read at its own library_path"
     );
 }
 

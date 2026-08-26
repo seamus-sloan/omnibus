@@ -230,6 +230,50 @@ pub fn build_test_kepub(spine: &[(&str, &str)]) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
+// In-memory audiobook fixtures
+// ---------------------------------------------------------------------------
+
+/// Minimal MP4/M4B carrying a Nero `chpl` atom with the given chapters,
+/// as `(start_100ns, title)` pairs. Just `ftyp` + `moov/udta/chpl` — enough
+/// for `audiobook::extract_chapters` to walk, with no media payload.
+pub fn build_m4b_with_chapters(chapters: &[(u64, &str)]) -> Vec<u8> {
+    let mut chpl_body = Vec::new();
+    // version=0, flags=0x000000
+    chpl_body.extend_from_slice(&[0u8; 4]);
+    // chapter count (u32 BE for version 0)
+    chpl_body.extend_from_slice(&(chapters.len() as u32).to_be_bytes());
+    for (start_100ns, title) in chapters {
+        chpl_body.extend_from_slice(&start_100ns.to_be_bytes());
+        let title_bytes = title.as_bytes();
+        chpl_body.push(title_bytes.len() as u8);
+        chpl_body.extend_from_slice(title_bytes);
+    }
+
+    let chpl = wrap_mp4_box(b"chpl", &chpl_body);
+    let udta = wrap_mp4_box(b"udta", &chpl);
+    let moov = wrap_mp4_box(b"moov", &udta);
+
+    // A minimal `ftyp` up front so the file looks like a real MP4.
+    let mut ftyp_body = Vec::new();
+    ftyp_body.extend_from_slice(b"M4B ");
+    ftyp_body.extend_from_slice(&0u32.to_be_bytes());
+
+    let mut out = wrap_mp4_box(b"ftyp", &ftyp_body);
+    out.extend_from_slice(&moov);
+    out
+}
+
+/// Wrap `body` in an MP4 box header: 32-bit big-endian total size, then the
+/// four-byte type.
+fn wrap_mp4_box(box_type: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + body.len());
+    out.extend_from_slice(&((8 + body.len()) as u32).to_be_bytes());
+    out.extend_from_slice(box_type);
+    out.extend_from_slice(body);
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Generic env-var guard
 // ---------------------------------------------------------------------------
 

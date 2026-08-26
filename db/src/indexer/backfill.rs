@@ -63,20 +63,26 @@ async fn batch_update_books_column(
     Ok(())
 }
 
-/// Query the first-part filename (ordinal=0) and format for every book
-/// under `library_path` that needs chapter backfill (no `file_chapters`
-/// rows yet).
+/// Query the first-part filename (ordinal=0), format, and effective scan
+/// root for every book under `library_path` that needs chapter backfill (no
+/// `file_chapters` rows yet).
+///
+/// Scoped on the file's own root (`COALESCE(bf.library_path, l.path)`, the
+/// shape `book_file_path` resolves with), not the book's: a merged
+/// audiobook's files hang off a target book whose `library_id` is the
+/// *target's* scan root, so scoping on the book's would drop every merged
+/// audiobook from the backfill.
 async fn fetch_backfill_candidates(
     pool: &SqlitePool,
     library_path: &str,
-) -> anyhow::Result<Vec<(i64, String, String)>> {
-    let rows: Vec<(i64, String, String)> = sqlx::query_as(
-        "SELECT bf.id, bfp.filename, bf.format \
+) -> anyhow::Result<Vec<(i64, String, String, String)>> {
+    let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
+        "SELECT bf.id, bfp.filename, bf.format, COALESCE(bf.library_path, l.path) \
          FROM book_files bf \
          JOIN books b ON bf.book_id = b.id \
          JOIN scan_roots l ON b.library_id = l.id \
          JOIN book_file_parts bfp ON bfp.book_file_id = bf.id \
-         WHERE l.path = ? \
+         WHERE COALESCE(bf.library_path, l.path) = ? \
            AND bf.format IN ('M4B', 'M4A', 'MP3') \
            AND bfp.ordinal = 0 \
            AND NOT EXISTS (SELECT 1 FROM file_chapters fc WHERE fc.book_file_id = bf.id) \
@@ -163,17 +169,20 @@ pub(crate) async fn backfill_chapters(
         "backfilling chapters for existing audiobooks"
     );
 
-    let book_file_ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
+    let book_file_ids: Vec<i64> = rows.iter().map(|(id, ..)| *id).collect();
     let parts_by_id = bulk_fetch_parts(pool, &book_file_ids).await?;
 
     // Process books in batches of 250 to bound transaction size (mirrors the
     // sync/audiobooks.rs backfill pattern).
     let root_name = super::root_display_name(library_path);
-    let lib_root = PathBuf::from(library_path);
     for (batch_idx, chunk) in rows.chunks(250).enumerate() {
         let mut tx = pool.begin().await?;
-        for (i, (book_file_id, first_part_filename, format)) in chunk.iter().enumerate() {
-            let abs = lib_root.join(first_part_filename);
+        for (i, (book_file_id, first_part_filename, format, file_root)) in chunk.iter().enumerate()
+        {
+            // The row's own root, not the task's: a stat under the wrong
+            // root extracts nothing and writes the synthetic `Part N`
+            // fallback over the book's real chapters.
+            let abs = PathBuf::from(file_root).join(first_part_filename);
             let fmt = format.clone();
             let chapters =
                 tokio::task::spawn_blocking(move || audiobook::extract_chapters(&abs, &fmt))
