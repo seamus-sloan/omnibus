@@ -434,10 +434,18 @@ so `IOS_WIDGETS_PROVISIONING_PROFILE_BASE64` sits alongside
 `IOS_PROVISIONING_PROFILE_BASE64` and `ExportOptions.plist` carries a
 `provisioningProfiles` entry per embedded bundle. Both App IDs must also carry
 the App Groups capability for `group.com.omnibus.mobile` — which means the
-*existing* app profile has to be regenerated, not just the new one created, since
-a profile minted before the entitlement existed fails export on the mismatch.
-Nothing before `-exportArchive` catches either: the archive is built unsigned and
-every simulator lane signs ad-hoc.
+*existing* app profile has to be regenerated, not just the new one created: a
+profile does not pick up a capability added after it was created.
+
+Getting that wrong fails **silently**, which is why the workflow checks it three
+ways. The archive is built unsigned, so the binaries carry no entitlements and
+`-exportArchive` derives them wholly from the profiles — a profile missing the
+App Group yields an IPA that exports, uploads and installs, whose widgets then
+render their placeholder forever because `containerURL` returns `nil`.
+`.github/actions/ios-signing/check-profile.sh` therefore asserts each profile's
+app id, App Group and distribution type *before* the archive, and the export step
+re-reads the signed IPA to confirm the entitlement actually landed. Simulator
+lanes prove none of it — they sign ad-hoc.
 
 **TestFlight release:** the manually-triggered
 `.github/workflows/testflight.yml` (workflow_dispatch, `macos-26` runner —
@@ -445,9 +453,10 @@ Xcode 26 / iOS 26 SDK, which App Store Connect now requires) archives the
 Xcode project with manual signing (`xcodebuild archive` +
 `-exportArchive`, bundle `com.omnibus.mobile`) and uploads the `.ipa`
 with `xcrun altool`, stamping the marketing version from the latest `v*`
-release tag so TestFlight tracks the server release. Signing is six
-CI-only repo secrets (distribution cert + password, provisioning profile,
-App Store Connect API key + key-id + issuer-id) — enumerated in the
+release tag so TestFlight tracks the server release. Signing is seven
+CI-only repo secrets (distribution cert + password, an App Store
+provisioning profile for *each* of the two embedded bundles, App Store
+Connect API key + key-id + issuer-id) — enumerated in the
 workflow file's header comment. A daily companion workflow
 (`testflight-feedback.yml`) turns new TestFlight screenshot feedback into
 GitHub issues via `scripts/testflight_feedback_to_issues.py`.
