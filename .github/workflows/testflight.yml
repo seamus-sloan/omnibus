@@ -155,8 +155,14 @@ jobs:
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           # altool resolves the key by this exact filename; xcodebuild is given
           # the same path explicitly, so one file serves both.
-          echo "$ASC_API_KEY_BASE64" | base64 -D \
-            > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          # Created empty and locked down *before* any key material lands in
+          # it, so the bytes are never briefly world-readable. `printf %s`
+          # rather than `echo`, which mangles a value beginning with `-` and
+          # interprets backslashes in some shells.
+          : > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          printf '%s' "$ASC_API_KEY_BASE64" | base64 -D > "$KEY_PATH"
 
       # Archive with **automatic** signing, letting Xcode fetch what it needs
       # from App Store Connect via the API key.
@@ -231,9 +237,11 @@ jobs:
           pb "Add :uploadSymbols bool true"
           pb "Add :destination string export"
 
-      # Signs the (unsigned) archive: cert + profile come from ExportOptions.plist,
-      # and codesign finds the identity because the ios-signing action prepended
-      # the throwaway keychain to the user search list.
+      # Re-signs the archive for distribution. The profile comes from Apple at
+      # this point rather than from ExportOptions, which now only says *how* to
+      # sign (`signingStyle: automatic`) rather than *with what* — hence the
+      # credentials repeated here. codesign finds the certificate because the
+      # ios-signing action prepended the throwaway keychain to the search list.
       - name: Export .ipa
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}

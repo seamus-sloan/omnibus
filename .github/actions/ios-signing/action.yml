@@ -37,17 +37,21 @@ outputs:
   keychain-path:
     description: "Path to the throwaway keychain — delete it in an always() cleanup step"
     value: ${{ steps.cert.outputs.keychain }}
+  # The four below describe an installed profile, and are **empty** whenever
+  # `profile-base64` was not supplied — an automatic-signing caller installs no
+  # profile at all. Empty means "none was installed", never "installed but
+  # unreadable"; a caller that needs one must check before using it.
   profile-path:
-    description: "Path to the decoded .mobileprovision file (the dx path embeds this directly)"
+    description: "Path to the decoded .mobileprovision file. Empty when no profile was supplied."
     value: ${{ steps.profile.outputs.path }}
   profile-uuid:
-    description: "UUID of the provisioning profile"
+    description: "UUID of the provisioning profile. Empty when no profile was supplied."
     value: ${{ steps.profile.outputs.uuid }}
   profile-name:
-    description: "Name of the provisioning profile (for PROVISIONING_PROFILE_SPECIFIER / ExportOptions)"
+    description: "Name of the provisioning profile (for PROVISIONING_PROFILE_SPECIFIER / ExportOptions). Empty when no profile was supplied."
     value: ${{ steps.profile.outputs.name }}
   profile-team:
-    description: "Team ID the provisioning profile belongs to"
+    description: "Team ID the provisioning profile belongs to. Empty when no profile was supplied."
     value: ${{ steps.profile.outputs.team }}
 
 runs:
