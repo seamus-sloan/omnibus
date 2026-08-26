@@ -71,7 +71,7 @@ body.flow{overflow:auto}
 /* ── chrome ───────────────────────────────────────────────────── */
 .site-top{position:fixed;top:0;left:0;right:0;z-index:30;display:flex;align-items:center;gap:16px;padding:18px var(--pad)}
 .site-brand{display:flex;align-items:center;gap:10px}
-.site-brand i{width:26px;height:26px;background:url("assets/omnibus-otter.png") center/contain no-repeat}
+.site-brand i{width:26px;height:26px;background:url("assets/omnibus-stoat.png") center/contain no-repeat}
 .dir-sepia .site-brand i{filter:saturate(.9) brightness(.55)}
 .site-brand span{font-family:var(--serif);font-size:24px;font-weight:600;letter-spacing:-0.015em;line-height:1}
 .site-top .spacer{flex:1}
