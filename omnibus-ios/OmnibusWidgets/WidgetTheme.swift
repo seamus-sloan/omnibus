@@ -43,9 +43,9 @@ struct WidgetTheme {
     var track: Color { ink2.opacity(0.28) }
 
     /// The plate a coverless book gets, so a shelf of them doesn't read as
-    /// grey noise. A pared-back `GeneratedCoverPlate` — a widget draws these
-    /// at 34pt wide, where the app's title-in-the-artwork treatment is
-    /// unreadable and only costs a text layout pass per render.
+    /// grey noise. A pared-back `GeneratedCoverPlate`: the app sets the title
+    /// into the artwork, which a widget draws at 34pt wide in the large family
+    /// — illegible there, and a text layout pass per render for nothing.
     func plate(_ bookTone: WidgetBook.Tone) -> LinearGradient {
         let base = OKLCH(bookTone.l, bookTone.c, bookTone.h)
         return LinearGradient(
@@ -85,6 +85,11 @@ struct WidgetCover: View {
             // fills, so it has to be clipped inside a container that can't
             // grow — otherwise it stretches the row it sits in.
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            // The artwork carries the same information the title beside it
+            // does, so it announces as the book rather than as an unlabelled
+            // image — matching how the in-app Continue hero labels its cover.
+            .accessibilityElement()
+            .accessibilityLabel(book.title)
     }
 
     private var image: UIImage? {

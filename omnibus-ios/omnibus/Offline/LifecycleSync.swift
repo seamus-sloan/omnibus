@@ -82,7 +82,7 @@ final class LifecycleSync {
         async let resume: Void = refreshResumePoints()
         _ = await (mirror, resume)
 
-        await WidgetSnapshotWriter.refresh()
+        await WidgetSnapshotWriter.shared.refresh()
     }
 
     /// A book was opened.
@@ -109,7 +109,7 @@ final class LifecycleSync {
             // The end of a session is the moment the Home Screen is most likely
             // to be wrong — the book just moved to the front of the rail, with
             // a new position under it.
-            await WidgetSnapshotWriter.refresh()
+            await WidgetSnapshotWriter.shared.refresh()
         }
     }
 
@@ -131,7 +131,7 @@ final class LifecycleSync {
             // is the one the Home Screen shows — this is the pass that makes a
             // widget correct while the app is closed, which is the only state
             // anyone ever looks at one in.
-            await WidgetSnapshotWriter.refresh()
+            await WidgetSnapshotWriter.shared.refresh()
             scheduleBackgroundRefresh()
         }
 
@@ -211,7 +211,7 @@ final class LifecycleSync {
             // The whole reason a widget can be right about a session that
             // ended on another device: this pass runs without the app ever
             // being opened, and the Home Screen redraws off the back of it.
-            await WidgetSnapshotWriter.refresh()
+            await WidgetSnapshotWriter.shared.refresh()
         }
         task.expirationHandler = { work.cancel() }
         await work.value

@@ -576,10 +576,15 @@ enum Format {
         return formatter.string(from: date)
     }
 
-    static func relative(unix: Int64) -> String {
+    /// `relativeTo` defaults to now, and exists so this and the widget's
+    /// `WidgetLabels.relative` can be asserted equal on a fixed clock rather
+    /// than trusted to stay in step. The widget needs its own copy because an
+    /// extension cannot reach this enum — it lives in a file full of SwiftUI
+    /// views — and an untestable duplicate is how the two would drift.
+    static func relative(unix: Int64, relativeTo now: Date = Date()) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(unix))
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
+        return formatter.localizedString(for: date, relativeTo: now)
     }
 }

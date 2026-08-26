@@ -117,6 +117,13 @@ force quit.
   nothing to play. `Book.resumeFormat(for:)` is the one place that decides, and
   the Continue hero, the snapshot and the deep link all read it.
 
+> **Releasing needs a second provisioning profile.** One profile covers one
+> bundle ID, and the app now embeds `com.omnibus.mobile.OmnibusWidgets`, so
+> TestFlight wants `IOS_WIDGET_PROVISIONING_PROFILE_BASE64` beside the existing
+> secret — and both App IDs need the App Groups capability, so the app's own
+> profile must be *regenerated* rather than reused. `just ios-build` and
+> `just ios-test` cannot catch a mistake here: simulator builds sign ad-hoc.
+
 > The widget draws in SF (with the serif face for titles) rather than the app's
 > vendored Cormorant Garamond. `UIAppFonts` registers fonts per-bundle and an
 > extension is its own bundle, so using the display face would mean shipping a

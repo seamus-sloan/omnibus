@@ -427,6 +427,17 @@ including the ones that end at the connect or login screen, since a widget
 outlives a sign-out and would otherwise keep showing the previous account's
 books.
 
+**TestFlight release requires a second provisioning profile.** A profile is
+bound to one bundle ID and the app now embeds `com.omnibus.mobile.OmnibusWidgets`,
+so `IOS_WIDGET_PROVISIONING_PROFILE_BASE64` sits alongside
+`IOS_PROVISIONING_PROFILE_BASE64` and `ExportOptions.plist` carries a
+`provisioningProfiles` entry per embedded bundle. Both App IDs must also carry
+the App Groups capability for `group.com.omnibus.mobile` — which means the
+*existing* app profile has to be regenerated, not just the new one created, since
+a profile minted before the entitlement existed fails export on the mismatch.
+Nothing before `-exportArchive` catches either: the archive is built unsigned and
+every simulator lane signs ad-hoc.
+
 **TestFlight release:** the manually-triggered
 `.github/workflows/testflight.yml` (workflow_dispatch, `macos-26` runner —
 Xcode 26 / iOS 26 SDK, which App Store Connect now requires) archives the

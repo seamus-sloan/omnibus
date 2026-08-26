@@ -96,7 +96,7 @@ final class AppState {
         // at the connect or login screen are exactly the ones that must: a
         // session revoked elsewhere otherwise leaves the previous account's
         // titles and cover art on a surface outside the app's sandbox.
-        defer { Task { await WidgetSnapshotWriter.refresh() } }
+        defer { Task { await WidgetSnapshotWriter.shared.refresh() } }
 
         await OfflineStore.shared.open()
 
@@ -160,6 +160,13 @@ final class AppState {
             phase = .ready
         } catch APIError.unauthorized {
             phase = .needsLogin
+            // `bootstrap`'s defer has already run by now — it fires when
+            // `bootstrap` *returns*, which is before this detached task
+            // resolves — so it published the still-signed-in snapshot and
+            // would never revisit it. A session revoked elsewhere is the
+            // motivating case for refreshing at all; it is also the one that
+            // arrives here rather than through a transition.
+            await WidgetSnapshotWriter.shared.refresh()
         } catch {
             if user == nil { phase = .needsLogin }
         }
@@ -217,7 +224,7 @@ final class AppState {
         // The Home Screen is outside the app's sandbox, so a snapshot left
         // behind here keeps showing the previous server's books — titles and
         // cover art — to whoever picks the phone up next.
-        await WidgetSnapshotWriter.refresh()
+        await WidgetSnapshotWriter.shared.refresh()
     }
 
     func signedIn(_ user: UserSummary) {
@@ -226,8 +233,17 @@ final class AppState {
         Task { await SyncEngine.shared.drain() }
         // A fresh sign-in has no mirror yet, and every offline surface depends
         // on one — pull it now rather than on the first foreground.
-        Task { await LibraryIndex.shared.sync(force: true) }
-        Task { await WidgetSnapshotWriter.refresh() }
+        //
+        // The widget refresh is chained *behind* the mirror rather than run
+        // alongside it: a fresh sign-in has no cached resume points either, so
+        // a refresh that wins the race asks `LibraryIndex.isPopulated()` before
+        // anything has been written and publishes the "No books yet" card to an
+        // account with a full library — where it would sit until the next
+        // foreground.
+        Task {
+            await LibraryIndex.shared.sync(force: true)
+            await WidgetSnapshotWriter.shared.refresh()
+        }
     }
 
     /// Sign out, pushing anything still queued first.
@@ -243,12 +259,17 @@ final class AppState {
         user = nil
         phase = .needsLogin
         // Same reason as `changeServer`: the widget survives the sign-out.
-        await WidgetSnapshotWriter.refresh()
+        await WidgetSnapshotWriter.shared.refresh()
     }
 
     private func handleUnauthorized() {
         guard phase == .ready else { return }
         user = nil
         phase = .needsLogin
+        // The token was already cleared by the 401 that got us here, so this
+        // publishes the signed-out card. Without it the Home Screen keeps the
+        // revoked session's titles and cover art until some *other* hook
+        // happens to fire.
+        Task { await WidgetSnapshotWriter.shared.refresh() }
     }
 }

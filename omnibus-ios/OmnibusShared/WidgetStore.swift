@@ -65,26 +65,64 @@ enum WidgetStore {
 
     // MARK: - Cover art
 
+    /// The extensions a pre-rendered cover can carry. Covers with alpha are
+    /// filed as PNG — some are transparent, and flattening one onto JPEG's
+    /// implicit black is how a cover that reads fine in the app becomes a dark
+    /// slab on the Home Screen. Everything else is JPEG, which is a fraction
+    /// of the size for a photographic cover.
+    static let thumbExtensions = ["jpg", "png"]
+
+    /// Where a named cover lives, or `nil` when the name is not one this store
+    /// could have written.
+    ///
+    /// Validated on the *read* path as well as the write path. The name comes
+    /// out of a decoded file rather than from a value this process built, and
+    /// the extension hands it straight to `UIImage(contentsOfFile:)` — so a
+    /// name carrying `..` or a separator would read outside the thumbs
+    /// directory. Only the app writes the snapshot today; that is a reason the
+    /// guard is cheap, not a reason to omit it.
     static func thumbURL(named name: String) -> URL? {
-        thumbsDirectory?.appendingPathComponent(name)
+        guard isValidThumbName(name), let thumbsDirectory else { return nil }
+        return thumbsDirectory.appendingPathComponent(name)
     }
 
-    /// The name a book's pre-rendered cover is filed under. One per book
-    /// rather than per (book, format): a dual-format book is two cards showing
-    /// the same artwork.
-    static func thumbName(for bookUUID: String) -> String {
+    static func isValidThumbName(_ name: String) -> Bool {
+        !name.isEmpty && !name.contains("/") && !name.hasPrefix(".")
+    }
+
+    /// The name a book's cover is filed under. One per book rather than per
+    /// (book, format): a dual-format book is two cards showing one artwork.
+    static func thumbName(for bookUUID: String, ext: String) -> String {
         // The uuid is a UUIDv4 or a row id, so it is already path-safe — but
-        // it arrives from the server, and a path separator smuggled into one
-        // would write outside the container.
-        "\(bookUUID.replacingOccurrences(of: "/", with: "_")).jpg"
+        // it arrives from the server, and a separator smuggled into one would
+        // write outside the container.
+        "\(bookUUID.replacingOccurrences(of: "/", with: "_")).\(ext)"
+    }
+
+    /// The name this book's art is *already* filed under, whichever extension
+    /// that turned out to be. What lets a refresh that could not re-resolve a
+    /// cover keep the one the widget is currently drawing.
+    static func existingThumbName(for bookUUID: String) -> String? {
+        thumbExtensions
+            .map { thumbName(for: bookUUID, ext: $0) }
+            .first { name in
+                guard let url = thumbURL(named: name) else { return false }
+                return FileManager.default.fileExists(atPath: url.path)
+            }
+    }
+
+    static func thumbModified(named name: String) -> Date? {
+        guard let url = thumbURL(named: name) else { return nil }
+        return try? url.resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate
     }
 
     static func writeThumb(_ data: Data, named name: String) {
-        guard let thumbsDirectory else { return }
+        guard let url = thumbURL(named: name), let thumbsDirectory else { return }
         try? FileManager.default.createDirectory(
             at: thumbsDirectory, withIntermediateDirectories: true
         )
-        try? data.write(to: thumbsDirectory.appendingPathComponent(name), options: .atomic)
+        try? data.write(to: url, options: .atomic)
     }
 
     /// Drop art for books that have left the snapshot. Without it the group

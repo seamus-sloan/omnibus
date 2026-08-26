@@ -4,25 +4,56 @@
 //  The extension gets a finished answer rather than a second reader on
 //  `OfflineStore`: a timeline render has a tight budget, and a second SQLite
 //  connection would be a concurrency problem the app does not have today.
-//  Everything here reads the replica only — a snapshot write must never block
-//  on the network, since most of them happen on the way to being suspended.
+//  Everything here reads the replica; the one thing that can touch the network
+//  is pulling a cover that has never reached the device, and that is gated on
+//  reachability so an offline pass cannot sit on a request timeout.
 
 import UIKit
 import WidgetKit
 
-enum WidgetSnapshotWriter {
+actor WidgetSnapshotWriter {
+    static let shared = WidgetSnapshotWriter()
+
     /// Cap on the pre-rendered cover's long edge, in pixels. The largest a
     /// widget draws one is `systemSmall`'s, around 90pt — 300px covers it at
     /// 3x with room to spare, and keeps five books' art well under a megabyte
     /// in a container both processes have to page in.
     private static let thumbMaxPixels: CGFloat = 300
 
+    /// The pass currently running or queued behind one.
+    private var pass: Task<Void, Never>?
+
     /// Rebuild the snapshot and tell WidgetKit to redraw.
     ///
-    /// Safe to call from anywhere and at any phase — it resolves the empty
-    /// states itself rather than expecting callers to know which one applies.
-    static func refresh() async {
-        let snapshot = await build()
+    /// Passes are **serialized**, and that is load-bearing rather than tidy.
+    /// A build takes several `await`s (the replica, the mirror, possibly a
+    /// cover fetch), and sign-out runs its own refresh after two network calls
+    /// of its own — so an unordered pair let a build that started while signed
+    /// in finish *after* the signed-out one, re-publishing the previous
+    /// account's titles and cover art to a surface outside the app's sandbox
+    /// and re-writing the thumbs the sign-out had just pruned. Chaining makes
+    /// the last caller the last writer.
+    func refresh() async {
+        let previous = pass
+        let mine = Task { [previous] in
+            _ = await previous?.value
+            await Self.runPass()
+        }
+        pass = mine
+        await mine.value
+    }
+
+    private static func runPass() async {
+        var snapshot = await build()
+
+        // Re-checked after the build, not only before it. The build is long
+        // enough for a sign-out to land inside it, and publishing books for an
+        // account that is no longer signed in is the one outcome this file
+        // exists to prevent.
+        if snapshot.state == .ready, await !APIClient.shared.hasToken() {
+            snapshot = .empty(.signedOut)
+        }
+
         WidgetStore.save(snapshot)
         WidgetStore.pruneThumbs(keeping: Set(snapshot.books.compactMap(\.thumb)))
         WidgetCenter.shared.reloadTimelines(ofKind: WidgetKind.continueReading)
@@ -66,9 +97,7 @@ enum WidgetSnapshotWriter {
             title: book.displayTitle,
             author: book.authorDisplay,
             tone: WidgetBook.Tone(l: tone.l, c: tone.c, h: tone.h),
-            // Not a listening fraction on a card that is no longer presenting
-            // itself as one — the same guard the Continue hero applies.
-            fraction: format == point.record.format ? point.fraction : nil,
+            fraction: fraction(for: point, format: format),
             secondsRemaining: secondsRemaining(for: point, format: format),
             updatedAt: Date(timeIntervalSince1970: TimeInterval(point.record.updatedAt)),
             fileID: format == .audio ? point.record.bookFileID : nil,
@@ -76,12 +105,18 @@ enum WidgetSnapshotWriter {
         )
     }
 
+    /// The record's own honest fraction, but never a listening fraction on a
+    /// card that is no longer presenting itself as one — the same guard the
+    /// Continue hero applies. `internal` so the rule is testable.
+    static func fraction(for point: ResumePoint, format: ProgressFormat) -> Double? {
+        format == point.record.format ? point.fraction : nil
+    }
+
     /// The wall-clock wait at the reader's saved speed, matching the player's
     /// own "left" readout. Clamped first: a position past the reported total
     /// (stale metadata) must read as none left, not as a negative span.
-    private static func secondsRemaining(
-        for point: ResumePoint, format: ProgressFormat
-    ) -> Double? {
+    /// `internal` so the arithmetic is testable.
+    static func secondsRemaining(for point: ResumePoint, format: ProgressFormat) -> Double? {
         guard format == .audio, point.isAudio,
               let total = point.totalDurationSeconds,
               let position = point.record.audioPositionSeconds
@@ -99,30 +134,59 @@ enum WidgetSnapshotWriter {
         let key = "/api/thumbs/\(book.uuid)/\(ThumbSize.md.rawValue)"
 
         var image = await ImageCache.shared.image(for: key)
-        if image == nil {
-            // No-ops offline and when the cache already holds it, so this is
-            // only ever the first snapshot after a book reaches the rail.
+        if image == nil, await Connectivity.shared.isOnline {
+            // Guarded on reachability because `ImageCache.prefetch` has no
+            // guard of its own, and `APIClient`'s fail-fast window only opens
+            // once something has *already* timed out — so an offline pass
+            // would pay a full request timeout per book, serially, inside a
+            // background assertion that cancels the whole pass when it runs
+            // out. Offline this stays a pure replica read.
             await ImageCache.shared.prefetch(key)
             image = await ImageCache.shared.image(for: key)
         }
-        guard let image, let data = encode(image) else { return nil }
 
-        let name = WidgetStore.thumbName(for: book.uuid)
+        // Whatever the group already holds beats nothing. A cover that cannot
+        // be re-resolved this pass — offline, or after the image cache was
+        // cleared — must not be pruned out from under a widget that is
+        // currently drawing it, or an Airplane Mode render silently degrades
+        // every book to its plate and stays there until the next online pass.
+        guard let image else { return WidgetStore.existingThumbName(for: book.uuid) }
+
+        let ext = hasAlpha(image) ? "png" : "jpg"
+        let name = WidgetStore.thumbName(for: book.uuid, ext: ext)
+        guard await needsRewrite(name: name, source: key) else { return name }
+
+        guard let data = encode(image, ext: ext) else {
+            return WidgetStore.existingThumbName(for: book.uuid)
+        }
         WidgetStore.writeThumb(data, named: name)
         return name
     }
 
+    /// Whether the group's copy is older than the cached cover it came from.
+    ///
+    /// `refresh()` is wired to eight call sites, so a session of foreground →
+    /// open → close → background is four passes over the same five books.
+    /// Without this each one re-decoded, re-scaled and re-encoded every cover
+    /// and rewrote it, including inside the suspension race on the way out.
+    private static func needsRewrite(name: String, source key: String) async -> Bool {
+        guard let written = WidgetStore.thumbModified(named: name) else { return true }
+        guard let cached = await ImageCache.shared.diskModified(for: key) else { return false }
+        return written < cached
+    }
+
     /// Downscale to the widget's needs and encode.
     ///
-    /// JPEG unless the cover carries alpha — some are transparent PNGs, and
-    /// flattening one onto JPEG's implicit black is how a cover that reads
-    /// fine in the app becomes a dark slab on the Home Screen.
-    private static func encode(_ image: UIImage) -> Data? {
+    /// PNG when the cover carries alpha — some are transparent, and flattening
+    /// one onto JPEG's implicit black is how a cover that reads fine in the app
+    /// becomes a dark slab on the Home Screen. The file is named for whichever
+    /// this produced, so nothing downstream has to infer the type from bytes.
+    private static func encode(_ image: UIImage, ext: String) -> Data? {
         let longest = max(image.size.width, image.size.height)
         guard longest > 0 else { return nil }
 
         let scaled = longest <= thumbMaxPixels ? image : resize(image, by: thumbMaxPixels / longest)
-        return hasAlpha(scaled) ? scaled.pngData() : scaled.jpegData(compressionQuality: 0.85)
+        return ext == "png" ? scaled.pngData() : scaled.jpegData(compressionQuality: 0.85)
     }
 
     private static func resize(_ image: UIImage, by scale: CGFloat) -> UIImage {

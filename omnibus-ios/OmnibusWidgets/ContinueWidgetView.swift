@@ -104,7 +104,7 @@ private struct MediumCard: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             ForEach(books.prefix(Layout.mediumColumns)) { book in
-                Link(destination: book.deepLink) {
+                OptionalLink(destination: book.deepLink) {
                     // Centred as a column, for the same reason as the small
                     // card's — see `SmallCard`.
                     VStack(alignment: .center, spacing: 6) {
@@ -137,6 +137,12 @@ private struct MediumCard: View {
                 }
             }
         }
+        // Everything a `Link` doesn't cover — the container margins, the gaps
+        // between columns, and the filler columns padding a one- or two-book
+        // fan, which can be two thirds of the card. Without it a tap there
+        // launches the app with no URL at all, which is the failure `DeepLink`
+        // exists to describe.
+        .widgetURL(books.first?.deepLink)
     }
 }
 
@@ -164,7 +170,9 @@ private struct LargeCard: View {
                         .fill(theme.ink2.opacity(0.18))
                         .frame(height: 0.5)
                 }
-                Link(destination: book.deepLink) { LargeRow(book: book, theme: theme) }
+                OptionalLink(destination: book.deepLink) {
+                    LargeRow(book: book, theme: theme)
+                }
                     // The rows share the card's height rather than stacking at
                     // the top under a spacer. Five is the ceiling but two or
                     // three is the common case, and holding a fixed row height
@@ -172,6 +180,9 @@ private struct LargeCard: View {
                     .frame(maxHeight: .infinity)
             }
         }
+        // The kicker, the container margins and the row hairlines are all
+        // dead zones otherwise — see `MediumCard`.
+        .widgetURL(books.first?.deepLink)
     }
 }
 
@@ -208,6 +219,10 @@ private struct LargeRow: View {
                 Image(systemName: book.format == .audio ? "headphones" : "book.closed.fill")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(theme.rule)
+                    // The only thing on the row distinguishing an audiobook
+                    // from an ebook, and VoiceOver reads a bare system image
+                    // as its symbol name — "headphones" is not user-facing.
+                    .accessibilityLabel(book.format == .audio ? "Audiobook" : "Ebook")
 
                 // Not `Text(_, style: .relative)`. That one re-renders on the
                 // system's clock, which is the tempting part, but it formats
@@ -298,7 +313,7 @@ private struct EmptyCard: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .widgetURL(URL(string: "\(DeepLink.scheme)://"))
+        .widgetURL(DeepLink.appRoot)
     }
 
     private var symbol: String {
@@ -326,27 +341,21 @@ private struct EmptyCard: View {
     }
 }
 
-enum WidgetLabels {
-    /// Compact spoken form — "4h 12m". Mirrors `Format.humanDuration` in the
-    /// app; the extension can't reach it, and moving the app's whole
-    /// formatting enum across the target boundary to share six lines would
-    /// drag SwiftUI view code with it.
-    static func duration(_ seconds: Double) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "0m" }
-        let total = Int(seconds.rounded())
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        if hours > 0 { return minutes > 0 ? "\(hours)h \(minutes)m" : "\(hours)h" }
-        if minutes > 0 { return "\(minutes)m" }
-        return "\(total)s"
-    }
+/// A `Link` when there is somewhere to go, and inert content when there isn't.
+///
+/// `DeepLink.url` is optional because it refuses to force-unwrap its own
+/// fallback; `Link` needs a `URL`. Rather than each call site growing an `if
+/// let` that changes the view type, this keeps the layout identical either way.
+private struct OptionalLink<Content: View>: View {
+    let destination: URL?
+    @ViewBuilder var content: () -> Content
 
-    /// "2h ago". Mirrors `Format.relative(unix:)` in the app, so the widget and
-    /// the Continue hero describe the same book in the same words.
-    static func relative(_ date: Date, relativeTo now: Date = .now) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: now)
+    var body: some View {
+        if let destination {
+            Link(destination: destination) { content() }
+        } else {
+            content()
+        }
     }
 }
 
@@ -354,7 +363,7 @@ private extension WidgetBook {
     /// Where a tap on this card lands. The file id rides along so an audiobook
     /// reopens the narration the position was taken in — two narrations of one
     /// book do not share a timeline.
-    var deepLink: URL {
+    var deepLink: URL? {
         DeepLink.book(uuid: bookUUID, format: format, fileID: fileID).url
     }
 }

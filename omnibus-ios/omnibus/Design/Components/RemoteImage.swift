@@ -60,6 +60,17 @@ actor ImageCache {
         return image
     }
 
+    /// When this key's bytes were last written to disk.
+    ///
+    /// For callers holding a *derived* copy somewhere else — the widget
+    /// snapshot's pre-rendered covers live in the App Group, and only need
+    /// re-encoding when the cover behind them has actually moved.
+    func diskModified(for key: String) -> Date? {
+        try? diskURL(for: key)
+            .resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate
+    }
+
     func store(_ image: UIImage, data: Data, for key: String, etag: String? = nil) {
         memory.setObject(image, forKey: key as NSString, cost: data.count)
         try? data.write(to: diskURL(for: key), options: .atomic)

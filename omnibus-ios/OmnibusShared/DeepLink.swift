@@ -29,7 +29,17 @@ enum DeepLink: Equatable, Sendable {
     private static let segmentAllowed = CharacterSet.urlPathAllowed
         .subtracting(CharacterSet(charactersIn: "/"))
 
-    var url: URL {
+    /// `omnibus://` with no destination — the app, and nothing more specific.
+    /// What an empty card's tap lands on.
+    static let appRoot = URL(string: "\(scheme)://")
+
+    /// `nil` only if `URLComponents` cannot form a URL from a constant scheme,
+    /// a constant host and a percent-encoded path — which it cannot. Optional
+    /// anyway rather than force-unwrapped: the two consumers are `widgetURL`,
+    /// which already takes an optional, and a `Link`, which is inside an `if
+    /// let` for exactly this reason. A `!` here would be the one construct in
+    /// this file that can crash the widget process.
+    var url: URL? {
         switch self {
         case let .book(uuid, format, fileID):
             var components = URLComponents()
@@ -45,11 +55,9 @@ enum DeepLink: Equatable, Sendable {
                 items.append(URLQueryItem(name: Self.fileQuery, value: String(fileID)))
             }
             components.queryItems = items.isEmpty ? nil : items
-            // `URLComponents` can only fail to produce a URL for a host or
-            // path it can't encode, and both are percent-encoded above. The
-            // scheme alone still names the app, so a link with no book beats
-            // a crash on a value the server handed us.
-            return components.url ?? URL(string: "\(Self.scheme)://")!
+            // The scheme alone still names the app, so a link with no book
+            // beats no link at all on a uuid the server handed us.
+            return components.url ?? Self.appRoot
         }
     }
 

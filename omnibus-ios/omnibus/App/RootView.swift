@@ -29,21 +29,16 @@ struct RootView: View {
         }
         .animation(Motion.glide, value: app.phase)
         .onOpenURL { router.receive($0) }
-        // Keyed on both halves, so the order they arrive in doesn't matter: a
-        // cold launch from a widget delivers the URL first and reaches `.ready`
-        // second, while a tap with the app already open does the reverse.
-        .task(id: DeepLinkDelivery(phase: app.phase, link: router.pending)) {
-            guard app.phase == .ready else { return }
-            await router.deliverPending()
+        // The router owns the delivery itself; this only tells it when the app
+        // is somewhere a book can be opened. Deliberately not a `.task(id:)`
+        // over the router's own state — SwiftUI cancels a view task whenever
+        // anything it observes changes, which cancelled the delivery the moment
+        // it started. `initial: true` covers the app launching straight into
+        // `.ready` from a cached identity.
+        .onChange(of: app.phase, initial: true) { _, phase in
+            router.setReady(phase == .ready)
         }
     }
-}
-
-/// The pair `.task` watches — a value type so SwiftUI can tell one delivery
-/// attempt from the next.
-private struct DeepLinkDelivery: Equatable {
-    let phase: AppState.Phase
-    let link: DeepLink?
 }
 
 /// Shown for the fraction of a second the store takes to open. Matches the
