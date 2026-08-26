@@ -27,6 +27,28 @@ inputs:
       extension needs no second secret.
     required: false
     default: ""
+  expected-bundle-id:
+    description: >
+      Bundle ID the app profile must be for. Checked against the profile's own
+      `application-identifier` entitlement, which is the only copy of Apple's
+      answer that reaches CI — the portal is the authority here, so comparing
+      the workflow against the Xcode project proves nothing (the two have
+      agreed while both disagreed with Apple). Optional; skipped when empty
+      and always satisfied by a wildcard profile.
+    required: false
+    default: ""
+  expected-extension-bundle-id:
+    description: "Same, for the embedded extension's profile."
+    required: false
+    default: ""
+  require-app-group:
+    description: >
+      App Group both profiles must carry, e.g. group.com.omnibus.mobile. A
+      profile generated before the capability was added to its App ID silently
+      lacks the entitlement and fails export with a mismatch that names
+      neither the group nor the fix. Optional; skipped when empty.
+    required: false
+    default: ""
   expected-team:
     description: >
       Team ID the profile must belong to. Set it on any job that resolves the
@@ -116,6 +138,8 @@ runs:
       env:
         PROFILE_BASE64: ${{ inputs.profile-base64 }}
         EXPECTED_TEAM: ${{ inputs.expected-team }}
+        EXPECTED_BUNDLE_ID: ${{ inputs.expected-bundle-id }}
+        REQUIRE_APP_GROUP: ${{ inputs.require-app-group }}
       run: |
         set -euo pipefail
         PROFILE="$RUNNER_TEMP/omnibus.mobileprovision"
@@ -132,6 +156,12 @@ runs:
           echo "::error::Profile '$NAME' belongs to team $TEAM, but the build signs as $EXPECTED_TEAM. The cert, the profile, and DEVELOPMENT_TEAM must all name one team."
           exit 1
         fi
+
+        # Fail here rather than after the archive. Export is the first thing
+        # that compares the profile to the binary, and by then the run has
+        # spent ten minutes building.
+        bash "$GITHUB_ACTION_PATH/check-profile.sh" \
+          "$PLIST" "$NAME" "$EXPECTED_BUNDLE_ID" "$REQUIRE_APP_GROUP"
 
         # Install into every dir xcodebuild searches, keyed by UUID as Xcode
         # expects. Xcode 16 moved the search path to ~/Library/Developer/Xcode/
@@ -162,6 +192,8 @@ runs:
       env:
         PROFILE_BASE64: ${{ inputs.extension-profile-base64 }}
         EXPECTED_TEAM: ${{ inputs.expected-team }}
+        EXPECTED_BUNDLE_ID: ${{ inputs.expected-extension-bundle-id }}
+        REQUIRE_APP_GROUP: ${{ inputs.require-app-group }}
       run: |
         set -euo pipefail
         PROFILE="$RUNNER_TEMP/omnibus-extension.mobileprovision"
@@ -177,6 +209,9 @@ runs:
           echo "::error::Extension profile '$NAME' belongs to team $TEAM, but the build signs as $EXPECTED_TEAM."
           exit 1
         fi
+
+        bash "$GITHUB_ACTION_PATH/check-profile.sh" \
+          "$PLIST" "$NAME" "$EXPECTED_BUNDLE_ID" "$REQUIRE_APP_GROUP"
 
         for INSTALL_DIR in \
           "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" \

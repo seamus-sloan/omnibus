@@ -8,13 +8,14 @@ name: TestFlight
 run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.marketing_version) || 'latest tag' }}"
 
 # Manually-triggered iOS build + TestFlight upload for the native SwiftUI app
-# (omnibus-ios/ Xcode project, bundle com.omnibus.mobile). The Apple side
-# (App ID, app record, distribution cert, App Store Connect API key, App Store
-# provisioning profile) must already exist.
+# (omnibus-ios/ Xcode project, bundle com.omnibus.mobile). The Apple side must
+# already exist: the app record, the distribution cert, the App Store Connect
+# API key, and — because the app embeds a widget extension — **two** App IDs
+# with **two** App Store provisioning profiles, one per embedded bundle.
 #
 # The build is a real .xcodeproj archived unsigned by `xcodebuild archive`,
-# signed at `xcodebuild -exportArchive` time (manual signing against the
-# profile below, scoped to the app bundle id via ExportOptions.plist) and
+# signed at `xcodebuild -exportArchive` time (manual signing, with one
+# ExportOptions.plist `provisioningProfiles` entry per embedded bundle) and
 # uploaded with `xcrun altool`. The cert-import + profile-install lives in
 # .github/actions/ios-signing.
 #
@@ -29,16 +30,21 @@ run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.mark
 #     IOS_PROVISIONING_PROFILE_BASE64   App Store profile for com.omnibus.mobile
 #     IOS_WIDGETS_PROVISIONING_PROFILE_BASE64
 #                                       App Store profile for
-#                                       com.omnibus.mobile.OmnibusWidgets
+#                                       com.omnibus.mobile.widgets
 #
 # The app embeds a WidgetKit extension, and manual signing needs one profile
 # per embedded bundle — so both secrets are required, and both App IDs must
-# carry the App Groups capability with group.com.omnibus.mobile. A profile
-# minted before the app group was added does not include the entitlement and
-# fails export with a provisioning/entitlement mismatch, so the *existing*
-# com.omnibus.mobile profile has to be regenerated as well as the new one
-# created. Nothing before -exportArchive catches either: the archive is built
-# unsigned, and the simulator lanes sign ad-hoc.
+# carry the App Groups capability with group.com.omnibus.mobile. The *existing*
+# com.omnibus.mobile profile therefore has to be regenerated, not just reused:
+# a profile does not pick up a capability added after it was created.
+#
+# Getting that wrong does not fail loudly. The archive is built unsigned, so
+# the binaries carry no entitlements and export derives them wholly from the
+# profiles — a profile without the App Group produces an IPA that exports,
+# uploads and installs, whose widgets then render their placeholder forever.
+# Hence the checks: ios-signing asserts each profile's app id, App Group and
+# distribution type before the archive, and the export step re-checks the
+# signed IPA. The simulator lanes prove none of this; they sign ad-hoc.
 
 on:
   workflow_dispatch:
@@ -100,7 +106,7 @@ jobs:
   ios:
     name: ios (native · com.omnibus.mobile)
     needs: version
-    # omnibus-ios targets iOS 26.5, so it needs the Xcode 26 / iOS 26 SDK on
+    # omnibus-ios targets iOS 26.4, so it needs the Xcode 26 / iOS 26 SDK on
     # macos-26. App Store Connect also rejects any upload built with an older
     # SDK, so macos-14/15 (Xcode 15/16) can't be used.
     runs-on: macos-26
@@ -111,13 +117,29 @@ jobs:
       # injected per-job and isn't governed by `permissions:`.
       actions: write
     env:
+      # Validated in the Archive step. Defaulting to run_number is only
+      # monotonic if nobody has ever dispatched a higher literal — once
+      # someone does, every later default is rejected by App Store Connect
+      # for going backwards.
       BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}
       MARKETING_VERSION: ${{ needs.version.outputs.marketing_version }}
       # The team the omnibus-ios project + the distribution cert belong to.
       DEVELOPMENT_TEAM: "D33VSDXHA6"
       BUNDLE_ID: com.omnibus.mobile
-      # Must match PRODUCT_BUNDLE_IDENTIFIER on the OmnibusWidgets target.
-      WIDGET_BUNDLE_ID: com.omnibus.mobile.OmnibusWidgets
+      # Asserted against both profiles before the archive, and against the
+      # exported IPA afterwards. Must match `WidgetStore.appGroupID` and both
+      # .entitlements files.
+      APP_GROUP_ID: group.com.omnibus.mobile
+      # Must match the App ID of the profile in
+      # IOS_WIDGETS_PROVISIONING_PROFILE_BASE64. That is the binding
+      # constraint, and the reason this can't be derived from the project:
+      # when it last broke, this value and PRODUCT_BUNDLE_IDENTIFIER agreed
+      # with each other and disagreed with Apple's portal, so any check
+      # against the pbxproj would have passed and shipped the same failure.
+      # It has to equal PRODUCT_BUNDLE_IDENTIFIER as well — just don't read
+      # that agreement as evidence. Note it is deliberately *not* the target
+      # name: the product is OmnibusWidgets.appex and the id ends `.widgets`.
+      WIDGET_BUNDLE_ID: com.omnibus.mobile.widgets
     steps:
       - uses: actions/checkout@v4
 
@@ -130,6 +152,9 @@ jobs:
           profile-base64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           extension-profile-base64: ${{ secrets.IOS_WIDGETS_PROVISIONING_PROFILE_BASE64 }}
           expected-team: ${{ env.DEVELOPMENT_TEAM }}
+          expected-bundle-id: ${{ env.BUNDLE_ID }}
+          expected-extension-bundle-id: ${{ env.WIDGET_BUNDLE_ID }}
+          require-app-group: ${{ env.APP_GROUP_ID }}
 
       # Archive unsigned. Signing settings passed on the xcodebuild command line
       # apply to every target in the build — including SPM-generated resource
@@ -141,6 +166,14 @@ jobs:
       - name: Archive
         run: |
           set -euo pipefail
+          # CURRENT_PROJECT_VERSION must be a dotted integer sequence. An input
+          # like "1.0-rc1" builds happily and is only rejected once App Store
+          # Connect processes the upload, minutes after the run goes green.
+          case "$BUILD_NUMBER" in
+            '' | *[!0-9.]*)
+              echo "::error::build_number must be numeric/dot-separated, got: '$BUILD_NUMBER'"
+              exit 1 ;;
+          esac
           xcodebuild \
             -project omnibus-ios/omnibus.xcodeproj \
             -scheme omnibus \
@@ -198,6 +231,37 @@ jobs:
           # exportArchive names the .ipa after the product; copy to a stable path.
           IPA="$(ls "$RUNNER_TEMP"/export/*.ipa | head -n1)"
           cp "$IPA" "$GITHUB_WORKSPACE/omnibus-ios.ipa"
+
+      # The archive is built unsigned (CODE_SIGNING_ALLOWED=NO), so the binaries
+      # carry no entitlements of their own — export derives them entirely from
+      # the provisioning profiles. That makes a missing App Group a *silent*
+      # outcome rather than a loud one: the IPA exports, uploads, installs, and
+      # every widget renders its placeholder forever, because
+      # containerURL(forSecurityApplicationGroupIdentifier:) returns nil. The
+      # profile checks in ios-signing catch it earlier; this proves it of the
+      # artifact actually being shipped.
+      - name: Verify the exported IPA carries the App Group
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ipa-check"
+          rm -rf "$WORK" && mkdir -p "$WORK"
+          unzip -q "$GITHUB_WORKSPACE/omnibus-ios.ipa" -d "$WORK"
+          APP="$(ls -d "$WORK"/Payload/*.app | head -n1)"
+
+          fail=0
+          for BUNDLE in "$APP" "$APP"/PlugIns/*.appex; do
+            [ -e "$BUNDLE" ] || continue
+            NAME="$(basename "$BUNDLE")"
+            ENTS="$(codesign -d --entitlements - --xml "$BUNDLE" 2>/dev/null || true)"
+            case "$ENTS" in
+              *"$APP_GROUP_ID"*)
+                echo "$NAME carries $APP_GROUP_ID." ;;
+              *)
+                echo "::error::$NAME was signed without the App Group $APP_GROUP_ID. Its provisioning profile does not grant it, so the widget would install and silently render nothing. Add App Groups to that bundle's App ID and regenerate the profile."
+                fail=1 ;;
+            esac
+          done
+          [ "$fail" -eq 0 ] || exit 1
 
       - name: Upload to TestFlight
         env:

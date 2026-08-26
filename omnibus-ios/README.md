@@ -65,7 +65,7 @@ to scope an exception to.
 | `omnibus/Comic/` | CBZ comic pager: paged `TabView` + `UIScrollView` zoom, no WebView |
 | `omnibus/Widgets/` | Builds the App Group snapshot the Home Screen renders from |
 | `OmnibusShared/` | Compiled into **both** targets: the snapshot, the App Group layout, the deep-link URLs, OKLCH |
-| `OmnibusWidgets/` | The WidgetKit extension — a separate target, a separate process |
+| `OmnibusWidgets/` | The WidgetKit extension — a separate target, a separate process, and a separate bundle id (`com.omnibus.mobile.widgets`) |
 
 `OmnibusShared/` and `OmnibusWidgets/` sit beside `omnibus/` rather than inside
 it because a target's sources have to be a folder of their own: the project uses
@@ -118,11 +118,15 @@ force quit.
   the Continue hero, the snapshot and the deep link all read it.
 
 > **Releasing needs a second provisioning profile.** One profile covers one
-> bundle ID, and the app now embeds `com.omnibus.mobile.OmnibusWidgets`, so
+> bundle ID, and the app now embeds `com.omnibus.mobile.widgets`, so
 > TestFlight wants `IOS_WIDGETS_PROVISIONING_PROFILE_BASE64` beside the existing
 > secret — and both App IDs need the App Groups capability, so the app's own
-> profile must be *regenerated* rather than reused. `just ios-build` and
-> `just ios-test` cannot catch a mistake here: simulator builds sign ad-hoc.
+> profile must be *regenerated* rather than reused. Getting it wrong is silent,
+> not loud: the release archive is unsigned, so entitlements come entirely from
+> the profiles, and one missing the App Group ships a widget that installs and
+> renders nothing. CI asserts it on both profiles and again on the exported IPA.
+> `just ios-build` and `just ios-test` cannot catch it — simulator builds sign
+> ad-hoc.
 
 > The widget draws in SF (with the serif face for titles) rather than the app's
 > vendored Cormorant Garamond. `UIAppFonts` registers fonts per-bundle and an
