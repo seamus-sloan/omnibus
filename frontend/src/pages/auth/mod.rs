@@ -24,10 +24,7 @@ pub(crate) fn m_auth_shell(tagline: &str, children: Element) -> Element {
                 p { class: "m-auth-tagline", "{tagline}" }
             }
             div { class: "m-auth-body", {children} }
-            div { class: "m-auth-foot mono",
-                "omnibus · v"
-                {env!("CARGO_PKG_VERSION")}
-            }
+            div { class: "m-auth-foot mono", {crate::version::version_line()} }
         }
     }
 }

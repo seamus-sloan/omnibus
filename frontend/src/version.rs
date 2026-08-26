@@ -23,6 +23,13 @@ pub fn app_version() -> String {
     normalize(raw)
 }
 
+/// The `omnibus · v0.8.9` line the auth-page footers render (the web login
+/// form and the mobile auth shell), kept here so the two can't drift — and
+/// so neither re-adds the literal `v` that [`app_version`] already carries.
+pub fn version_line() -> String {
+    format!("omnibus · {}", app_version())
+}
+
 /// Ensure `raw` has exactly one leading `v`, trimming whitespace and
 /// collapsing any number of existing leading `v` characters (e.g. a doubled
 /// `"vv0.8.9"`) down to one.
@@ -39,6 +46,13 @@ mod tests {
         // OMNIBUS_VERSION isn't set for `cargo test`, so this pins the local
         // dev fallback (AC6): "v" + CARGO_PKG_VERSION, currently "v0.1.0".
         assert_eq!(app_version(), format!("v{}", env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn version_line_renders_one_v_and_no_literal_prefix() {
+        let line = version_line();
+        assert_eq!(line, format!("omnibus · v{}", env!("CARGO_PKG_VERSION")));
+        assert!(!line.contains("vv"), "doubled v in {line:?}");
     }
 
     #[test]
