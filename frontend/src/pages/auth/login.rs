@@ -346,10 +346,7 @@ fn LoginForm(props: LoginFormProps) -> Element {
                     Link { to: Route::Register {}, "Register" }
                 }
             }
-            div { class: "auth-footer-note",
-                "omnibus · v"
-                {env!("CARGO_PKG_VERSION")}
-            }
+            div { class: "auth-footer-note", {crate::version::version_line()} }
         }
     }
 }
