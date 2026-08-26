@@ -187,7 +187,12 @@ body.flow [data-anim]{opacity:1;transform:none;transition:none}
 body.flow .site-top{position:sticky;background:color-mix(in oklch,var(--pg-bg) 88%,transparent);backdrop-filter:blur(10px)}
 body.flow .hero{grid-template-columns:1fr}
 body.flow .hero-shot{position:static;display:block;perspective:none;margin-top:28px}
-body.flow .hero-shot .frame{transform:none;mask-image:none;-webkit-mask-image:none;border-bottom:1px solid var(--pg-line);border-radius:14px;background:var(--pg-panel)}
+/* The wrapper is only ever transform + mask; the border and radius live on
+   the image, so flow mode has to close the hero's frame there too — the
+   deck variant leaves it deliberately open at the bottom to bleed under
+   the mask, and there is no mask here to hide a squared-off edge. */
+body.flow .hero-shot .frame{transform:none;mask-image:none;-webkit-mask-image:none;aspect-ratio:auto}
+body.flow .hero-shot .shot{width:100%;height:auto;object-fit:fill;border:1px solid var(--pg-line);border-radius:14px;background:var(--pg-panel)}
 body.flow .split,body.flow .split--flip{grid-template-columns:1fr;height:auto;padding:0;gap:28px}
 body.flow .split--flip .split-vis{order:2}
 body.flow .split-vis,body.flow .themes-vis{height:auto}
