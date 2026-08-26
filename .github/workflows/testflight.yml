@@ -278,8 +278,20 @@ jobs:
           fi
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
-          echo "$ASC_API_KEY_BASE64" | base64 -D > "$KEY_PATH"
           trap 'rm -f "$KEY_PATH"' EXIT
+          # Locked down before any key material lands in it, so the bytes are
+          # never briefly world-readable. `echo`, not `printf '%s'` — base64
+          # wraps at 76 columns and this secret is stored wrapped, so dropping
+          # the trailing newline truncates the decode.
+          : > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "$ASC_API_KEY_BASE64" | base64 -D > "$KEY_PATH"
+          # Header only, never the contents. A bad decode otherwise surfaces as
+          # an opaque altool authentication error.
+          if ! grep -q -- "-----BEGIN PRIVATE KEY-----" "$KEY_PATH"; then
+            echo "::error::ASC_API_KEY_BASE64 did not decode to a PEM private key. Re-store it as the base64 of the AuthKey_*.p8 file, e.g. base64 -i AuthKey_XXXX.p8 | gh secret set ASC_API_KEY_BASE64."
+            exit 1
+          fi
 
           # Validate before uploading. `--upload-app` only proves the bytes
           # arrived: everything appex-specific — entitlement validity, asset

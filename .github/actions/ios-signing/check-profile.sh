@@ -41,16 +41,19 @@ if [ -n "$expected_bundle_id" ]; then
 fi
 
 if [ -n "$require_app_group" ]; then
+  # PlistBuddy prints an array one entry per line, inside Array { ... }.
+  # Matched whole-line and literally: a substring test would accept
+  # `group.com.example.other` for a required `group.com.example`, which is
+  # the one way this check could pass while the entitlement is wrong.
   groups="$(pb 'Print :Entitlements:com.apple.security.application-groups' || true)"
-  case "$groups" in
-    *"$require_app_group"*)
-      echo "Profile '$name' carries the App Group $require_app_group."
-      ;;
-    *)
-      echo "::error::Profile '$name' does not carry the App Group '$require_app_group'. Add the App Groups capability to its App ID and then REGENERATE the profile — a profile does not pick up a capability added after it was created, which is why reusing an existing one fails here."
-      exit 1
-      ;;
-  esac
+  if printf '%s\n' "$groups" \
+    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+    | grep -qxF -- "$require_app_group"; then
+    echo "Profile '$name' carries the App Group $require_app_group."
+  else
+    echo "::error::Profile '$name' does not carry the App Group '$require_app_group'. Add the App Groups capability to its App ID and then REGENERATE the profile — a profile does not pick up a capability added after it was created, which is why reusing an existing one fails here."
+    exit 1
+  fi
 fi
 
 # An App Store profile must not carry get-task-allow. A Development profile
