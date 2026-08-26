@@ -120,6 +120,11 @@ struct ReaderSettingsSheet: View {
                     .font(.monoUI(12))
                     .foregroundStyle(palette.ink2Color)
                     .contentTransition(.numericText())
+                    // The row is tight enough that the number is what SwiftUI
+                    // compresses first — without this it wraps to a digit per
+                    // line rather than pushing on anything else.
+                    .lineLimit(1)
+                    .fixedSize()
                     .animation(Motion.snap, value: controller.settings.fontSize)
 
                 stepButton("minus", enabled: controller.settings.fontSize > 12) {
