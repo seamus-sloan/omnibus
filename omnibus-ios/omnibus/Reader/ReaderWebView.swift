@@ -298,11 +298,23 @@ final class ReaderController: NSObject {
         didSet {
             guard settings != oldValue else { return }
             settings.save()
-            applySettings(changedFrom: oldValue)
+            syncSettings()
         }
     }
 
-    fileprivate var webView: WKWebView?
+    /// The typography the page was last handed, or `nil` when no page is holding
+    /// ours — before the first boot, and after a teardown.
+    ///
+    /// This, rather than `didSet`'s `oldValue`, is what a sync diffs against. A
+    /// change made while the page is rebooting has to survive until there is a
+    /// page to receive it, and `oldValue` forgets it the moment the next change
+    /// lands (#2191).
+    private(set) var appliedSettings: ReaderSettings?
+
+    /// Internal rather than fileprivate so a test can stand a controller up with
+    /// a real page attached — `hasLivePage` gates the settings handover on it,
+    /// so a controller without one can't be driven through that path at all.
+    var webView: WKWebView?
     private var book: Book?
     /// Where a boot of the page picks up — the position the book opened at,
     /// then every position the reader reaches.
@@ -325,8 +337,11 @@ final class ReaderController: NSObject {
     /// same reclaim. Settled by `reloadIfNeeded` on the way back.
     private(set) var awaitingReload = false
 
-    override init() {
-        settings = ReaderSettings.load()
+    /// `settings` is a parameter so a test can pin the typography instead of
+    /// inheriting whatever the host's stored blob holds — every controller in a
+    /// suite otherwise reads one shared `UserDefaults` key.
+    init(settings: ReaderSettings = .load()) {
+        self.settings = settings
         super.init()
     }
 
@@ -447,6 +462,10 @@ final class ReaderController: NSObject {
         run("OmnibusReader.destroy()")
         webView?.stopLoading()
         webView = nil
+        // Nothing is holding our typography any more. Left standing, the next
+        // change would diff against a page that no longer exists and mark
+        // itself applied without ever having been sent.
+        appliedSettings = nil
     }
 
     // MARK: - Page lifetime
@@ -493,38 +512,90 @@ final class ReaderController: NSObject {
         drawnHighlights = []
     }
 
-    private func applySettings(changedFrom old: ReaderSettings) {
-        guard isReady else { return }
-        if settings.fontSize != old.fontSize {
-            run("OmnibusReader.setFontSize(\(settings.fontSize))")
-        }
-        if settings.theme != old.theme {
-            run("OmnibusReader.setTheme(\(settings.theme.jsQuoted))")
-        }
-        if settings.fontFamily != old.fontFamily {
-            run("OmnibusReader.setFont(\(settings.fontFamily.jsQuoted))")
-        }
-        if settings.lineHeight != old.lineHeight {
-            run("OmnibusReader.setLineHeight(\(settings.lineHeight))")
-        }
-        if settings.margins != old.margins {
-            run("OmnibusReader.setMargins(\(settings.margins.css.jsQuoted))")
-        }
-        if settings.justify != old.justify {
-            run("OmnibusReader.setJustify(\(settings.justify))")
-        }
-        if settings.spread != old.spread {
-            run("OmnibusReader.setSpread(\(settings.spread.css.jsQuoted))")
-        }
+    /// Whether a page is up and holding our typography.
+    ///
+    /// Both halves are needed and each is dropped by a different path — a
+    /// reclaimed process clears `isReady` and leaves the view, a teardown clears
+    /// the view and leaves `isReady`. Asking one is how a half-dead page gets
+    /// treated as live.
+    private var hasLivePage: Bool { webView != nil && isReady }
+
+    /// Bring the page up to the settings in force, if it isn't already there.
+    ///
+    /// Runs both when a setting changes and when a page reports ready. A boot
+    /// bakes a *snapshot* of the settings into its options (`bootScript`), so
+    /// anything changed between that snapshot and first paint is on disk and
+    /// nowhere else — dropping it left the sheet showing one size and the page
+    /// rendering another until the next reboot (#2191).
+    private func syncSettings() {
+        guard hasLivePage, let shown = appliedSettings, shown != settings else { return }
+        for script in Self.settingsScripts(from: shown, to: settings) { run(script) }
+        appliedSettings = settings
     }
 
+    /// The calls that bring a page showing `shown` up to `wanted`.
+    ///
+    /// Static, so it is genuinely a function of its two arguments — no
+    /// controller, no stored settings, and nothing to build in order to assert
+    /// what a sync would send.
+    static func settingsScripts(
+        from shown: ReaderSettings, to wanted: ReaderSettings
+    ) -> [String] {
+        var scripts: [String] = []
+        if wanted.fontSize != shown.fontSize {
+            scripts.append("OmnibusReader.setFontSize(\(wanted.fontSize))")
+        }
+        if wanted.theme != shown.theme {
+            scripts.append("OmnibusReader.setTheme(\(wanted.theme.jsQuoted))")
+        }
+        if wanted.fontFamily != shown.fontFamily {
+            scripts.append("OmnibusReader.setFont(\(wanted.fontFamily.jsQuoted))")
+        }
+        if wanted.lineHeight != shown.lineHeight {
+            scripts.append("OmnibusReader.setLineHeight(\(wanted.lineHeight))")
+        }
+        if wanted.margins != shown.margins {
+            scripts.append("OmnibusReader.setMargins(\(wanted.margins.css.jsQuoted))")
+        }
+        if wanted.justify != shown.justify {
+            scripts.append("OmnibusReader.setJustify(\(wanted.justify))")
+        }
+        if wanted.spread != shown.spread {
+            scripts.append("OmnibusReader.setSpread(\(wanted.spread.css.jsQuoted))")
+        }
+        return scripts
+    }
+
+    #if DEBUG
+    /// Scripts handed to the page, newest last — a test seam, read by nothing in
+    /// the app. Capped, because a reading session evaluates one of these per page
+    /// turn and an unbounded log would be a leak in every debug build.
+    ///
+    /// It exists because a settings sync's whole job is the JS it emits, and
+    /// asserting only the bookkeeping that follows leaves the emission itself
+    /// free to be deleted with the suite still green.
+    private(set) var evaluatedScripts: [String] = []
+    private static let evaluatedScriptsCap = 64
+    #endif
+
     fileprivate func run(_ script: String) {
+        #if DEBUG
+        evaluatedScripts.append(script)
+        if evaluatedScripts.count > Self.evaluatedScriptsCap { evaluatedScripts.removeFirst() }
+        #endif
         webView?.evaluateJavaScript(script)
     }
 
     fileprivate func bootReader() {
-        guard let script = bootScript() else { return }
+        // No page means nothing received the boot, so nothing may be recorded as
+        // holding it — a `hostReady` still in flight when the reader tore down
+        // would otherwise re-arm the diff base against a page that is gone.
+        guard webView != nil, let script = bootScript() else { return }
         run(script)
+        // `bootScript` baked the settings in force into its options, so the page
+        // answering this call is showing exactly these — and a change arriving
+        // before it reports ready is a diff against them.
+        appliedSettings = settings
     }
 
     /// The `OmnibusReader.init` call that boots the page, at `restoreCFI` and in
@@ -583,6 +654,19 @@ final class ReaderController: NSObject {
                 }
                 drawnHighlights = pendingHighlights.filter { $0.epubCFIRange != nil }
                 pendingHighlights = []
+                // A setting changed between this page's boot snapshot and its
+                // first paint reaches it here, or not at all until the next
+                // reboot (#2191).
+                //
+                // After the marks, not before: a size or spread change reflows
+                // the page, and this fork of the glue has no annotation repaint
+                // (the web one's `scheduleAnnotationRepaint` was never ported),
+                // so marks laid into a reflow that is still settling keep the
+                // rects they were given. Painting first makes this the same
+                // order as changing a setting with the book already open —
+                // which has the same repaint gap (#2193), but is at least the
+                // one path the reader already exercises.
+                syncSettings()
             case "error":
                 failed = true
             default:

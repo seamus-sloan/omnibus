@@ -5,12 +5,14 @@
 //  web-content process of an app that has been in the background a while, and
 //  `reader.html` is loaded again when the reader comes back. Every one of those
 //  boots reads the same state, so these pin what it has to be — the position the
-//  reader actually reached rather than the one the book was opened at, and the
-//  marks the outgoing page was holding (#1656).
+//  reader actually reached rather than the one the book was opened at (#1656),
+//  the marks the outgoing page was holding, and the typography in force by the
+//  time the replacement paints rather than when it started booting (#2191).
 
 import Foundation
 import Testing
 import UIKit
+import WebKit
 
 @testable import omnibus
 
@@ -18,7 +20,10 @@ import UIKit
 private func openReader(at cfi: String?, holding highlights: [Highlight] = [])
     -> ReaderController
 {
-    let controller = ReaderController()
+    // Explicit settings, so nothing here depends on the host's stored blob — and
+    // a real web view, because the settings handover is gated on a live page.
+    let controller = ReaderController(settings: ReaderSettings())
+    controller.webView = WKWebView()
     controller.configure(
         book: Book(
             id: 1, filename: "hound.epub", title: "The Hound of the Baskervilles",
@@ -69,6 +74,9 @@ private func mark(_ range: String) -> Highlight {
 
 private let openedAt = "epubcfi(/6/14[chap07]!/4/2/2,/1:0,/1:1)"
 private let readTo = "epubcfi(/6/14[chap07]!/4/2/58,/1:0,/1:1)"
+
+/// The call a page has to receive for a size change to have actually landed.
+private let setFontSize26 = "OmnibusReader.setFontSize(26)"
 
 @Suite("Reader page reboot")
 @MainActor
@@ -203,5 +211,112 @@ struct ReaderRebootTests {
         // Otherwise the resume hook loads the page a second time, throwing away
         // the one that just came back and re-reading the book to do it.
         #expect(!controller.awaitingReload)
+    }
+
+    // MARK: - Typography handover
+
+    /// The bug. A boot bakes a *snapshot* of the settings into its options, and
+    /// a page rebooting after a backgrounding is not ready for seconds — long
+    /// enough for the reader to change a setting in a sheet that is still open
+    /// over it. Dropped, the change sat on disk while the page went on
+    /// rendering the snapshot, so the sheet read 26 and the page read 19.
+    @Test("a size changed while the page was rebooting reaches it when the page comes back")
+    func settingsChangedDuringARebootAreAppliedOnReady() {
+        withCleanReaderSettings {
+            let controller = openReader(at: openedAt)
+            // WebKit reclaimed the process: this is the replacement's snapshot.
+            controller.handle(message: ["type": "hostReady"])
+
+            controller.settings.fontSize = 26
+
+            // Nothing can take it yet — the replacement page hasn't painted.
+            #expect(controller.appliedSettings?.fontSize == ReaderSettings().fontSize)
+            #expect(!controller.evaluatedScripts.contains(setFontSize26))
+
+            controller.handle(message: ["type": "status", "payload": "ready"])
+
+            // The bookkeeping is not the fix — the page being told is. Asserting
+            // only `appliedSettings` would let the emission be deleted outright
+            // with this test still green.
+            #expect(controller.evaluatedScripts.contains(setFontSize26))
+            #expect(controller.appliedSettings?.fontSize == 26)
+        }
+    }
+
+    @Test("a size changed while the page is up is handed over as it happens")
+    func settingsChangedWhileReadyAreAppliedImmediately() {
+        withCleanReaderSettings {
+            let controller = openReader(at: openedAt)
+
+            controller.settings.fontSize = 26
+
+            #expect(controller.evaluatedScripts.contains(setFontSize26))
+            #expect(controller.appliedSettings?.fontSize == 26)
+        }
+    }
+
+    /// The other half of the window, carried by `bootScript` reading the settings
+    /// live rather than by the sync on ready — a different mechanism, and the
+    /// more commonly hit one. Hoisting the boot options into a value captured at
+    /// `configure` time (the mistake #1656 fixed for `restoreCFI`) would
+    /// reintroduce the reported symptom with every other test still passing.
+    @Test("a size changed before the replacement page boots rides its boot options")
+    func settingsChangedBeforeHostReadyRideTheBootSnapshot() throws {
+        try withCleanReaderSettings {
+            let controller = openReader(at: openedAt)
+            controller.webContentProcessDidTerminate(state: .active)
+
+            controller.settings.fontSize = 26
+
+            let options = try bootOptions(controller)
+            #expect(options["fontSize"] as? Int == 26)
+        }
+    }
+
+    /// A sync is a diff, not a replay: re-sending a setting the page already has
+    /// costs a re-pagination for nothing.
+    @Test("a sync sends only what the page is not already showing")
+    func syncSendsOnlyTheDifference() {
+        var wanted = ReaderSettings()
+        wanted.fontSize = 26
+
+        #expect(
+            ReaderController.settingsScripts(from: ReaderSettings(), to: wanted)
+                == [setFontSize26]
+        )
+        #expect(ReaderController.settingsScripts(from: wanted, to: wanted).isEmpty)
+    }
+
+    @Test("a torn-down page stops being a diff base")
+    func teardownDropsTheDiffBase() {
+        withCleanReaderSettings {
+            let controller = openReader(at: openedAt)
+            #expect(controller.appliedSettings != nil)
+
+            controller.teardown()
+
+            // Left standing, the next change would diff against a page that is
+            // gone and mark itself applied without ever having been sent.
+            #expect(controller.appliedSettings == nil)
+            controller.settings.fontSize = 26
+            #expect(controller.appliedSettings == nil)
+            #expect(!controller.evaluatedScripts.contains(setFontSize26))
+        }
+    }
+
+    /// The page posts `hostReady` before it goes away; the message lands on the
+    /// main queue after the reader has already torn down.
+    @Test("a hostReady arriving after teardown does not re-arm the diff base")
+    func lateHostReadyDoesNotRearmAfterTeardown() {
+        withCleanReaderSettings {
+            let controller = openReader(at: openedAt)
+            controller.teardown()
+
+            controller.handle(message: ["type": "hostReady"])
+
+            // Re-arming here would undo the teardown: a later change would diff
+            // against a page that does not exist and record itself as sent.
+            #expect(controller.appliedSettings == nil)
+        }
     }
 }
