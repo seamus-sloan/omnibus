@@ -5,8 +5,9 @@
 //  web-content process of an app that has been in the background a while, and
 //  `reader.html` is loaded again when the reader comes back. Every one of those
 //  boots reads the same state, so these pin what it has to be — the position the
-//  reader actually reached rather than the one the book was opened at, and the
-//  marks the outgoing page was holding (#1656).
+//  reader actually reached rather than the one the book was opened at (#1656),
+//  the marks the outgoing page was holding, and the typography in force by the
+//  time the replacement paints rather than when it started booting (#2191).
 
 import Foundation
 import Testing
@@ -203,5 +204,73 @@ struct ReaderRebootTests {
         // Otherwise the resume hook loads the page a second time, throwing away
         // the one that just came back and re-reading the book to do it.
         #expect(!controller.awaitingReload)
+    }
+
+    // MARK: - Typography handover
+
+    /// The bug. A boot bakes a *snapshot* of the settings into its options, and
+    /// a page rebooting after a backgrounding is not ready for seconds — long
+    /// enough for the reader to change a setting in a sheet that is still open
+    /// over it. Dropped, the change sat on disk while the page went on
+    /// rendering the snapshot, so the sheet read 26 and the page read 19.
+    @Test("a size changed while the page was rebooting reaches it when the page comes back")
+    func settingsChangedDuringARebootAreAppliedOnReady() {
+        withCleanReaderSettings {
+            let controller = openReader(at: openedAt)
+            // WebKit reclaimed the process: this is the replacement's snapshot.
+            controller.handle(message: ["type": "hostReady"])
+
+            controller.settings.fontSize = 26
+
+            // Nothing can take it yet — the replacement page hasn't painted.
+            #expect(controller.appliedSettings?.fontSize == ReaderSettings().fontSize)
+
+            controller.handle(message: ["type": "status", "payload": "ready"])
+
+            #expect(controller.appliedSettings?.fontSize == 26)
+        }
+    }
+
+    @Test("a size changed while the page is up is handed over as it happens")
+    func settingsChangedWhileReadyAreAppliedImmediately() {
+        withCleanReaderSettings {
+            let controller = openReader(at: openedAt)
+
+            controller.settings.fontSize = 26
+
+            #expect(controller.appliedSettings?.fontSize == 26)
+        }
+    }
+
+    /// A sync is a diff, not a replay: re-sending a setting the page already has
+    /// costs a re-pagination for nothing.
+    @Test("a sync sends only what the page is not already showing")
+    func syncSendsOnlyTheDifference() {
+        withCleanReaderSettings {
+            let controller = ReaderController()
+            controller.settings.fontSize = 26
+
+            #expect(
+                controller.settingsScripts(from: ReaderSettings())
+                    == ["OmnibusReader.setFontSize(26)"]
+            )
+            #expect(controller.settingsScripts(from: controller.settings).isEmpty)
+        }
+    }
+
+    @Test("a torn-down page stops being a diff base")
+    func teardownDropsTheDiffBase() {
+        withCleanReaderSettings {
+            let controller = openReader(at: openedAt)
+            #expect(controller.appliedSettings != nil)
+
+            controller.teardown()
+
+            // Left standing, the next change would diff against a page that is
+            // gone and mark itself applied without ever having been sent.
+            #expect(controller.appliedSettings == nil)
+            controller.settings.fontSize = 26
+            #expect(controller.appliedSettings == nil)
+        }
     }
 }

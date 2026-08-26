@@ -38,23 +38,9 @@ private func decode(_ payload: [String: Any]) throws -> ReaderSettings {
     try JSONDecoder().decode(ReaderSettings.self, from: JSONSerialization.data(withJSONObject: payload))
 }
 
-/// Runs `body` against an empty `omnibus.readerSettings`, then puts back
-/// whatever the test host held.
-private func withCleanStore(_ body: () throws -> Void) rethrows {
-    let defaults = UserDefaults.standard
-    let held = defaults.data(forKey: ReaderSettings.storageKey)
-    defaults.removeObject(forKey: ReaderSettings.storageKey)
-    defer {
-        if let held {
-            defaults.set(held, forKey: ReaderSettings.storageKey)
-        } else {
-            defaults.removeObject(forKey: ReaderSettings.storageKey)
-        }
-    }
-    try body()
-}
-
-// Serialized: every test in here shares the one `UserDefaults` key.
+// Serialized: every test in here shares the one `UserDefaults` key. The store
+// is guarded by `withCleanReaderSettings`, which also holds off the reboot
+// suite — `.serialized` orders this suite's tests and nothing else.
 @Suite("Reader settings persistence", .serialized)
 struct ReaderSettingsTests {
     /// The regression itself: the payload shape a build before #2084 wrote.
@@ -135,7 +121,7 @@ struct ReaderSettingsTests {
 
     @Test("a saved blob round-trips through UserDefaults")
     func savedBlobRoundTrips() {
-        withCleanStore {
+        withCleanReaderSettings {
             stored.save()
 
             #expect(ReaderSettings.load() == stored)
@@ -146,7 +132,7 @@ struct ReaderSettingsTests {
     /// first launch after the update.
     @Test("an upgrade onto a build with a new field loads the reader's own theme")
     func upgradeLoadsTheStoredTheme() throws {
-        try withCleanStore {
+        try withCleanReaderSettings {
             var payload = fullPayload()
             payload.removeValue(forKey: "spread")
             UserDefaults.standard.set(
@@ -164,7 +150,7 @@ struct ReaderSettingsTests {
 
     @Test("nothing stored loads the defaults")
     func emptyStoreLoadsDefaults() {
-        withCleanStore {
+        withCleanReaderSettings {
             #expect(ReaderSettings.load() == ReaderSettings())
         }
     }

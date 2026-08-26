@@ -104,6 +104,9 @@ struct ReaderSettingsSheet: View {
     }
 
     /// The size is set in the face it controls, so the control previews itself.
+    /// The number carries what the preview can't: two adjacent sizes look alike,
+    /// so a change that didn't land is otherwise indistinguishable from one that
+    /// did — and it matches the line-height row directly beneath.
     private var sizeRow: some View {
         PlateRow(label: "Size", isFirst: true) {
             HStack(spacing: Spacing.md) {
@@ -111,6 +114,12 @@ struct ReaderSettingsSheet: View {
                     .font(.display(CGFloat(controller.settings.fontSize)))
                     .foregroundStyle(palette.ink1Color)
                     .frame(width: 46, alignment: .trailing)
+                    .animation(Motion.snap, value: controller.settings.fontSize)
+
+                Text("\(controller.settings.fontSize)")
+                    .font(.monoUI(12))
+                    .foregroundStyle(palette.ink2Color)
+                    .contentTransition(.numericText())
                     .animation(Motion.snap, value: controller.settings.fontSize)
 
                 stepButton("minus", enabled: controller.settings.fontSize > 12) {

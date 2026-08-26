@@ -298,9 +298,18 @@ final class ReaderController: NSObject {
         didSet {
             guard settings != oldValue else { return }
             settings.save()
-            applySettings(changedFrom: oldValue)
+            syncSettings()
         }
     }
+
+    /// The typography the page was last handed, or `nil` when no page is holding
+    /// ours — before the first boot, and after a teardown.
+    ///
+    /// This, rather than `didSet`'s `oldValue`, is what a sync diffs against. A
+    /// change made while the page is rebooting has to survive until there is a
+    /// page to receive it, and `oldValue` forgets it the moment the next change
+    /// lands (#2191).
+    private(set) var appliedSettings: ReaderSettings?
 
     fileprivate var webView: WKWebView?
     private var book: Book?
@@ -447,6 +456,10 @@ final class ReaderController: NSObject {
         run("OmnibusReader.destroy()")
         webView?.stopLoading()
         webView = nil
+        // Nothing is holding our typography any more. Left standing, the next
+        // change would diff against a page that no longer exists and mark
+        // itself applied without ever having been sent.
+        appliedSettings = nil
     }
 
     // MARK: - Page lifetime
@@ -493,29 +506,46 @@ final class ReaderController: NSObject {
         drawnHighlights = []
     }
 
-    private func applySettings(changedFrom old: ReaderSettings) {
-        guard isReady else { return }
-        if settings.fontSize != old.fontSize {
-            run("OmnibusReader.setFontSize(\(settings.fontSize))")
+    /// Bring the page up to the settings in force, if it isn't already there.
+    ///
+    /// Runs both when a setting changes and when a page reports ready. A boot
+    /// bakes a *snapshot* of the settings into its options (`bootScript`), so
+    /// anything changed between that snapshot and first paint is on disk and
+    /// nowhere else — dropping it left the sheet showing one size and the page
+    /// rendering another until the next reboot (#2191).
+    private func syncSettings() {
+        guard isReady, let shown = appliedSettings, shown != settings else { return }
+        for script in settingsScripts(from: shown) { run(script) }
+        appliedSettings = settings
+    }
+
+    /// The calls that bring a page showing `shown` up to the settings in force.
+    ///
+    /// Pure, so what a sync would send is assertable without a web view.
+    func settingsScripts(from shown: ReaderSettings) -> [String] {
+        var scripts: [String] = []
+        if settings.fontSize != shown.fontSize {
+            scripts.append("OmnibusReader.setFontSize(\(settings.fontSize))")
         }
-        if settings.theme != old.theme {
-            run("OmnibusReader.setTheme(\(settings.theme.jsQuoted))")
+        if settings.theme != shown.theme {
+            scripts.append("OmnibusReader.setTheme(\(settings.theme.jsQuoted))")
         }
-        if settings.fontFamily != old.fontFamily {
-            run("OmnibusReader.setFont(\(settings.fontFamily.jsQuoted))")
+        if settings.fontFamily != shown.fontFamily {
+            scripts.append("OmnibusReader.setFont(\(settings.fontFamily.jsQuoted))")
         }
-        if settings.lineHeight != old.lineHeight {
-            run("OmnibusReader.setLineHeight(\(settings.lineHeight))")
+        if settings.lineHeight != shown.lineHeight {
+            scripts.append("OmnibusReader.setLineHeight(\(settings.lineHeight))")
         }
-        if settings.margins != old.margins {
-            run("OmnibusReader.setMargins(\(settings.margins.css.jsQuoted))")
+        if settings.margins != shown.margins {
+            scripts.append("OmnibusReader.setMargins(\(settings.margins.css.jsQuoted))")
         }
-        if settings.justify != old.justify {
-            run("OmnibusReader.setJustify(\(settings.justify))")
+        if settings.justify != shown.justify {
+            scripts.append("OmnibusReader.setJustify(\(settings.justify))")
         }
-        if settings.spread != old.spread {
-            run("OmnibusReader.setSpread(\(settings.spread.css.jsQuoted))")
+        if settings.spread != shown.spread {
+            scripts.append("OmnibusReader.setSpread(\(settings.spread.css.jsQuoted))")
         }
+        return scripts
     }
 
     fileprivate func run(_ script: String) {
@@ -525,6 +555,10 @@ final class ReaderController: NSObject {
     fileprivate func bootReader() {
         guard let script = bootScript() else { return }
         run(script)
+        // `bootScript` baked the settings in force into its options, so the page
+        // answering this call is showing exactly these — and a change arriving
+        // before it reports ready is a diff against them.
+        appliedSettings = settings
     }
 
     /// The `OmnibusReader.init` call that boots the page, at `restoreCFI` and in
@@ -573,6 +607,10 @@ final class ReaderController: NSObject {
             case "ready":
                 isReady = true
                 failed = false
+                // A setting changed between this page's boot snapshot and its
+                // first paint reaches it here, or not at all until the next
+                // reboot (#2191).
+                syncSettings()
                 for highlight in pendingHighlights {
                     guard let cfiRange = highlight.epubCFIRange else { continue }
                     addAnnotation(
