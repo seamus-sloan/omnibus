@@ -4,6 +4,8 @@
 //! crate version, pinned at `0.1.0`) so `dx serve` / `cargo build` keep
 //! compiling and rendering a version string without the env var set.
 
+use std::sync::OnceLock;
+
 /// This build's own version string, always with a single leading `v` (e.g.
 /// `v0.8.9`; `v0.1.0` for a local dev build with no `OMNIBUS_VERSION` set —
 /// AC6). Docker's build-arg carries the full release tag (already
@@ -23,11 +25,13 @@ pub fn app_version() -> String {
     normalize(raw)
 }
 
-/// The `omnibus · v0.8.9` line the auth-page footers render (the web login
-/// form and the mobile auth shell), kept here so the two can't drift — and
-/// so neither re-adds the literal `v` that [`app_version`] already carries.
-pub fn version_line() -> String {
-    format!("omnibus · {}", app_version())
+/// The `omnibus · v0.8.9` line both auth-page footers render.
+///
+/// [`app_version`] already carries the leading `v`, so a caller must not add
+/// one. Computed once — the login form re-renders on every keystroke.
+pub fn version_line() -> &'static str {
+    static LINE: OnceLock<String> = OnceLock::new();
+    LINE.get_or_init(|| format!("omnibus · {}", app_version()))
 }
 
 /// Ensure `raw` has exactly one leading `v`, trimming whitespace and
@@ -51,7 +55,7 @@ mod tests {
     #[test]
     fn version_line_renders_one_v_and_no_literal_prefix() {
         let line = version_line();
-        assert_eq!(line, format!("omnibus · v{}", env!("CARGO_PKG_VERSION")));
+        assert_eq!(line, concat!("omnibus · v", env!("CARGO_PKG_VERSION")));
         assert!(!line.contains("vv"), "doubled v in {line:?}");
     }
 
