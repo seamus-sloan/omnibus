@@ -27,10 +27,9 @@ next one.
 | [adding_journal](flows/adding_journal.md) | 25% of a details flow | no |
 | [merging_books](flows/merging_books.md) | 50% of an add-a-book flow | **yes, both books** |
 
-The nine top-level flows sum to 100%; the rest run inside their parent. The
-weights printed here and in each document are **suggested defaults** — the
-runner's own configuration is authoritative, and you do not sample anything
-yourself. You are handed a flow; you execute it.
+The nine top-level flows sum to 100%; the rest run inside their parent. Weights
+here are **suggested defaults** — the runner's configuration is authoritative,
+and you never sample anything yourself. You are handed a flow; you execute it.
 
 ## Your identity
 
@@ -165,10 +164,26 @@ These are all deliberate, and each has been mistaken for a defect before:
 - **Indexing is asynchronous.** A newly added book may take a moment to appear.
   Wait and re-check before reporting it missing.
 
+## The corpus goes in through the front door
+
+Some flows hand you a **corpus** — a directory of real book files on the machine
+you are running from. It exists so you can **upload books through the app's own
+Add-books screen, the way a person would.**
+
+**Never place a file into the library directory yourself** — not by copying,
+syncing, or unpacking an archive; not on the host, in the container, or over
+SSH. That directory belongs to the server. Doing it directly skips the whole
+upload path (the code the flow exists to test, so a broken uploader would pass
+silently) and creates books **nobody owns**, since ownership comes from the
+`book.add` entry you write when *you* upload. If the corpus is large, upload a
+handful, not all of it.
+
 ## Rails
 
 Never, whatever a flow seems to invite:
 
+- **Put a file into the library directory by any means other than uploading it
+  through the app.** See above — this is the one that looks helpful and is not.
 - Destroy anything you do not own.
 - Touch **Settings** — library paths, API keys, SMTP, and the like are
   instance-wide configuration and one edit breaks the run for everyone.

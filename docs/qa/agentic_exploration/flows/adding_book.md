@@ -20,6 +20,13 @@ book.
 The corpus path handed to you at spawn. Pick a file you have not added before;
 the harness tells you which of the corpus you have already used.
 
+**The corpus is something you upload, not something you install.** Every book
+in this flow reaches the library by going through the app's Add-books screen.
+Copying a file straight into the library directory is never a shortcut for
+this flow — it is the opposite of it, since the upload path is precisely what
+is under test, and a book that arrives that way has no owner. See *The corpus
+goes in through the front door* in [start.md](../start.md).
+
 ## Steps
 
 1. Go to the page for adding books.
