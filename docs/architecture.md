@@ -406,7 +406,7 @@ OmnibusShared/      — source compiled into *both* the app and the widget
                       conversion for server-provided accents — shared so the
                       widget and the Continue hero cannot draw one book in two
                       different colours)
-OmnibusWidgets/     — the WidgetKit extension (`com.omnibus.mobile.OmnibusWidgets`,
+OmnibusWidgets/     — the WidgetKit extension (`com.omnibus.mobile.widgets`,
                       embedded into the app at `PlugIns/`): ContinueWidget (a
                       `TimelineProvider` that reads the App Group and nothing
                       else, so it renders in Airplane Mode with the app force
@@ -429,7 +429,7 @@ outlives a sign-out and would otherwise keep showing the previous account's
 books.
 
 **TestFlight release requires a second provisioning profile.** A profile is
-bound to one bundle ID and the app now embeds `com.omnibus.mobile.OmnibusWidgets`,
+bound to one bundle ID and the app now embeds `com.omnibus.mobile.widgets`,
 so `IOS_WIDGETS_PROVISIONING_PROFILE_BASE64` sits alongside
 `IOS_PROVISIONING_PROFILE_BASE64` and `ExportOptions.plist` carries a
 `provisioningProfiles` entry per embedded bundle. Both App IDs must also carry

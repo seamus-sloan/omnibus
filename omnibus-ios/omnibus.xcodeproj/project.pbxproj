@@ -696,7 +696,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.omnibus.mobile.OmnibusWidgets;
+				PRODUCT_BUNDLE_IDENTIFIER = com.omnibus.mobile.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
@@ -729,7 +729,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.omnibus.mobile.OmnibusWidgets;
+				PRODUCT_BUNDLE_IDENTIFIER = com.omnibus.mobile.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;

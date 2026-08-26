@@ -29,7 +29,7 @@ run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.mark
 #     IOS_PROVISIONING_PROFILE_BASE64   App Store profile for com.omnibus.mobile
 #     IOS_WIDGETS_PROVISIONING_PROFILE_BASE64
 #                                       App Store profile for
-#                                       com.omnibus.mobile.OmnibusWidgets
+#                                       com.omnibus.mobile.widgets
 #
 # The app embeds a WidgetKit extension, and manual signing needs one profile
 # per embedded bundle — so both secrets are required, and both App IDs must
@@ -117,7 +117,7 @@ jobs:
       DEVELOPMENT_TEAM: "D33VSDXHA6"
       BUNDLE_ID: com.omnibus.mobile
       # Must match PRODUCT_BUNDLE_IDENTIFIER on the OmnibusWidgets target.
-      WIDGET_BUNDLE_ID: com.omnibus.mobile.OmnibusWidgets
+      WIDGET_BUNDLE_ID: com.omnibus.mobile.widgets
     steps:
       - uses: actions/checkout@v4
 
