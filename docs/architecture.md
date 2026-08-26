@@ -448,6 +448,23 @@ the pending queue. `webViewWebContentProcessDidTerminate` makes the recovery
 explicit, deferring the reload past a backgrounding rather than feeding a fresh
 process to the same reclaim.
 
+Typography is the third thing a boot carries, and it is shaped differently from
+the other two: it *is* a snapshot, because `bootScript` has to hand the glue one
+complete set of options in a single call. So the boot records what it handed over
+in `ReaderController.appliedSettings`, and `ready` re-syncs the difference. Both
+halves of the reboot window matter and each is carried by a different mechanism —
+a change made before the replacement announces `hostReady` rides the boot options
+(`bootScript` reads `settings` live), and one made after it announces but before
+it paints rides the re-sync. Dropping the second left the settings sheet showing
+one size while the page rendered another until the next reboot (#2191). A new
+`ReaderSettings` field therefore has to be added in three places, not one:
+`bootScript`'s options, `settingsScripts`' diff, and the tolerant decoder.
+
+`appliedSettings` is `nil` whenever no page is holding our typography, and the
+two page-death paths each clear only their own half of that — `prepareForReboot`
+drops `isReady` and leaves the view, `teardown` drops the view and leaves
+`isReady` — so the gate is `hasLivePage`, which asks both, never one alone.
+
 **The models are hand-mirrored, so they drift silently.** `Models/` restates the
 `shared/` wire DTOs in Swift with no generator and no compiler tying the two
 together, so a field added or renamed on the Rust side surfaces as a runtime 422

@@ -104,9 +104,11 @@ struct ReaderSettingsSheet: View {
     }
 
     /// The size is set in the face it controls, so the control previews itself.
-    /// The number carries what the preview can't: two adjacent sizes look alike,
-    /// so a change that didn't land is otherwise indistinguishable from one that
-    /// did — and it matches the line-height row directly beneath.
+    /// The number is there because the preview alone can't separate two adjacent
+    /// sizes — 19 and 20 render as the same "Aa" — and it matches the
+    /// line-height row directly beneath. Like every control here it shows what
+    /// the reader has *asked for*; whether the page took it is
+    /// `ReaderController.appliedSettings`, which is not a reader-facing fact.
     private var sizeRow: some View {
         PlateRow(label: "Size", isFirst: true) {
             HStack(spacing: Spacing.md) {
@@ -115,22 +117,37 @@ struct ReaderSettingsSheet: View {
                     .foregroundStyle(palette.ink1Color)
                     .frame(width: 46, alignment: .trailing)
                     .animation(Motion.snap, value: controller.settings.fontSize)
+                    .accessibilityHidden(true)
 
-                Text("\(controller.settings.fontSize)")
+                // `verbatim` rather than interpolation: the sibling row formats
+                // with `String(format:)`, which is locale-independent, and
+                // `Text("\(int)")` goes through `LocalizedStringKey` — the two
+                // adjacent readouts would render in different numeral systems.
+                Text(verbatim: String(controller.settings.fontSize))
                     .font(.monoUI(12))
                     .foregroundStyle(palette.ink2Color)
                     .contentTransition(.numericText())
                     // The row is tight enough that the number is what SwiftUI
                     // compresses first — without this it wraps to a digit per
-                    // line rather than pushing on anything else.
+                    // line rather than pushing on anything else. Horizontal
+                    // only: the height is not in question, and pinning it
+                    // fights the numeric roll.
                     .lineLimit(1)
-                    .fixedSize()
+                    .fixedSize(horizontal: true, vertical: false)
                     .animation(Motion.snap, value: controller.settings.fontSize)
+                    .accessibilityLabel("Size")
+                    .accessibilityValue("\(controller.settings.fontSize) point")
 
-                stepButton("minus", enabled: controller.settings.fontSize > 12) {
+                stepButton(
+                    "minus", label: "Decrease size",
+                    enabled: controller.settings.fontSize > 12
+                ) {
                     controller.settings.fontSize = max(12, controller.settings.fontSize - 1)
                 }
-                stepButton("plus", enabled: controller.settings.fontSize < 34) {
+                stepButton(
+                    "plus", label: "Increase size",
+                    enabled: controller.settings.fontSize < 34
+                ) {
                     controller.settings.fontSize = min(34, controller.settings.fontSize + 1)
                 }
             }
@@ -159,7 +176,7 @@ struct ReaderSettingsSheet: View {
     }
 
     private func stepButton(
-        _ icon: String, enabled: Bool, action: @escaping () -> Void
+        _ icon: String, label: String, enabled: Bool, action: @escaping () -> Void
     ) -> some View {
         Button {
             Haptics.tap()
@@ -174,6 +191,9 @@ struct ReaderSettingsSheet: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        // Without this the row reads as an unattributed number followed by two
+        // unnamed buttons — the glyph name is all VoiceOver would otherwise have.
+        .accessibilityLabel(label)
     }
 
     private func group<Content: View>(
