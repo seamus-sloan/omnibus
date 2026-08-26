@@ -90,6 +90,14 @@ final class AppState {
     // MARK: - Boot
 
     func bootstrap() async {
+        // Every exit path, not just the signed-in one. The scene-phase handler
+        // doesn't fire for the launch itself, so this is the only thing that
+        // re-derives the Home Screen on a cold start — and the paths that end
+        // at the connect or login screen are exactly the ones that must: a
+        // session revoked elsewhere otherwise leaves the previous account's
+        // titles and cover art on a surface outside the app's sandbox.
+        defer { Task { await WidgetSnapshotWriter.refresh() } }
+
         await OfflineStore.shared.open()
 
         #if DEBUG
@@ -206,6 +214,10 @@ final class AppState {
         serverURL = nil
         await APIClient.shared.configure(baseURL: nil)
         phase = .needsServer
+        // The Home Screen is outside the app's sandbox, so a snapshot left
+        // behind here keeps showing the previous server's books — titles and
+        // cover art — to whoever picks the phone up next.
+        await WidgetSnapshotWriter.refresh()
     }
 
     func signedIn(_ user: UserSummary) {
@@ -215,6 +227,7 @@ final class AppState {
         // A fresh sign-in has no mirror yet, and every offline surface depends
         // on one — pull it now rather than on the first foreground.
         Task { await LibraryIndex.shared.sync(force: true) }
+        Task { await WidgetSnapshotWriter.refresh() }
     }
 
     /// Sign out, pushing anything still queued first.
@@ -229,6 +242,8 @@ final class AppState {
         await Connectivity.shared.refreshPendingCount()
         user = nil
         phase = .needsLogin
+        // Same reason as `changeServer`: the widget survives the sign-out.
+        await WidgetSnapshotWriter.refresh()
     }
 
     private func handleUnauthorized() {

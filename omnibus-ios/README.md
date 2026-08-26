@@ -63,6 +63,65 @@ to scope an exception to.
 | `omnibus/Features/` | One folder per screen |
 | `omnibus/Reader/` | EPUB reader: native chrome over the vendored epub.js engine |
 | `omnibus/Comic/` | CBZ comic pager: paged `TabView` + `UIScrollView` zoom, no WebView |
+| `omnibus/Widgets/` | Builds the App Group snapshot the Home Screen renders from |
+| `OmnibusShared/` | Compiled into **both** targets: the snapshot, the App Group layout, the deep-link URLs, OKLCH |
+| `OmnibusWidgets/` | The WidgetKit extension — a separate target, a separate process |
+
+`OmnibusShared/` and `OmnibusWidgets/` sit beside `omnibus/` rather than inside
+it because a target's sources have to be a folder of their own: the project uses
+filesystem-synchronized groups, so membership is the directory. `OmnibusShared`
+is listed in both targets' `fileSystemSynchronizedGroups`, which is how one file
+compiles into two binaries without a framework.
+
+## Widgets
+
+The Home Screen gets **Continue** in all three system families — one book,
+three across, or five with last-read timestamps. It is the landing Continue
+stack, and like the rest of the app it is local-first: the widget reads the
+shared container and nothing else, so it draws in Airplane Mode with the app
+force quit.
+
+- **The extension is handed a finished answer, not a database.** A timeline
+  render has a tight memory and time budget, and a second reader on
+  `OfflineStore`'s SQLite would be a concurrency problem the app doesn't
+  currently have. `WidgetSnapshotWriter` resolves everything app-side — title,
+  author, the book's tone, the fraction, the rate-adjusted time left — and
+  writes one small JSON file. Cover art is downscaled and pre-rendered into the
+  same container, so a render is a file read and a decode, never a fetch.
+- **The colour comes from the book, so no palette crosses the boundary.** The
+  reader's chosen theme lives in the app's `UserDefaults`, which the extension
+  cannot read, and a duplicated token table would be a second place for the two
+  to disagree. The Continue hero already takes its wash from the book rather
+  than from a global accent, so a widget built the same way needs no palette —
+  only `CoverIdentity.tone`, resolved app-side and carried in the snapshot as
+  OKLCH. That is also why `OKLCH.swift` is shared rather than copied: two copies
+  could drift, and one book would show up in two different colours.
+- **The three empty states are three different screens.** "Not signed in",
+  "no books yet" and "nothing open" want three different next steps; a bare
+  empty list can't tell them apart, and a blank tile tells the reader nothing.
+- **The snapshot is rewritten on every `bootstrap` exit path**, including the
+  ones that end at the connect or login screen. A widget outlives a sign-out and
+  lives outside the app's sandbox, so a snapshot left behind keeps showing the
+  previous account's titles and cover art to whoever picks the phone up next.
+- **A tap is a URL, and the app almost always isn't running yet.**
+  `omnibus://book/<uuid>?format=…&file=…` — the file id rides along so an
+  audiobook reopens the narration the position was taken in. `DeepLinkRouter`
+  *records* the link rather than acting on it, and delivers once the app reaches
+  `.ready`: a widget tap is a cold launch, so the URL arrives long before
+  `bootstrap` has decided whether there is even an account on the device, and
+  acting immediately meant dropping it.
+- **Which surface a card opens is not the format its position was recorded
+  in.** A progress row soft-references `books.uuid` with no cascade, so it
+  outlives its file — a book whose audiobook has since been removed still
+  carries an audio position, and offering Play for it opens a player with
+  nothing to play. `Book.resumeFormat(for:)` is the one place that decides, and
+  the Continue hero, the snapshot and the deep link all read it.
+
+> The widget draws in SF (with the serif face for titles) rather than the app's
+> vendored Cormorant Garamond. `UIAppFonts` registers fonts per-bundle and an
+> extension is its own bundle, so using the display face would mean shipping a
+> second copy of the file inside the appex. `WidgetTheme` holds the whole type
+> scale in one place if that trade is ever worth revisiting.
 
 ## Shell
 
@@ -406,5 +465,20 @@ carries a TODO to harden it; this does that.
   so a fresh entry takes up to a minute to appear.
 - Author photo editing, book merging, and the admin log viewer are not ported.
 - Test coverage is limited to the pure logic worth pinning — the offline layer
-  (`omnibusTests/OfflineSyncTests.swift`) and the player's chapter arithmetic
-  (`omnibusTests/ChapterTimelineTests.swift`). No screen-level coverage.
+  (`omnibusTests/OfflineSyncTests.swift`), the player's chapter arithmetic
+  (`omnibusTests/ChapterTimelineTests.swift`) and the two contracts the widget
+  extension crosses a process boundary on
+  (`omnibusTests/WidgetSnapshotTests.swift`). No screen-level coverage.
+- **Nothing drives a widget in CI, or from a script.** `simctl` can install the
+  extension and prove `pluginkit` registers it, but adding a widget to a Home
+  Screen is a manual gesture — so the three families and the three empty states
+  are verified by eye, through the `#Preview`s in `ContinueWidget.swift` and by
+  adding the widget on a simulator. A regression in a widget layout will not
+  turn CI red. That gap is not theoretical: rendering the three families the
+  first time is what found a `systemSmall` title truncating to one line (the
+  fixed cover height had already spent the budget, so `layoutPriority` could
+  not help), a `systemLarge` card empty below the third row, and a "last read"
+  line reading `2 hr, 0 min` — `Text(_, style: .relative)` formats a bare
+  duration, which on a card of audiobooks looks like time *remaining*. Making
+  this lane automatic would mean moving the family layouts into
+  `OmnibusShared/` so `omnibusTests` can render them.

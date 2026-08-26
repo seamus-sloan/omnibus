@@ -98,19 +98,10 @@ private struct HeroCard: View {
 
     /// The one place the card decides which medium it's about: the eyebrow, the
     /// bar, the position line, the button, and where the tap goes all read this.
-    ///
-    /// Normally the format the position was recorded in. A progress row outlives
-    /// its file — it soft-references `books.uuid` with no cascade — so a book
-    /// whose audiobook has since been removed still carries an audio position,
-    /// and offering "Play" for it opens a player with nothing to play. `formats`
-    /// is empty only when the payload omitted it, so an empty list defers to the
-    /// record rather than overriding it.
+    /// Shared with the widget snapshot and the widget's deep link — see
+    /// `Book.resumeFormat(for:)` for why the record alone doesn't settle it.
     private var format: ProgressFormat {
-        guard !book.formats.isEmpty else { return point.record.format }
-        switch point.record.format {
-        case .audio: return book.hasAudiobook ? .audio : .epub
-        case .epub: return book.hasEbook ? .epub : .audio
-        }
+        book.resumeFormat(for: point.record.format)
     }
 
     private var isAudio: Bool { format == .audio }

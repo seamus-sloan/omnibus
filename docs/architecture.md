@@ -276,8 +276,7 @@ omnibusApp.swift    — @main OmnibusApp: audio session + appearance bootstrap
 App/                — AppState (server URL, auth, theme), RootView phase router
                       (launching → connect → login → tabs), MainTabView shell +
                       destination routing + global reader/player presentation
-Design/             — Theme (Atrium tokens + the type scale), OKLCH↔sRGB
-                      conversion for server-provided accents, Fonts/ (static
+Design/             — Theme (Atrium tokens + the type scale), Fonts/ (static
                       cuts of Cormorant Garamond / Instrument Sans / Space Mono,
                       the three families the web pulls from Google Fonts, each
                       with its OFL licence and every file listed in
@@ -384,7 +383,49 @@ Services/           — AuthService, LibraryService, UserDataService,
                       starts them: one worker, one cancellable handle, and a
                       registry of live staging directories so the sweep cannot
                       delete an upload still reading from one)
+Widgets/            — WidgetSnapshotWriter: builds the App Group snapshot the
+                      Home Screen renders from, out of the replica's cached
+                      `recent_progress` plus the library mirror, and
+                      pre-renders each cover into the group container. Reads
+                      only — a snapshot write must never block on the network,
+                      since most of them happen on the way to suspension
 ```
+
+Two more directories sit beside `omnibus/` rather than inside it, because they
+are the other half of a second target:
+
+```
+OmnibusShared/      — source compiled into *both* the app and the widget
+                      extension (a filesystem-synchronized group listed in two
+                      targets' `fileSystemSynchronizedGroups`): WidgetSnapshot
+                      (the wire form), WidgetStore (the App Group container's
+                      layout, and the only encoder either side uses), DeepLink
+                      (the `omnibus://book/<uuid>` URLs the widget mints and
+                      the app parses back) and OKLCH (the OKLCH↔sRGB
+                      conversion for server-provided accents — shared so the
+                      widget and the Continue hero cannot draw one book in two
+                      different colours)
+OmnibusWidgets/     — the WidgetKit extension (`com.omnibus.mobile.OmnibusWidgets`,
+                      embedded into the app at `PlugIns/`): ContinueWidget (a
+                      `TimelineProvider` that reads the App Group and nothing
+                      else, so it renders in Airplane Mode with the app force
+                      quit), its three family layouts and the three distinct
+                      empty states, and WidgetTheme — colours derived entirely
+                      from the book's own tone, because the reader's chosen
+                      theme lives in the app's `UserDefaults`, which the
+                      extension cannot read
+```
+
+Both processes address `group.com.omnibus.mobile`, declared in
+`omnibus-ios/omnibus.entitlements` and `omnibus-ios/OmnibusWidgets.entitlements`
+and named once in code as `WidgetStore.appGroupID`. All three must agree: a
+mismatch is silent — the container URL comes back `nil` and every widget falls
+back to its placeholder. The app writes the snapshot at each of the four moments
+the Home Screen could have gone wrong (`LifecycleSync`'s foreground, background,
+background-refresh and book-close hooks), plus on every `bootstrap` exit path —
+including the ones that end at the connect or login screen, since a widget
+outlives a sign-out and would otherwise keep showing the previous account's
+books.
 
 **TestFlight release:** the manually-triggered
 `.github/workflows/testflight.yml` (workflow_dispatch, `macos-26` runner —

@@ -30,6 +30,26 @@
 		     phone left in a pocket is stale until it's next unlocked. -->
 		<string>fetch</string>
 	</array>
+	<!-- Where a widget's `widgetURL` lands. Without a registered scheme the URL
+	     is not merely ignored — iOS has nothing to open it with, so the tap
+	     launches the app at whatever screen it was last on and nothing is
+	     logged anywhere. `DeepLink.scheme` is the Swift half; the two must
+	     agree. Deliberately unqualified rather than reverse-DNS: a self-hosted
+	     app is not claiming a public scheme, and this one only ever travels
+	     from this app's own extension back to itself. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.omnibus.mobile.deeplink</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>omnibus</string>
+			</array>
+		</dict>
+	</array>
 	<!-- Must list every identifier passed to BGTaskScheduler.register; an
 	     unlisted one throws at registration time rather than failing quietly. -->
 	<key>BGTaskSchedulerPermittedIdentifiers</key>

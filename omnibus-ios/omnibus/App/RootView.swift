@@ -7,6 +7,8 @@ struct RootView: View {
     @Environment(AppState.self) private var app
     @Environment(\.palette) private var palette
 
+    private var router: DeepLinkRouter { DeepLinkRouter.shared }
+
     var body: some View {
         ZStack {
             ScreenBackground()
@@ -26,7 +28,22 @@ struct RootView: View {
             }
         }
         .animation(Motion.glide, value: app.phase)
+        .onOpenURL { router.receive($0) }
+        // Keyed on both halves, so the order they arrive in doesn't matter: a
+        // cold launch from a widget delivers the URL first and reaches `.ready`
+        // second, while a tap with the app already open does the reverse.
+        .task(id: DeepLinkDelivery(phase: app.phase, link: router.pending)) {
+            guard app.phase == .ready else { return }
+            await router.deliverPending()
+        }
     }
+}
+
+/// The pair `.task` watches — a value type so SwiftUI can tell one delivery
+/// attempt from the next.
+private struct DeepLinkDelivery: Equatable {
+    let phase: AppState.Phase
+    let link: DeepLink?
 }
 
 /// Shown for the fraction of a second the store takes to open. Matches the
