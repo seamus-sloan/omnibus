@@ -9,7 +9,15 @@
  * chrome is real HTML so the page stays selectable, responsive and indexable.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400..700;1,400..700&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
+/* Self-hosted, so the page makes no third-party request. These are the OFL
+   faces already vendored for the iOS client under
+   omnibus-ios/omnibus/Design/Fonts/, re-compressed to woff2 — only the five
+   weights this stylesheet actually asks for. */
+@font-face{font-family:'Cormorant Garamond';font-style:normal;font-weight:600;font-display:swap;src:url('assets/fonts/CormorantGaramond-SemiBold.woff2') format('woff2')}
+@font-face{font-family:'Instrument Sans';font-style:normal;font-weight:400;font-display:swap;src:url('assets/fonts/InstrumentSans-Regular.woff2') format('woff2')}
+@font-face{font-family:'Instrument Sans';font-style:normal;font-weight:500;font-display:swap;src:url('assets/fonts/InstrumentSans-Medium.woff2') format('woff2')}
+@font-face{font-family:'Instrument Sans';font-style:normal;font-weight:600;font-display:swap;src:url('assets/fonts/InstrumentSans-SemiBold.woff2') format('woff2')}
+@font-face{font-family:'Space Mono';font-style:normal;font-weight:400;font-display:swap;src:url('assets/fonts/SpaceMono-Regular.woff2') format('woff2')}
 
 :root{
   --serif:'Cormorant Garamond','EB Garamond',Georgia,serif;

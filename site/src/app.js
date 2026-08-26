@@ -2,8 +2,9 @@
  *
  * Twelve full-viewport panels on one translated track. Wheel, keys and touch
  * all funnel through one gate so a trackpad's inertia can't skip three panels
- * at once. Nothing here is required to read the page: with JS off every panel
- * is still in the DOM and `.no-js` lets them stack and scroll normally.
+ * at once. Nothing here is required to read the page: the document ships with
+ * `body.flow` set, so with JS off every panel stays in the DOM as an ordinary
+ * stacked section. This script only ever opts *into* the deck.
  */
 (function () {
   'use strict';
@@ -23,9 +24,9 @@
   var WHEEL_THRESHOLD = 34;
   var SWIPE_PX = 42;
 
-  /* The deck only engages where it fits. The page ships in flow mode, so a
-     no-JS visit and a phone both get an ordinary scrolling document; this
-     opts into the locked panels and re-checks on resize. */
+  /* The deck only engages where it fits. The page ships with body.flow set, so
+     a no-JS visit and a phone both get an ordinary scrolling document; this
+     removes that class to opt in, and re-checks on resize. */
   var deckOK = window.matchMedia('(min-width: 861px) and (min-height: 560px)');
   var deck = false;
 
@@ -70,7 +71,13 @@
     b.setAttribute('aria-label', label);
     b.innerHTML = '<em></em><i></i>';
     b.querySelector('em').textContent = label;
-    b.addEventListener('click', function () { if (deck) go(k); else panes[k].scrollIntoView({ behavior: 'smooth' }); });
+    b.addEventListener('click', function () {
+      if (deck) { go(k); return; }
+      // the CSS drops every transition under reduced motion; a smooth scroll
+      // here would reintroduce exactly the motion that opts out
+      var still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      panes[k].scrollIntoView({ behavior: still ? 'auto' : 'smooth' });
+    });
     rail.appendChild(b);
   });
   var railBtns = Array.prototype.slice.call(rail.children);
