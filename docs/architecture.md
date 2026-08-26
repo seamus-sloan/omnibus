@@ -471,3 +471,20 @@ locally:
 xcodebuild test -project omnibus-ios/omnibus.xcodeproj -scheme omnibus \
   -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:omnibusTests
 ```
+## site/
+
+The marketing site at <https://seamus-sloan.github.io/omnibus/>. Not a crate and
+not part of any build — `site/src/` is plain HTML/CSS/JS copied verbatim to the
+`gh-pages` branch by [`.github/workflows/pages.yml`](../.github/workflows/pages.yml)
+on every push to `main` that touches it.
+
+| Path | Role |
+|---|---|
+| `src/index.html` | Twelve panels. All copy is real markup, never baked into an image. |
+| `src/site.css` | `--pg-*` chrome tokens, dark + sepia directions, and the `body.flow` fallback used below 861x560 and whenever JS is off. |
+| `src/app.js` | The panel deck — wheel/key/touch behind one gate, direction toggle, section rail. Progressive: the deck is opt-in, the page reads without it. |
+| `src/shots/` | App screenshots, WebP. Stills exported at 2x from the Claude Design "Omnibus" project and re-encoded by [`scripts/site-shots.sh`](../scripts/site-shots.sh); the PNGs are not committed. |
+
+Because the shots are stills, they are a picture of the *design*, not of what the
+server currently renders — they need re-exporting as redesigned surfaces ship.
+

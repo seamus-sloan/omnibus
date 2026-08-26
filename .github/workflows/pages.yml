@@ -1,0 +1,60 @@
+name: Pages
+
+# Publishes the marketing site (site/src/) to the `gh-pages` branch, which
+# GitHub Pages serves at https://seamus-sloan.github.io/omnibus/.
+#
+# The branch previously held the Playwright HTML report tree — one folder per
+# branch per sha, ~17k files, with the site root a redirect into the newest
+# `main` report. That publishing is gone (see e2e.yml), so this workflow owns
+# the branch outright and force-pushes a single-commit orphan: the tree is
+# exactly `site/src/`, and no report history accumulates behind it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One publisher, one branch. A queued run rebuilds from the newer commit
+# anyway, so cancelling an in-flight one loses nothing.
+concurrency:
+  group: gh-pages-publish
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: publish site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No build step: site/src/ is what gets served. `.nojekyll` keeps Pages
+      # from running Jekyll over it (which would drop any _-prefixed path).
+      - name: Publish site/src to gh-pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -f site/src/index.html
+
+          work="$(mktemp -d)"
+          cp -R site/src/. "$work/"
+          touch "$work/.nojekyll"
+
+          cd "$work"
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "site: publish ${GITHUB_SHA::7}"
+          git push -q --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            gh-pages
+
+          echo "published $(find . -type f -not -path './.git/*' | wc -l | tr -d ' ') files" >>"$GITHUB_STEP_SUMMARY"
+          echo "https://seamus-sloan.github.io/omnibus/" >>"$GITHUB_STEP_SUMMARY"

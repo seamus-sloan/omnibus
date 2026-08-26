@@ -1,0 +1,196 @@
+/* Omnibus — marketing site.
+ *
+ * Two colour directions: .dir-dark (matches the app) and .dir-sepia (warm
+ * paper). Page chrome uses --pg-* tokens so it never fights the app
+ * screenshots inside, which carry their own palette in the image.
+ *
+ * The framed screens are stills exported from the Claude Design "Omnibus"
+ * project at 2x. They are images, not live markup — every panel's copy and
+ * chrome is real HTML so the page stays selectable, responsive and indexable.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400..700;1,400..700&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
+
+:root{
+  --serif:'Cormorant Garamond','EB Garamond',Georgia,serif;
+  --sans:'Instrument Sans',ui-sans-serif,-apple-system,system-ui,sans-serif;
+  --mono:'Space Mono',ui-monospace,'SF Mono',monospace;
+}
+
+html,body{margin:0;height:100%;background:oklch(0.125 0.006 70)}
+body{overflow:hidden}
+body.flow{overflow:auto}
+
+.dir-dark{--pg-bg:oklch(0.125 0.006 70);--pg-panel:oklch(0.175 0.008 70);--pg-ink:oklch(0.97 0.006 80);--pg-ink2:oklch(0.74 0.012 72);--pg-ink3:oklch(0.55 0.012 70);--pg-line:oklch(0.45 0.012 70/0.34);--pg-accent:oklch(0.80 0.13 66);--pg-accent-ink:oklch(0.18 0.03 65);--pg-shadow:0 46px 90px -34px rgb(0 0 0/.85)}
+.dir-sepia{--pg-bg:oklch(0.930 0.025 75);--pg-panel:oklch(0.888 0.028 75);--pg-ink:oklch(0.215 0.020 58);--pg-ink2:oklch(0.395 0.022 54);--pg-ink3:oklch(0.545 0.022 54);--pg-line:oklch(0.46 0.024 54/0.32);--pg-accent:oklch(0.47 0.14 30);--pg-accent-ink:oklch(0.965 0.020 80);--pg-shadow:0 40px 70px -34px oklch(0.35 0.03 50/.45)}
+
+.site{position:fixed;inset:0;overflow:hidden;background:var(--pg-bg);color:var(--pg-ink);font-family:var(--sans);font-size:15px;line-height:1.5;letter-spacing:-0.005em;-webkit-font-smoothing:antialiased;--pad:clamp(26px,4.4vw,86px)}
+.site *,.site *::before,.site *::after{box-sizing:border-box}
+.site a{color:var(--pg-accent);text-decoration:none}
+.site a:hover{color:var(--pg-ink)}
+.site :is(h1,h2,h3){font-family:var(--serif);font-weight:600;margin:0;letter-spacing:-0.012em;color:var(--pg-ink);font-style:normal}
+.site p{margin:0}
+.site button{font:inherit;cursor:pointer}
+.site :focus-visible{outline:2px solid var(--pg-accent);outline-offset:3px;border-radius:4px}
+
+.track{position:absolute;left:0;right:0;top:0;will-change:transform;transition:transform .95s cubic-bezier(.72,0,.16,1)}
+.pane{position:relative;height:100vh;width:100%;overflow:hidden;padding:0 var(--pad)}
+.sec-inner{height:100%;display:grid;align-content:center;gap:clamp(18px,2.4vh,34px)}
+.sec-inner--split{gap:0}
+.sec-inner--stack{grid-template-rows:auto 1fr;align-content:stretch;padding:clamp(80px,12.5vh,140px) 0 clamp(30px,5vh,74px)}
+.sec-inner--faq{max-width:1280px;margin:0 auto;width:100%}
+
+/* ── type ─────────────────────────────────────────────────────── */
+.kick{font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--pg-accent)}
+.h1{font-family:var(--serif);font-weight:600;font-size:clamp(40px,min(5.9vw,9.4vh),102px);line-height:0.96;letter-spacing:-0.018em;text-wrap:balance}
+.h2{font-family:var(--serif);font-weight:600;font-size:clamp(32px,min(4vw,6.4vh),64px);line-height:1.0;letter-spacing:-0.015em;text-wrap:balance}
+.lede{font-size:clamp(15px,min(1.24vw,2.1vh),19px);line-height:1.55;color:var(--pg-ink2);max-width:46ch;text-wrap:pretty}
+.rule{height:1px;background:var(--pg-line);border:0;margin:0}
+
+.pts{display:flex;flex-direction:column;gap:clamp(10px,1.5vh,18px);max-width:44ch;margin:0;padding:0;list-style:none}
+.pts li{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:baseline;font-size:clamp(13.5px,min(1.05vw,1.85vh),16px);color:var(--pg-ink2);line-height:1.45}
+.pts li::before{content:'';width:16px;height:1px;background:var(--pg-accent);transform:translateY(-4px)}
+.pts b{color:var(--pg-ink);font-weight:600}
+
+.cta{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.site a.sbtn{white-space:nowrap;display:inline-flex;align-items:center;gap:9px;height:46px;padding:0 20px;border-radius:999px;border:1px solid transparent;background:var(--pg-accent);color:var(--pg-accent-ink);font-weight:600;font-size:14px;transition:transform .14s,filter .16s}
+.site a.sbtn:hover{filter:brightness(1.08);transform:translateY(-1px);color:var(--pg-accent-ink)}
+.site a.sbtn.ghost{background:transparent;color:var(--pg-ink);border-color:var(--pg-line)}
+.site a.sbtn.ghost:hover{border-color:var(--pg-ink3);filter:none;color:var(--pg-ink)}
+.sbtn .star{font-size:15px;line-height:1}
+.meta{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--pg-ink3);display:flex;flex-wrap:wrap;gap:8px 16px}
+
+/* ── chrome ───────────────────────────────────────────────────── */
+.site-top{position:fixed;top:0;left:0;right:0;z-index:30;display:flex;align-items:center;gap:16px;padding:18px var(--pad)}
+.site-brand{display:flex;align-items:center;gap:10px}
+.site-brand i{width:26px;height:26px;background:url("assets/omnibus-otter.png") center/contain no-repeat}
+.dir-sepia .site-brand i{filter:saturate(.9) brightness(.55)}
+.site-brand span{font-family:var(--serif);font-size:24px;font-weight:600;letter-spacing:-0.015em;line-height:1}
+.site-top .spacer{flex:1}
+.dirtog{display:inline-flex;padding:3px;border:1px solid var(--pg-line);border-radius:999px;gap:2px;background:color-mix(in oklch,var(--pg-bg) 70%,transparent);backdrop-filter:blur(8px)}
+.dirtog button{border:0;background:transparent;color:var(--pg-ink3);font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;padding:6px 12px;border-radius:999px;transition:color .15s,background .15s}
+.dirtog button.on{background:var(--pg-ink);color:var(--pg-bg)}
+.dirtog button:hover{color:var(--pg-ink)}
+.site a.top-star{white-space:nowrap;display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 15px;border:1px solid var(--pg-line);border-radius:999px;color:var(--pg-ink);font-size:12.5px;font-weight:500}
+.site a.top-star:hover{border-color:var(--pg-accent);color:var(--pg-ink)}
+
+.rail{position:fixed;right:calc(var(--pad) * .42);top:50%;transform:translateY(-50%);z-index:30;display:flex;flex-direction:column;gap:13px;align-items:flex-end}
+.rail button{border:0;background:transparent;padding:0;display:flex;align-items:center;gap:9px;color:var(--pg-ink3)}
+.rail em{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;font-style:normal;opacity:0;transition:opacity .2s}
+.rail i{display:block;width:20px;height:2px;background:currentColor;opacity:.42;transition:opacity .2s,width .25s,background .2s}
+.rail button:hover em,.rail button:focus-visible em{opacity:1}
+.rail button:hover i{opacity:.8}
+.rail button.on{color:var(--pg-accent)}
+.rail button.on i{opacity:1;width:34px}
+.rail button.on em{opacity:1}
+
+.cue{position:fixed;left:var(--pad);bottom:24px;z-index:30;display:flex;flex-direction:column;align-items:flex-start;gap:8px;font-family:var(--mono);font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--pg-ink3);transition:opacity .5s}
+.cue i{display:block;width:1px;height:26px;margin-left:6px;background:linear-gradient(var(--pg-ink3),transparent);animation:cuepulse 2.2s ease-in-out infinite}
+@keyframes cuepulse{0%,100%{opacity:.25;transform:translateY(-3px)}50%{opacity:1;transform:translateY(3px)}}
+.cue.hide{opacity:0;pointer-events:none}
+
+/* ── framed screenshots ───────────────────────────────────────────
+   Every framed box declares its shot's aspect as --ar, so the BOX owns the
+   sizing and the image just fills it. Letting the image size itself instead
+   is the bug this replaced: `max-width` binds first, the height that implies
+   wins over `height:100%`, and a tall phone shot overflows its row. */
+.frame,.phone{aspect-ratio:var(--ar);height:100%;width:auto;max-width:100%;margin:0 auto}
+.frame{position:relative;border:1px solid var(--pg-line);border-radius:14px;overflow:hidden;background:var(--pg-panel);box-shadow:var(--pg-shadow)}
+.shot{display:block;width:100%;height:100%;object-fit:cover;object-position:center top}
+.frame--fill{width:100%;height:100%}
+
+/* hero — the one screen shown in perspective, bleeding off the right edge */
+.hero{display:grid;grid-template-columns:minmax(360px,42%) 1fr;align-items:center;gap:clamp(24px,4vw,72px)}
+.hero-copy{display:grid;gap:clamp(14px,2.2vh,28px);align-content:center;position:relative;z-index:2}
+.hero-shot{position:absolute;left:44%;right:calc(var(--pad) * -1.1);top:7%;bottom:auto;perspective:2200px}
+.hero-shot .frame{position:absolute;left:0;right:0;top:0;height:auto;width:auto;max-width:none;margin:0;background:transparent;border-bottom:0;border-radius:14px 14px 0 0;transform:rotateX(5deg) rotateY(-11deg) rotateZ(0.6deg) scale(1.04);transform-origin:left center;-webkit-mask-image:linear-gradient(to bottom,#000 0,#000 68%,rgba(0,0,0,.5) 87%,transparent 100%);mask-image:linear-gradient(to bottom,#000 0,#000 68%,rgba(0,0,0,.5) 87%,transparent 100%)}
+
+/* two-up: copy beside a screen */
+.split{display:grid;grid-template-columns:minmax(300px,34%) 1fr;gap:clamp(24px,3.6vw,64px);align-items:center;height:100%;padding:clamp(70px,11vh,120px) 0 clamp(48px,8vh,90px)}
+.split--flip{grid-template-columns:1fr minmax(300px,33%)}
+.split-copy{display:grid;gap:clamp(12px,2vh,24px);align-content:center}
+.split-vis{position:relative;height:100%;min-height:0;display:grid;place-items:center}
+.inset-shot{position:absolute;left:-5%;bottom:-4%;width:46%;z-index:5}
+
+/* the theme strip is one image; its four labels are baked in */
+.themes-in{grid-template-rows:auto 1fr;align-content:stretch;padding:clamp(78px,12vh,124px) 0 clamp(26px,4.5vh,58px);gap:clamp(14px,2.4vh,30px)}
+.themes-copy{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:6px clamp(28px,4.5vw,80px);align-items:end}
+.themes-copy .kick{grid-column:1/-1}
+.themes-copy .lede{max-width:52ch;align-self:end}
+.themes-vis{position:relative;min-height:0;display:grid;place-items:center}
+
+/* phone rows */
+.phones{display:flex;align-items:center;justify-content:center;gap:clamp(24px,4vw,76px);height:100%;min-height:0}
+.trio{display:flex;align-items:center;justify-content:center;gap:clamp(12px,2.2vw,40px);height:100%;min-height:0}
+.phones>div,.trio>div{min-width:0;height:100%;display:grid;grid-template-rows:1fr auto}
+.trio>div{flex:0 1 320px}
+.phones>div{flex:0 1 440px}
+.phone{min-height:0;overflow:hidden;border-radius:22px}
+.phone .shot{object-fit:contain;object-position:center}
+.phone-cap{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--pg-ink3);text-align:center;margin-top:16px;min-height:2.4em}
+
+/* side-by-side desktop screens */
+.duo{display:flex;align-items:stretch;justify-content:center;gap:clamp(16px,2.6vw,48px);height:100%;min-height:0}
+.duo>div{flex:1 1 0;min-width:0;height:100%;display:grid;grid-template-rows:1fr auto}
+.duo .shotwrap{position:relative;min-height:0;display:grid;place-items:center}
+
+/* centred copy blocks */
+.center-copy{display:grid;gap:clamp(10px,1.7vh,20px);justify-items:center;text-align:center;margin:0 auto;width:100%}
+.center-copy>:is(h1,h2,p){justify-self:center;width:100%;margin-inline:auto}
+
+/* faq */
+.faq{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(18px,3vh,40px) clamp(28px,4vw,72px);max-width:1180px}
+.faq-q{font-family:var(--serif);font-size:clamp(19px,min(1.6vw,2.9vh),27px);line-height:1.12;letter-spacing:-0.01em;color:var(--pg-ink)}
+.faq-a{margin-top:9px;font-size:clamp(13px,min(1.02vw,1.75vh),15.5px);color:var(--pg-ink2);line-height:1.5;text-wrap:pretty;max-width:48ch}
+.faq-a code{font-family:var(--mono);font-size:.9em;color:var(--pg-ink)}
+
+/* close */
+.close-in{display:grid;justify-items:center;text-align:center;gap:clamp(16px,2.6vh,32px);max-width:900px;margin:0 auto}
+.close-in>:is(h1,h2,p){justify-self:center;width:100%;margin-inline:auto}
+.cmd{font-family:var(--mono);font-size:13px;color:var(--pg-ink);background:color-mix(in oklch,var(--pg-panel) 80%,transparent);border:1px solid var(--pg-line);border-radius:10px;padding:11px 18px;display:inline-flex;gap:10px;align-items:center;width:auto!important}
+.cmd s{text-decoration:none;color:var(--pg-accent)}
+
+/* ── entrance ─────────────────────────────────────────────────── */
+[data-anim]{opacity:0;transform:translateY(22px);transition:opacity .85s cubic-bezier(.2,.7,.2,1),transform .85s cubic-bezier(.2,.7,.2,1);transition-delay:var(--d,0ms)}
+.pane.on [data-anim]{opacity:1;transform:none}
+
+/* ── flow mode: narrow viewports, and any no-JS visit ─────────────
+   The deck is a desktop conceit — twelve locked 100vh panels on a phone is a
+   trap. Below the breakpoint (and with JS off) the panels become ordinary
+   stacked sections that scroll, and every [data-anim] is shown outright. */
+body.flow .site{position:static;overflow:visible;height:auto}
+body.flow .track{position:static;transform:none!important;transition:none}
+body.flow .pane{height:auto;min-height:0;overflow:visible;padding-top:clamp(72px,14vh,120px);padding-bottom:clamp(48px,10vh,96px)}
+body.flow .sec-inner{height:auto;padding:0}
+body.flow .rail,body.flow .cue{display:none}
+body.flow [data-anim]{opacity:1;transform:none;transition:none}
+body.flow .site-top{position:sticky;background:color-mix(in oklch,var(--pg-bg) 88%,transparent);backdrop-filter:blur(10px)}
+body.flow .hero{grid-template-columns:1fr}
+body.flow .hero-shot{position:static;perspective:none;margin-top:28px}
+body.flow .hero-shot .frame{position:static;transform:none;mask-image:none;-webkit-mask-image:none;border-bottom:1px solid var(--pg-line);border-radius:14px;background:var(--pg-panel)}
+body.flow .split,body.flow .split--flip{grid-template-columns:1fr;height:auto;padding:0;gap:28px}
+body.flow .split--flip .split-vis{order:2}
+body.flow .split-vis,body.flow .themes-vis{height:auto}
+body.flow .inset-shot{position:static;width:76%;margin:-6% auto 0}
+body.flow .themes-copy{grid-template-columns:1fr}
+body.flow .phones,body.flow .trio,body.flow .duo{flex-direction:column;height:auto;gap:36px}
+body.flow .phones>div,body.flow .trio>div,body.flow .duo>div{height:auto;flex:none;width:100%;max-width:380px;margin:0 auto}
+body.flow .frame,body.flow .phone{height:auto;width:100%}
+body.flow .duo>div{max-width:640px}
+body.flow .duo .frame{height:auto;width:100%}
+body.flow .faq{grid-template-columns:1fr}
+
+/* the top bar runs out of room before the hero does: the Star link is a
+   duplicate of the hero CTA, so it is the one that goes */
+@media (max-width:560px){
+  .site-top{gap:10px;padding:14px var(--pad)}
+  .site a.top-star{display:none}
+  .site-brand span{font-size:21px}
+  .dirtog button{padding:6px 10px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .track{transition:none}
+  [data-anim]{transition:none;opacity:1;transform:none}
+  .cue i{animation:none}
+}

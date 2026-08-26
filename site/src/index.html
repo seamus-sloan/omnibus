@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Omnibus — a library that belongs entirely to you</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Omnibus is a self-hosted ebook and audiobook library. It indexes the books already on your disk and gives them a cover wall, a reader that keeps your place, and a player that knows its chapters.">
+<meta property="og:title" content="Omnibus — a library that belongs entirely to you">
+<meta property="og:description" content="A self-hosted ebook &amp; audiobook library. Point it at the folder you already have.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="shots/omnibus-library-home.webp">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/omnibus-otter.png">
+<link rel="preload" as="image" href="shots/omnibus-library-home.webp">
+<link rel="stylesheet" href="site.css">
+</head>
+<body class="flow">
+<div class="site dir-dark" id="site">
+
+  <header class="site-top">
+    <div class="site-brand"><i></i><span>Omnibus</span></div>
+    <div class="spacer"></div>
+    <div class="dirtog" role="group" aria-label="Colour direction">
+      <button type="button" data-dir="dark" class="on">Dark</button>
+      <button type="button" data-dir="sepia">Sepia</button>
+    </div>
+    <a class="top-star" href="https://github.com/seamus-sloan/omnibus" target="_blank" rel="noreferrer">★ Star</a>
+  </header>
+
+  <nav class="rail" aria-label="Sections"></nav>
+
+  <div class="track" id="track">
+
+    <!-- 1 · hero -->
+    <section class="pane on" id="hero" data-label="Omnibus">
+      <div class="sec-inner hero">
+        <div class="hero-copy">
+          <p class="kick" data-anim>Self-hosted ebook &amp; audiobook library</p>
+          <h1 class="h1" data-anim style="--d:70ms">A library that belongs entirely to you.</h1>
+          <p class="lede" data-anim style="--d:140ms">Omnibus indexes the books already sitting on your disk and gives them a home: a cover wall you can browse, a reader that keeps your place, a player that knows its chapters, and no account anywhere except your own server.</p>
+          <div class="cta" data-anim style="--d:200ms">
+            <a class="sbtn" href="https://github.com/seamus-sloan/omnibus" target="_blank" rel="noreferrer"><span class="star">★</span>Star on GitHub</a>
+            <a class="sbtn ghost" href="https://github.com/seamus-sloan/omnibus" target="_blank" rel="noreferrer">Read the source</a>
+          </div>
+          <p class="meta" data-anim style="--d:260ms"><span>EPUB · M4B · MP3</span></p>
+        </div>
+        <div class="hero-shot" data-anim style="--d:300ms">
+          <figure class="frame frame--top" style="--ar:1442/902">
+            <img class="shot" src="shots/omnibus-library-home.webp" width="1442" height="902" alt="The Omnibus library home: a continue-reading fan of four open books above a shelf row and a wall of cover art.">
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2 · themes -->
+    <section class="pane" id="themes" data-label="Themes">
+      <div class="sec-inner themes-in">
+        <div class="themes-copy">
+          <p class="kick" data-anim>Themes</p>
+          <h2 class="h2" data-anim style="--d:70ms">The same shelf, four ways.</h2>
+          <p class="lede" data-anim style="--d:130ms">Dark, black, white, sepia. Pick one and it follows you everywhere — library, reader, player, phone.</p>
+        </div>
+        <div class="themes-vis" data-anim style="--d:200ms">
+          <figure class="frame frame--fill" style="--ar:1442/1002">
+            <img class="shot" src="shots/omnibus-themes-strip.webp" width="1442" height="1002" alt="One library screen sliced diagonally into four colour themes: dark, black, white and sepia.">
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3 · read -->
+    <section class="pane" id="read" data-label="Read">
+      <div class="sec-inner sec-inner--split">
+        <div class="split">
+          <div class="split-copy">
+            <p class="kick" data-anim>Read</p>
+            <h2 class="h2" data-anim style="--d:70ms">A reader that keeps your place.</h2>
+            <ul class="pts" data-anim style="--d:130ms">
+              <li><span><b>Progress lives on the server.</b> The page you left on the laptop is the page your phone opens.</span></li>
+              <li><span><b>Highlight a passage</b> and share it as a quote card in a tap.</span></li>
+              <li><span><b>Send to your device.</b> Push any book to a Kobo or Kindle — no Calibre round-trip.</span></li>
+            </ul>
+            <div class="cta" data-anim style="--d:190ms">
+              <a class="sbtn ghost" href="https://github.com/seamus-sloan/omnibus" target="_blank" rel="noreferrer">See the reader code</a>
+            </div>
+          </div>
+          <div class="split-vis" data-anim style="--d:230ms">
+            <figure class="frame" style="--ar:1442/982">
+              <img class="shot" src="shots/omnibus-reader-quote-card.webp" width="1442" height="982" alt="The EPUB reader with a highlighted passage and the quote-card composer open beside it.">
+            </figure>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4 · listen -->
+    <section class="pane" id="listen" data-label="Listen">
+      <div class="sec-inner sec-inner--split">
+        <div class="split split--flip">
+          <div class="split-vis" data-anim>
+            <figure class="frame" style="--ar:1442/902">
+              <img class="shot" src="shots/omnibus-player.webp" width="1442" height="902" alt="The audiobook player: cover art, chapter map, and transport controls.">
+            </figure>
+          </div>
+          <div class="split-copy">
+            <p class="kick" data-anim style="--d:80ms">Listen</p>
+            <h2 class="h2" data-anim style="--d:140ms">Audiobooks with a chapter map.</h2>
+            <ul class="pts" data-anim style="--d:200ms">
+              <li><span><b>Streamed, not downloaded.</b> HLS transcode on the fly — start on the commute, finish in the kitchen.</span></li>
+              <li><span><b>Chapter map, speed, sleep timer.</b> The controls you actually reach for, one row deep.</span></li>
+              <li><span><b>One book, both formats.</b> Read forty pages, listen for an hour; the record stays in one place.</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5 · sync -->
+    <section class="pane" id="sync" data-label="Sync">
+      <div class="sec-inner sec-inner--split">
+        <div class="split">
+          <div class="split-copy">
+            <p class="kick" data-anim>Format sync</p>
+            <h2 class="h2" data-anim style="--d:70ms">One book, two formats, one position.</h2>
+            <ul class="pts" data-anim style="--d:130ms">
+              <li><span><b>Link the EPUB to its audiobook</b> and the book keeps a single place: read to chapter 14, the player opens at 4:12:38.</span></li>
+              <li><span><b>Chapter anchors when the files have them,</b> percentage when they don’t — and it says which one it used, and how confident it is.</span></li>
+              <li><span><b>One resume card instead of two,</b> led by whichever format you touched last.</span></li>
+            </ul>
+          </div>
+          <div class="split-vis" data-anim style="--d:210ms">
+            <figure class="frame" style="--ar:1442/802">
+              <img class="shot" src="shots/omnibus-sync-alignment.webp" width="1442" height="802" alt="The Link formats dialog, mapping an ebook’s chapters onto its audiobook timeline.">
+            </figure>
+            <figure class="frame inset-shot" data-anim style="--ar:1442/382;--d:360ms">
+              <img class="shot" src="shots/omnibus-sync-continue-hero.webp" width="1442" height="382" alt="A single continue card marked synced, offering Immersive, Read and Listen.">
+            </figure>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6 · kobo -->
+    <section class="pane" id="kobo" data-label="Kobo">
+      <div class="sec-inner sec-inner--split">
+        <div class="split split--flip">
+          <div class="split-vis" data-anim>
+            <figure class="frame" style="--ar:1442/1002">
+              <img class="shot" src="shots/omnibus-shelf-kobo.webp" width="1442" height="1002" alt="The smart-shelf editor: a Fantasy tag rule matching six books, with Sync to Kobo switched on.">
+            </figure>
+          </div>
+          <div class="split-copy">
+            <p class="kick" data-anim style="--d:80ms">Kobo</p>
+            <h2 class="h2" data-anim style="--d:140ms">Your shelves, on your Kobo.</h2>
+            <ul class="pts" data-anim style="--d:200ms">
+              <li><span><b>A shelf becomes a collection.</b> Flip sync on and the device sees that shelf — reading state comes back the same way.</span></li>
+              <li><span><b>KEPUB, not just EPUB.</b> Files convert through kepubify at sync time and stay cached until the book changes.</span></li>
+              <li><span><b>Kindle by email, OPDS for the rest,</b> and an OPF export of your metadata for the day you want out.</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7 · kindle -->
+    <section class="pane" id="kindle" data-label="Kindle">
+      <div class="sec-inner sec-inner--split">
+        <div class="split">
+          <div class="split-copy">
+            <p class="kick" data-anim>Kindle</p>
+            <h2 class="h2" data-anim style="--d:70ms">And the Kindle in your bag.</h2>
+            <ul class="pts" data-anim style="--d:130ms">
+              <li><span><b>The EPUB itself gets sent.</b></span></li>
+              <li><span><b>Set SMTP once.</b> The admin configures it in settings, each reader saves their own send-to address, and every book page grows a Send button.</span></li>
+              <li><span><b>Sends run in the background.</b> The job queues on the worker, so the page never waits and the file on disk is never touched.</span></li>
+            </ul>
+          </div>
+          <div class="split-vis" data-anim style="--d:210ms">
+            <figure class="frame" style="--ar:1442/902">
+              <img class="shot" src="shots/omnibus-book-detail.webp" width="1442" height="902" alt="A book page for The Name of the Wind, with resume, listen and read-status controls.">
+            </figure>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8 · check-in -->
+    <section class="pane" id="checkin" data-label="Check-in">
+      <div class="sec-inner sec-inner--stack">
+        <div class="center-copy" style="max-width:720px">
+          <p class="kick" data-anim>Check-in</p>
+          <h2 class="h2" data-anim style="--d:70ms">The shelf you can actually touch.</h2>
+          <p class="lede" data-anim style="--d:130ms;max-width:58ch;margin:0 auto">Scan the barcode of a physical book. Omnibus matches it against your library — ISBN first, then title and author. Own it in print? Check the copy in. Don’t own it yet? It lands on the wishlist with the day you found it, and no invented progress.</p>
+        </div>
+        <div class="trio">
+          <div>
+            <div class="phone" data-anim style="--ar:382/822;--d:190ms">
+              <img class="shot" src="shots/omnibus-checkin-scan.webp" width="382" height="822" alt="The check-in scanner lining up a book’s barcode.">
+            </div>
+            <p class="phone-cap" data-anim style="--d:250ms">Scan a barcode</p>
+          </div>
+          <div>
+            <div class="phone" data-anim style="--ar:382/822;--d:270ms">
+              <img class="shot" src="shots/omnibus-checkin-success.webp" width="382" height="822" alt="A scanned book confirmed as physically owned, offering Scan another or View book.">
+            </div>
+            <p class="phone-cap" data-anim style="--d:330ms">Check the copy in</p>
+          </div>
+          <div>
+            <div class="phone" data-anim style="--ar:404/876;--d:350ms">
+              <img class="shot" src="shots/omnibus-wishlist-ios.webp" width="404" height="876" alt="A wishlist book on iOS, tracking since the day it was found, with Find a copy.">
+            </div>
+            <p class="phone-cap" data-anim style="--d:410ms">Or track it on the wishlist</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 9 · mobile -->
+    <section class="pane" id="mobile" data-label="Mobile">
+      <div class="sec-inner sec-inner--stack">
+        <div class="center-copy" style="max-width:680px">
+          <p class="kick" data-anim>Mobile</p>
+          <h2 class="h2" data-anim style="--d:70ms">In your pocket, on your server.</h2>
+          <p class="lede" data-anim style="--d:130ms;max-width:54ch;margin:0 auto">A native SwiftUI app on iOS and a WebView shell on Android, both speaking to the same backend. Same library, same progress, same theme.</p>
+        </div>
+        <div class="phones">
+          <div>
+            <div class="phone" data-anim style="--ar:404/876;--d:190ms">
+              <img class="shot" src="shots/omnibus-ios-book-detail.webp" width="404" height="876" alt="A book page in the native iOS app, resuming at chapter four.">
+            </div>
+            <p class="phone-cap" data-anim style="--d:250ms">iOS · native SwiftUI</p>
+          </div>
+          <div>
+            <div class="phone" data-anim style="--ar:382/802;--d:280ms">
+              <img class="shot" src="shots/omnibus-android-library.webp" width="382" height="802" alt="The library on Android, with a continue card and a wall of covers.">
+            </div>
+            <p class="phone-cap" data-anim style="--d:340ms">Android · WebView shell</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10 · scanning -->
+    <section class="pane" id="scan" data-label="Scanning">
+      <div class="sec-inner sec-inner--stack">
+        <div class="center-copy" style="max-width:900px">
+          <p class="kick" data-anim>Scanning</p>
+          <h2 class="h2" data-anim style="--d:70ms">Point it at a folder. It walks the rest.</h2>
+          <p class="lede" data-anim style="--d:130ms;max-width:74ch;margin:0 auto">The scanner recurses through whatever you already have — nested author and series trees, loose files, mixed formats — and reads each book’s metadata out of the file itself. What you then edit lives in the database, not in your books: originals are never rewritten, and the current values ride along on anything you export or send to a device.</p>
+        </div>
+        <div class="duo">
+          <div>
+            <div class="shotwrap" data-anim style="--d:190ms">
+              <figure class="frame" style="--ar:1442/1102">
+                <img class="shot" src="shots/omnibus-settings-library.webp" width="1442" height="1102" alt="Settings showing the ebook and audiobook library paths and a scan in progress.">
+              </figure>
+            </div>
+            <p class="phone-cap" data-anim style="--d:250ms">Settings · Library Location</p>
+          </div>
+          <div>
+            <div class="shotwrap" data-anim style="--d:280ms">
+              <figure class="frame" style="--ar:1442/1102">
+                <img class="shot" src="shots/omnibus-metadata-edit.webp" width="1442" height="1102" alt="The metadata editor for a book, with edited fields marked and a save bar counting them.">
+              </figure>
+            </div>
+            <p class="phone-cap" data-anim style="--d:340ms">Edit metadata</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 11 · questions -->
+    <section class="pane" id="faq" data-label="Questions">
+      <div class="sec-inner sec-inner--faq">
+        <p class="kick" data-anim>Questions</p>
+        <h2 class="h2" data-anim style="--d:70ms;max-width:18ch">Before you clone it.</h2>
+        <hr class="rule" data-anim style="--d:110ms">
+        <div class="faq">
+          <div data-anim style="--d:150ms">
+            <p class="faq-q">Does it work with my existing Calibre folders?</p>
+            <p class="faq-a">Point Omnibus at the folder you already have. The <code>Author/Title</code> layout scans as-is, metadata is read from inside each EPUB rather than Calibre’s <code>metadata.opf</code> sidecar, and nothing on disk is moved or renamed.</p>
+          </div>
+          <div data-anim style="--d:220ms">
+            <p class="faq-q">Do I need a beefy server?</p>
+            <p class="faq-a">No. A 4GB Raspberry Pi is more than enough. One Rust binary, SQLite, and a bind-mount — it runs on the machine you already own. Audio is transcoded on demand, so leave a little CPU headroom if the whole house listens at once.</p>
+          </div>
+          <div data-anim style="--d:290ms">
+            <p class="faq-q">Does it read DRM-locked files?</p>
+            <p class="faq-a">No, and it won’t pretend to. Omnibus opens the EPUBs and audiobooks you own outright; locked files stay locked and nothing gets stripped.</p>
+          </div>
+          <div data-anim style="--d:360ms">
+            <p class="faq-q">Why not just use Calibre-web or Audiobookshelf?</p>
+            <p class="faq-a">Omnibus allows you to read and listen to your digital library and keep in sync with all your different devices (kobo, web, mobile). Mobile apps for Calibre-Web and Audiobookshelf only exist in third-party forms.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 12 · close -->
+    <section class="pane" id="close" data-label="Get it">
+      <div class="sec-inner">
+        <div class="close-in">
+          <p class="kick" data-anim>Open source</p>
+          <h2 class="h1" data-anim style="--d:70ms;max-width:20ch">Your books. Your machine. Your call.</h2>
+          <p class="lede" data-anim style="--d:130ms;text-align:center;max-width:52ch">Point Omnibus at your existing digital library and try it out; Omnibus doesn’t tamper with any of your files or folder structure.</p>
+          <p class="cmd" data-anim style="--d:190ms"><s>$</s>docker compose up -d</p>
+          <div class="cta" data-anim style="--d:240ms;justify-content:center">
+            <a class="sbtn" href="https://github.com/seamus-sloan/omnibus" target="_blank" rel="noreferrer"><span class="star">★</span>Star on GitHub</a>
+            <a class="sbtn ghost" href="https://github.com/seamus-sloan/omnibus/blob/main/docs/docker.md" target="_blank" rel="noreferrer">Deployment docs</a>
+          </div>
+          <p class="meta" data-anim style="--d:300ms;justify-content:center;margin-top:8px"><span>github.com/seamus-sloan/omnibus</span></p>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <p class="cue" id="cue">Scroll<i></i></p>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
