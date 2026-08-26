@@ -3,54 +3,17 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+use crate::test_support::build_m4b_with_chapters;
+
 use super::*;
 
-/// Build a minimal MP4 file with a Nero `chpl` atom containing the given
-/// chapter entries. Returns the path to a temp file.
+/// Write a Nero-`chpl` M4B fixture to a temp file. The bytes come from
+/// `test_support::build_m4b_with_chapters`; this only lands them on disk,
+/// since `extract_chapters` takes a path.
 fn make_chpl_fixture(chapters: &[(u64, &str)]) -> (tempfile::NamedTempFile, PathBuf) {
-    let mut chpl_body = Vec::new();
-    // version=0, flags=0x000000
-    chpl_body.extend_from_slice(&[0u8; 4]);
-    // chapter count (u32 BE for version 0)
-    chpl_body.extend_from_slice(&(chapters.len() as u32).to_be_bytes());
-    for (start_100ns, title) in chapters {
-        chpl_body.extend_from_slice(&start_100ns.to_be_bytes());
-        let title_bytes = title.as_bytes();
-        chpl_body.push(title_bytes.len() as u8);
-        chpl_body.extend_from_slice(title_bytes);
-    }
-
-    let chpl_size = (8 + chpl_body.len()) as u32;
-    let mut chpl_box = Vec::new();
-    chpl_box.extend_from_slice(&chpl_size.to_be_bytes());
-    chpl_box.extend_from_slice(b"chpl");
-    chpl_box.extend_from_slice(&chpl_body);
-
-    let udta_size = (8 + chpl_box.len()) as u32;
-    let mut udta_box = Vec::new();
-    udta_box.extend_from_slice(&udta_size.to_be_bytes());
-    udta_box.extend_from_slice(b"udta");
-    udta_box.extend_from_slice(&chpl_box);
-
-    let moov_size = (8 + udta_box.len()) as u32;
-    let mut moov_box = Vec::new();
-    moov_box.extend_from_slice(&moov_size.to_be_bytes());
-    moov_box.extend_from_slice(b"moov");
-    moov_box.extend_from_slice(&udta_box);
-
-    // Prepend a minimal ftyp box so the file looks like a real MP4
-    let mut ftyp = Vec::new();
-    let ftyp_size: u32 = 16; // 8 header + 4 brand + 4 minor
-    ftyp.extend_from_slice(&ftyp_size.to_be_bytes());
-    ftyp.extend_from_slice(b"ftyp");
-    ftyp.extend_from_slice(b"M4B ");
-    ftyp.extend_from_slice(&0u32.to_be_bytes());
-
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(&ftyp).unwrap();
-    file.write_all(&moov_box).unwrap();
+    file.write_all(&build_m4b_with_chapters(chapters)).unwrap();
     file.flush().unwrap();
-
     let path = file.path().to_path_buf();
     (file, path)
 }
