@@ -270,12 +270,30 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           set -euo pipefail
+          # An empty secret otherwise writes a zero-byte .p8 and surfaces as an
+          # opaque altool authentication error rather than a named cause.
+          if [ -z "$ASC_API_KEY_BASE64" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ]; then
+            echo "::error::One of ASC_API_KEY_BASE64 / ASC_KEY_ID / ASC_ISSUER_ID is unset."
+            exit 1
+          fi
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
           echo "$ASC_API_KEY_BASE64" | base64 -D > "$KEY_PATH"
+          trap 'rm -f "$KEY_PATH"' EXIT
+
+          # Validate before uploading. `--upload-app` only proves the bytes
+          # arrived: everything appex-specific — entitlement validity, asset
+          # catalogue completeness, device-family and MinimumOSVersion
+          # agreement between the app and its extension — is checked
+          # asynchronously afterwards and reported by email. Without this the
+          # run goes green and the build simply never appears in TestFlight,
+          # which is indistinguishable from success right up until someone
+          # goes looking for it.
+          xcrun altool --validate-app -f "$GITHUB_WORKSPACE/omnibus-ios.ipa" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+
           xcrun altool --upload-app -f "$GITHUB_WORKSPACE/omnibus-ios.ipa" -t ios \
             --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
-          rm -f "$KEY_PATH"
 
       - name: Upload .ipa artifact
         if: always()
