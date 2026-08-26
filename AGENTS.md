@@ -12,6 +12,11 @@ regardless of which agent or tool you are:
   content validators, keep-skills-fresh, end-of-session).
 - **[.claude/skills/](.claude/skills/)** — task recipes: `add-backend-route`,
   `add-playwright-flow`, `create-github-issue`, `ui-validate`.
+- **[docs/feature-map-web.md](docs/feature-map-web.md)** /
+  **[docs/feature-map-ios.md](docs/feature-map-ios.md)** — start here to locate
+  code: one row per feature, listing the files it spans. They cover features,
+  not every file, so fall through to `architecture.md` and then `grep` when a
+  row comes up short.
 - **[docs/architecture.md](docs/architecture.md)** — the five-crate
   workspace map (per-crate module maps + request-flow diagrams).
 

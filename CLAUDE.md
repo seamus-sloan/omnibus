@@ -4,6 +4,20 @@ Guidance for Claude Code when working in this repo. This file is an index — de
 
 Omnibus is a self-hosted ebook/audiobook library. Foundations and browse/discovery have shipped; reading/listening is in progress — the UI is a real library app (landing grid + table, EPUB reader, audiobook player, command-palette search, auth, author/series/tag discovery).
 
+## Finding code
+
+**Start with the feature maps.** They answer "where does X live" — one row per user-visible feature, listing every file it spans across the stack.
+
+- [docs/feature-map-web.md](docs/feature-map-web.md) — the web app, and the Android WebView shell that renders the same markup: `shared/` → `db/` → `server/` → `frontend/` per feature, plus the Playwright spec that covers it.
+- [docs/feature-map-ios.md](docs/feature-map-ios.md) — the native SwiftUI client: views, service, REST route, offline contract, and test per feature.
+
+**They are a starting point, not a complete index — look elsewhere when they fall short.** A cell names the module that owns a concern, not always the exact file, and only user-visible features get rows. If what you need isn't listed, the row is thinner than you need, or it looks like it has drifted, fall through to:
+
+1. [docs/architecture.md](docs/architecture.md) — the per-crate module map, with the design rationale behind each module.
+2. `grep` / `Glob` over the tree — always authoritative. The maps are hand-maintained and can lag a rename.
+
+Trust the code over either document, and update the map in the same change when you find it stale (rule [98](.claude/rules/98-keep-skills-fresh.md)).
+
 ## Rules
 
 Numbered rules in [.claude/rules/](.claude/rules/), applied in order. Follow them mechanically.
@@ -43,7 +57,7 @@ Five-crate Cargo workspace: `shared/` (serde types), `db/` (data layer + indexer
 
 Alongside it, `omnibus-ios/` is a native SwiftUI client — an Xcode project, not a Cargo crate; `just ios-build` / `ios-test` / `ios-test-ui` / `ios-sim` wrap xcodebuild + simctl for it (no cargo target touches it). It is the iOS surface; `mobile/` is the Android shell (nothing builds the `mobile/` crate for iOS anymore). It speaks the same `/api/*` REST surface.
 
-Full crate descriptions, per-crate module maps, request flow diagrams, and mobile-auth details live in [docs/architecture.md](docs/architecture.md).
+Full crate descriptions, per-crate module maps, request flow diagrams, and mobile-auth details live in [docs/architecture.md](docs/architecture.md) — that file is organized by directory, so it answers "what does this module do". To go the other way, from a feature to the files it spans, use the [feature maps](#finding-code).
 
 ## Version control
 

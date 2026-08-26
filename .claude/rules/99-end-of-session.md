@@ -4,6 +4,7 @@ Before ending a session where code changed, run this checklist:
 
 1. **Docs sync.** Update the right file for the change:
    - New module or subdirectory → add it to [docs/architecture.md](../../docs/architecture.md) (per-crate module map). If it adds a new top-level crate or top-level concept worth listing in the index, also link it from [CLAUDE.md](../../CLAUDE.md).
+   - New feature, or a feature whose files moved/renamed → the matching [feature map](../../docs/feature-map-web.md) ([iOS](../../docs/feature-map-ios.md)). [98-keep-skills-fresh.md](98-keep-skills-fresh.md) lists what counts.
    - New dependency in `Cargo.toml` → call it out wherever it's relevant (CLAUDE.md if it affects build commands, the matching rule file if it shifts a convention).
    - New environment variable or configuration key → [.claude/rules/01-dev-environment.md](01-dev-environment.md) and [.env.example](../../.env.example).
    - New or changed convention (error handling, test patterns, etc.) → the matching rule file under [.claude/rules/](.) and the [CLAUDE.md](../../CLAUDE.md) rules index if it's a new file.
