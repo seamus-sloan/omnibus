@@ -43,7 +43,7 @@ Five-crate Cargo workspace: `shared/` (serde types), `db/` (data layer + indexer
 
 Alongside it, `omnibus-ios/` is a native SwiftUI client — an Xcode project, not a Cargo crate; `just ios-build` / `ios-test` / `ios-test-ui` / `ios-sim` wrap xcodebuild + simctl for it (no cargo target touches it). It is the iOS surface; `mobile/` is the Android shell (nothing builds the `mobile/` crate for iOS anymore). It speaks the same `/api/*` REST surface.
 
-`site/` is the marketing site served at <https://seamus-sloan.github.io/omnibus/> — static HTML with no build step, published to the `gh-pages` branch by `.github/workflows/pages.yml`. Its framed app screens are stills exported from the Claude Design "Omnibus" project, not live markup; see [site/README.md](site/README.md).
+`site/` is the marketing site served at <https://seamus-sloan.github.io/omnibus/> — static HTML with no build step, published to the `gh-pages` branch by `.github/workflows/pages.yml`. Its framed app screens are stills exported from the Claude Design "Omnibus" project, not live markup; see the `site/` section of [docs/architecture.md](docs/architecture.md).
 
 Full crate descriptions, per-crate module maps, request flow diagrams, and mobile-auth details live in [docs/architecture.md](docs/architecture.md).
 

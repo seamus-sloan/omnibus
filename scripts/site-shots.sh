@@ -6,18 +6,25 @@
 # not committed. Only the WebP output under site/src/shots/ is, so a clone
 # needs no encoder to build the site.
 #
-#   ./scripts/site-shots.sh ~/Downloads          # or wherever the exports are
+#   ./scripts/site-shots.sh ~/Downloads              # -> site/src/shots/dark/
+#   ./scripts/site-shots.sh ~/Downloads sepia        # -> site/src/shots/sepia/
 #
-# Names must match the <img src> values in site/src/index.html.
+# Output is namespaced by colour direction so a second set can sit beside the
+# first without renaming either. Names must match the <img src> values in
+# site/src/index.html.
 set -euo pipefail
 
 SRC="${1:-}"
-[ -n "$SRC" ] && [ -d "$SRC" ] || { echo "usage: $0 <dir-of-omnibus-*.png>" >&2; exit 2; }
+VARIANT="${2:-dark}"
+[ -n "$SRC" ] && [ -d "$SRC" ] || { echo "usage: $0 <dir-of-omnibus-*.png> [variant]" >&2; exit 2; }
+case "$VARIANT" in
+  */*|"") echo "variant must be a plain directory name, e.g. dark or sepia" >&2; exit 2 ;;
+esac
 
 command -v cwebp >/dev/null || { echo "cwebp not found — nix shell nixpkgs#libwebp" >&2; exit 1; }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="$ROOT/site/src/shots"
+OUT="$ROOT/site/src/shots/$VARIANT"
 mkdir -p "$OUT"
 
 shopt -s nullglob
@@ -36,4 +43,4 @@ for f in "$SRC"/omnibus-*.png; do
 done
 
 [ "$found" = 1 ] || { echo "no omnibus-*.png in $SRC" >&2; exit 1; }
-echo "total: $(du -sh "$OUT" | cut -f1)"
+echo "total ($VARIANT): $(du -sh "$OUT" | cut -f1)"

@@ -483,8 +483,15 @@ on every push to `main` that touches it.
 | `src/index.html` | Twelve panels. All copy is real markup, never baked into an image. |
 | `src/site.css` | `--pg-*` chrome tokens, dark + sepia directions, and the `body.flow` fallback used below 861x560 and whenever JS is off. |
 | `src/app.js` | The panel deck — wheel/key/touch behind one gate, direction toggle, section rail. Progressive: the deck is opt-in, the page reads without it. |
-| `src/shots/` | App screenshots, WebP. Stills exported at 2x from the Claude Design "Omnibus" project and re-encoded by [`scripts/site-shots.sh`](../scripts/site-shots.sh); the PNGs are not committed. |
+| `src/shots/dark/` | App screenshots, WebP, one directory per colour direction. Stills exported at 2x from the Claude Design "Omnibus" project and re-encoded by [`scripts/site-shots.sh`](../scripts/site-shots.sh) (`… <dir> sepia` writes the sibling set); the PNGs are not committed. |
 
 Because the shots are stills, they are a picture of the *design*, not of what the
-server currently renders — they need re-exporting as redesigned surfaces ship.
+server currently renders — they need re-exporting as redesigned surfaces ship
+under [#2132](https://github.com/seamus-sloan/omnibus/issues/2132). Only the
+dark set exists today and the page references it directly; wiring `app.js` to
+swap `src` with the direction toggle is work for whenever a sepia set lands.
+
+Serve it locally with `python3 -m http.server 8000 --directory site/src`. The
+deck engages only above 861x560 — below that, and with JS off, `body.flow`
+leaves the panels as ordinary stacked sections, so test both.
 
