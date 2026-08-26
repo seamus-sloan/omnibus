@@ -49,9 +49,11 @@ Full crate descriptions, per-crate module maps, request flow diagrams, and mobil
 
 ## Version control
 
-This repo is developed with [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/) over the Git backend, and changes land as GitHub pull requests — one PR per change, conventional-commit titles (`feat:` / `fix:` / `chore:` / `docs:`).
+This repo is developed with [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/) over the Git backend, and changes land as GitHub pull requests — one PR per change, conventional-commit titles (`feat:` / `fix:` / `chore:` / `none:`, optionally `!` before the colon for a breaking change).
 
-- Release notes are automated — `release.yml` cuts a tag on every merge to `main` (patch by default, minor with the `minor version` label). There is no hand-curated changelog to update alongside a PR.
+- Release notes are automated — `release.yml` cuts a tag on every merge to `main` (patch by default, minor with the `minor version` label; skipped by the `no release` label or by an unlabeled diff touching only `*.md` / `docs/` / `.github/`). There is no hand-curated changelog to update alongside a PR.
+- **Those four prefixes are the whole allowed set.** A `commit-msg` hook installed machine-wide from personal config (`core.hooksPath`) rejects any other subject — `docs:`, `test:`, `refactor:`, `ci:` and friends all bounce, so fold them into `chore:`. Merge, revert, and `fixup!` / `squash!` / `amend!` subjects are exempt, and `git commit --no-verify` skips it for that one commit. It runs client-side only, so a GitHub squash-merge never passes through it — which is why `main`'s history still carries older `docs:` subjects taken from PR titles.
+- `none:` is accepted by the hook but carries **no defined meaning here** — it drives nothing (the release job reads PR labels and paths, never a commit prefix) and no commit in this repo has ever used it. Prefer `chore:`; treat `none:` as the hook's spare token rather than a type with semantics.
 - **Never amend or rewrite an already-pushed commit.** `jj` auto-snapshots the working copy into the current change on every command, so editing files while `@` sits on a pushed bookmark silently rewrites published history into a force-push. Run `jj new <bookmark>` to start a fresh change *before* editing — even when the working copy is clean.
 - Routine flow: `jj git fetch` to sync; `jj bookmark create <name>` for a branch; `jj describe -m "…"` to set the message; `jj bookmark move <name> --to @` then `jj git push`.
 - The dev tooling assumes `jj` — `scripts/dev-server-up.sh` identity-checks the workspace root so sibling `jj` workspaces don't collide on a port.
