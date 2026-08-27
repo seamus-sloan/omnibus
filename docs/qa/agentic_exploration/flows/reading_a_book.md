@@ -24,6 +24,10 @@ starting.
 2. Open it to read. Note where it opened — at the start, or where you left off.
 3. Read forward through roughly 10% of the book. Turn pages the way a person
    does: some quickly, some slowly. Do not spam the page-forward control.
+   **If page-turning itself is broken**, that is a `fail` and you should journal
+   it as one — but do not abandon the flow. Reaching a position through the
+   table of contents, or through Resume, counts as arriving there, so carry on
+   with the rest of the steps and say in the journal how you moved.
 4. Somewhere in the middle, do one incidental thing a reader does — open the
    table of contents, change the font size, search for a word, switch the
    theme. Pick a different one each time.

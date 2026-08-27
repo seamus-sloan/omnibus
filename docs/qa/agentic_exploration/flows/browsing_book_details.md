@@ -19,9 +19,11 @@ turn up something cosmetic that no assertion would catch.
 3. Ask of each thing: is this plausible? A negative page count, a date in 1900,
    an author of "Unknown, Unknown", a description that is raw HTML, a cover
    that belongs to another book — all findings.
-4. Then pick **one** of the following, at roughly equal odds:
-   - **Rate it.** Set a rating, confirm it takes, come back later and confirm it
-     stuck. Occasionally clear it.
+4. Then do **each** of the following, in whatever order you like. You do not
+   choose between them — a flow never samples its own steps:
+   - **Rate it.** Set a rating, confirm it takes, reload and confirm it stuck.
+     Then clear it, confirm the clear sticks, and set it once more — leave a
+     rating behind, because the audit reconciles against one.
    - **Set a read status.** Move it between want, reading, and finished, and
      watch what the home page does in response.
    - **Follow a link out** — to the author, the series, a tag, or a genre — and

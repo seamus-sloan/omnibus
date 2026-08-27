@@ -22,8 +22,12 @@ must never affect what you see.
 4. Carry on reading for a page or two.
 5. Open the list of saved passages and confirm yours is there, with its colour
    and note intact.
-6. Occasionally — perhaps a quarter of the time — change the colour, or delete
-   the highlight, and confirm the change sticks.
+6. Change the colour and confirm it sticks.
+7. **Delete a highlight only if you have made more than one in this run**, and
+   never the last one standing. Every highlight you leave behind is evidence the
+   post-run audit reconciles against; deleting your only one erases the thing
+   being checked. When you skip the delete for this reason, journal that you
+   skipped it and why — a skipped step recorded is data, a silent one is a gap.
 
 ## Journal
 

@@ -17,6 +17,17 @@ book.
 
 ## Preconditions
 
+**You need a browser tool that can actually put a file into a file input.** The
+upload is a real `<input type="file">`, and the page's own CSP (`connect-src
+'self'`) blocks every in-page workaround, so an agent whose browser cannot drive
+a file chooser cannot perform this flow. If yours cannot, stop and journal it
+`uncertain` — say so plainly and move on.
+
+**Never fall back to `curl` or a direct API call to get the book in.** That
+uploads the file while skipping the entire client-side path this flow exists to
+exercise, and it would report a pass for a broken uploader. An upload you did
+not perform through the screen is not this flow.
+
 The corpus path handed to you at spawn. Pick a file you have not added before;
 the harness tells you which of the corpus you have already used.
 
@@ -45,10 +56,9 @@ goes in through the front door* in [start.md](../start.md).
 6. Wait for the book to appear in the library. Indexing is asynchronous — give
    it time and re-check rather than reporting it missing straight away.
 7. Open its detail page from the library grid. Confirm the cover, title, author,
-   format, and page or chapter count are plausible for that book.
+   format, publication date, and identifiers are plausible for that book. The
+   detail page shows no page or chapter count — do not go looking for one.
 8. **Journal `book.add` with the resulting uuid.** This is the ownership record.
-9. Half the time, add a **second** book and then run
-   [merging_books](merging_books.md) against the pair.
 
 Two refusals you may legitimately meet, both correct behaviour: "Title and
 author are required." if you clear those fields, and "You don't have permission
