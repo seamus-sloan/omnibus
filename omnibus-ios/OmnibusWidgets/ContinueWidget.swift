@@ -11,6 +11,10 @@ import WidgetKit
 struct ContinueEntry: TimelineEntry {
     let date: Date
     let snapshot: WidgetSnapshot
+    /// Which book the one-book families are showing. Resolved at timeline time
+    /// rather than inside the view, so a render stays a pure function of its
+    /// entry and a `#Preview` can pose any card in the rail.
+    var cursor: String?
 }
 
 struct ContinueProvider: TimelineProvider {
@@ -34,11 +38,20 @@ struct ContinueProvider: TimelineProvider {
         // the same fabricated card the placeholder does — a real-looking
         // widget is what someone is choosing between in that list.
         let snapshot = context.isPreview ? .preview : (WidgetStore.load() ?? .empty())
-        completion(ContinueEntry(date: .now, snapshot: snapshot))
+        // The gallery always shows the front of the rail: someone choosing a
+        // widget has not flipped it anywhere yet, and a stored cursor from a
+        // widget already on their Home Screen would pose this one on a book
+        // they didn't pick.
+        let cursor = context.isPreview ? nil : WidgetStore.cursor()
+        completion(ContinueEntry(date: .now, snapshot: snapshot, cursor: cursor))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<ContinueEntry>) -> Void) {
-        let entry = ContinueEntry(date: .now, snapshot: WidgetStore.load() ?? .empty())
+        let entry = ContinueEntry(
+            date: .now,
+            snapshot: WidgetStore.load() ?? .empty(),
+            cursor: WidgetStore.cursor()
+        )
         completion(
             Timeline(entries: [entry], policy: .after(.now + Self.refreshInterval))
         )
@@ -48,7 +61,7 @@ struct ContinueProvider: TimelineProvider {
 struct ContinueWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: WidgetKind.continueReading, provider: ContinueProvider()) { entry in
-            ContinueWidgetView(snapshot: entry.snapshot)
+            ContinueWidgetView(snapshot: entry.snapshot, cursor: entry.cursor)
         }
         .configurationDisplayName("Continue")
         .description("Pick up the book you were last in.")

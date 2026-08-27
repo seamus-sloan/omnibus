@@ -1,148 +1,328 @@
 //  ContinueWidgetView.swift
 //  One card per family, plus the three ways the card can be empty.
 //
-//  The families are not the same layout at three sizes: small answers "what am
-//  I in the middle of", medium "which of my two or three", large "and when did
-//  I last touch each". Each is sized around the one question it answers.
+//  The families are not the same layout at three sizes: small and medium each
+//  answer "what am I in the middle of" with a single book, and large answers
+//  "and when did I last touch each" with all of them. The one-book families
+//  carry a control that flips to the next book, because a widget cannot be
+//  swiped — see `ContinueIntents`.
 
+import AppIntents
 import SwiftUI
 import WidgetKit
 
 struct ContinueWidgetView: View {
     let snapshot: WidgetSnapshot
+    /// Which book the one-book families are showing, by `WidgetBook.id`.
+    var cursor: String?
 
     @Environment(\.widgetFamily) private var family
     @Environment(\.colorScheme) private var scheme
 
-    /// The whole card takes its colour from whichever book leads it, the way
-    /// the book-detail hero takes its wash from the book it is about.
+    /// The whole card takes its colour from the book it is about, the way the
+    /// book-detail hero takes its wash from the book it is about. For the one
+    /// book families that is whichever the reader has flipped to; large is a
+    /// list, so it stays with the book leading it.
     private var theme: WidgetTheme {
-        WidgetTheme(tone: snapshot.books.first?.tone, scheme: scheme)
+        WidgetTheme(tone: (isRail ? snapshot.books.first : shown?.book)?.tone, scheme: scheme)
+    }
+
+    private var isRail: Bool { family == .systemLarge }
+
+    private var shown: (book: WidgetBook, index: Int)? {
+        snapshot.showing(cursor: cursor)
     }
 
     var body: some View {
         content
-            .padding(Layout.margin)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .containerBackground(for: .widget) { theme.ground }
+            .containerBackground(for: .widget) { background }
+    }
+
+    /// Small spends the book's own artwork on its ground; the others keep the
+    /// tone wash, which is what a card with room for the cover *sharp* wants
+    /// behind it.
+    @ViewBuilder
+    private var background: some View {
+        if family == .systemSmall, let book = shown?.book {
+            WidgetHeroBackdrop(book: book, theme: theme)
+        } else {
+            theme.ground
+        }
     }
 
     @ViewBuilder
     private var content: some View {
-        if snapshot.books.isEmpty {
-            EmptyCard(state: snapshot.state, theme: theme, family: family)
-        } else {
+        if let shown, !snapshot.books.isEmpty {
+            let rail = RailPosition(index: shown.index, count: snapshot.books.count)
             switch family {
-            case .systemSmall: SmallCard(book: snapshot.books[0], theme: theme)
+            case .systemSmall: SmallCard(book: shown.book, theme: theme, rail: rail)
             case .systemLarge: LargeCard(books: snapshot.books, theme: theme)
-            default: MediumCard(books: snapshot.books, theme: theme)
+            default: MediumCard(book: shown.book, theme: theme, rail: rail)
             }
+        } else {
+            EmptyCard(state: snapshot.state, theme: theme, family: family)
         }
     }
 }
 
 private enum Layout {
     static let margin: CGFloat = 14
-    /// The most a `systemMedium` fits across without the titles becoming two
-    /// truncated words each.
-    static let mediumColumns = 3
+}
+
+/// Where the shown book sits in the rail — what the dots draw and what tells
+/// the advance control whether there is anywhere to go.
+private struct RailPosition {
+    let index: Int
+    let count: Int
+
+    var hasOthers: Bool { count > 1 }
 }
 
 // MARK: - Small
 
-/// One book, given the whole card: cover, title, and where you are in it.
+/// One book, given the whole card: its own artwork blurred into the ground, the
+/// cover sharp on top, and where you are along the bottom edge.
 ///
-/// The sizes here are a budget, not a preference. A `systemSmall` is 134pt of
-/// content on a 6.3" phone, and the cover, the two spacings, and the footer are
-/// all fixed — so whatever they don't claim is what the title gets, and
-/// `layoutPriority` cannot conjure more. At a 74pt cover and 8pt spacings the
-/// title was left 15pt, which is one line, so every title longer than the card
-/// is wide truncated mid-word. Sized to fit two lines instead: nothing on this
-/// card matters more than which book it is.
+/// The sizes here are a budget, not a preference. A `systemSmall` is 130pt of
+/// content on a 6.3" phone, and the cover, the spacings and the position line
+/// are all fixed — so whatever they don't claim is what the title gets, and
+/// `layoutPriority` cannot conjure more. Sized so the title keeps two lines:
+/// nothing on this card matters more than which book it is.
 private struct SmallCard: View {
     let book: WidgetBook
     let theme: WidgetTheme
+    let rail: RailPosition
 
     var body: some View {
         // Centred as a column. A 2:3 cover is far narrower than the card, so
         // ranged left it sat off in one corner — and centring the cover over a
         // left-ranged title just moves the mismatch onto the type.
-        VStack(alignment: .center, spacing: 6) {
-            WidgetCover(book: book, theme: theme, cornerRadius: 5)
-                .frame(height: 60)
-                .shadow(color: .black.opacity(0.3), radius: 6, y: 3)
-                // Also what holds the column at the card's full width: with no
-                // bar to draw (a CFI-only EPUB save has no percentage) nothing
-                // else here is greedy, and the stack would shrink to the
-                // title's width and be pinned to the leading edge — centred
-                // within itself, off-centre on the card.
+        VStack(alignment: .center, spacing: 0) {
+            WidgetCover(book: book, theme: theme, cornerRadius: 6)
+                .frame(height: 74)
+                // Deeper than the flat card's, because here the cover is laid
+                // on a blur of itself: without a shadow to separate them the
+                // sharp edge reads as an artefact of the blur rather than as a
+                // second object in front of it.
+                .shadow(color: .black.opacity(0.42), radius: 10, y: 5)
                 .frame(maxWidth: .infinity)
+
+            Spacer(minLength: 4)
 
             Text(book.title)
                 .font(.system(size: 13, weight: .semibold, design: .serif))
                 .foregroundStyle(theme.ink0)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
-                // Claims its two lines ahead of the spacer below it.
+                // Claims its two lines ahead of the spacer above it.
                 .layoutPriority(1)
 
-            Spacer(minLength: 0)
-
-            PositionFooter(book: book, theme: theme)
+            Text(PositionLabel.text(for: book))
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(theme.ink1)
+                .lineLimit(1)
+                .padding(.top, 2)
+        }
+        .padding(Layout.margin)
+        // The bar bleeds the full width of the card rather than sitting inside
+        // the margins: it is the one element that reads at arm's length, and
+        // the card has no vertical room left to give it a band of its own.
+        .overlay(alignment: .bottom) { BleedBar(book: book, theme: theme) }
+        .overlay(alignment: .topTrailing) {
+            AdvanceButton(theme: theme, rail: rail).padding(6)
         }
         .widgetURL(book.deepLink)
     }
 }
 
-// MARK: - Medium
-
-/// Three across — the shape of "which of the two or three am I picking up".
-private struct MediumCard: View {
-    let books: [WidgetBook]
+/// The position bar, run edge to edge along the bottom of the small card.
+private struct BleedBar: View {
+    let book: WidgetBook
     let theme: WidgetTheme
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ForEach(books.prefix(Layout.mediumColumns)) { book in
-                OptionalLink(destination: book.deepLink) {
-                    // Centred as a column, for the same reason as the small
-                    // card's — see `SmallCard`.
-                    VStack(alignment: .center, spacing: 6) {
-                        WidgetCover(book: book, theme: theme)
-                            .frame(height: 80)
-                            .shadow(color: .black.opacity(0.28), radius: 5, y: 3)
-                            .frame(maxWidth: .infinity)
-
-                        Text(book.title)
-                            .font(.system(size: 11.5, weight: .semibold, design: .serif))
-                            .foregroundStyle(theme.ink0)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.center)
-
-                        Spacer(minLength: 0)
-
-                        if let fraction = book.fraction {
-                            WidgetProgressBar(fraction: fraction, theme: theme, height: 2.5)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .center)
+        if let fraction = book.fraction {
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(theme.track)
+                    Rectangle()
+                        .fill(theme.rule)
+                        .frame(width: geometry.size.width * min(1, max(0, fraction)))
                 }
             }
-            // A single book must not stretch to the full width — the column is
-            // sized by the cover's aspect, and a lone one would draw a cover
-            // three times the height of the card.
-            if books.count < Layout.mediumColumns {
-                ForEach(books.count..<Layout.mediumColumns, id: \.self) { _ in
-                    Color.clear.frame(maxWidth: .infinity)
+            .frame(height: 3)
+        }
+    }
+}
+
+// MARK: - Medium
+
+/// One book as a call to action: the cover at full card height, the title set
+/// large beside it, and a pill that resumes it.
+///
+/// The old three-across fan answered "which of my two or three" by shrinking
+/// all three to a thumbnail and a truncated title. This answers it by showing
+/// one book properly and letting the reader flip — which is the same question
+/// with the resume actually reachable from the Home Screen.
+private struct MediumCard: View {
+    let book: WidgetBook
+    let theme: WidgetTheme
+    let rail: RailPosition
+
+    private var isAudio: Bool { book.format == .audio }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            OptionalLink(destination: book.deepLink) {
+                // Sized by width, not height. `WidgetCover` fits a 2:3 box into
+                // whatever it is proposed, and an `HStack` proposes width to a
+                // flexible child before it knows the row's height — so left to
+                // fill, the cover took half the card across and hung off the
+                // bottom of it. 86pt puts its derived height just inside the
+                // 6.3" card's 130.
+                WidgetCover(book: book, theme: theme, cornerRadius: 7)
+                    .frame(width: 86)
+                    // Tighter than the small card's, which is laid on a blur of
+                    // itself and needs the separation. Here the ground is a
+                    // pale wash, and a soft shadow on one spreads 10pt of grey
+                    // past every edge — which reads as the cover being bigger
+                    // and hanging off the card rather than as depth.
+                    .shadow(color: .black.opacity(0.26), radius: 6, y: 3)
+            }
+            .frame(maxHeight: .infinity)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .center, spacing: 6) {
+                    Text(isAudio ? "Continue listening" : "Continue reading")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .tracking(0.6)
+                        .textCase(.uppercase)
+                        .foregroundStyle(theme.rule)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+
+                    Spacer(minLength: 0)
+
+                    RailDots(theme: theme, rail: rail)
+                    AdvanceButton(theme: theme, rail: rail)
+                }
+
+                Text(book.title)
+                    .font(.system(size: 17, weight: .semibold, design: .serif))
+                    .foregroundStyle(theme.ink0)
+                    .lineLimit(2)
+                    // The card's height is fixed, so a stack with nothing left
+                    // to give takes it from the title — a two-line one silently
+                    // becomes one truncated line the moment anything below asks
+                    // for space.
+                    .layoutPriority(1)
+
+                Text(book.author)
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.ink2)
+                    .lineLimit(1)
+
+                Spacer(minLength: 2)
+
+                if let fraction = book.fraction {
+                    WidgetProgressBar(fraction: fraction, theme: theme, height: 3)
+                        .padding(.bottom, 4)
+                }
+
+                HStack(spacing: 8) {
+                    Text(PositionLabel.text(for: book))
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(theme.ink1)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 0)
+
+                    ResumePill(book: book, theme: theme)
                 }
             }
         }
-        // Everything a `Link` doesn't cover — the container margins, the gaps
-        // between columns, and the filler columns padding a one- or two-book
-        // fan, which can be two thirds of the card. Without it a tap there
-        // launches the app with no URL at all, which is the failure `DeepLink`
-        // exists to describe.
-        .widgetURL(books.first?.deepLink)
+        .padding(Layout.margin)
+        .background(alignment: .leading) {
+            // Centred on the cover: the offset puts the bloom's middle at the
+            // margin plus half the cover's width. Kept close to the card's own
+            // height, too — a circle much larger than the card is clipped top
+            // and bottom into a full-height band, which reads as a slab of
+            // colour behind the artwork rather than as a glow around it.
+            theme.bloom(diameter: 170).offset(x: Layout.margin + 43 - 85)
+        }
+        // Everything a `Link` or a `Button` doesn't cover — the margins, the
+        // gap between the cover and the text, the text itself. Without it a tap
+        // there launches the app with no URL at all, which is the failure
+        // `DeepLink` exists to describe.
+        .widgetURL(book.deepLink)
+    }
+}
+
+/// The card's one solid shape, and the only control on it that resumes.
+private struct ResumePill: View {
+    let book: WidgetBook
+    let theme: WidgetTheme
+
+    var body: some View {
+        OptionalLink(destination: book.deepLink) {
+            HStack(spacing: 5) {
+                Image(systemName: book.format == .audio ? "play.fill" : "book.fill")
+                    .font(.system(size: 9, weight: .bold))
+                Text(book.format == .audio ? "Play" : "Read")
+                    .font(.system(size: 11.5, weight: .semibold))
+            }
+            .foregroundStyle(theme.pillInk)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(theme.pillFill))
+        }
+    }
+}
+
+// MARK: - Flipping through the rail
+
+/// Moves the card on to the next book without leaving the Home Screen.
+///
+/// Hidden on a rail of one, where it would be a control that does nothing —
+/// and drawn as a chevron rather than a pair of arrows because the intent
+/// wraps, so forward is the only direction there needs to be.
+private struct AdvanceButton: View {
+    let theme: WidgetTheme
+    let rail: RailPosition
+
+    var body: some View {
+        if rail.hasOthers {
+            Button(intent: ShowNextBook()) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(theme.ink1)
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(theme.track))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Next book")
+        }
+    }
+}
+
+/// Where the shown book sits in the rail. Drawn from the resolved index rather
+/// than from a count of its own, so it cannot disagree with the card above it.
+private struct RailDots: View {
+    let theme: WidgetTheme
+    let rail: RailPosition
+
+    var body: some View {
+        if rail.hasOthers {
+            HStack(spacing: 4) {
+                ForEach(0..<rail.count, id: \.self) { position in
+                    Capsule()
+                        .fill(position == rail.index ? theme.rule : theme.ink2.opacity(0.35))
+                        .frame(width: position == rail.index ? 10 : 4, height: 4)
+                }
+            }
+            .accessibilityHidden(true)
+        }
     }
 }
 
@@ -180,6 +360,7 @@ private struct LargeCard: View {
                     .frame(maxHeight: .infinity)
             }
         }
+        .padding(Layout.margin)
         // The kicker, the container margins and the row hairlines are all
         // dead zones otherwise — see `MediumCard`.
         .widgetURL(books.first?.deepLink)
@@ -243,30 +424,13 @@ private struct LargeRow: View {
 
 // MARK: - Shared pieces
 
-/// The bar and the one line under it — percent for a book, time left for an
-/// audiobook. The small card's footer; medium draws a bare bar and large has
-/// its own row shape.
-private struct PositionFooter: View {
-    let book: WidgetBook
-    let theme: WidgetTheme
-
-    var body: some View {
-        VStack(alignment: .center, spacing: 5) {
-            if let fraction = book.fraction {
-                WidgetProgressBar(fraction: fraction, theme: theme)
-            }
-            Text(label)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(theme.ink1)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
+/// The one line describing where you are — percent for a book, time left for an
+/// audiobook. Large has its own row shape and doesn't use it.
+private enum PositionLabel {
     /// Percent and time-left together when the book has both — the two answer
     /// different questions ("how far in", "how much longer"), and an audiobook
     /// is the only thing that can say the second.
-    private var label: String {
+    static func text(for book: WidgetBook) -> String {
         var parts: [String] = []
         if let fraction = book.fraction {
             parts.append("\(Int((fraction * 100).rounded()))%")
@@ -312,6 +476,7 @@ private struct EmptyCard: View {
 
             Spacer(minLength: 0)
         }
+        .padding(Layout.margin)
         .frame(maxWidth: .infinity, alignment: .leading)
         .widgetURL(DeepLink.appRoot)
     }

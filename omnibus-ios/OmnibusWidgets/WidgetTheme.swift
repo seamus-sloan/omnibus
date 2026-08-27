@@ -42,6 +42,32 @@ struct WidgetTheme {
 
     var track: Color { ink2.opacity(0.28) }
 
+    /// The Read/Play pill — the card's one solid, saturated shape. Everything
+    /// else on a hero card is a wash or a hairline, so this is what the eye
+    /// lands on and the reason the card reads as something to act on.
+    var pillFill: Color { OKLCH(isLight ? 0.52 : 0.82, tone.c * 1.0, tone.h).color }
+    var pillInk: Color { OKLCH(isLight ? 0.99 : 0.16, tone.c * 0.06, tone.h).color }
+
+    /// A bloom of the book's own colour behind its cover, lifting the artwork
+    /// off the wash instead of letting it sit on a flat panel. Same
+    /// construction as the app's `HeroCard.cardGround`.
+    func bloom(diameter: CGFloat) -> some View {
+        RadialGradient(
+            // Far weaker on a light ground. `plusLighter` on something already
+            // near white has nowhere to go but grey, so the strength the app's
+            // dark hero uses reads here as a smudge rather than as a glow.
+            colors: [OKLCH(0.62, tone.c * 0.9, tone.h).color.opacity(isLight ? 0.16 : 0.40), .clear],
+            center: .center,
+            startRadius: 0,
+            // Must land inside the frame's half-width, or the frame clips the
+            // gradient while it still has colour and the bloom shows a hard
+            // seam.
+            endRadius: diameter / 2
+        )
+        .frame(width: diameter, height: diameter)
+        .blendMode(.plusLighter)
+    }
+
     /// The plate a coverless book gets, so a shelf of them doesn't read as
     /// grey noise. A pared-back `GeneratedCoverPlate`: the app sets the title
     /// into the artwork, which a widget draws at 34pt wide in the large family
@@ -92,11 +118,66 @@ struct WidgetCover: View {
             .accessibilityLabel(book.title)
     }
 
-    private var image: UIImage? {
+    private var image: UIImage? { WidgetArt.image(for: book) }
+}
+
+/// The one place a card decodes a book's pre-rendered cover.
+///
+/// Shared because the small hero draws the same bytes twice — once blurred as
+/// the card's ground and once sharp on top of it — and two decodes of one file
+/// on a render budget as tight as a widget's is a cost for nothing.
+enum WidgetArt {
+    static func image(for book: WidgetBook) -> UIImage? {
         guard let name = book.thumb,
               let url = WidgetStore.thumbURL(named: name)
         else { return nil }
         return UIImage(contentsOfFile: url.path)
+    }
+}
+
+/// The book's own artwork, blown up and blurred into the card's ground.
+///
+/// Falls back to the tone wash when there is no art — which is not a
+/// degradation so much as the same idea by a cheaper route, since the tone was
+/// extracted from that cover in the first place.
+struct WidgetHeroBackdrop: View {
+    let book: WidgetBook
+    let theme: WidgetTheme
+
+    var body: some View {
+        ZStack {
+            theme.ground
+            if let image = WidgetArt.image(for: book) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    // Blurred hard enough that the crop is no longer legible
+                    // as a crop. A 2:3 cover filling a square loses a third of
+                    // its height, and at any gentler radius what shows is
+                    // recognisably the middle of the artwork with its title
+                    // sliced off.
+                    .blur(radius: 24, opaque: true)
+                    // A blur this heavy is an average of the whole cover, and
+                    // the average of any artwork is closer to grey than any
+                    // part of it was. Pushing the chroma back up is what keeps
+                    // the ground reading as *this book's* colour.
+                    .saturation(1.4)
+                    // Graded, not flat. A single veil strong enough to carry
+                    // the title at the bottom of the card washes the top of it
+                    // out too, and the top is the half with the artwork's
+                    // colour in it — which is the whole reason for using the
+                    // cover as a ground rather than the tone.
+                    .overlay {
+                        LinearGradient(
+                            colors: theme.isLight
+                                ? [.white.opacity(0.08), .white.opacity(0.66)]
+                                : [.black.opacity(0.12), .black.opacity(0.72)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+            }
+        }
     }
 }
 
