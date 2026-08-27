@@ -129,18 +129,20 @@ actor WidgetSnapshotWriter {
     /// after a sign-out. Cancelling costs only a request that hadn't answered,
     /// since `Cache.live` caches whatever it has already fetched regardless.
     private static func refreshRail(hasToken: Bool) async {
-        guard await shouldPullRail(hasToken: hasToken, isOnline: Connectivity.shared.isOnline)
-        else { return }
+        // Bound separately: `shouldPullRail` is synchronous, so an `await` in
+        // front of it would name the wrong thing as the suspension point.
+        let isOnline = await Connectivity.shared.isOnline
+        guard shouldPullRail(hasToken: hasToken, isOnline: isOnline) else { return }
         let pull = Task {
             for await _ in UserDataService.recentProgress().values() {}
         }
-        // `try`, not `try?`: cancelling the deadline has to *skip* the cancel,
-        // and a swallowed `CancellationError` would fall through to it instead.
-        // Harmless in this order — the pull has already finished by then — but
-        // it reads as a guard it isn't, and one swapped line would make it a
-        // real spurious cancel.
+        // Cancelling the deadline has to *skip* the cancel, so the sleep's
+        // `CancellationError` returns rather than falling through — `try?`
+        // here would swallow it and cancel a pull that had just succeeded.
+        // Catching keeps the task non-throwing, matching the timer in
+        // `firstResult`.
         let deadline = Task {
-            try await Task.sleep(for: railDeadline)
+            do { try await Task.sleep(for: railDeadline) } catch { return }
             pull.cancel()
         }
         await pull.value
