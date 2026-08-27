@@ -77,10 +77,9 @@ final class LifecycleSync {
         await Connectivity.shared.refreshPendingCount()
 
         // The replica entries a returning reader is most likely to be looking
-        // at. Everything else refreshes when its screen asks.
-        async let mirror: Void = LibraryIndex.shared.sync()
-        async let resume: Void = refreshResumePoints()
-        _ = await (mirror, resume)
+        // at. Everything else refreshes when its screen asks — the Continue
+        // rail included, which the snapshot pass below pulls for itself.
+        await LibraryIndex.shared.sync()
 
         await WidgetSnapshotWriter.shared.refresh()
     }
@@ -156,13 +155,6 @@ final class LifecycleSync {
         }
     }
 
-    /// Pull the Continue-reading rail through its live read so the replica is
-    /// current before any screen asks. The values themselves are the caller's
-    /// business — this is here for the write into the cache the read performs.
-    private func refreshResumePoints() async {
-        for await _ in UserDataService.recentProgress().values() {}
-    }
-
     // MARK: - Background refresh
 
     /// Register the background handler. Must run before the app finishes
@@ -197,8 +189,9 @@ final class LifecycleSync {
     ///
     /// Deliberately narrow. The system grants seconds, not minutes, and killing
     /// the app for overrunning costs future grants — so this drains the outbox
-    /// and refreshes the resume rail, and leaves the library mirror to a real
-    /// foreground where there's time to page through it.
+    /// and refreshes the resume rail (inside the snapshot pass, which pulls it),
+    /// and leaves the library mirror to a real foreground where there's time to
+    /// page through it.
     private func runBackgroundRefresh(_ task: BGAppRefreshTask) async {
         // Re-arm first: an early return past this point would otherwise end the
         // chain and the app would never be woken again.
@@ -206,7 +199,6 @@ final class LifecycleSync {
 
         let work = Task {
             await SyncEngine.shared.drain()
-            await refreshResumePoints()
             await Connectivity.shared.refreshPendingCount()
             // The whole reason a widget can be right about a session that
             // ended on another device: this pass runs without the app ever

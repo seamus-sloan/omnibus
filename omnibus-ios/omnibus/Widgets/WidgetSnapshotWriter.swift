@@ -20,6 +20,12 @@ actor WidgetSnapshotWriter {
     /// in a container both processes have to page in.
     private static let thumbMaxPixels: CGFloat = 300
 
+    /// How long a pass waits on the Continue rail before composing from the
+    /// replica instead. Longer than the reader's `PositionSync.openDeadline`
+    /// — nobody is watching a snapshot pass the way they are watching a book
+    /// open — but short enough to leave the background assertion its time.
+    private static let railDeadline: Duration = .seconds(3)
+
     /// The pass currently running or queued behind one.
     private var pass: Task<Void, Never>?
 
@@ -62,6 +68,7 @@ actor WidgetSnapshotWriter {
     private static func build() async -> WidgetSnapshot {
         guard await APIClient.shared.hasToken() else { return .empty(.signedOut) }
 
+        await refreshRail()
         let points: [ResumePoint] = await Cache.cachedOnly(CacheKey.recentProgress) ?? []
         guard !points.isEmpty else {
             // Two different things to say, and the mirror is what tells them
@@ -80,6 +87,38 @@ actor WidgetSnapshotWriter {
             books.append(await entry(for: point))
         }
         return WidgetSnapshot(state: .ready, books: books, generatedAt: Date())
+    }
+
+    /// Pull the Continue rail through its live read, for the write into the
+    /// cache the read performs — the values are `build`'s business.
+    ///
+    /// A position this device just wrote is deliberately incomplete: the
+    /// reader saves a CFI and the server derives the whole-book percent off
+    /// the request path, so the optimistic row carries no percent and a card
+    /// built from it draws no bar. Half the passes used to pull first and half
+    /// didn't, and the ones that didn't are the two that run right after a
+    /// write — a close, a backgrounding — so the Home Screen kept the barless
+    /// snapshot until the app was next opened. Owning the pull here is what
+    /// stops the next call site from reintroducing that.
+    ///
+    /// Gated on reachability like the cover fetch below: offline this stays a
+    /// pure replica read rather than paying a request timeout inside a
+    /// background assertion that cancels the whole pass when it runs out.
+    ///
+    /// Bounded for the same reason, and the bound is not a timeout — the read
+    /// carries on and still writes the cache, so a pull that misses this pass
+    /// serves the next one. Waiting on it unbounded would put a hung request
+    /// in front of the publish on the way to the background, and a pass the
+    /// expiration handler cancels writes no snapshot at all: the Home Screen
+    /// would keep an older one rather than the replica's, which is the
+    /// outcome this whole change is about avoiding.
+    private static func refreshRail() async {
+        guard await Connectivity.shared.isOnline else { return }
+        let pull = Task { () -> Bool? in
+            for await _ in UserDataService.recentProgress().values() {}
+            return true
+        }
+        _ = await firstResult(of: pull, within: railDeadline)
     }
 
     private static func entry(for point: ResumePoint) async -> WidgetBook {

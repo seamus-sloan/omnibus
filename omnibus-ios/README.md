@@ -96,6 +96,16 @@ force quit.
   only `CoverIdentity.tone`, resolved app-side and carried in the snapshot as
   OKLCH. That is also why `OKLCH.swift` is shared rather than copied: two copies
   could drift, and one book would show up in two different colours.
+- **A snapshot pass pulls the Continue rail before it composes anything.** The
+  extension is local-first but the *pass* is not, and it cannot be: the reader
+  saves a CFI and the server derives the whole-book percent off the request
+  path, so the row this device just wrote carries no percent and a card built
+  from it draws no bar. Half the passes used to pull first and half didn't, and
+  the ones that didn't were the two that run right after a write — a close, a
+  backgrounding — so the Home Screen kept a barless snapshot until the app was
+  next opened, while the app's own rail had already healed. `refreshRail` owns
+  it now so a new call site can't reintroduce the split. Gated on reachability:
+  offline the pass stays a pure replica read.
 - **The three empty states are three different screens.** "Not signed in",
   "no books yet" and "nothing open" want three different next steps; a bare
   empty list can't tell them apart, and a blank tile tells the reader nothing.
@@ -476,6 +486,12 @@ carries a TODO to harden it; this does that.
   derives from journal entries at 100% progress — marking a book Finished via
   read status alone does not populate it. The server also caches stats for 60s,
   so a fresh entry takes up to a minute to appear.
+- **A widget card loses its bar for an EPUB read offline.** The whole-book
+  percent is derived server-side and the device cannot compute one, so a
+  position written with no connection has none to show until the next online
+  snapshot pass — the card falls back to its "Reading" label. The same pass can
+  also, rarely, outrun the server's own derivation, which is spawned after the
+  write's response is composed; that heals on the following pass.
 - Author photo editing, book merging, and the admin log viewer are not ported.
 - Test coverage is limited to the pure logic worth pinning — the offline layer
   (`omnibusTests/OfflineSyncTests.swift`), the player's chapter arithmetic
