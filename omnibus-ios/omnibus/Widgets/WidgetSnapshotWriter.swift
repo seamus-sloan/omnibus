@@ -20,6 +20,12 @@ actor WidgetSnapshotWriter {
     /// in a container both processes have to page in.
     private static let thumbMaxPixels: CGFloat = 300
 
+    /// How long a pass waits on the Continue rail before composing from the
+    /// replica instead. Longer than the reader's `PositionSync.openDeadline`
+    /// — nobody is watching a snapshot pass the way they are watching a book
+    /// open — but short enough to leave the background assertion its time.
+    private static let railDeadline: Duration = .seconds(3)
+
     /// The pass currently running or queued behind one.
     private var pass: Task<Void, Never>?
 
@@ -60,8 +66,10 @@ actor WidgetSnapshotWriter {
     }
 
     private static func build() async -> WidgetSnapshot {
-        guard await APIClient.shared.hasToken() else { return .empty(.signedOut) }
+        let hasToken = await APIClient.shared.hasToken()
+        guard hasToken else { return .empty(.signedOut) }
 
+        await refreshRail(hasToken: hasToken)
         let points: [ResumePoint] = await Cache.cachedOnly(CacheKey.recentProgress) ?? []
         guard !points.isEmpty else {
             // Two different things to say, and the mirror is what tells them
@@ -80,6 +88,54 @@ actor WidgetSnapshotWriter {
             books.append(await entry(for: point))
         }
         return WidgetSnapshot(state: .ready, books: books, generatedAt: Date())
+    }
+
+    /// Whether a pass should spend a rail pull: a session to read with, and a
+    /// network to read over. `internal` so the rule is testable.
+    ///
+    /// The token is a parameter rather than an ordering assumption. `build`
+    /// guards on it above, so passing it here reads redundant — but that guard
+    /// is the only thing standing between a sign-out pass and an authenticated
+    /// read, and an ordering property holds only until someone moves a line.
+    /// As a term of the rule it cannot be lost that way.
+    static func shouldPullRail(hasToken: Bool, isOnline: Bool) -> Bool {
+        hasToken && isOnline
+    }
+
+    /// Pull the Continue rail through its live read, for the write into the
+    /// cache the read performs — the values are `build`'s business. A position
+    /// this device just wrote carries no percent, so a card composed from the
+    /// replica alone draws no bar; see the widget section of
+    /// `omnibus-ios/README.md` for why that is and what it cost.
+    ///
+    /// Three invariants an edit here has to keep:
+    ///
+    /// - **Signed in and online only.** Offline this stays a pure replica read
+    ///   rather than paying a request timeout inside a background assertion.
+    /// - **Bounded**, so a hung request can't sit in front of the publish on
+    ///   the way to the background — a pass the expiration handler cancels
+    ///   writes no snapshot at all.
+    /// - **The bound cancels rather than abandons, and stays structured.** A
+    ///   pull outliving its pass still carries the bearer it went out with,
+    ///   and would break this actor's one guarantee that the last caller is
+    ///   the last writer.
+    private static func refreshRail(hasToken: Bool) async {
+        // Bound separately: `shouldPullRail` is synchronous, so an `await` in
+        // front of it would name the wrong thing as the suspension point.
+        let isOnline = await Connectivity.shared.isOnline
+        guard shouldPullRail(hasToken: hasToken, isOnline: isOnline) else { return }
+        // A group rather than two unstructured `Task`s: a group's children
+        // inherit cancellation, so the expiration handler that cancels a
+        // background pass stops the read with it. Two unstructured tasks do
+        // not, and would have carried a read into suspension for as long as
+        // the deadline had left to run. Whichever child lands first — the
+        // read, or the deadline — `cancelAll` retires the other.
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { for await _ in UserDataService.recentProgress().values() {} }
+            group.addTask { try? await Task.sleep(for: railDeadline) }
+            await group.next()
+            group.cancelAll()
+        }
     }
 
     private static func entry(for point: ResumePoint) async -> WidgetBook {
