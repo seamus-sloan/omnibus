@@ -1,71 +1,33 @@
 //  ContinueIntents.swift
-//  What makes one Continue widget different from the next one beside it.
+//  Moving the medium card along the rail without leaving the Home Screen.
 //
-//  A widget cannot be swiped — the system renders it as a snapshot and only
-//  routes taps — so the rail is walked by *stacking* widgets and swiping the
-//  stack. That only shows different books if each copy can be configured to a
-//  different one, which is what this is: the book parameter the Home Screen's
-//  edit sheet offers, and the entity query behind it.
+//  A widget cannot be swiped — the system renders it as a snapshot, and the
+//  only interaction it offers is a tap: a `widgetURL`/`Link` that opens the
+//  app, or an `AppIntent` that runs in the extension. So the card flips rather
+//  than scrolls, and this is the flip.
 
 import AppIntents
+import WidgetKit
 
-/// A book the widget can be pinned to, named by `WidgetBook.id` so the
-/// selection survives the rail being rewritten around it.
-struct BookEntity: AppEntity {
-    let id: String
-    let title: String
-    let author: String
-
-    init(_ book: WidgetBook) {
-        id = book.id
-        title = book.title
-        author = book.author
-    }
-
-    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Book"
-    static let defaultQuery = BookQuery()
-
-    var displayRepresentation: DisplayRepresentation {
-        DisplayRepresentation(title: "\(title)", subtitle: "\(author)")
-    }
-}
-
-/// Answers the configuration sheet out of the App Group snapshot.
-///
-/// The books in progress are the only ones offered. Pinning a widget to
-/// something the reader is not currently reading would be a widget that says
-/// "Continue" about a book they never started — and the snapshot is all the
-/// extension can see anyway.
-struct BookQuery: EntityQuery {
-    func entities(for identifiers: [BookEntity.ID]) async throws -> [BookEntity] {
-        books.filter { identifiers.contains($0.id) }
-    }
-
-    func suggestedEntities() async throws -> [BookEntity] {
-        books
-    }
-
-    private var books: [BookEntity] {
-        (WidgetStore.load() ?? .empty()).books.map(BookEntity.init)
-    }
-}
-
-struct SelectBookIntent: WidgetConfigurationIntent {
-    static let title: LocalizedStringResource = "Choose a book"
+struct ShowNextBook: AppIntent {
+    static let title: LocalizedStringResource = "Show the next book"
     static let description = IntentDescription(
-        "Pick the book this widget shows. Left empty it follows whichever book you read last."
+        "Moves the Continue widget on to the next book you have in progress."
     )
 
-    /// Optional on purpose, and the empty case is the default: a widget added
-    /// without a thought should track the reader rather than pin to whatever
-    /// happened to be on top the day they added it. Pinning is what you do to
-    /// the *second* copy, once you are building a stack.
-    @Parameter(title: "Book")
-    var book: BookEntity?
+    /// The whole point is that the rail can be walked from the Home Screen.
+    /// Launching the app to answer a tap would make the control slower than
+    /// just opening the book it is trying to skip past.
+    static let openAppWhenRun = false
 
-    init() {}
-
-    init(book: BookEntity?) {
-        self.book = book
+    func perform() async throws -> some IntentResult {
+        let snapshot = WidgetStore.load() ?? .empty()
+        WidgetStore.setCursor(snapshot.next(after: WidgetStore.cursor())?.id)
+        // WidgetKit reloads after an intent on its own, but only for the
+        // widget whose button was tapped. Naming the kind refreshes a second
+        // Continue widget on the same screen, which is otherwise left showing
+        // a cursor that has already moved.
+        WidgetCenter.shared.reloadTimelines(ofKind: WidgetKind.continueReading)
+        return .result()
     }
 }

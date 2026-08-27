@@ -399,9 +399,10 @@ are the other half of a second target:
 OmnibusShared/      — source compiled into *both* the app and the widget
                       extension (a filesystem-synchronized group listed in two
                       targets' `fileSystemSynchronizedGroups`): WidgetSnapshot
-                      (the wire form, plus which book a pinned widget resolves
-                      to), WidgetStore (the App Group container's layout, and
-                      the only encoder either side uses), DeepLink
+                      (the wire form, plus the cursor arithmetic the medium
+                      card flips its rail with), WidgetStore (the App Group
+                      container's layout, the only encoder either side uses,
+                      and where that cursor is kept), DeepLink
                       (the `omnibus://book/<uuid>` URLs the widget mints and
                       the app parses back) and OKLCH (the OKLCH↔sRGB
                       conversion for server-provided accents — shared so the
@@ -413,13 +414,12 @@ OmnibusWidgets/     — the WidgetKit extension (`com.omnibus.mobile.widgets`,
                       else, so it renders in Airplane Mode with the app force
                       quit), its three family layouts and the three distinct
                       empty states, ContinueIntents (a widget cannot be swiped,
-                      so small and medium each show *one* book and the widget
-                      is an `AppIntentConfiguration` — one copy per book,
-                      stacked, and the swipe is the stack's; `relevance()`
-                      publishes one configuration per book in progress so a
-                      Smart Stack has something to rotate), and WidgetTheme —
-                      colours derived entirely from the book's own tone,
-                      because the reader's chosen
+                      so the medium card shows one book and carries an
+                      `AppIntent` that flips to the next — capped at three,
+                      and absent from the small card, which answers with
+                      whichever book you touched last and nothing else), and
+                      WidgetTheme — colours derived entirely from the book's
+                      own tone, because the reader's chosen
                       theme lives in the app's `UserDefaults`, which the
                       extension cannot read
 ```

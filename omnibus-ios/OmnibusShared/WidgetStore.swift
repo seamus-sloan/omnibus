@@ -63,6 +63,33 @@ enum WidgetStore {
         try decoder.decode(WidgetSnapshot.self, from: data)
     }
 
+    // MARK: - Which book the medium card is showing
+
+    /// The book the medium card last advanced to, by `WidgetBook.id`.
+    ///
+    /// In the App Group's defaults rather than the snapshot file: the app owns
+    /// that file and rewrites it wholesale on every position save, so a cursor
+    /// kept there would be erased by the next sync. This is the one piece of
+    /// widget state the *extension* writes.
+    static func cursor() -> String? {
+        groupDefaults?.string(forKey: cursorKey)
+    }
+
+    static func setCursor(_ id: String?) {
+        guard let defaults = groupDefaults else { return }
+        if let id {
+            defaults.set(id, forKey: cursorKey)
+        } else {
+            defaults.removeObject(forKey: cursorKey)
+        }
+    }
+
+    private static let cursorKey = "continue.cursor"
+
+    private static var groupDefaults: UserDefaults? {
+        UserDefaults(suiteName: appGroupID)
+    }
+
     // MARK: - Cover art
 
     /// The extensions a pre-rendered cover can carry. Covers with alpha are

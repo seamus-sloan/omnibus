@@ -5,20 +5,19 @@
 //  Airplane Mode with the app force-quit — which is most of the time a widget
 //  is actually looked at.
 
-import AppIntents
 import SwiftUI
 import WidgetKit
 
 struct ContinueEntry: TimelineEntry {
     let date: Date
     let snapshot: WidgetSnapshot
-    /// Which book this copy of the widget is pinned to, by `WidgetBook.id`.
-    /// Resolved at timeline time rather than inside the view, so a render stays
-    /// a pure function of its entry and a `#Preview` can pose any book.
-    var selected: String?
+    /// Which book the medium card is showing, by `WidgetBook.id`. Read at
+    /// timeline time rather than inside the view, so a render stays a pure
+    /// function of its entry and a `#Preview` can pose any card in the rail.
+    var cursor: String?
 }
 
-struct ContinueProvider: AppIntentTimelineProvider {
+struct ContinueProvider: TimelineProvider {
     /// How long a timeline stands before WidgetKit asks for another.
     ///
     /// The app pushes a reload whenever the snapshot changes, so this is only
@@ -34,74 +33,38 @@ struct ContinueProvider: AppIntentTimelineProvider {
         ContinueEntry(date: .now, snapshot: .preview)
     }
 
-    func snapshot(for configuration: SelectBookIntent, in context: Context) async -> ContinueEntry {
+    func getSnapshot(in context: Context, completion: @escaping (ContinueEntry) -> Void) {
         // The gallery preview has no App Group content to show yet, so it gets
         // the same fabricated card the placeholder does — a real-looking
         // widget is what someone is choosing between in that list.
         let snapshot = context.isPreview ? .preview : (WidgetStore.load() ?? .empty())
-        return ContinueEntry(
-            date: .now,
-            snapshot: snapshot,
-            selected: context.isPreview ? nil : configuration.book?.id
-        )
+        // The gallery always shows the front of the rail: someone choosing a
+        // widget has not flipped it anywhere yet, and a stored cursor from a
+        // widget already on their Home Screen would pose this one on a book
+        // they didn't pick.
+        let cursor = context.isPreview ? nil : WidgetStore.cursor()
+        completion(ContinueEntry(date: .now, snapshot: snapshot, cursor: cursor))
     }
 
-    func timeline(for configuration: SelectBookIntent, in context: Context) async -> Timeline<ContinueEntry> {
+    func getTimeline(in context: Context, completion: @escaping (Timeline<ContinueEntry>) -> Void) {
         let entry = ContinueEntry(
             date: .now,
             snapshot: WidgetStore.load() ?? .empty(),
-            selected: configuration.book?.id
+            cursor: WidgetStore.cursor()
         )
-        return Timeline(entries: [entry], policy: .after(.now + Self.refreshInterval))
-    }
-
-    /// One configuration per book in progress, so a Smart Stack has something
-    /// to rotate between rather than one card that never changes.
-    ///
-    /// Grouped rather than loose: these are alternative views of one widget,
-    /// not five widgets someone asked for, and an ungrouped set can stack up as
-    /// five separate faces of the same thing.
-    func relevance() async -> WidgetRelevance<SelectBookIntent> {
-        let books = (WidgetStore.load() ?? .empty()).books.prefix(WidgetSnapshot.maxBooks)
-        return WidgetRelevance(
-            books.map {
-                WidgetRelevanceAttribute(
-                    configuration: SelectBookIntent(book: BookEntity($0)),
-                    group: .named(WidgetKind.continueReading)
-                )
-            }
+        completion(
+            Timeline(entries: [entry], policy: .after(.now + Self.refreshInterval))
         )
-    }
-
-    /// What the widget gallery offers when the reader is adding one. The
-    /// unpinned card leads: it is the one that keeps working without being
-    /// revisited, and the pinned ones are what a stack is built out of
-    /// afterwards.
-    func recommendations() -> [AppIntentRecommendation<SelectBookIntent>] {
-        let books = (WidgetStore.load() ?? .empty()).books.prefix(WidgetSnapshot.maxBooks)
-        return [AppIntentRecommendation(intent: SelectBookIntent(), description: Text("Most recent"))]
-            + books.map {
-                AppIntentRecommendation(
-                    intent: SelectBookIntent(book: BookEntity($0)),
-                    description: Text($0.title)
-                )
-            }
     }
 }
 
 struct ContinueWidget: Widget {
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(
-            kind: WidgetKind.continueReading,
-            intent: SelectBookIntent.self,
-            provider: ContinueProvider()
-        ) { entry in
-            ContinueWidgetView(snapshot: entry.snapshot, selected: entry.selected)
+        StaticConfiguration(kind: WidgetKind.continueReading, provider: ContinueProvider()) { entry in
+            ContinueWidgetView(snapshot: entry.snapshot, cursor: entry.cursor)
         }
         .configurationDisplayName("Continue")
-        // Says the stack out loud: the card shows one book, and the way to see
-        // the others is to add a second copy and stack them.
-        .description("Pick up a book you're in the middle of. Add one per book and stack them to swipe between.")
+        .description("Pick up the book you were last in.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
         // The card is a full-bleed wash in the book's own colour with cover
         // art laid on it, so it owns its insets: the system's default margins

@@ -92,19 +92,43 @@ struct WidgetSnapshot: Codable, Sendable, Equatable {
         WidgetSnapshot(state: state, generatedAt: .distantPast)
     }
 
-    /// The book a one-book card should draw, given what its widget is pinned to.
+    /// The most the medium card's control will flip through.
     ///
-    /// The selection names a *book*, never an index. The rail is rewritten on
-    /// every position save, so an index means "whatever is third today" — the
+    /// Five is what the large family *lists*, and listing is cheap. Flipping is
+    /// not: every book past the front costs a tap and a redraw to reach, and
+    /// past three the control stops meaning "the other book I'm in" and starts
+    /// meaning "page my library" — which is the app's job, not a widget's.
+    static let maxFlipped = 3
+
+    /// The books that control walks. The front of the rail, capped.
+    var flipRail: [WidgetBook] {
+        Array(books.prefix(Self.maxFlipped))
+    }
+
+    /// Which book the medium card is showing, and where it sits in that rail.
+    ///
+    /// The cursor names a *book*, never an index. The rail is rewritten on
+    /// every position save, so an index means "whatever is second today" — the
     /// next save that reorders it would move the card out from under the
     /// reader. Naming the book lets it hold its place, and gives an honest
-    /// answer once it drops off the rail: a widget pinned to a book the reader
-    /// has since finished falls back to whatever they are reading now, rather
-    /// than sitting on a finished book until they think to reconfigure it.
+    /// answer once it drops off: it is gone, so the front book takes over.
     /// Same rule as the app's `ContinueHero.selected`.
-    func showing(selected: String?) -> WidgetBook? {
-        guard let first = books.first else { return nil }
-        guard let selected else { return first }
-        return books.first { $0.id == selected } ?? first
+    func showing(cursor: String?) -> (book: WidgetBook, index: Int)? {
+        let rail = flipRail
+        guard let first = rail.first else { return nil }
+        guard let cursor, let index = rail.firstIndex(where: { $0.id == cursor }) else {
+            return (first, 0)
+        }
+        return (rail[index], index)
+    }
+
+    /// The book after the cursor's, wrapping at the end — where the card's
+    /// advance control moves to. It wraps because that control is the only way
+    /// through the rail: dead-ending on the last book would leave no way back
+    /// to the one the reader is actually in the middle of.
+    func next(after cursor: String?) -> WidgetBook? {
+        let rail = flipRail
+        guard let (_, index) = showing(cursor: cursor) else { return nil }
+        return rail[(index + 1) % rail.count]
     }
 }
