@@ -178,25 +178,46 @@ struct WidgetHeroBackdrop: View {
         ZStack {
             theme.ground
             if let image = WidgetArt.image(for: book) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    // Blurred hard enough that the crop is no longer legible
-                    // as a crop. A 2:3 cover filling a square loses a third of
-                    // its height, and at any gentler radius what shows is
-                    // recognisably the middle of the artwork with its title
-                    // sliced off.
-                    // Not `opaque: true`. Covers with alpha are filed as PNG on
-                    // purpose (`WidgetStore.thumbExtensions`), and telling the
-                    // blur its input has no alpha pulls black in around every
-                    // transparent edge — on exactly the covers the store goes
-                    // out of its way to keep unflattened.
-                    .blur(radius: 24, opaque: false)
-                    // A blur this heavy is an average of the whole cover, and
-                    // the average of any artwork is closer to grey than any
-                    // part of it was. Pushing the chroma back up is what keeps
-                    // the ground reading as *this book's* colour.
-                    .saturation(1.4)
+                // Held in a container that cannot grow, the same way
+                // `WidgetCover` holds its own: an aspect-fill image *reports* a
+                // size larger than the box it fills, so anything hung on it is
+                // laid out against that larger box. With the veil attached to
+                // the image directly, a 2:3 cover on a square card put the
+                // card's edges at 17% and 83% of the ramp — 0.22 of black at
+                // the top where 0.12 was asked for, and 0.62 at the bottom
+                // where 0.72 was. The gradient has to grade the *card*.
+                Color.clear
+                    .overlay {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            // Overfilled a little, because the blur below fades
+                            // to transparent at the image's own edges and the
+                            // fill is flush with the card across its width.
+                            // Without this the ground shows through as a
+                            // 24pt vignette down both sides.
+                            .scaleEffect(1.2)
+                            // Blurred hard enough that the crop is no longer
+                            // legible as a crop. A 2:3 cover filling a square
+                            // loses a third of its height, and at any gentler
+                            // radius what shows is recognisably the middle of
+                            // the artwork with its title sliced off.
+                            //
+                            // Not `opaque: true`. Covers with alpha are filed
+                            // as PNG on purpose (`WidgetStore.thumbExtensions`),
+                            // and telling the blur its input has no alpha pulls
+                            // black in around every transparent edge — on
+                            // exactly the covers the store goes out of its way
+                            // to keep unflattened.
+                            .blur(radius: 24, opaque: false)
+                            // A blur this heavy is an average of the whole
+                            // cover, and the average of any artwork is closer
+                            // to grey than any part of it was. Pushing the
+                            // chroma back up is what keeps the ground reading
+                            // as *this book's* colour.
+                            .saturation(1.4)
+                    }
+                    .clipped()
                     // Graded, not flat. A single veil strong enough to carry
                     // the title at the bottom of the card washes the top of it
                     // out too, and the top is the half with the artwork's

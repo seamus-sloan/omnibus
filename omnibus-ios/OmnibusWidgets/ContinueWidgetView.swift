@@ -98,6 +98,10 @@ private enum Layout {
     static var mediumBloomOffset: CGFloat {
         margin + mediumCoverWidth / 2 - mediumBloom / 2
     }
+
+    /// Width the eyebrow row keeps clear for the dots and the chevron, which
+    /// are drawn over it rather than in it.
+    static let mediumControls: CGFloat = 58
 }
 
 /// Where the shown book sits in the medium card's flip rail — what the dots
@@ -219,7 +223,7 @@ private struct MediumCard: View {
             .frame(maxHeight: .infinity)
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .center, spacing: 6) {
+                HStack(spacing: 6) {
                     Text(isAudio ? "Continue listening" : "Continue reading")
                         .font(.system(size: 9.5, weight: .semibold))
                         .tracking(0.6)
@@ -228,10 +232,13 @@ private struct MediumCard: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
 
-                    Spacer(minLength: 0)
-
-                    RailDots(theme: theme, rail: rail)
-                    AdvanceButton(theme: theme, rail: rail)
+                    // Holds the corner the dots and the chevron are drawn in.
+                    // They are an overlay rather than members of this row
+                    // because the chevron's tap target has to be far bigger
+                    // than the chevron, and a row as tall as that target costs
+                    // the title its second line on a 6.3" phone. A spacer
+                    // reserves the width without owning the height.
+                    Spacer(minLength: Layout.mediumControls)
                 }
 
                 Text(book.title)
@@ -269,6 +276,18 @@ private struct MediumCard: View {
             }
         }
         .padding(Layout.margin)
+        .overlay(alignment: .topTrailing) {
+            HStack(spacing: 2) {
+                RailDots(theme: theme, rail: rail)
+                AdvanceButton(theme: theme, rail: rail)
+            }
+            // The button carries `slop` of its own padding, so its frame
+            // overhangs the chevron by that much on every side. Backing the
+            // inset off by the same amount lands the drawn chip on the card's
+            // margin rather than the invisible frame around it.
+            .padding(.top, Layout.margin - AdvanceButton.slop)
+            .padding(.trailing, Layout.margin - AdvanceButton.slop)
+        }
         .background(alignment: .leading) {
             theme.bloom(diameter: Layout.mediumBloom)
                 .offset(x: Layout.mediumBloomOffset)
@@ -318,18 +337,22 @@ private struct AdvanceButton: View {
     let theme: WidgetTheme
     let rail: RailPosition
 
-    /// How far past the drawn chip a tap still counts.
+    /// How far past the drawn chip a tap still counts, taking the target to
+    /// 40pt around a 22pt chevron.
     ///
-    /// The chip stays 22pt because the card's height budget is tuned around it
-    /// — the eyebrow row is as tall as this control, and the title's second
-    /// line is what pays for any growth. But 22pt is half Apple's minimum, and
-    /// this is the one control on the card whose *miss* does something other
-    /// than what a hit does: every other target here resolves to the same
-    /// `book.deepLink`, while the margin around this one is the card-wide
-    /// `widgetURL`, so a tap a few points off cold-launches the reader instead
-    /// of flipping. The padding buys the hit area, the negative padding hands
-    /// the layout its 22pt back.
-    private static let slop: CGFloat = 8
+    /// 22pt alone is half Apple's minimum, and this is the one control on the
+    /// card whose *miss* does something other than what a hit does: every other
+    /// target here resolves to the same `book.deepLink`, while the space around
+    /// this one is the card-wide `widgetURL`, so a tap a few points off
+    /// cold-launches the reader instead of flipping.
+    ///
+    /// Plain padding, and the caller draws this in an overlay. Padding the
+    /// button and then cancelling it with negative padding also shrinks the
+    /// bounds hit-testing uses, which would leave the target the 22pt it
+    /// started at; growing the row instead costs the title its second line at
+    /// 158pt. An overlay is the only one of the three that buys the area
+    /// without spending layout.
+    static let slop: CGFloat = 9
 
     var body: some View {
         if rail.hasOthers {
@@ -343,7 +366,6 @@ private struct AdvanceButton: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .padding(-Self.slop)
             .accessibilityLabel("Next book")
         }
     }

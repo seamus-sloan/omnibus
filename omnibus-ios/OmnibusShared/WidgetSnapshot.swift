@@ -1,10 +1,15 @@
 //  WidgetSnapshot.swift
-//  What the app hands the Home Screen, and the only thing a widget reads.
+//  What the app hands the Home Screen: every book a card could draw, and
+//  everything it draws about one.
 //
 //  A timeline render gets a tight memory and time budget, so the extension is
 //  given a finished answer rather than a second reader on `OfflineStore` — no
-//  SQLite, no decoding of the full `Book` payloads, no network. Everything a
-//  card draws is resolved app-side and written here.
+//  SQLite, no decoding of the full `Book` payloads, no network.
+//
+//  *Which* of those books a one-book card shows is the one thing not resolved
+//  app-side: the reader flips it from the Home Screen, so the extension keeps
+//  that cursor in the App Group's defaults and resolves it against this list —
+//  see `showing(cursor:)` and `WidgetStore.cursor()`.
 
 import Foundation
 

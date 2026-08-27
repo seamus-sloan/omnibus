@@ -1,9 +1,10 @@
 //  ContinueWidget.swift
 //  The Home Screen equivalent of the landing Continue stack.
 //
-//  Reads nothing but the App Group snapshot, so it renders identically in
-//  Airplane Mode with the app force-quit — which is most of the time a widget
-//  is actually looked at.
+//  Reads nothing outside the App Group — the snapshot the app writes, and the
+//  cursor the extension keeps beside it — so it renders identically in Airplane
+//  Mode with the app force-quit, which is most of the time a widget is actually
+//  looked at.
 
 import SwiftUI
 import WidgetKit
