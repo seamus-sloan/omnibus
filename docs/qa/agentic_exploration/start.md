@@ -93,11 +93,11 @@ transcripts are thrown away.
 
 | Field | Meaning |
 |---|---|
-| `ts` | UTC, millisecond precision. The report correlates across agents on this alone, so do not batch entries and stamp them later. |
+| `ts` | UTC, ms precision. The report correlates agents on this alone — never batch entries and stamp them later. |
 | `seq` | Your own monotonic counter, from 1, for the run. |
 | `action` | Dotted verb — `book.open`, `highlight.create`, `metadata.save`, `shelf.add`. |
 | `target` | The book uuid or other entity id. `null` when there isn't one. |
-| `params` | **Everything a replayer would need to redo this.** Under-filling this field is the single most common way a real bug becomes an anecdote. |
+| `params` | **Everything a replayer needs to redo this.** Under-filling it is the commonest way a real bug becomes an anecdote. |
 | `outcome` | `ok`, `error`, or `refused` (an ownership or permission refusal that was correct). |
 | `note` | One human sentence. Required whenever `outcome` is not `ok`. |
 
@@ -135,28 +135,12 @@ Reload once before calling something a failure. A single stale render is worth
 one retry; if it survives the reload, it is real, and say in the note that it
 survived.
 
-## Not bugs
+## Before you report anything: read not_bugs.md
 
-These are all deliberate, and each has been mistaken for a defect before:
-
-- **Opening a reader or starting a player changes your read status by itself.**
-  Unread becomes reading on open; reaching the end marks finished. You did not
-  do that, and it is not a bug.
-- **Read status filters the continue surface** on the home page. A book you
-  just marked finished vanishing from it is correct.
-- **The continue surface is an overlapping fan**, not a carousel — cards sit on
-  top of one another until you hover.
-- **Book covers are not links** but list items. Clicking works; middle-click and
-  "open in new tab" may not.
-- **Shelf pages are a mobile surface.** On the web, picking a shelf filters the
-  library in place and the URL does not change. Only the iOS agent gets a
-  dedicated shelf screen.
-- **Other agents are working in the same library at the same time.** Covers
-  changing, books appearing, a title you were looking at getting edited — that
-  is another reader, not corruption. Only call it a finding if *your own* data
-  changed underneath you.
-- **Indexing is asynchronous.** A newly added book may take a moment to appear.
-  Wait and re-check before reporting it missing.
+[not_bugs.md](not_bugs.md) lists what looks like a defect and is not — both
+deliberate app behaviour and the ways your own browser lies to you. Read it
+before your first flow. Nearly every false alarm this system has produced was
+already on that list.
 
 ## The corpus goes in through the front door
 
