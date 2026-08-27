@@ -102,6 +102,10 @@ private enum Layout {
     /// Width the eyebrow row keeps clear for the dots and the chevron, which
     /// are drawn over it rather than in it.
     static let mediumControls: CGFloat = 58
+
+    /// The drawn chevron chip, and so also the height the eyebrow row holds
+    /// open beneath it — see the row's own note.
+    static let mediumChip: CGFloat = 22
 }
 
 /// Where the shown book sits in the medium card's flip rail — what the dots
@@ -167,6 +171,12 @@ private struct SmallCard: View {
         // The bar bleeds the full width of the card rather than sitting inside
         // the margins: it is the one element that reads at arm's length, and
         // the card has no vertical room left to give it a band of its own.
+        //
+        // Known and accepted: the widget is masked to a ~21.5pt rounded rect,
+        // so the leading corner of the fill is clipped and a book under about
+        // 7% draws no visible fill at all. Insetting the bar to clear the mask
+        // was tried and rejected — a bar floating above the edge is a worse
+        // card than one whose first few percent don't show.
         .overlay(alignment: .bottom) { BleedBar(book: book, theme: theme) }
         .widgetURL(book.deepLink)
     }
@@ -236,10 +246,16 @@ private struct MediumCard: View {
                     // They are an overlay rather than members of this row
                     // because the chevron's tap target has to be far bigger
                     // than the chevron, and a row as tall as that target costs
-                    // the title its second line on a 6.3" phone. A spacer
-                    // reserves the width without owning the height.
+                    // the title its second line on a 6.3" phone.
                     Spacer(minLength: Layout.mediumControls)
                 }
+                // The row still has to be as tall as the *chip*, even though it
+                // no longer contains it. Left to the 9.5pt eyebrow alone the row
+                // collapsed and pulled the title up under the control — so the
+                // end of a long first line sat inside the chevron's tap circle,
+                // and tapping a word of the title flipped the book instead of
+                // opening it.
+                .frame(height: Layout.mediumChip)
 
                 Text(book.title)
                     .font(.system(size: 17, weight: .semibold, design: .serif))
@@ -360,9 +376,15 @@ private struct AdvanceButton: View {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(theme.ink1)
-                    .frame(width: 22, height: 22)
+                    .frame(width: Layout.mediumChip, height: Layout.mediumChip)
                     .background(Circle().fill(theme.track))
-                    .padding(Self.slop)
+                    // Grown up and outwards, into the card's own margin, and
+                    // barely downwards — below the chip is the title, and a
+                    // target that reaches into it turns a tap on the last word
+                    // of a line into a flip.
+                    .padding(.top, Self.slop)
+                    .padding(.horizontal, Self.slop)
+                    .padding(.bottom, Self.slop / 2)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
