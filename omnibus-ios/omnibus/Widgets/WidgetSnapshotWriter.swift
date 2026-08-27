@@ -66,9 +66,10 @@ actor WidgetSnapshotWriter {
     }
 
     private static func build() async -> WidgetSnapshot {
-        guard await APIClient.shared.hasToken() else { return .empty(.signedOut) }
+        let hasToken = await APIClient.shared.hasToken()
+        guard hasToken else { return .empty(.signedOut) }
 
-        await refreshRail()
+        await refreshRail(hasToken: hasToken)
         let points: [ResumePoint] = await Cache.cachedOnly(CacheKey.recentProgress) ?? []
         guard !points.isEmpty else {
             // Two different things to say, and the mirror is what tells them
@@ -87,6 +88,18 @@ actor WidgetSnapshotWriter {
             books.append(await entry(for: point))
         }
         return WidgetSnapshot(state: .ready, books: books, generatedAt: Date())
+    }
+
+    /// Whether a pass should spend a rail pull: a session to read with, and a
+    /// network to read over. `internal` so the rule is testable.
+    ///
+    /// The token is a parameter rather than an ordering assumption. `build`
+    /// guards on it above, so passing it here reads redundant — but that guard
+    /// is the only thing standing between a sign-out pass and an authenticated
+    /// read, and an ordering property holds only until someone moves a line.
+    /// As a term of the rule it cannot be lost that way.
+    static func shouldPullRail(hasToken: Bool, isOnline: Bool) -> Bool {
+        hasToken && isOnline
     }
 
     /// Pull the Continue rail through its live read, for the write into the
@@ -115,8 +128,9 @@ actor WidgetSnapshotWriter {
     /// went out with, so it can land the previous account's rail in the replica
     /// after a sign-out. Cancelling costs only a request that hadn't answered,
     /// since `Cache.live` caches whatever it has already fetched regardless.
-    private static func refreshRail() async {
-        guard await Connectivity.shared.isOnline else { return }
+    private static func refreshRail(hasToken: Bool) async {
+        guard await shouldPullRail(hasToken: hasToken, isOnline: Connectivity.shared.isOnline)
+        else { return }
         let pull = Task {
             for await _ in UserDataService.recentProgress().values() {}
         }

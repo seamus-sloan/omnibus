@@ -253,6 +253,24 @@ struct WidgetSnapshotWriterTests {
 
         #expect(WidgetSnapshotWriter.secondsRemaining(for: unmeasured, format: .audio) == nil)
     }
+
+    @Test(arguments: [
+        (true, true, true),
+        (true, false, false),
+        (false, true, false),
+        (false, false, false),
+    ])
+    func a_pass_pulls_the_rail_only_with_a_session_and_a_network(
+        hasToken: Bool, isOnline: Bool, pulls: Bool
+    ) {
+        // Signed out the read would go out under a bearer a sign-out is in the
+        // middle of revoking; offline it would pay a request timeout inside a
+        // background assertion. Both are terms of the rule rather than an
+        // ordering the next edit to `build` could quietly lose.
+        #expect(
+            WidgetSnapshotWriter.shouldPullRail(hasToken: hasToken, isOnline: isOnline) == pulls
+        )
+    }
 }
 
 @Suite("Widget labels track the app's own")
