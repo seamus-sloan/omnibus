@@ -105,20 +105,27 @@ actor WidgetSnapshotWriter {
     /// pure replica read rather than paying a request timeout inside a
     /// background assertion that cancels the whole pass when it runs out.
     ///
-    /// Bounded for the same reason, and the bound is not a timeout — the read
-    /// carries on and still writes the cache, so a pull that misses this pass
-    /// serves the next one. Waiting on it unbounded would put a hung request
-    /// in front of the publish on the way to the background, and a pass the
-    /// expiration handler cancels writes no snapshot at all: the Home Screen
-    /// would keep an older one rather than the replica's, which is the
-    /// outcome this whole change is about avoiding.
+    /// Bounded for the same reason, and the bound **cancels** rather than
+    /// abandons. Waiting unbounded would put a hung request in front of the
+    /// publish on the way to the background, where a pass the expiration
+    /// handler cancels writes no snapshot at all and the Home Screen keeps an
+    /// older one. Letting the read run on past the bound — `firstResult`'s
+    /// shape — would break this actor's one guarantee, that the last caller is
+    /// the last writer: a pull outliving its pass still carries the bearer it
+    /// went out with, so it can land the previous account's rail in the replica
+    /// after a sign-out. Cancelling costs only a request that hadn't answered,
+    /// since `Cache.live` caches whatever it has already fetched regardless.
     private static func refreshRail() async {
         guard await Connectivity.shared.isOnline else { return }
-        let pull = Task { () -> Bool? in
+        let pull = Task {
             for await _ in UserDataService.recentProgress().values() {}
-            return true
         }
-        _ = await firstResult(of: pull, within: railDeadline)
+        let deadline = Task {
+            try? await Task.sleep(for: railDeadline)
+            pull.cancel()
+        }
+        await pull.value
+        deadline.cancel()
     }
 
     private static func entry(for point: ResumePoint) async -> WidgetBook {
