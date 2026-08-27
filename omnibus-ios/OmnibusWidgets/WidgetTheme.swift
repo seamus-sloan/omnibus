@@ -121,17 +121,40 @@ struct WidgetCover: View {
     private var image: UIImage? { WidgetArt.image(for: book) }
 }
 
-/// The one place a card decodes a book's pre-rendered cover.
+/// The one place a card decodes a book's pre-rendered cover, and the memo that
+/// keeps it to once per file.
 ///
-/// Shared because the small hero draws the same bytes twice — once blurred as
-/// the card's ground and once sharp on top of it — and two decodes of one file
-/// on a render budget as tight as a widget's is a cost for nothing.
+/// The small hero draws the same bytes twice — blurred as the card's ground,
+/// then sharp on top of it — and two decodes of one file on a render budget as
+/// tight as a widget's is a cost for nothing.
+///
+/// Keyed on the file's modification date as well as its name, because the app
+/// rewrites a cover in place under the same name when the artwork changes: a
+/// name-only key would pin a live extension process to the bytes it happened to
+/// decode first. `@MainActor` rather than locked — SwiftUI evaluates a body
+/// there, which is the only place this is reached from.
+@MainActor
 enum WidgetArt {
+    private struct Key: Hashable {
+        let name: String
+        let modified: Date?
+    }
+
+    private static var memo: [Key: UIImage] = [:]
+
     static func image(for book: WidgetBook) -> UIImage? {
         guard let name = book.thumb,
               let url = WidgetStore.thumbURL(named: name)
         else { return nil }
-        return UIImage(contentsOfFile: url.path)
+
+        let key = Key(name: name, modified: WidgetStore.thumbModified(named: name))
+        if let cached = memo[key] { return cached }
+
+        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
+        // Bounded by the snapshot, which is bounded by `WidgetSnapshot.maxBooks`
+        // — so this cannot grow with the reader's library.
+        memo[key] = image
+        return image
     }
 }
 
@@ -156,7 +179,12 @@ struct WidgetHeroBackdrop: View {
                     // its height, and at any gentler radius what shows is
                     // recognisably the middle of the artwork with its title
                     // sliced off.
-                    .blur(radius: 24, opaque: true)
+                    // Not `opaque: true`. Covers with alpha are filed as PNG on
+                    // purpose (`WidgetStore.thumbExtensions`), and telling the
+                    // blur its input has no alpha pulls black in around every
+                    // transparent edge — on exactly the covers the store goes
+                    // out of its way to keep unflattened.
+                    .blur(radius: 24, opaque: false)
                     // A blur this heavy is an average of the whole cover, and
                     // the average of any artwork is closer to grey than any
                     // part of it was. Pushing the chroma back up is what keeps

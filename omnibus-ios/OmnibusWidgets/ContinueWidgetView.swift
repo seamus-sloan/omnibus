@@ -80,6 +80,24 @@ struct ContinueWidgetView: View {
 
 private enum Layout {
     static let margin: CGFloat = 14
+
+    /// The medium card's cover, sized by width rather than height.
+    /// `WidgetCover` fits a 2:3 box into whatever it is proposed, and an
+    /// `HStack` proposes width to a flexible child before it knows the row's
+    /// height — so left to fill, the cover took half the card across and hung
+    /// off the bottom of it. 86pt puts its derived height just inside the 6.3"
+    /// card's 130.
+    static let mediumCoverWidth: CGFloat = 86
+
+    /// Kept close to the card's own height. A bloom much larger than the card
+    /// is clipped top and bottom into a full-height band, which reads as a slab
+    /// of colour behind the artwork rather than as a glow around it.
+    static let mediumBloom: CGFloat = 170
+
+    /// Puts the bloom's centre on the cover's centre.
+    static var mediumBloomOffset: CGFloat {
+        margin + mediumCoverWidth / 2 - mediumBloom / 2
+    }
 }
 
 /// Where the shown book sits in the medium card's flip rail — what the dots
@@ -189,14 +207,8 @@ private struct MediumCard: View {
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
             OptionalLink(destination: book.deepLink) {
-                // Sized by width, not height. `WidgetCover` fits a 2:3 box into
-                // whatever it is proposed, and an `HStack` proposes width to a
-                // flexible child before it knows the row's height — so left to
-                // fill, the cover took half the card across and hung off the
-                // bottom of it. 86pt puts its derived height just inside the
-                // 6.3" card's 130.
                 WidgetCover(book: book, theme: theme, cornerRadius: 7)
-                    .frame(width: 86)
+                    .frame(width: Layout.mediumCoverWidth)
                     // Tighter than the small card's, which is laid on a blur of
                     // itself and needs the separation. Here the ground is a
                     // pale wash, and a soft shadow on one spreads 10pt of grey
@@ -258,12 +270,8 @@ private struct MediumCard: View {
         }
         .padding(Layout.margin)
         .background(alignment: .leading) {
-            // Centred on the cover: the offset puts the bloom's middle at the
-            // margin plus half the cover's width. Kept close to the card's own
-            // height, too — a circle much larger than the card is clipped top
-            // and bottom into a full-height band, which reads as a slab of
-            // colour behind the artwork rather than as a glow around it.
-            theme.bloom(diameter: 170).offset(x: Layout.margin + 43 - 85)
+            theme.bloom(diameter: Layout.mediumBloom)
+                .offset(x: Layout.mediumBloomOffset)
         }
         // Everything a `Link` or a `Button` doesn't cover — the margins, the
         // gap between the cover and the text, the text itself. Without it a tap
