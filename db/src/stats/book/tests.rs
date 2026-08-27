@@ -336,6 +336,30 @@ async fn book_insights_keeps_glance_seconds_in_the_total_it_excludes_from_the_co
 
     assert_eq!(insights.sessions, 1, "the glance is not a sitting");
     assert_eq!(insights.seconds_total, 620, "but its seconds still count");
+    assert_eq!(
+        insights.sitting_seconds, 600,
+        "the mean's numerator excludes them, so avg sit can't exceed longest"
+    );
+}
+
+#[tokio::test]
+async fn book_insights_keeps_sitting_seconds_below_a_mean_of_the_longest_sit() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    // One 30m sitting plus forty 30s glances on distinct days. Dividing
+    // `seconds_total` would report a 50m mean beside a 30m longest sit.
+    reading_session(&pool, user, "uuid-1", T0, 1_800).await;
+    for i in 1..=40 {
+        reading_session(&pool, user, "uuid-1", T0 + i * 86_400, 30).await;
+    }
+
+    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+
+    assert_eq!(insights.sessions, 1);
+    assert_eq!(insights.seconds_total, 3_000);
+    assert_eq!(insights.sitting_seconds, 1_800);
+    assert!(insights.sitting_seconds / insights.sessions <= insights.longest_seconds);
 }
 
 #[tokio::test]

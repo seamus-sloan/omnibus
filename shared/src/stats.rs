@@ -98,6 +98,16 @@ pub struct BookInsights {
     /// up rather than how often the reporting client flushed. Sittings under
     /// the server's minimum are glances and don't count.
     pub sessions: i64,
+    /// Seconds belonging to the sittings [`Self::sessions`] counted, glances
+    /// excluded — the numerator for a per-sitting mean.
+    ///
+    /// Dividing [`Self::seconds_total`] by [`Self::sessions`] instead mixes
+    /// two populations: a book with one real sitting and a pile of glances
+    /// would report a mean above its own longest sitting. This is always
+    /// `<= seconds_total`, and the mean it yields is always
+    /// `<= longest_seconds`.
+    #[serde(default)]
+    pub sitting_seconds: i64,
     /// Seconds of the single longest sitting on this book.
     pub longest_seconds: i64,
     /// Unix seconds when that longest sitting started.

@@ -38,6 +38,8 @@ const BOOK_SESSIONS: &str = "\
 /// [`sessionize::MIN_SITTING_SECS`], while `seconds_total` sums every row the
 /// stitch grouped. A book whose only activity is glances therefore reports
 /// zero sessions and takes the empty state, the same as one never opened.
+/// `sitting_seconds` is the counted sittings' own total, so a caller wanting
+/// a per-sitting mean divides two figures drawn from the same population.
 pub async fn book_insights(
     pool: &SqlitePool,
     user_id: i64,
@@ -51,7 +53,9 @@ pub async fn book_insights(
 
     let sql = format!(
         "SELECT MIN(started_at) AS started_at, COALESCE(SUM(secs), 0) AS seconds_total, \
-                COALESCE(SUM(CASE WHEN secs >= {min_secs} THEN 1 ELSE 0 END), 0) AS sessions \
+                COALESCE(SUM(CASE WHEN secs >= {min_secs} THEN 1 ELSE 0 END), 0) AS sessions, \
+                COALESCE(SUM(CASE WHEN secs >= {min_secs} THEN secs ELSE 0 END), 0) \
+                    AS sitting_seconds \
          FROM ({sittings})"
     );
     let row = sqlx::query(&sql)
@@ -68,6 +72,7 @@ pub async fn book_insights(
     }
     let started_at: i64 = row.get("started_at");
     let seconds_total: i64 = row.get("seconds_total");
+    let sitting_seconds: i64 = row.get("sitting_seconds");
 
     // Longest single sit. Ties break to the earliest occurrence so the
     // answer is stable across runs. The floor is redundant against a `MAX`
@@ -112,6 +117,7 @@ pub async fn book_insights(
         started_at,
         seconds_total,
         sessions,
+        sitting_seconds,
         longest_seconds,
         longest_started_at,
         daily,
