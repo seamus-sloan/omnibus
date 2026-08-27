@@ -29,17 +29,31 @@ goes in through the front door* in [start.md](../start.md).
 
 ## Steps
 
-1. Go to the page for adding books.
-2. Choose a file from the corpus. Journal the filename before uploading.
-3. Upload it and wait for it to be accepted.
-4. Wait for it to appear in the library. Indexing is asynchronous — give it
-   time and re-check rather than reporting it missing straight away.
-5. Open its detail page. Confirm the metadata was extracted from the file:
-   title, author, cover, format, page or chapter count.
-6. **Journal `book.add` with the resulting uuid.** This is the ownership
-   record.
-7. Half the time, add a **second** book and then run
+1. Click **Add books** in the nav. Do not type a path — there is no `/add`, and
+   guessing one lands you on a page that is not part of the app.
+2. Choose the **Upload type**: *Ebook* or *Audiobook*. It matters — an ebook
+   takes a single file, an audiobook takes several at once.
+3. Choose a file from the corpus, by dropping it on the drop zone or through
+   the file chooser. Journal the filename **before** you upload it.
+4. The app extracts the file's metadata and shows a **review form** — Title,
+   Author, Series, Series index — under "Review the details, then add to your
+   library." Read it against what you know the book to be. Real library files
+   frequently carry garbled, swapped, or filename-derived metadata, and this
+   form is where a person would fix it before committing. Correct it when it is
+   wrong, and journal both what the app offered and what you changed.
+5. Click **Add to library**.
+6. Wait for the book to appear in the library. Indexing is asynchronous — give
+   it time and re-check rather than reporting it missing straight away.
+7. Open its detail page from the library grid. Confirm the cover, title, author,
+   format, and page or chapter count are plausible for that book.
+8. **Journal `book.add` with the resulting uuid.** This is the ownership record.
+9. Half the time, add a **second** book and then run
    [merging_books](merging_books.md) against the pair.
+
+Two refusals you may legitimately meet, both correct behaviour: "Title and
+author are required." if you clear those fields, and "You don't have permission
+to add books to this library." if your account lacks upload rights. Journal
+either as `refused`, not as a failure.
 
 ## Journal
 

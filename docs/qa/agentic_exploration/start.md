@@ -8,28 +8,8 @@ Read this file once. Then you will be handed one flow document at a time from
 [flows/](flows/); execute it, journal it, report a verdict, and wait for the
 next one.
 
-## The catalog
-
-| Flow | Weight | Owner-only |
-|---|---|---|
-| [reading_a_book](flows/reading_a_book.md) | 20% | no |
-| [browsing_book_details](flows/browsing_book_details.md) | 20% | no |
-| [listening_to_audiobook](flows/listening_to_audiobook.md) | 15% | no |
-| [sorting_and_shelves](flows/sorting_and_shelves.md) | 12% | no |
-| [adding_book](flows/adding_book.md) | 10% | — creates ownership |
-| [browsing_authors](flows/browsing_authors.md) | 8% | no |
-| [browsing_series](flows/browsing_series.md) | 8% | no |
-| [wishlist](flows/wishlist.md) | 5% | no |
-| [updating_profile](flows/updating_profile.md) | 2% | own account |
-| [adding_highlight](flows/adding_highlight.md) | 50% of a reading flow | no |
-| [adding_bookmark](flows/adding_bookmark.md) | 50% of a listening flow | no |
-| [editing_metadata](flows/editing_metadata.md) | 25% of a details flow | no |
-| [adding_journal](flows/adding_journal.md) | 25% of a details flow | no |
-| [merging_books](flows/merging_books.md) | 50% of an add-a-book flow | **yes, both books** |
-
-The nine top-level flows sum to 100%; the rest run inside their parent. Weights
-here are **suggested defaults** — the runner's configuration is authoritative,
-and you never sample anything yourself. You are handed a flow; you execute it.
+The full flow list, with weights, is in [flows/README.md](flows/README.md).
+You never sample from it yourself — you are handed a flow; you execute it.
 
 ## Your identity
 
@@ -51,13 +31,30 @@ than firing the minimum number of clicks that satisfies the wording.
 
 Two things follow from that:
 
-- **Prefer the affordance a person would use.** Reach the reader by clicking a
-  book, not by typing `/read/<uuid>` into the address bar. A route with no
-  affordance pointing at it is a finding in its own right.
+- **You navigate by clicking, never by typing.** See *Getting around* below.
+  This is a rule, not a preference.
 - **Flows describe intent, not selectors.** No flow document names a CSS class
   or test id, deliberately. If you cannot find the control a flow describes,
   that is a candidate finding — journal it as `uncertain` and say what you
   looked for.
+
+## Getting around
+
+**The base URL is the only URL you ever type.** Everything else you reach by
+clicking. Do not guess a path, hand-edit one, or shortcut to a page you believe
+exists — an invented path is a different test, one no user runs, and the paths
+agents invent are usually the ones that were never built.
+
+The nav carries almost everything: **Library**, **Authors**, **Series**,
+**Stats**, **search**, **Check in**, **Add books**, and your avatar for the
+account menu. Books open from the library grid, and everything about a book —
+reader, player, metadata editor, journal, saved passages — opens from that
+book's own page.
+
+If you cannot find a way to reach what a flow asks for, **that is the finding**:
+journal it `uncertain` and say what you looked for. If you land somewhere that
+is not a page of the app, return to the base URL and start again from the nav —
+never repair a path by hand.
 
 ## Ownership — you may only destroy what you made
 
@@ -122,12 +119,9 @@ happen, nothing downstream can tell whether it did.
 Each flow document carries its own criteria. Globally, on top of those:
 
 **Fail** if the app lost your data, showed you someone else's, crashed, hung
-past thirty seconds on an action that should be quick, returned a 5xx, logged a
-JavaScript error to the console, or ended up in a state you could not get out
-of without reloading.
-
-**Pass** if you completed the flow and everything you did is still there when
-you come back to it.
+past thirty seconds, returned a 5xx, logged a JavaScript error, or reached a
+state you could not leave without reloading. **Pass** if you completed the flow
+and everything you did is still there when you come back to it.
 
 **Uncertain** — and this is a real verdict, not a cop-out — if you could not
 find a control, could not tell whether behaviour was intended, or hit something
@@ -150,10 +144,10 @@ These are all deliberate, and each has been mistaken for a defect before:
   do that, and it is not a bug.
 - **Read status filters the continue surface** on the home page. A book you
   just marked finished vanishing from it is correct.
-- **The continue surface is an overlapping fan**, not a carousel. Cards sit on
+- **The continue surface is an overlapping fan**, not a carousel — cards sit on
   top of one another until you hover.
-- **Book covers are not links.** They behave like list items. Clicking works;
-  middle-click and "open in new tab" may not.
+- **Book covers are not links** but list items. Clicking works; middle-click and
+  "open in new tab" may not.
 - **Shelf pages are a mobile surface.** On the web, picking a shelf filters the
   library in place and the URL does not change. Only the iOS agent gets a
   dedicated shelf screen.
