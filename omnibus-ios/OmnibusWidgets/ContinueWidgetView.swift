@@ -3,34 +3,33 @@
 //
 //  The families are not the same layout at three sizes: small and medium each
 //  answer "what am I in the middle of" with a single book, and large answers
-//  "and when did I last touch each" with all of them. The one-book families
-//  carry a control that flips to the next book, because a widget cannot be
-//  swiped — see `ContinueIntents`.
+//  "and when did I last touch each" with all of them. A widget cannot be
+//  swiped, so the one-book families are each pinned to a book instead and the
+//  rail is walked by stacking them — see `ContinueIntents`.
 
-import AppIntents
 import SwiftUI
 import WidgetKit
 
 struct ContinueWidgetView: View {
     let snapshot: WidgetSnapshot
-    /// Which book the one-book families are showing, by `WidgetBook.id`.
-    var cursor: String?
+    /// Which book this copy is pinned to, by `WidgetBook.id`.
+    var selected: String?
 
     @Environment(\.widgetFamily) private var family
     @Environment(\.colorScheme) private var scheme
 
     /// The whole card takes its colour from the book it is about, the way the
     /// book-detail hero takes its wash from the book it is about. For the one
-    /// book families that is whichever the reader has flipped to; large is a
-    /// list, so it stays with the book leading it.
+    /// book families that is the pinned book; large is a list, so it stays with
+    /// the book leading it.
     private var theme: WidgetTheme {
-        WidgetTheme(tone: (isRail ? snapshot.books.first : shown?.book)?.tone, scheme: scheme)
+        WidgetTheme(tone: (isRail ? snapshot.books.first : shown)?.tone, scheme: scheme)
     }
 
     private var isRail: Bool { family == .systemLarge }
 
-    private var shown: (book: WidgetBook, index: Int)? {
-        snapshot.showing(cursor: cursor)
+    private var shown: WidgetBook? {
+        snapshot.showing(selected: selected)
     }
 
     var body: some View {
@@ -44,8 +43,8 @@ struct ContinueWidgetView: View {
     /// behind it.
     @ViewBuilder
     private var background: some View {
-        if family == .systemSmall, let book = shown?.book {
-            WidgetHeroBackdrop(book: book, theme: theme)
+        if family == .systemSmall, let shown {
+            WidgetHeroBackdrop(book: shown, theme: theme)
         } else {
             theme.ground
         }
@@ -53,12 +52,11 @@ struct ContinueWidgetView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let shown, !snapshot.books.isEmpty {
-            let rail = RailPosition(index: shown.index, count: snapshot.books.count)
+        if let shown {
             switch family {
-            case .systemSmall: SmallCard(book: shown.book, theme: theme, rail: rail)
+            case .systemSmall: SmallCard(book: shown, theme: theme)
             case .systemLarge: LargeCard(books: snapshot.books, theme: theme)
-            default: MediumCard(book: shown.book, theme: theme, rail: rail)
+            default: MediumCard(book: shown, theme: theme)
             }
         } else {
             EmptyCard(state: snapshot.state, theme: theme, family: family)
@@ -68,15 +66,6 @@ struct ContinueWidgetView: View {
 
 private enum Layout {
     static let margin: CGFloat = 14
-}
-
-/// Where the shown book sits in the rail — what the dots draw and what tells
-/// the advance control whether there is anywhere to go.
-private struct RailPosition {
-    let index: Int
-    let count: Int
-
-    var hasOthers: Bool { count > 1 }
 }
 
 // MARK: - Small
@@ -92,7 +81,6 @@ private struct RailPosition {
 private struct SmallCard: View {
     let book: WidgetBook
     let theme: WidgetTheme
-    let rail: RailPosition
 
     var body: some View {
         // Centred as a column. A 2:3 cover is far narrower than the card, so
@@ -129,9 +117,6 @@ private struct SmallCard: View {
         // the margins: it is the one element that reads at arm's length, and
         // the card has no vertical room left to give it a band of its own.
         .overlay(alignment: .bottom) { BleedBar(book: book, theme: theme) }
-        .overlay(alignment: .topTrailing) {
-            AdvanceButton(theme: theme, rail: rail).padding(6)
-        }
         .widgetURL(book.deepLink)
     }
 }
@@ -163,12 +148,11 @@ private struct BleedBar: View {
 ///
 /// The old three-across fan answered "which of my two or three" by shrinking
 /// all three to a thumbnail and a truncated title. This answers it by showing
-/// one book properly and letting the reader flip — which is the same question
-/// with the resume actually reachable from the Home Screen.
+/// one book properly, with the resume actually reachable from the Home Screen —
+/// and leaves "which of them" to a stack of these.
 private struct MediumCard: View {
     let book: WidgetBook
     let theme: WidgetTheme
-    let rail: RailPosition
 
     private var isAudio: Bool { book.format == .audio }
 
@@ -193,20 +177,13 @@ private struct MediumCard: View {
             .frame(maxHeight: .infinity)
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .center, spacing: 6) {
-                    Text(isAudio ? "Continue listening" : "Continue reading")
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .tracking(0.6)
-                        .textCase(.uppercase)
-                        .foregroundStyle(theme.rule)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-
-                    Spacer(minLength: 0)
-
-                    RailDots(theme: theme, rail: rail)
-                    AdvanceButton(theme: theme, rail: rail)
-                }
+                Text(isAudio ? "Continue listening" : "Continue reading")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .tracking(0.6)
+                    .textCase(.uppercase)
+                    .foregroundStyle(theme.rule)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
 
                 Text(book.title)
                     .font(.system(size: 17, weight: .semibold, design: .serif))
@@ -276,52 +253,6 @@ private struct ResumePill: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(Capsule().fill(theme.pillFill))
-        }
-    }
-}
-
-// MARK: - Flipping through the rail
-
-/// Moves the card on to the next book without leaving the Home Screen.
-///
-/// Hidden on a rail of one, where it would be a control that does nothing —
-/// and drawn as a chevron rather than a pair of arrows because the intent
-/// wraps, so forward is the only direction there needs to be.
-private struct AdvanceButton: View {
-    let theme: WidgetTheme
-    let rail: RailPosition
-
-    var body: some View {
-        if rail.hasOthers {
-            Button(intent: ShowNextBook()) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(theme.ink1)
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(theme.track))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Next book")
-        }
-    }
-}
-
-/// Where the shown book sits in the rail. Drawn from the resolved index rather
-/// than from a count of its own, so it cannot disagree with the card above it.
-private struct RailDots: View {
-    let theme: WidgetTheme
-    let rail: RailPosition
-
-    var body: some View {
-        if rail.hasOthers {
-            HStack(spacing: 4) {
-                ForEach(0..<rail.count, id: \.self) { position in
-                    Capsule()
-                        .fill(position == rail.index ? theme.rule : theme.ink2.opacity(0.35))
-                        .frame(width: position == rail.index ? 10 : 4, height: 4)
-                }
-            }
-            .accessibilityHidden(true)
         }
     }
 }

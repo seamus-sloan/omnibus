@@ -399,10 +399,9 @@ are the other half of a second target:
 OmnibusShared/      — source compiled into *both* the app and the widget
                       extension (a filesystem-synchronized group listed in two
                       targets' `fileSystemSynchronizedGroups`): WidgetSnapshot
-                      (the wire form, plus the cursor arithmetic the one-book
-                      families walk their rail with), WidgetStore (the App
-                      Group container's layout, the only encoder either side
-                      uses, and where that cursor is kept), DeepLink
+                      (the wire form, plus which book a pinned widget resolves
+                      to), WidgetStore (the App Group container's layout, and
+                      the only encoder either side uses), DeepLink
                       (the `omnibus://book/<uuid>` URLs the widget mints and
                       the app parses back) and OKLCH (the OKLCH↔sRGB
                       conversion for server-provided accents — shared so the
@@ -414,8 +413,11 @@ OmnibusWidgets/     — the WidgetKit extension (`com.omnibus.mobile.widgets`,
                       else, so it renders in Airplane Mode with the app force
                       quit), its three family layouts and the three distinct
                       empty states, ContinueIntents (a widget cannot be swiped,
-                      so small and medium each show one book and carry an
-                      `AppIntent` that flips to the next), and WidgetTheme —
+                      so small and medium each show *one* book and the widget
+                      is an `AppIntentConfiguration` — one copy per book,
+                      stacked, and the swipe is the stack's; `relevance()`
+                      publishes one configuration per book in progress so a
+                      Smart Stack has something to rotate), and WidgetTheme —
                       colours derived entirely from the book's own tone,
                       because the reader's chosen
                       theme lives in the app's `UserDefaults`, which the

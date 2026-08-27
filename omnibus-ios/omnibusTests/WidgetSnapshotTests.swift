@@ -118,11 +118,11 @@ struct WidgetSnapshotCodableTests {
     }
 }
 
-/// The cursor the one-book families flip through the rail with. A widget cannot
-/// be swiped, so this is the whole of "show the next book" — and it resolves
+/// Which book a pinned copy of the widget draws. A widget cannot be swiped, so
+/// each copy is configured to a book and the rail is walked by stacking them —
 /// against a rail the app rewrites on every position save.
-@Suite("Widget rail cursor")
-struct WidgetRailCursorTests {
+@Suite("Widget book selection")
+struct WidgetBookSelectionTests {
     private static func rail(_ uuids: [String]) -> WidgetSnapshot {
         WidgetSnapshot(
             state: .ready,
@@ -132,61 +132,51 @@ struct WidgetRailCursorTests {
     }
 
     @Test
-    func showing_starts_at_the_front_when_the_reader_has_not_flipped_yet() throws {
-        let shown = try #require(Self.rail(["a", "b", "c"]).showing(cursor: nil))
-        #expect(shown.book.bookUUID == "a")
-        #expect(shown.index == 0)
+    func showing_follows_the_most_recent_book_when_the_widget_is_unpinned() throws {
+        let shown = try #require(Self.rail(["a", "b", "c"]).showing(selected: nil))
+        #expect(shown.bookUUID == "a")
     }
 
     @Test
-    func showing_holds_the_book_the_reader_flipped_to() throws {
-        let shown = try #require(Self.rail(["a", "b", "c"]).showing(cursor: "b:epub"))
-        #expect(shown.book.bookUUID == "b")
-        #expect(shown.index == 1)
+    func showing_draws_the_book_the_widget_is_pinned_to() throws {
+        let shown = try #require(Self.rail(["a", "b", "c"]).showing(selected: "b:epub"))
+        #expect(shown.bookUUID == "b")
     }
 
-    /// Why the cursor names a book rather than an index: a save that reorders
-    /// the rail must not move the card out from under the reader.
+    /// Why the selection names a book rather than an index: a save that
+    /// reorders the rail must not repoint a pinned widget at a different book.
     @Test
     func showing_follows_its_book_when_the_rail_is_reordered_around_it() throws {
-        let shown = try #require(Self.rail(["c", "a", "b"]).showing(cursor: "b:epub"))
-        #expect(shown.book.bookUUID == "b")
-        #expect(shown.index == 2)
+        let shown = try #require(Self.rail(["c", "a", "b"]).showing(selected: "b:epub"))
+        #expect(shown.bookUUID == "b")
     }
 
+    /// A widget pinned to a book the reader has since finished falls back to
+    /// what they are reading now, rather than sitting on a dead card until they
+    /// think to reconfigure it.
     @Test
     func showing_falls_back_to_the_front_when_its_book_leaves_the_rail() throws {
-        let shown = try #require(Self.rail(["a", "c"]).showing(cursor: "b:epub"))
-        #expect(shown.book.bookUUID == "a")
-        #expect(shown.index == 0)
+        let shown = try #require(Self.rail(["a", "c"]).showing(selected: "b:epub"))
+        #expect(shown.bookUUID == "a")
     }
 
     @Test
     func showing_is_nil_when_there_is_nothing_to_continue() {
-        #expect(WidgetSnapshot.empty(.nothingInProgress).showing(cursor: "b:epub") == nil)
+        #expect(WidgetSnapshot.empty(.nothingInProgress).showing(selected: "b:epub") == nil)
+        #expect(WidgetSnapshot.empty().showing(selected: nil) == nil)
     }
 
+    /// The two formats of a dual-format book are two cards, so a widget pinned
+    /// to the audiobook must not be answered with the ebook.
     @Test
-    func next_walks_the_rail_in_order() {
-        #expect(Self.rail(["a", "b", "c"]).next(after: "a:epub")?.bookUUID == "b")
-    }
-
-    /// The advance control is the only way through the rail, so it has to come
-    /// back round — dead-ending on the last book would strand a reader away
-    /// from the one they are actually in the middle of.
-    @Test
-    func next_wraps_past_the_end_of_the_rail() {
-        #expect(Self.rail(["a", "b", "c"]).next(after: "c:epub")?.bookUUID == "a")
-    }
-
-    @Test
-    func next_on_a_rail_of_one_stays_where_it_is() {
-        #expect(Self.rail(["a"]).next(after: "a:epub")?.bookUUID == "a")
-    }
-
-    @Test
-    func next_is_nil_when_there_is_nothing_to_continue() {
-        #expect(WidgetSnapshot.empty().next(after: nil) == nil)
+    func showing_separates_the_two_formats_of_one_book() throws {
+        let snapshot = WidgetSnapshot(
+            state: .ready,
+            books: [entry(uuid: "a", format: .epub), entry(uuid: "a", format: .audio)],
+            generatedAt: Date(timeIntervalSince1970: 1_724_500_000)
+        )
+        let shown = try #require(snapshot.showing(selected: "a:audio"))
+        #expect(shown.format == .audio)
     }
 }
 
