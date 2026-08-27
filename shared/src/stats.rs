@@ -82,8 +82,9 @@ pub struct RankedEntity {
 /// `db::stats::book_insights` from the same `reading_sessions` /
 /// `listening_sessions` tables [`StatsSummary`] aggregates from, but scoped to
 /// a single `(user, book_uuid)` rather than a user-wide window. The RPC wraps
-/// this in `Option` — `None` means the book has no sitting worth reporting
-/// yet, driving the stop's quiet empty state.
+/// this in `Option` — `None` means either that the uuid resolves to no live
+/// book or that the book has no sitting worth reporting yet, both driving the
+/// stop's quiet empty state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BookInsights {
     /// Unix seconds of the earliest recorded session (reading or listening).

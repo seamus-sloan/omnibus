@@ -178,8 +178,9 @@ pub(super) async fn avg_stars(
 /// [`sessionize::MIN_SITTING_SECS`] don't count (their seconds still do,
 /// in `reading_seconds` / `listening_seconds`).
 ///
-/// A sitting that straddles `start` contributes only its in-window rows, so
-/// it can never be counted in two windows.
+/// Rows are windowed before they are stitched, so a sitting straddling
+/// `start` is truncated to its in-window part rather than pulling pre-window
+/// time into the count — and can fall under the floor once truncated.
 pub(super) async fn session_count(
     pool: &SqlitePool,
     user_id: i64,
