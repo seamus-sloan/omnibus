@@ -539,7 +539,15 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = omnibus.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				// Release signs manually against an explicit profile; Debug stays
+				// Automatic so local builds and the simulator test lanes are
+				// untouched. Set per-target here rather than on xcodebuild's
+				// command line, because a command-line setting applies to every
+				// target — including the SPM resource bundles, which reject a
+				// profile and fail the archive.
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
+				PROVISIONING_PROFILE_SPECIFIER = "Omnibus App Store Connect Distribution Prov Prof";
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = D33VSDXHA6;
 				ENABLE_APP_SANDBOX = YES;
@@ -717,7 +725,15 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = OmnibusWidgets.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				// Release signs manually against an explicit profile; Debug stays
+				// Automatic so local builds and the simulator test lanes are
+				// untouched. Set per-target here rather than on xcodebuild's
+				// command line, because a command-line setting applies to every
+				// target — including the SPM resource bundles, which reject a
+				// profile and fail the archive.
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
+				PROVISIONING_PROFILE_SPECIFIER = "Omnibus Widgets Prov Prof";
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = D33VSDXHA6;
 				GENERATE_INFOPLIST_FILE = YES;

@@ -156,13 +156,26 @@ jobs:
           expected-extension-bundle-id: ${{ env.WIDGET_BUNDLE_ID }}
           require-app-group: ${{ env.APP_GROUP_ID }}
 
-      # Archive unsigned. Signing settings passed on the xcodebuild command line
-      # apply to every target in the build — including SPM-generated resource
-      # bundles (ZIPFoundation_ZIPFoundation), which reject a manually specified
-      # profile and fail the archive. Signing happens at export instead, where
-      # ExportOptions.plist scopes the profile to the app's bundle id.
+      # Archive **signed**. This used to pass CODE_SIGNING_ALLOWED=NO and leave
+      # signing to export, on the reasoning that command-line signing settings
+      # apply to every target and the SPM resource bundles reject a profile.
+      # That is true, and the conclusion was wrong: a provisioning profile is a
+      # permission *ceiling*, not a source of entitlements. Entitlements come
+      # from each target's .entitlements file when the binary is signed, so an
+      # unsigned archive carries none and -exportArchive has nothing to carry
+      # through — it re-signed with only the four baseline entitlements and
+      # dropped the App Group, producing an IPA whose widget installs and
+      # renders nothing. Verified on the artifact from run 33024849469: the
+      # embedded profile granted group.com.omnibus.mobile, the binary never
+      # claimed it.
+      #
+      # The SPM problem is avoided by setting Manual signing per-target on the
+      # Release configuration in the project rather than on this command line,
+      # so the resource bundles keep their own defaults. Debug is untouched.
+      #
       # MARKETING_VERSION + CURRENT_PROJECT_VERSION are passed as build settings
-      # so the archive is stamped without editing the pbxproj.
+      # so the archive is stamped without editing the pbxproj, and apply to every
+      # target — the appex included, which App Store Connect requires to match.
       - name: Archive
         run: |
           set -euo pipefail
@@ -181,8 +194,6 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/omnibus.xcarchive" \
             archive \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
             MARKETING_VERSION="$MARKETING_VERSION" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 
