@@ -42,6 +42,32 @@ struct WidgetTheme {
 
     var track: Color { ink2.opacity(0.28) }
 
+    /// The Read/Play pill — the card's one solid, saturated shape. Everything
+    /// else on a hero card is a wash or a hairline, so this is what the eye
+    /// lands on and the reason the card reads as something to act on.
+    var pillFill: Color { OKLCH(isLight ? 0.52 : 0.82, tone.c * 1.0, tone.h).color }
+    var pillInk: Color { OKLCH(isLight ? 0.99 : 0.16, tone.c * 0.06, tone.h).color }
+
+    /// A bloom of the book's own colour behind its cover, lifting the artwork
+    /// off the wash instead of letting it sit on a flat panel. Same
+    /// construction as the app's `HeroCard.cardGround`.
+    func bloom(diameter: CGFloat) -> some View {
+        RadialGradient(
+            // Far weaker on a light ground. `plusLighter` on something already
+            // near white has nowhere to go but grey, so the strength the app's
+            // dark hero uses reads here as a smudge rather than as a glow.
+            colors: [OKLCH(0.62, tone.c * 0.9, tone.h).color.opacity(isLight ? 0.16 : 0.40), .clear],
+            center: .center,
+            startRadius: 0,
+            // Must land inside the frame's half-width, or the frame clips the
+            // gradient while it still has colour and the bloom shows a hard
+            // seam.
+            endRadius: diameter / 2
+        )
+        .frame(width: diameter, height: diameter)
+        .blendMode(.plusLighter)
+    }
+
     /// The plate a coverless book gets, so a shelf of them doesn't read as
     /// grey noise. A pared-back `GeneratedCoverPlate`: the app sets the title
     /// into the artwork, which a widget draws at 34pt wide in the large family
@@ -92,11 +118,122 @@ struct WidgetCover: View {
             .accessibilityLabel(book.title)
     }
 
-    private var image: UIImage? {
+    private var image: UIImage? { WidgetArt.image(for: book) }
+}
+
+/// The one place a card decodes a book's pre-rendered cover, and the memo that
+/// keeps it to once per file.
+///
+/// The small hero draws the same bytes twice — blurred as the card's ground,
+/// then sharp on top of it — and two decodes of one file on a render budget as
+/// tight as a widget's is a cost for nothing.
+///
+/// Entries are keyed by name and carry the file's modification date, because
+/// the app rewrites a cover in place under the same name when the artwork
+/// changes. Keying on the *pair* would leave the superseded bytes behind, one
+/// entry per revision; keying on the name and comparing the date replaces them.
+/// `@MainActor` rather than locked — SwiftUI evaluates a body there, which is
+/// the only place this is reached from.
+@MainActor
+enum WidgetArt {
+    private struct Entry {
+        let modified: Date?
+        let image: UIImage
+    }
+
+    private static var memo: [String: Entry] = [:]
+
+    static func image(for book: WidgetBook) -> UIImage? {
         guard let name = book.thumb,
               let url = WidgetStore.thumbURL(named: name)
         else { return nil }
-        return UIImage(contentsOfFile: url.path)
+
+        let modified = WidgetStore.thumbModified(named: name)
+        if let hit = memo[name], hit.modified == modified { return hit.image }
+
+        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
+        // One entry per name bounds this against a single snapshot, but not
+        // against a process that outlives several: the rail turns over as books
+        // are finished and started, and each new one is a name this has never
+        // seen. Dropping the lot at the ceiling costs one re-decode per visible
+        // card, which is the same cost this memo exists to save once.
+        if memo[name] == nil, memo.count >= WidgetSnapshot.maxBooks {
+            memo.removeAll(keepingCapacity: true)
+        }
+        memo[name] = Entry(modified: modified, image: image)
+        return image
+    }
+}
+
+/// The book's own artwork, blown up and blurred into the card's ground.
+///
+/// Falls back to the tone wash when there is no art — which is not a
+/// degradation so much as the same idea by a cheaper route, since the tone was
+/// extracted from that cover in the first place.
+struct WidgetHeroBackdrop: View {
+    let book: WidgetBook
+    let theme: WidgetTheme
+
+    var body: some View {
+        ZStack {
+            theme.ground
+            if let image = WidgetArt.image(for: book) {
+                // Held in a container that cannot grow, the same way
+                // `WidgetCover` holds its own: an aspect-fill image *reports* a
+                // size larger than the box it fills, so anything hung on it is
+                // laid out against that larger box. With the veil attached to
+                // the image directly, a 2:3 cover on a square card put the
+                // card's edges at 17% and 83% of the ramp — 0.22 of black at
+                // the top where 0.12 was asked for, and 0.62 at the bottom
+                // where 0.72 was. The gradient has to grade the *card*.
+                Color.clear
+                    .overlay {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            // Overfilled a little, because the blur below fades
+                            // to transparent at the image's own edges and the
+                            // fill is flush with the card across its width.
+                            // Without this the ground shows through as a
+                            // 24pt vignette down both sides.
+                            .scaleEffect(1.2)
+                            // Blurred hard enough that the crop is no longer
+                            // legible as a crop. A 2:3 cover filling a square
+                            // loses a third of its height, and at any gentler
+                            // radius what shows is recognisably the middle of
+                            // the artwork with its title sliced off.
+                            //
+                            // Not `opaque: true`. Covers with alpha are filed
+                            // as PNG on purpose (`WidgetStore.thumbExtensions`),
+                            // and telling the blur its input has no alpha pulls
+                            // black in around every transparent edge — on
+                            // exactly the covers the store goes out of its way
+                            // to keep unflattened.
+                            .blur(radius: 24, opaque: false)
+                            // A blur this heavy is an average of the whole
+                            // cover, and the average of any artwork is closer
+                            // to grey than any part of it was. Pushing the
+                            // chroma back up is what keeps the ground reading
+                            // as *this book's* colour.
+                            .saturation(1.4)
+                    }
+                    .clipped()
+                    // Graded, not flat. A single veil strong enough to carry
+                    // the title at the bottom of the card washes the top of it
+                    // out too, and the top is the half with the artwork's
+                    // colour in it — which is the whole reason for using the
+                    // cover as a ground rather than the tone.
+                    .overlay {
+                        LinearGradient(
+                            colors: theme.isLight
+                                ? [.white.opacity(0.08), .white.opacity(0.66)]
+                                : [.black.opacity(0.12), .black.opacity(0.72)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+            }
+        }
     }
 }
 

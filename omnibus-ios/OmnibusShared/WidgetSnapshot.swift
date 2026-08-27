@@ -1,10 +1,15 @@
 //  WidgetSnapshot.swift
-//  What the app hands the Home Screen, and the only thing a widget reads.
+//  What the app hands the Home Screen: every book a card could draw, and
+//  everything it draws about one.
 //
 //  A timeline render gets a tight memory and time budget, so the extension is
 //  given a finished answer rather than a second reader on `OfflineStore` — no
-//  SQLite, no decoding of the full `Book` payloads, no network. Everything a
-//  card draws is resolved app-side and written here.
+//  SQLite, no decoding of the full `Book` payloads, no network.
+//
+//  *Which* of those books a one-book card shows is the one thing not resolved
+//  app-side: the reader flips it from the Home Screen, so the extension keeps
+//  that cursor in the App Group's defaults and resolves it against this list —
+//  see `showing(cursor:)` and `WidgetStore.cursor()`.
 
 import Foundation
 
@@ -90,5 +95,45 @@ struct WidgetSnapshot: Codable, Sendable, Equatable {
     /// fresh install, or a container the extension cannot reach.
     static func empty(_ state: State = .signedOut) -> WidgetSnapshot {
         WidgetSnapshot(state: state, generatedAt: .distantPast)
+    }
+
+    /// The most the medium card's control will flip through.
+    ///
+    /// Five is what the large family *lists*, and listing is cheap. Flipping is
+    /// not: every book past the front costs a tap and a redraw to reach, and
+    /// past three the control stops meaning "the other book I'm in" and starts
+    /// meaning "page my library" — which is the app's job, not a widget's.
+    static let maxFlipped = 3
+
+    /// The books that control walks. The front of the rail, capped.
+    var flipRail: [WidgetBook] {
+        Array(books.prefix(Self.maxFlipped))
+    }
+
+    /// Which book the medium card is showing, and where it sits in that rail.
+    ///
+    /// The cursor names a *book*, never an index. The rail is rewritten on
+    /// every position save, so an index means "whatever is second today" — the
+    /// next save that reorders it would move the card out from under the
+    /// reader. Naming the book lets it hold its place, and gives an honest
+    /// answer once it drops off: it is gone, so the front book takes over.
+    /// Same rule as the app's `ContinueHero.selected`.
+    func showing(cursor: String?) -> (book: WidgetBook, index: Int)? {
+        let rail = flipRail
+        guard let first = rail.first else { return nil }
+        guard let cursor, let index = rail.firstIndex(where: { $0.id == cursor }) else {
+            return (first, 0)
+        }
+        return (rail[index], index)
+    }
+
+    /// The book after the cursor's, wrapping at the end — where the card's
+    /// advance control moves to. It wraps because that control is the only way
+    /// through the rail: dead-ending on the last book would leave no way back
+    /// to the one the reader is actually in the middle of.
+    func next(after cursor: String?) -> WidgetBook? {
+        let rail = flipRail
+        guard let (_, index) = showing(cursor: cursor) else { return nil }
+        return rail[(index + 1) % rail.count]
     }
 }

@@ -75,9 +75,10 @@ compiles into two binaries without a framework.
 
 ## Widgets
 
-The Home Screen gets **Continue** in all three system families — one book,
-three across, or five with last-read timestamps. It is the landing Continue
-stack, and like the rest of the app it is local-first: the widget reads the
+The Home Screen gets **Continue** in all three system families — the book you
+are in, that book with a control that flips through the next two, or five with
+last-read timestamps. It is the landing Continue stack, and like the rest of the
+app it is local-first: apart from the one write below, the widget reads the
 shared container and nothing else, so it draws in Airplane Mode with the app
 force quit.
 
@@ -106,6 +107,20 @@ force quit.
   next opened, while the app's own rail had already healed. `refreshRail` owns
   it now so a new call site can't reintroduce the split. Gated on reachability:
   offline the pass stays a pure replica read.
+- **A widget cannot be swiped, so the medium card flips.** The system renders a
+  widget as a snapshot and routes only taps — a `widgetURL`/`Link` that opens
+  the app, or an `AppIntent` that runs in the extension. So the medium family
+  shows one book and a chevron backed by `ShowNextBook`, which advances a cursor
+  and reloads the timeline in place. That cursor is the **one piece of widget
+  state the extension writes**: it lives in the App Group's `UserDefaults`
+  rather than in the snapshot file, because the app owns that file and rewrites
+  it wholesale on every position save, so a cursor kept there would be erased by
+  the next sync. It names a book rather than an index — the rail is reordered by
+  those same saves — and falls back to the front when its book leaves. The flip
+  caps at three (`WidgetSnapshot.maxFlipped`): the large family *lists* five,
+  and listing is cheap, but every book past the front of a flip costs a tap.
+  The small family carries no control at all; it answers with the book you
+  touched last and nothing else.
 - **The three empty states are three different screens.** "Not signed in",
   "no books yet" and "nothing open" want three different next steps; a bare
   empty list can't tell them apart, and a blank tile tells the reader nothing.

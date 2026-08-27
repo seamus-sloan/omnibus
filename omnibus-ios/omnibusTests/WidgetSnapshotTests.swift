@@ -118,6 +118,112 @@ struct WidgetSnapshotCodableTests {
     }
 }
 
+/// The cursor the medium card flips through its rail with. A widget cannot be
+/// swiped, so this is the whole of "show the next book" — and it resolves
+/// against a rail the app rewrites on every position save.
+@Suite("Widget rail cursor")
+struct WidgetRailCursorTests {
+    private static func rail(_ uuids: [String]) -> WidgetSnapshot {
+        WidgetSnapshot(
+            state: .ready,
+            books: uuids.map { entry(uuid: $0) },
+            generatedAt: Date(timeIntervalSince1970: 1_724_500_000)
+        )
+    }
+
+    @Test
+    func showing_starts_at_the_front_when_the_reader_has_not_flipped_yet() throws {
+        let shown = try #require(Self.rail(["a", "b", "c"]).showing(cursor: nil))
+        #expect(shown.book.bookUUID == "a")
+        #expect(shown.index == 0)
+    }
+
+    @Test
+    func showing_holds_the_book_the_reader_flipped_to() throws {
+        let shown = try #require(Self.rail(["a", "b", "c"]).showing(cursor: "b:epub"))
+        #expect(shown.book.bookUUID == "b")
+        #expect(shown.index == 1)
+    }
+
+    /// Why the cursor names a book rather than an index: a save that reorders
+    /// the rail must not move the card out from under the reader.
+    @Test
+    func showing_follows_its_book_when_the_rail_is_reordered_around_it() throws {
+        let shown = try #require(Self.rail(["c", "a", "b"]).showing(cursor: "b:epub"))
+        #expect(shown.book.bookUUID == "b")
+        #expect(shown.index == 2)
+    }
+
+    @Test
+    func showing_falls_back_to_the_front_when_its_book_leaves_the_rail() throws {
+        let shown = try #require(Self.rail(["a", "c"]).showing(cursor: "b:epub"))
+        #expect(shown.book.bookUUID == "a")
+        #expect(shown.index == 0)
+    }
+
+    @Test
+    func showing_is_nil_when_there_is_nothing_to_continue() {
+        #expect(WidgetSnapshot.empty(.nothingInProgress).showing(cursor: "b:epub") == nil)
+    }
+
+    @Test
+    func next_walks_the_rail_in_order() {
+        #expect(Self.rail(["a", "b", "c"]).next(after: "a:epub")?.bookUUID == "b")
+    }
+
+    /// The advance control is the only way through the rail, so it has to come
+    /// back round — dead-ending on the last book would strand a reader away
+    /// from the one they are actually in the middle of.
+    @Test
+    func next_wraps_past_the_end_of_the_rail() {
+        #expect(Self.rail(["a", "b", "c"]).next(after: "c:epub")?.bookUUID == "a")
+    }
+
+    @Test
+    func next_on_a_rail_of_one_stays_where_it_is() {
+        #expect(Self.rail(["a"]).next(after: "a:epub")?.bookUUID == "a")
+    }
+
+    @Test
+    func next_is_nil_when_there_is_nothing_to_continue() {
+        #expect(WidgetSnapshot.empty().next(after: nil) == nil)
+    }
+
+    /// The large family lists five; the medium card flips through three. A
+    /// reader with more books in progress than that must not be able to tap
+    /// their way past the cap.
+    @Test
+    func flip_rail_stops_at_three_however_many_books_are_in_progress() {
+        let snapshot = Self.rail(["a", "b", "c", "d", "e"])
+        #expect(snapshot.books.count == 5)
+        #expect(snapshot.flipRail.map(\.bookUUID) == ["a", "b", "c"])
+        #expect(snapshot.next(after: "c:epub")?.bookUUID == "a")
+    }
+
+    /// A cursor left on a book that the cap has since pushed off the rail —
+    /// a fourth book arriving in front of it — reads as gone, not as an index
+    /// past the end.
+    @Test
+    func showing_falls_back_when_a_new_book_pushes_its_book_past_the_cap() throws {
+        let shown = try #require(Self.rail(["d", "a", "b", "c"]).showing(cursor: "c:epub"))
+        #expect(shown.book.bookUUID == "d")
+        #expect(shown.index == 0)
+    }
+
+    /// The two formats of a dual-format book are two cards, so a cursor on the
+    /// audiobook must not be answered with the ebook.
+    @Test
+    func showing_separates_the_two_formats_of_one_book() throws {
+        let snapshot = WidgetSnapshot(
+            state: .ready,
+            books: [entry(uuid: "a", format: .epub), entry(uuid: "a", format: .audio)],
+            generatedAt: Date(timeIntervalSince1970: 1_724_500_000)
+        )
+        let shown = try #require(snapshot.showing(cursor: "a:audio"))
+        #expect(shown.book.format == .audio)
+    }
+}
+
 @Suite("Widget deep links")
 struct WidgetDeepLinkTests {
     @Test
