@@ -291,6 +291,11 @@ private struct ResumePill: View {
             HStack(spacing: 5) {
                 Image(systemName: book.format == .audio ? "play.fill" : "book.fill")
                     .font(.system(size: 9, weight: .bold))
+                    // Decorative — the word beside it already says what this
+                    // does, and VoiceOver reads a bare system image as its
+                    // symbol name, so leaving it in makes the control announce
+                    // as "play.fill Play".
+                    .accessibilityHidden(true)
                 Text(book.format == .audio ? "Play" : "Read")
                     .font(.system(size: 11.5, weight: .semibold))
             }
@@ -313,6 +318,19 @@ private struct AdvanceButton: View {
     let theme: WidgetTheme
     let rail: RailPosition
 
+    /// How far past the drawn chip a tap still counts.
+    ///
+    /// The chip stays 22pt because the card's height budget is tuned around it
+    /// — the eyebrow row is as tall as this control, and the title's second
+    /// line is what pays for any growth. But 22pt is half Apple's minimum, and
+    /// this is the one control on the card whose *miss* does something other
+    /// than what a hit does: every other target here resolves to the same
+    /// `book.deepLink`, while the margin around this one is the card-wide
+    /// `widgetURL`, so a tap a few points off cold-launches the reader instead
+    /// of flipping. The padding buys the hit area, the negative padding hands
+    /// the layout its 22pt back.
+    private static let slop: CGFloat = 8
+
     var body: some View {
         if rail.hasOthers {
             Button(intent: ShowNextBook()) {
@@ -321,8 +339,11 @@ private struct AdvanceButton: View {
                     .foregroundStyle(theme.ink1)
                     .frame(width: 22, height: 22)
                     .background(Circle().fill(theme.track))
+                    .padding(Self.slop)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .padding(-Self.slop)
             .accessibilityLabel("Next book")
         }
     }

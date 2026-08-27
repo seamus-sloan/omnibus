@@ -128,32 +128,39 @@ struct WidgetCover: View {
 /// then sharp on top of it — and two decodes of one file on a render budget as
 /// tight as a widget's is a cost for nothing.
 ///
-/// Keyed on the file's modification date as well as its name, because the app
-/// rewrites a cover in place under the same name when the artwork changes: a
-/// name-only key would pin a live extension process to the bytes it happened to
-/// decode first. `@MainActor` rather than locked — SwiftUI evaluates a body
-/// there, which is the only place this is reached from.
+/// Entries are keyed by name and carry the file's modification date, because
+/// the app rewrites a cover in place under the same name when the artwork
+/// changes. Keying on the *pair* would leave the superseded bytes behind, one
+/// entry per revision; keying on the name and comparing the date replaces them.
+/// `@MainActor` rather than locked — SwiftUI evaluates a body there, which is
+/// the only place this is reached from.
 @MainActor
 enum WidgetArt {
-    private struct Key: Hashable {
-        let name: String
+    private struct Entry {
         let modified: Date?
+        let image: UIImage
     }
 
-    private static var memo: [Key: UIImage] = [:]
+    private static var memo: [String: Entry] = [:]
 
     static func image(for book: WidgetBook) -> UIImage? {
         guard let name = book.thumb,
               let url = WidgetStore.thumbURL(named: name)
         else { return nil }
 
-        let key = Key(name: name, modified: WidgetStore.thumbModified(named: name))
-        if let cached = memo[key] { return cached }
+        let modified = WidgetStore.thumbModified(named: name)
+        if let hit = memo[name], hit.modified == modified { return hit.image }
 
         guard let image = UIImage(contentsOfFile: url.path) else { return nil }
-        // Bounded by the snapshot, which is bounded by `WidgetSnapshot.maxBooks`
-        // — so this cannot grow with the reader's library.
-        memo[key] = image
+        // One entry per name bounds this against a single snapshot, but not
+        // against a process that outlives several: the rail turns over as books
+        // are finished and started, and each new one is a name this has never
+        // seen. Dropping the lot at the ceiling costs one re-decode per visible
+        // card, which is the same cost this memo exists to save once.
+        if memo[name] == nil, memo.count >= WidgetSnapshot.maxBooks {
+            memo.removeAll(keepingCapacity: true)
+        }
+        memo[name] = Entry(modified: modified, image: image)
         return image
     }
 }
