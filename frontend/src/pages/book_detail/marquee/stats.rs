@@ -53,7 +53,7 @@ pub(super) fn MarqueeStatsStop(
 fn render_stats(i: &BookInsights, progress: &MarqueeProgress, audio_only: bool) -> Element {
     let started_short = short_date(i.started_at);
     let days_in = ((now_unix() - i.started_at) / 86_400).max(0) + 1;
-    let avg = duration_label(i.seconds_total / i.sessions.max(1));
+    let avg = duration_label(avg_sit_secs(i));
     let time_label = if audio_only {
         "Time listened"
     } else {
@@ -87,6 +87,15 @@ fn render_stats(i: &BookInsights, progress: &MarqueeProgress, audio_only: bool) 
             span { "today" }
         }
     }
+}
+
+/// Mean seconds per counted sitting, the "avg sit" line under Pickups.
+///
+/// Divides `sitting_seconds` rather than `seconds_total`: the latter also
+/// carries glances too short to be sittings, which would push the mean above
+/// the "Longest sit" rendered in the next cell.
+fn avg_sit_secs(i: &BookInsights) -> i64 {
+    i.sitting_seconds / i.sessions.max(1)
 }
 
 /// One `.rx-stat` cell.
@@ -238,6 +247,46 @@ mod tests {
     #[test]
     fn duration_label_clamps_negative_input_to_zero() {
         assert_eq!(duration_label(-100), "0m");
+    }
+
+    fn insights(
+        seconds_total: i64,
+        sessions: i64,
+        sitting_seconds: i64,
+        longest: i64,
+    ) -> BookInsights {
+        BookInsights {
+            started_at: 0,
+            seconds_total,
+            sessions,
+            sitting_seconds,
+            longest_seconds: longest,
+            longest_started_at: 0,
+            daily: vec![],
+            as_of_day: "2026-08-27".into(),
+        }
+    }
+
+    #[test]
+    fn avg_sit_never_exceeds_the_longest_sit_beside_it() {
+        // One 30m sitting plus 40 glances of 30s: `seconds_total` carries all
+        // 3000s, but only the 1800s sitting was counted, so the mean must be
+        // 30m — not the 50m that dividing the full total would print next to
+        // a "Longest sit" of 30m.
+        let i = insights(3_000, 1, 1_800, 1_800);
+        assert_eq!(avg_sit_secs(&i), 1_800);
+        assert!(avg_sit_secs(&i) <= i.longest_seconds);
+    }
+
+    #[test]
+    fn avg_sit_means_the_counted_sittings() {
+        let i = insights(3_700, 2, 3_600, 2_400);
+        assert_eq!(avg_sit_secs(&i), 1_800);
+    }
+
+    #[test]
+    fn avg_sit_does_not_divide_by_zero_without_sittings() {
+        assert_eq!(avg_sit_secs(&insights(40, 0, 0, 0)), 0);
     }
 
     #[test]

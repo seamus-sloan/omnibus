@@ -182,6 +182,51 @@ async fn all_time_aggregates_hours_sessions_and_active_days() {
 }
 
 #[tokio::test]
+async fn session_count_stitches_contiguous_checkpoint_rows_into_one_sitting() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    // An hour of web reading as sixty 60s heartbeat flushes.
+    for i in 0..60 {
+        reading_session(&pool, user, "uuid-1", T0 + i * 60, 60).await;
+    }
+
+    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+
+    assert_eq!(s.sessions, 1);
+    assert_eq!(s.reading_seconds, 3600, "the stitch must not lose time");
+}
+
+#[tokio::test]
+async fn session_count_counts_two_books_read_back_to_back_separately() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let user = seed_user(&pool, "alice").await;
+    // No idle between them, but sittings are scoped per book — so this is
+    // two pickups, and the user-wide figure stays the sum of each book's.
+    reading_session(&pool, user, "uuid-1", T0, 600).await;
+    reading_session(&pool, user, "uuid-2", T0 + 600, 600).await;
+
+    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+
+    assert_eq!(s.sessions, 2);
+}
+
+#[tokio::test]
+async fn session_count_excludes_glances_but_keeps_their_seconds() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    reading_session(&pool, user, "uuid-1", T0, 600).await;
+    reading_session(&pool, user, "uuid-1", T0 + DAY, 20).await;
+
+    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+
+    assert_eq!(s.sessions, 1);
+    assert_eq!(s.reading_seconds, 620);
+}
+
+#[tokio::test]
 async fn streak_counts_longest_consecutive_run() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 1).await;

@@ -82,19 +82,35 @@ pub struct RankedEntity {
 /// `db::stats::book_insights` from the same `reading_sessions` /
 /// `listening_sessions` tables [`StatsSummary`] aggregates from, but scoped to
 /// a single `(user, book_uuid)` rather than a user-wide window. The RPC wraps
-/// this in `Option` — `None` means the book has no recorded sessions yet,
-/// driving the stop's quiet empty state.
+/// this in `Option` — `None` means either that the uuid resolves to no live
+/// book or that the book has no sitting worth reporting yet, both driving the
+/// stop's quiet empty state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BookInsights {
     /// Unix seconds of the earliest recorded session (reading or listening).
     pub started_at: i64,
     /// Total seconds across every reading and listening session on this book.
+    /// Counts every recorded second, including those in sittings too short
+    /// to appear in [`Self::sessions`].
     pub seconds_total: i64,
-    /// Count of reading + listening sessions on this book.
+    /// Count of *sittings* — adjacent checkpoint rows across both formats
+    /// stitched back together, so this reflects how often the book was picked
+    /// up rather than how often the reporting client flushed. Sittings under
+    /// the server's minimum are glances and don't count.
     pub sessions: i64,
-    /// Seconds of the single longest session on this book.
+    /// Seconds belonging to the sittings [`Self::sessions`] counted, glances
+    /// excluded — the numerator for a per-sitting mean.
+    ///
+    /// Dividing [`Self::seconds_total`] by [`Self::sessions`] instead mixes
+    /// two populations: a book with one real sitting and a pile of glances
+    /// would report a mean above its own longest sitting. This is always
+    /// `<= seconds_total`, and the mean it yields is always
+    /// `<= longest_seconds`.
+    #[serde(default)]
+    pub sitting_seconds: i64,
+    /// Seconds of the single longest sitting on this book.
     pub longest_seconds: i64,
-    /// Unix seconds when that longest session started.
+    /// Unix seconds when that longest sitting started.
     pub longest_started_at: i64,
     /// Per-day activity on this book (active days only, ascending). Days use
     /// the same UTC `YYYY-MM-DD` bucketing as [`DayActivity`] elsewhere;
@@ -175,6 +191,8 @@ pub struct StatsSummary {
     /// `PartialEq`-only.
     #[serde(default)]
     pub avg_stars: Option<f64>,
+    /// Sittings in the window — checkpoint rows stitched back together per
+    /// book, glances excluded. Not a row count: see [`BookInsights::sessions`].
     pub sessions: i64,
     pub active_days: i64,
     pub longest_streak_days: i64,
@@ -232,7 +250,13 @@ impl StatsSummary {
     }
 
     /// True when the user has no activity to show, driving the empty state.
+    ///
+    /// Tested on recorded seconds rather than [`Self::sessions`], which is a
+    /// *filtered* count — sittings under the server's minimum don't reach it.
+    /// A reader whose every sitting was a glance still has time read, active
+    /// days, a heatmap and top authors to render, so keying the page's empty
+    /// state on the count would blank a populated page.
     pub fn is_empty(&self) -> bool {
-        self.sessions == 0 && self.books_finished == 0
+        self.total_seconds() == 0 && self.books_finished == 0
     }
 }
