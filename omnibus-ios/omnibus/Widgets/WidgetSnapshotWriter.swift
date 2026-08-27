@@ -134,8 +134,13 @@ actor WidgetSnapshotWriter {
         let pull = Task {
             for await _ in UserDataService.recentProgress().values() {}
         }
+        // `try`, not `try?`: cancelling the deadline has to *skip* the cancel,
+        // and a swallowed `CancellationError` would fall through to it instead.
+        // Harmless in this order — the pull has already finished by then — but
+        // it reads as a guard it isn't, and one swapped line would make it a
+        // real spurious cancel.
         let deadline = Task {
-            try? await Task.sleep(for: railDeadline)
+            try await Task.sleep(for: railDeadline)
             pull.cancel()
         }
         await pull.value
