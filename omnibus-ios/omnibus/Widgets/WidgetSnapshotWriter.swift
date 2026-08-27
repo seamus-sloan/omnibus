@@ -103,31 +103,21 @@ actor WidgetSnapshotWriter {
     }
 
     /// Pull the Continue rail through its live read, for the write into the
-    /// cache the read performs — the values are `build`'s business.
+    /// cache the read performs — the values are `build`'s business. A position
+    /// this device just wrote carries no percent, so a card composed from the
+    /// replica alone draws no bar; see the widget section of
+    /// `omnibus-ios/README.md` for why that is and what it cost.
     ///
-    /// A position this device just wrote is deliberately incomplete: the
-    /// reader saves a CFI and the server derives the whole-book percent off
-    /// the request path, so the optimistic row carries no percent and a card
-    /// built from it draws no bar. Half the passes used to pull first and half
-    /// didn't, and the ones that didn't are the two that run right after a
-    /// write — a close, a backgrounding — so the Home Screen kept the barless
-    /// snapshot until the app was next opened. Owning the pull here is what
-    /// stops the next call site from reintroducing that.
+    /// Three invariants an edit here has to keep:
     ///
-    /// Gated on reachability like the cover fetch below: offline this stays a
-    /// pure replica read rather than paying a request timeout inside a
-    /// background assertion that cancels the whole pass when it runs out.
-    ///
-    /// Bounded for the same reason, and the bound **cancels** rather than
-    /// abandons. Waiting unbounded would put a hung request in front of the
-    /// publish on the way to the background, where a pass the expiration
-    /// handler cancels writes no snapshot at all and the Home Screen keeps an
-    /// older one. Letting the read run on past the bound — `firstResult`'s
-    /// shape — would break this actor's one guarantee, that the last caller is
-    /// the last writer: a pull outliving its pass still carries the bearer it
-    /// went out with, so it can land the previous account's rail in the replica
-    /// after a sign-out. Cancelling costs only a request that hadn't answered,
-    /// since `Cache.live` caches whatever it has already fetched regardless.
+    /// - **Signed in and online only.** Offline this stays a pure replica read
+    ///   rather than paying a request timeout inside a background assertion.
+    /// - **Bounded**, so a hung request can't sit in front of the publish on
+    ///   the way to the background — a pass the expiration handler cancels
+    ///   writes no snapshot at all.
+    /// - **The bound cancels rather than abandons.** A pull outliving its pass
+    ///   still carries the bearer it went out with, and would break this
+    ///   actor's one guarantee that the last caller is the last writer.
     private static func refreshRail(hasToken: Bool) async {
         // Bound separately: `shouldPullRail` is synchronous, so an `await` in
         // front of it would name the wrong thing as the suspension point.

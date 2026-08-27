@@ -78,7 +78,8 @@ final class LifecycleSync {
 
         // The replica entries a returning reader is most likely to be looking
         // at. Everything else refreshes when its screen asks — the Continue
-        // rail included, which the snapshot pass below pulls for itself.
+        // rail included, which the snapshot pass below pulls for itself when
+        // there is a session and a network to pull with.
         await LibraryIndex.shared.sync()
 
         await WidgetSnapshotWriter.shared.refresh()
@@ -189,9 +190,9 @@ final class LifecycleSync {
     ///
     /// Deliberately narrow. The system grants seconds, not minutes, and killing
     /// the app for overrunning costs future grants — so this drains the outbox
-    /// and refreshes the resume rail (inside the snapshot pass, which pulls it),
-    /// and leaves the library mirror to a real foreground where there's time to
-    /// page through it.
+    /// and refreshes the resume rail (inside the snapshot pass, which pulls it
+    /// when online), and leaves the library mirror to a real foreground where
+    /// there's time to page through it.
     private func runBackgroundRefresh(_ task: BGAppRefreshTask) async {
         // Re-arm first: an early return past this point would otherwise end the
         // chain and the app would never be woken again.
