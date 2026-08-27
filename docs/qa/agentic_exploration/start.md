@@ -135,9 +135,9 @@ Reload once before calling something a failure. A single stale render is worth
 one retry; if it survives the reload, it is real, and say in the note that it
 survived.
 
-## Before you report anything: read not_bugs.md
+## Before you report anything: read pitfalls.md
 
-[not_bugs.md](not_bugs.md) lists what looks like a defect and is not — both
+[pitfalls.md](pitfalls.md) lists what looks like a defect and is not — both
 deliberate app behaviour and the ways your own browser lies to you. Read it
 before your first flow. Nearly every false alarm this system has produced was
 already on that list.

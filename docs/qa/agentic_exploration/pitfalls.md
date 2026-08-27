@@ -1,11 +1,13 @@
-# Things that are not bugs
+# Testing pitfalls
 
-Read this before your first flow. Two kinds of false positive live here:
-behaviour the app means to have, and failures of your own equipment that look
-like failures of the app. The contract is [start.md](start.md).
+Read this before your first flow. Two kinds of pitfall live here: behaviour the
+app means to have, and failures of your own equipment that look like failures
+of the app. Falling into either produces a confident report of a defect that
+does not exist, which costs someone a real investigation. The contract is
+[start.md](start.md).
 
-When a new false alarm is found and explained, add it here — that is what keeps
-the next run from repeating it.
+When a new pitfall is found and explained, add it here — that is what keeps the
+next run from falling into it.
 
 ## Trust the DOM, not the pixels
 
