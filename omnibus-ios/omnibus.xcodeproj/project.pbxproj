@@ -539,7 +539,16 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = omnibus.entitlements;
+				/* Device Release signs manually against an explicit profile, so the
+				   .entitlements are applied at archive time. Scoped to iphoneos:
+				   a Release *simulator* build would otherwise demand distribution
+				   credentials nobody has locally. Set per-target here rather than
+				   on xcodebuild's command line, which applies to every target
+				   including the SPM resource bundles — they reject a profile. */
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";
 				CODE_SIGN_STYLE = Automatic;
+				"CODE_SIGN_STYLE[sdk=iphoneos*]" = Manual;
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "Omnibus App Store Connect Distribution Prov Prof";
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = D33VSDXHA6;
 				ENABLE_APP_SANDBOX = YES;
@@ -717,7 +726,16 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = OmnibusWidgets.entitlements;
+				/* Device Release signs manually against an explicit profile, so the
+				   .entitlements are applied at archive time. Scoped to iphoneos:
+				   a Release *simulator* build would otherwise demand distribution
+				   credentials nobody has locally. Set per-target here rather than
+				   on xcodebuild's command line, which applies to every target
+				   including the SPM resource bundles — they reject a profile. */
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";
 				CODE_SIGN_STYLE = Automatic;
+				"CODE_SIGN_STYLE[sdk=iphoneos*]" = Manual;
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "Omnibus Widgets Prov Prof";
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = D33VSDXHA6;
 				GENERATE_INFOPLIST_FILE = YES;

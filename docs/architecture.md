@@ -437,15 +437,18 @@ the App Groups capability for `group.com.omnibus.mobile` — which means the
 *existing* app profile has to be regenerated, not just the new one created: a
 profile does not pick up a capability added after it was created.
 
-Getting that wrong fails **silently**, which is why the workflow checks it three
-ways. The archive is built unsigned, so the binaries carry no entitlements and
-`-exportArchive` derives them wholly from the profiles — a profile missing the
-App Group yields an IPA that exports, uploads and installs, whose widgets then
-render their placeholder forever because `containerURL` returns `nil`.
-`.github/actions/ios-signing/check-profile.sh` therefore asserts each profile's
-app id, App Group and distribution type *before* the archive, and the export step
-re-reads the signed IPA to confirm the entitlement actually landed. Simulator
-lanes prove none of it — they sign ad-hoc.
+Getting that wrong fails **silently**, so it is checked from both ends. A
+provisioning profile only *permits* an entitlement — the binary has to claim it,
+which happens when the target's `.entitlements` is applied at signing time. The
+release archive is therefore signed (manual signing, set per-target on the
+**Release** configuration and scoped to `iphoneos` so simulator builds need no
+distribution credentials); an unsigned archive carries no entitlements at all and
+`-exportArchive` re-signs it with only the baseline four, which is how a correct
+profile still yields a widget that renders nothing.
+`.github/actions/ios-signing/check-profile.sh` asserts each profile's app id, App
+Group and distribution type *before* the archive, and the export step re-reads
+the signed IPA to confirm the entitlement actually landed. Simulator lanes prove
+none of it — they sign ad-hoc.
 
 **TestFlight release:** the manually-triggered
 `.github/workflows/testflight.yml` (workflow_dispatch, `macos-26` runner —

@@ -13,11 +13,13 @@ run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.mark
 # API key, and — because the app embeds a widget extension — **two** App IDs
 # with **two** App Store provisioning profiles, one per embedded bundle.
 #
-# The build is a real .xcodeproj archived unsigned by `xcodebuild archive`,
-# signed at `xcodebuild -exportArchive` time (manual signing, with one
-# ExportOptions.plist `provisioningProfiles` entry per embedded bundle) and
-# uploaded with `xcrun altool`. The cert-import + profile-install lives in
-# .github/actions/ios-signing.
+# The build is a real .xcodeproj archived **signed** by `xcodebuild archive`,
+# re-signed for distribution at `xcodebuild -exportArchive` (manual signing,
+# one ExportOptions.plist `provisioningProfiles` entry per embedded bundle)
+# and uploaded with `xcrun altool`. Signing at archive time is what applies
+# each target's .entitlements; it is configured per-target on the Release
+# configuration in the project, not here. The cert-import + profile-install
+# lives in .github/actions/ios-signing.
 #
 # Required repository secrets:
 #   Shared (team/account-scoped):
@@ -38,13 +40,12 @@ run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.mark
 # com.omnibus.mobile profile therefore has to be regenerated, not just reused:
 # a profile does not pick up a capability added after it was created.
 #
-# Getting that wrong does not fail loudly. The archive is built unsigned, so
-# the binaries carry no entitlements and export derives them wholly from the
-# profiles — a profile without the App Group produces an IPA that exports,
-# uploads and installs, whose widgets then render their placeholder forever.
-# Hence the checks: ios-signing asserts each profile's app id, App Group and
-# distribution type before the archive, and the export step re-checks the
-# signed IPA. The simulator lanes prove none of this; they sign ad-hoc.
+# Getting that wrong does not fail loudly, so it is checked twice: ios-signing
+# asserts each profile's app id, App Group and distribution type before the
+# archive, and the export step re-reads the signed IPA. Both are needed — a
+# profile only *permits* an entitlement, the binary has to claim it, and the
+# two failures look identical from the outside. The simulator lanes prove
+# none of this; they sign ad-hoc.
 
 on:
   workflow_dispatch:
@@ -156,13 +157,26 @@ jobs:
           expected-extension-bundle-id: ${{ env.WIDGET_BUNDLE_ID }}
           require-app-group: ${{ env.APP_GROUP_ID }}
 
-      # Archive unsigned. Signing settings passed on the xcodebuild command line
-      # apply to every target in the build — including SPM-generated resource
-      # bundles (ZIPFoundation_ZIPFoundation), which reject a manually specified
-      # profile and fail the archive. Signing happens at export instead, where
-      # ExportOptions.plist scopes the profile to the app's bundle id.
+      # Archive **signed**. This used to pass CODE_SIGNING_ALLOWED=NO and leave
+      # signing to export, on the reasoning that command-line signing settings
+      # apply to every target and the SPM resource bundles reject a profile.
+      # That is true, and the conclusion was wrong: a provisioning profile is a
+      # permission *ceiling*, not a source of entitlements. Entitlements come
+      # from each target's .entitlements file when the binary is signed, so an
+      # unsigned archive carries none and -exportArchive has nothing to carry
+      # through — it re-signed with only the four baseline entitlements and
+      # dropped the App Group, producing an IPA whose widget installs and
+      # renders nothing. Verified on the artifact from run 33024849469: the
+      # embedded profile granted group.com.omnibus.mobile, the binary never
+      # claimed it.
+      #
+      # The SPM problem is avoided by setting Manual signing per-target on the
+      # Release configuration in the project rather than on this command line,
+      # so the resource bundles keep their own defaults. Debug is untouched.
+      #
       # MARKETING_VERSION + CURRENT_PROJECT_VERSION are passed as build settings
-      # so the archive is stamped without editing the pbxproj.
+      # so the archive is stamped without editing the pbxproj, and apply to every
+      # target — the appex included, which App Store Connect requires to match.
       - name: Archive
         run: |
           set -euo pipefail
@@ -181,8 +195,6 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/omnibus.xcarchive" \
             archive \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
             MARKETING_VERSION="$MARKETING_VERSION" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 
@@ -218,9 +230,10 @@ jobs:
           pb "Add :uploadSymbols bool true"
           pb "Add :destination string export"
 
-      # Signs the (unsigned) archive: cert + profile come from ExportOptions.plist,
-      # and codesign finds the identity because the ios-signing action prepended
-      # the throwaway keychain to the user search list.
+      # Re-signs the already-signed archive for distribution, scoping a profile
+      # to each embedded bundle via ExportOptions.plist. codesign finds the
+      # identity because the ios-signing action prepended the throwaway keychain
+      # to the user search list.
       - name: Export .ipa
         run: |
           set -euo pipefail
@@ -232,14 +245,13 @@ jobs:
           IPA="$(ls "$RUNNER_TEMP"/export/*.ipa | head -n1)"
           cp "$IPA" "$GITHUB_WORKSPACE/omnibus-ios.ipa"
 
-      # The archive is built unsigned (CODE_SIGNING_ALLOWED=NO), so the binaries
-      # carry no entitlements of their own — export derives them entirely from
-      # the provisioning profiles. That makes a missing App Group a *silent*
-      # outcome rather than a loud one: the IPA exports, uploads, installs, and
-      # every widget renders its placeholder forever, because
-      # containerURL(forSecurityApplicationGroupIdentifier:) returns nil. The
-      # profile checks in ios-signing catch it earlier; this proves it of the
-      # artifact actually being shipped.
+      # A profile only *permits* an entitlement; the binary has to claim it, and
+      # a binary that doesn't is indistinguishable from a correct one until the
+      # widget renders nothing on someone's Home Screen —
+      # containerURL(forSecurityApplicationGroupIdentifier:) just returns nil.
+      # The profile checks in ios-signing prove the permission exists; this
+      # proves the artifact being shipped actually used it. Run 33024849469 is
+      # why both are needed: profiles correct, binary bare.
       - name: Verify the exported IPA carries the App Group
         run: |
           set -euo pipefail
