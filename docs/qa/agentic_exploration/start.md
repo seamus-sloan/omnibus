@@ -86,8 +86,9 @@ transcripts are thrown away.
 ```json
 {"ts":"2026-08-26T14:02:09.412Z","run":"r-2026-08-26-01","actor":"agent-3",
  "surface":"web","flow":"adding_highlight","seq":7,
- "action":"highlight.create","target":"9f2c…","params":{"format":"epub",
- "location":"chapter 4, para 12","colour":"green","note":"…"},
+ "action":"highlight.create","target":"9f2c1e4a-7b60-4d33-9a2f-1c85e0d47b12",
+ "params":{"format":"epub","location":"chapter 4, para 12","colour":"green",
+ "note_text":"check this against the appendix"},
  "outcome":"ok","note":null}
 ```
 
@@ -96,10 +97,10 @@ transcripts are thrown away.
 | `ts` | UTC, ms precision. The report correlates agents on this alone — never batch entries and stamp them later. |
 | `seq` | Your own monotonic counter, from 1, for the run. |
 | `action` | Dotted verb — `book.open`, `highlight.create`, `metadata.save`, `shelf.add`. |
-| `target` | The book uuid or other entity id. `null` when there isn't one. |
+| `target` | The book uuid or other entity id, **in full** — never abbreviated. Ownership is looked up on this exact string, so a truncated uuid loses the book forever. `null` when there isn't one. |
 | `params` | **Everything a replayer needs to redo this.** Under-filling it is the commonest way a real bug becomes an anecdote. |
 | `outcome` | `ok`, `error`, or `refused` (an ownership or permission refusal that was correct). |
-| `note` | One human sentence. Required whenever `outcome` is not `ok`. |
+| `note` | One human sentence **about the outcome**. Required whenever `outcome` is not `ok`. Content the *user* wrote — a highlight's note, a journal entry — belongs in `params` under its own key (`note_text`), never here. |
 
 Three entries are special:
 

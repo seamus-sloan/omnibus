@@ -33,7 +33,8 @@ must never affect what you see.
 
 `highlight.create` carrying the book uuid, the **verbatim selected text**, the
 location in human terms, and the colour. If you added a note, `highlight.note`
-with the exact note text. The verbatim text is what the audit matches on, so
+with the exact note text in `params.note_text` — not in the entry's top-level
+`note`, which is reserved for describing the outcome. The verbatim text is what the audit matches on, so
 copy it rather than paraphrasing.
 
 Deletions get `highlight.delete` with the same identifying text — an
