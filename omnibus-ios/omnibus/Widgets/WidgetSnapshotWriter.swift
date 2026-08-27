@@ -115,28 +115,27 @@ actor WidgetSnapshotWriter {
     /// - **Bounded**, so a hung request can't sit in front of the publish on
     ///   the way to the background — a pass the expiration handler cancels
     ///   writes no snapshot at all.
-    /// - **The bound cancels rather than abandons.** A pull outliving its pass
-    ///   still carries the bearer it went out with, and would break this
-    ///   actor's one guarantee that the last caller is the last writer.
+    /// - **The bound cancels rather than abandons, and stays structured.** A
+    ///   pull outliving its pass still carries the bearer it went out with,
+    ///   and would break this actor's one guarantee that the last caller is
+    ///   the last writer.
     private static func refreshRail(hasToken: Bool) async {
         // Bound separately: `shouldPullRail` is synchronous, so an `await` in
         // front of it would name the wrong thing as the suspension point.
         let isOnline = await Connectivity.shared.isOnline
         guard shouldPullRail(hasToken: hasToken, isOnline: isOnline) else { return }
-        let pull = Task {
-            for await _ in UserDataService.recentProgress().values() {}
+        // A group rather than two unstructured `Task`s: a group's children
+        // inherit cancellation, so the expiration handler that cancels a
+        // background pass stops the read with it. Two unstructured tasks do
+        // not, and would have carried a read into suspension for as long as
+        // the deadline had left to run. Whichever child lands first — the
+        // read, or the deadline — `cancelAll` retires the other.
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { for await _ in UserDataService.recentProgress().values() {} }
+            group.addTask { try? await Task.sleep(for: railDeadline) }
+            await group.next()
+            group.cancelAll()
         }
-        // Cancelling the deadline has to *skip* the cancel, so the sleep's
-        // `CancellationError` returns rather than falling through — `try?`
-        // here would swallow it and cancel a pull that had just succeeded.
-        // Catching keeps the task non-throwing, matching the timer in
-        // `firstResult`.
-        let deadline = Task {
-            do { try await Task.sleep(for: railDeadline) } catch { return }
-            pull.cancel()
-        }
-        await pull.value
-        deadline.cancel()
     }
 
     private static func entry(for point: ResumePoint) async -> WidgetBook {
