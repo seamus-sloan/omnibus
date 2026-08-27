@@ -10,7 +10,7 @@ use omnibus_shared::{
 };
 use sqlx::{Row, SqlitePool};
 
-use super::{pages, StatsError};
+use super::{pages, sessionize, StatsError};
 
 /// How many rows the top-authors / top-tags rollups return.
 const TOP_N: i64 = 8;
@@ -30,14 +30,14 @@ const SESSION_BOOK_SECS: &str = "\
     SELECT book_uuid, seconds_listened FROM listening_sessions \
         WHERE user_id = ? AND started_at >= ?";
 
-/// The time-scoped session union reused by the busiest-week rollup: one
-/// `(started_at, secs)` row per session in the window. Bind order is
-/// `user_id, start, user_id, start`.
-const SESSION_TIME_SECS: &str = "\
-    SELECT started_at, seconds_read AS secs FROM reading_sessions \
+/// The time-scoped session union, reused by the busiest-week rollup and the
+/// sitting count: one `(book_uuid, started_at, ended_at, secs)` checkpoint row
+/// per session in the window. Bind order is `user_id, start, user_id, start`.
+const SESSION_ROWS: &str = "\
+    SELECT book_uuid, started_at, ended_at, seconds_read AS secs FROM reading_sessions \
         WHERE user_id = ? AND started_at >= ? \
     UNION ALL \
-    SELECT started_at, seconds_listened FROM listening_sessions \
+    SELECT book_uuid, started_at, ended_at, seconds_listened FROM listening_sessions \
         WHERE user_id = ? AND started_at >= ?";
 
 /// Book-level completion events for a user, unioned across the two ways a book
@@ -170,22 +170,33 @@ pub(super) async fn avg_stars(
     .await?)
 }
 
+/// Sittings in the window, counted over [`sessionize::stitched`] groups
+/// rather than raw checkpoint rows — the figure would otherwise report a
+/// client's flush cadence (~60 rows for an hour on web, ~12 on iOS) instead
+/// of how often the user actually sat down with a book. Stitching is
+/// per-book, so this stays the sum of every book's Pickups, and glances under
+/// [`sessionize::MIN_SITTING_SECS`] don't count (their seconds still do,
+/// in `reading_seconds` / `listening_seconds`).
+///
+/// A sitting that straddles `start` contributes only its in-window rows, so
+/// it can never be counted in two windows.
 pub(super) async fn session_count(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
 ) -> Result<i64, StatsError> {
-    Ok(sqlx::query_scalar(
-        "SELECT
-           (SELECT COUNT(*) FROM reading_sessions   WHERE user_id = ? AND started_at >= ?)
-         + (SELECT COUNT(*) FROM listening_sessions WHERE user_id = ? AND started_at >= ?)",
-    )
-    .bind(user_id)
-    .bind(start)
-    .bind(user_id)
-    .bind(start)
-    .fetch_one(pool)
-    .await?)
+    let sql = format!(
+        "SELECT COUNT(*) FROM ({}) WHERE secs >= {}",
+        sessionize::stitched(SESSION_ROWS),
+        sessionize::MIN_SITTING_SECS
+    );
+    Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .bind(start)
+        .bind(user_id)
+        .bind(start)
+        .fetch_one(pool)
+        .await?)
 }
 
 pub(super) async fn heatmap(
@@ -262,7 +273,7 @@ pub(super) async fn busiest_week(
              SELECT date(started_at, 'unixepoch') AS day,
                     (started_at / 86400) - (((started_at / 86400) + 3) % 7) AS week_start,
                     secs
-             FROM ({SESSION_TIME_SECS})
+             FROM ({SESSION_ROWS})
          ) GROUP BY week_start ORDER BY seconds DESC, week_start ASC LIMIT 1"
     );
     let row = sqlx::query(&sql)

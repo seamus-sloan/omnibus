@@ -2,11 +2,12 @@
 //! `listening_sessions` tables plus `journal_entries` / `book_read_status`
 //! for completion; no new query-time schema. See the `book`, `compute`, and
 //! `pages` submodules for the per-scope aggregation bodies this module's
-//! cache wraps.
+//! cache wraps, and `sessionize` for how checkpoint rows become sittings.
 
 mod book;
 mod compute;
 mod pages;
+mod sessionize;
 
 #[cfg(test)]
 mod tests;

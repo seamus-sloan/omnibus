@@ -7,26 +7,37 @@
 use omnibus_shared::{BookInsights, DayActivity};
 use sqlx::{Row, SqlitePool};
 
-use super::StatsError;
+use super::{sessionize, StatsError};
 
-/// One `(started_at, secs)` union of reading + listening sessions scoped to a
-/// single book. Bind order is `user_id, book_uuid, user_id, book_uuid`.
+/// One `(book_uuid, started_at, ended_at, secs)` union of reading + listening
+/// checkpoint rows scoped to a single book. Bind order is
+/// `user_id, book_uuid, user_id, book_uuid`.
 const BOOK_SESSIONS: &str = "\
-    SELECT started_at, seconds_read AS secs FROM reading_sessions \
+    SELECT book_uuid, started_at, ended_at, seconds_read AS secs FROM reading_sessions \
         WHERE user_id = ? AND book_uuid = ? \
     UNION ALL \
-    SELECT started_at, seconds_listened AS secs FROM listening_sessions \
+    SELECT book_uuid, started_at, ended_at, seconds_listened FROM listening_sessions \
         WHERE user_id = ? AND book_uuid = ?";
 
 /// Aggregate one user's reading/listening insights for a single book:
-/// earliest session start, total seconds and session count across both
-/// formats, the single longest session (length + when it started), and
+/// earliest session start, total seconds and sitting count across both
+/// formats, the single longest sitting (length + when it started), and
 /// per-day activity for the spark. `uuid` is resolved to the canonical
 /// `books.uuid` first (mirroring `db::progress`'s write path), so a link into
 /// a book that was later merged away still finds the sessions recorded under
 /// the surviving book. Returns `None` when the uuid doesn't resolve to a live
 /// book, or the book resolves but has no sessions yet — both drive the stats
 /// stop's empty state.
+///
+/// Every count here is over [`sessionize::stitched`] sittings rather than raw
+/// checkpoint rows, so the figures don't vary with the reporting client's
+/// flush cadence. The per-day spark stays on the raw rows — a sitting that
+/// crosses midnight belongs to both days.
+///
+/// `sessions` counts only sittings of at least
+/// [`sessionize::MIN_SITTING_SECS`], while `seconds_total` sums every row the
+/// stitch grouped. A book whose only activity is glances therefore reports
+/// zero sessions and takes the empty state, the same as one never opened.
 pub async fn book_insights(
     pool: &SqlitePool,
     user_id: i64,
@@ -35,11 +46,13 @@ pub async fn book_insights(
     let Some(book_uuid) = crate::books::resolve_canonical_book_uuid(pool, uuid).await? else {
         return Ok(None);
     };
+    let sittings = sessionize::stitched(BOOK_SESSIONS);
+    let min_secs = sessionize::MIN_SITTING_SECS;
 
     let sql = format!(
         "SELECT MIN(started_at) AS started_at, COALESCE(SUM(secs), 0) AS seconds_total, \
-                COUNT(*) AS sessions \
-         FROM ({BOOK_SESSIONS})"
+                COALESCE(SUM(CASE WHEN secs >= {min_secs} THEN 1 ELSE 0 END), 0) AS sessions \
+         FROM ({sittings})"
     );
     let row = sqlx::query(&sql)
         .bind(user_id)
@@ -57,10 +70,13 @@ pub async fn book_insights(
     let seconds_total: i64 = row.get("seconds_total");
 
     // Longest single sit. Ties break to the earliest occurrence so the
-    // answer is stable across runs.
+    // answer is stable across runs. The floor is redundant against a `MAX`
+    // — the early return above already proved a qualifying sitting exists,
+    // and it is the longest — but stated so this stays a query over the same
+    // population `sessions` counted.
     let sql = format!(
-        "SELECT started_at, secs FROM ({BOOK_SESSIONS}) \
-         ORDER BY secs DESC, started_at ASC LIMIT 1"
+        "SELECT started_at, secs FROM ({sittings}) \
+         WHERE secs >= {min_secs} ORDER BY secs DESC, started_at ASC LIMIT 1"
     );
     let row = sqlx::query(&sql)
         .bind(user_id)
