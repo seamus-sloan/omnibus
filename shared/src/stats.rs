@@ -239,7 +239,13 @@ impl StatsSummary {
     }
 
     /// True when the user has no activity to show, driving the empty state.
+    ///
+    /// Tested on recorded seconds rather than [`Self::sessions`], which is a
+    /// *filtered* count — sittings under the server's minimum don't reach it.
+    /// A reader whose every sitting was a glance still has time read, active
+    /// days, a heatmap and top authors to render, so keying the page's empty
+    /// state on the count would blank a populated page.
     pub fn is_empty(&self) -> bool {
-        self.sessions == 0 && self.books_finished == 0
+        self.total_seconds() == 0 && self.books_finished == 0
     }
 }

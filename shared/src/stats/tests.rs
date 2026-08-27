@@ -13,10 +13,15 @@ fn total_seconds_sums_reading_and_listening() {
 }
 
 #[test]
-fn is_empty_is_true_only_without_sessions_or_finishes() {
+fn is_empty_is_true_only_without_recorded_time_or_finishes() {
     assert!(StatsSummary::default().is_empty());
     assert!(!StatsSummary {
-        sessions: 1,
+        reading_seconds: 1,
+        ..Default::default()
+    }
+    .is_empty());
+    assert!(!StatsSummary {
+        listening_seconds: 1,
         ..Default::default()
     }
     .is_empty());
@@ -25,6 +30,21 @@ fn is_empty_is_true_only_without_sessions_or_finishes() {
         ..Default::default()
     }
     .is_empty());
+}
+
+#[test]
+fn is_empty_is_false_for_recorded_time_that_no_sitting_qualified_for() {
+    // `sessions` is filtered by the server's minimum sitting length, so a
+    // reader with only glances has zero of them — but a month of time read,
+    // active days and a heatmap to show. The page must not blank.
+    let glances_only = StatsSummary {
+        reading_seconds: 1650,
+        sessions: 0,
+        books_finished: 0,
+        active_days: 30,
+        ..Default::default()
+    };
+    assert!(!glances_only.is_empty());
 }
 
 #[test]

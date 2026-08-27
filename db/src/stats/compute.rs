@@ -27,7 +27,7 @@ const SESSION_BOOK_SECS: &str = "\
     SELECT book_uuid, seconds_read AS secs FROM reading_sessions \
         WHERE user_id = ? AND started_at >= ? \
     UNION ALL \
-    SELECT book_uuid, seconds_listened FROM listening_sessions \
+    SELECT book_uuid, seconds_listened AS secs FROM listening_sessions \
         WHERE user_id = ? AND started_at >= ?";
 
 /// The time-scoped session union, reused by the busiest-week rollup and the
@@ -37,7 +37,7 @@ const SESSION_ROWS: &str = "\
     SELECT book_uuid, started_at, ended_at, seconds_read AS secs FROM reading_sessions \
         WHERE user_id = ? AND started_at >= ? \
     UNION ALL \
-    SELECT book_uuid, started_at, ended_at, seconds_listened FROM listening_sessions \
+    SELECT book_uuid, started_at, ended_at, seconds_listened AS secs FROM listening_sessions \
         WHERE user_id = ? AND started_at >= ?";
 
 /// Book-level completion events for a user, unioned across the two ways a book
