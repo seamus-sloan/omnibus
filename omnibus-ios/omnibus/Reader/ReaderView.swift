@@ -183,6 +183,12 @@ struct ReaderView: View {
             }
             .animation(Motion.glide, value: audio.isActive)
         }
+        // The page ignores the safe area outright, so a keyboard inset lifts
+        // the chrome alone and parks it mid-prose. Nothing types here, but
+        // `NoteComposer` autofocuses and SwiftUI hands the presenter that inset
+        // too (#2220). On the modified view, never the inset's content, which
+        // the keyboard has already shrunk (#2102).
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .statusBarHidden(!chromeVisible)
         .persistentSystemOverlays(chromeVisible ? .automatic : .hidden)
         // The status bar sits on the page, so it has to read against the
