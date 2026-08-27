@@ -122,9 +122,11 @@ force quit.
 > TestFlight wants `IOS_WIDGETS_PROVISIONING_PROFILE_BASE64` beside the existing
 > secret — and both App IDs need the App Groups capability, so the app's own
 > profile must be *regenerated* rather than reused. Getting it wrong is silent,
-> not loud: the release archive is unsigned, so entitlements come entirely from
-> the profiles, and one missing the App Group ships a widget that installs and
-> renders nothing. CI asserts it on both profiles and again on the exported IPA.
+> not loud: a profile only *permits* the App Group, and the binary has to claim
+> it — so the release archive is signed (per-target on Release, scoped to
+> device) to apply the entitlements files. CI asserts the group on both profiles
+> and again on the exported IPA, because those are two different failures that
+> look the same from outside.
 > `just ios-build` and `just ios-test` cannot catch it — simulator builds sign
 > ad-hoc.
 
