@@ -28,7 +28,10 @@ selects, and end the flow — do not go looking.
 1. Go to the library. The shelves rail sits above the book list, starting with
    **All Books**.
 2. Click **＋ New shelf**.
-3. Name it something clearly yours, including your actor id.
+3. Name it the way a reader would name a shelf — *Weeknight Reading*, *Books
+   Dad Lent Me*, *Finish Before Winter*. Not your actor id, not a date, not
+   `test`. Journal the name you chose; that is what the audit matches on, so
+   the two must agree exactly. Do not reuse a name you have already used.
 4. Choose its visibility — **Private** or **Public** — and note whether you are
    making a hand-picked shelf or a **Smart** one (a smart shelf fills itself
    from a rule; a hand-picked one does not).

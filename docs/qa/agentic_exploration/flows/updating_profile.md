@@ -17,8 +17,11 @@ never change anyone's permissions, and never delete a user.
 ## Steps
 
 1. Go to your account page.
-2. Change your display name to something clearly yours and clearly new —
-   include your actor id and a counter, so a stale copy elsewhere is obvious.
+2. Change your display name to a **different plausible person's name** — not
+   your actor id, not a counter, not a date. A stale copy elsewhere is just as
+   obvious when the chrome still says `Mara Ellison` after you saved
+   `Ada Whitfield`, and the name is displayed all over the app and copied into
+   your wishlist shelf's name, so it needs to read like a person's.
 3. Save, and confirm the new name appears in the app's own chrome — wherever
    your name is shown while you are signed in.
 4. Occasionally replace your picture instead, and confirm it appears everywhere

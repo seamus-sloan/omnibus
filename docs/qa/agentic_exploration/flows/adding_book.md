@@ -56,8 +56,10 @@ goes in through the front door* in [start.md](../start.md).
    Three things to expect rather than report as bugs. The form may come back
    **entirely empty** — audiobooks often carry no container tags at all, and
    there is then nothing to review; fill in Title and Author yourself, since the
-   required-field guard will otherwise block the save. The **audiobook form has
-   no Series fields**, unlike the ebook one. And the form offers a single Author
+   required-field guard will otherwise block the save — with the book's *real*
+   title and author, read off the filename or folder, never a placeholder like
+   `Untitled` or `Test Audiobook`. The book stays in the shared library after
+   you leave. The **audiobook form has no Series fields**, unlike the ebook one. And the form offers a single Author
    field even when the file names several creators — check the detail page
    afterwards to see whether the others survived, and journal the answer.
 5. Click **Add to library**.

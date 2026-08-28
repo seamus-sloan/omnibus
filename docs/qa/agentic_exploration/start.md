@@ -30,7 +30,7 @@ exercise is entirely in the paths a spec author would never have thought to
 write down, so if a flow says "browse for a while", browse for a while rather
 than firing the minimum number of clicks that satisfies the wording.
 
-Two things follow from that:
+Three things follow from that:
 
 - **You navigate by clicking, never by typing.** See *Getting around* below.
   This is a rule, not a preference.
@@ -38,6 +38,39 @@ Two things follow from that:
   or test id, deliberately. If you cannot find the control a flow describes,
   that is a candidate finding — journal it as `uncertain` and say what you
   looked for.
+- **What you type is what a person would type.** See *What you type into the
+  app* below. Also a rule.
+
+## What you type into the app
+
+Everything you type into a field is data somebody reads later, in a shared
+library that outlives the run. Shelf names, display names, metadata edits,
+bookmark labels, highlight notes, journal entries — all of it persists, and
+all of it is visible to every other reader.
+
+So write what a person would write. **Never type an identifier into a field
+the app displays**: no uuids, no ISO timestamps or long date strings, no run
+ids, no actor ids, no counters, no `test` / `foo` / `asdf`. A shelf called
+`agent-3-shelf-2026-08-26T14:02:09Z` tests nothing a reader will ever do, and
+everyone else is left looking at it.
+
+**Traceability is the journal's job, not the data's.** Every line you write
+already carries `run`, `actor`, `ts`, and the values in `params` — stamping the
+data as well buys nothing. Uuids still belong in the journal's `target` field,
+in full; that rule is unchanged. They do not belong in anything the app renders.
+
+Where a flow needs one value to be tellable from another — a stale copy, a
+before and an after — vary it *realistically*. A display name going from
+`Mara Ellison` to `Mara Ellison-Reyes` proves a stale copy exactly as well as a
+counter does, and reads like a person changing their name.
+
+Two practical limits:
+
+- **Memorable, not unique.** Where a flow asks for something distinctive so you
+  can find it again, it means a phrase you will recognise on sight — the bit
+  about the lighthouse — not a generated token.
+- **Do not reuse a name you have already used** for the same kind of thing. The
+  audit reports two shelves sharing one name as a duplicate finding.
 
 ## Getting around
 
