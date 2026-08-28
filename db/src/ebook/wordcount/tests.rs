@@ -209,3 +209,14 @@ fn strip_tags_keeps_the_document_after_a_comment_containing_a_suppressed_tag() {
         "kept"
     );
 }
+
+#[test]
+fn strip_tags_terminates_a_long_comment_without_buffering_it() {
+    // A licence preamble is ordinary in EPUB XHTML. It must end at its own
+    // `-->` and nowhere else, whatever it contains.
+    let filler = "lorem ipsum -- dolor < sit > amet ".repeat(400);
+    let html = format!("<p>before</p><!-- {filler} --><p>after</p>");
+    assert_eq!(strip_tags(&html), "beforeafter");
+    // The empty comment is still a comment, and closes on its own `>`.
+    assert_eq!(strip_tags("<p>a</p><!--><p>b</p>"), "ab");
+}
