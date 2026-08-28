@@ -1,5 +1,6 @@
 //! Small display formatters shared across surfaces: file size/label for
-//! `book_files` pickers, [`plural`] for search-result summaries,
+//! `book_files` pickers, [`plural`] / [`plural_noun`] / [`count_label`] for
+//! counted nouns,
 //! [`facet_query`] for taxonomy refinements, and the
 //! [`format_date_short`]/[`format_date_month_year`] pair for table and
 //! series-card dates. Pure functions with no Dioxus/renderer state, so
@@ -67,6 +68,28 @@ pub fn plural(n: u32) -> &'static str {
     } else {
         "s"
     }
+}
+
+/// The noun alone, pluralized on `n`: `"day"` at exactly one, `"days"`
+/// otherwise. For surfaces that render the figure and its unit in separate
+/// elements (the streak cards), where [`count_label`] can't be used.
+///
+/// Regular `-s` plurals only — an irregular noun needs its own two-arm
+/// match at the call site.
+pub fn plural_noun(n: i64, singular: &str) -> String {
+    if n == 1 {
+        singular.to_string()
+    } else {
+        format!("{singular}s")
+    }
+}
+
+/// `"1 session"` / `"4 sessions"` — a count and its noun in one string,
+/// pluralized on the count. Reach for this instead of `format!("{n} nouns")`:
+/// a hand-written plural noun renders "1 days in" the moment the count is one
+/// (#2250).
+pub fn count_label(n: i64, singular: &str) -> String {
+    format!("{n} {}", plural_noun(n, singular))
 }
 
 /// Em dash used for a date with nothing displayable — absent, unparsable, or

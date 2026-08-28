@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use dioxus::prelude::*;
 use omnibus_shared::StatsSummary;
 
+use crate::format::plural_noun;
+
 /// Weeks of trailing history the grid renders.
 const WEEKS: i64 = 52;
 
@@ -169,6 +171,8 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
     let months = trailing_month_labels(anchor);
     let current = summary.current_streak_days;
     let longest = summary.longest_streak_days;
+    let current_unit = plural_noun(current, "day");
+    let longest_unit = plural_noun(longest, "day");
 
     rsx! {
         div { class: "card st-heatmap-card", "data-testid": "stats-heatmap",
@@ -185,14 +189,14 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
                     div { class: "st-streak", "data-testid": "stats-current-streak",
                         div { class: "st-streak-value",
                             "{current} "
-                            span { class: "st-streak-unit", "days" }
+                            span { class: "st-streak-unit", "{current_unit}" }
                         }
                         div { class: "label", "Current streak" }
                     }
                     div { class: "st-streak st-streak-minor", "data-testid": "stats-longest-streak",
                         div { class: "st-streak-value",
                             "{longest} "
-                            span { class: "st-streak-unit", "days" }
+                            span { class: "st-streak-unit", "{longest_unit}" }
                         }
                         div { class: "label", "Longest streak" }
                     }
@@ -229,6 +233,21 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Issue #2250: a one-day streak reads "1 day", not "1 days".
+    #[cfg(feature = "server")]
+    #[test]
+    fn heatmap_card_pluralizes_each_streak_unit_on_its_own_figure() {
+        let summary = StatsSummary {
+            as_of_day: "2026-07-12".to_string(),
+            current_streak_days: 1,
+            longest_streak_days: 9,
+            ..Default::default()
+        };
+        let html = crate::test_support::render(rsx! { HeatmapCard { summary } });
+        assert!(html.contains(">day<"), "{html}");
+        assert!(html.contains(">days<"), "{html}");
+    }
 
     /// The two streak figures land in their own slots, and neither takes the
     /// other's. Asserting only that both labels appear can't tell them apart —
