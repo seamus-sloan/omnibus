@@ -19,12 +19,13 @@
 #   N MCP clients against one server land back in a shared browser. The HTTP
 #   surface, one server per port, is what keeps them apart.
 #
-# Why a private browser directory:
-#   playwright-repl bundles Playwright 1.62.1 (Chromium build 1234) while the
-#   flake pins ~1.59 (build 1217) for the E2E suite. They cannot share
-#   PLAYWRIGHT_BROWSERS_PATH, and running `playwright install` inside
-#   ui_tests/playwright would diverge the suite from the flake — see
-#   .claude/rules/04-playwright.md.
+# Why it shares the flake's Chromium:
+#   playwright-repl declares `playwright: ^1.59.1`, which npm would float to
+#   whatever is newest — a build the flake's bundle does not contain. The
+#   driver's package.json pins that transitive dependency to the same version
+#   as the flake's playwright-driver.browsers, so one Nix Chromium serves the
+#   E2E suite and the driver alike and nothing ever downloads a browser. Bump
+#   the two together; see .claude/rules/04-playwright.md.
 
 set -euo pipefail
 
@@ -36,14 +37,17 @@ STATE="$ROOT/.claude/runtime/explore/driver"
 MANIFEST="$STATE/ports.json"
 
 driver::ensure_deps() {
-  export PLAYWRIGHT_BROWSERS_PATH="$DRIVER/browsers"
+  # The browser comes from the flake, so the driver must run inside a shell
+  # that provides it. Failing here beats a confusing "Executable doesn't
+  # exist" from deep inside Playwright.
+  if [ -z "${PLAYWRIGHT_BROWSERS_PATH-}" ]; then
+    echo "PLAYWRIGHT_BROWSERS_PATH is unset — run inside 'nix develop .#e2e'" >&2
+    echo "(or via scripts/with-dev-env.sh e2e …), which pins the Chromium bundle." >&2
+    return 1
+  fi
   if [ ! -x "$DRIVER/node_modules/.bin/playwright-repl" ]; then
     echo "installing driver deps (first run)…" >&2
     (cd "$DRIVER" && npm install --no-audit --no-fund >/dev/null 2>&1)
-  fi
-  if [ ! -d "$DRIVER/browsers" ]; then
-    echo "downloading the driver's own chromium (kept out of the flake)…" >&2
-    (cd "$DRIVER" && ./node_modules/.bin/playwright install chromium >/dev/null 2>&1)
   fi
 }
 
@@ -72,7 +76,7 @@ case "$cmd" in
       if driver::alive "$port"; then
         echo "  agent-$i: reusing server on $port" >&2
       else
-        (cd "$DRIVER" && PLAYWRIGHT_BROWSERS_PATH="$DRIVER/browsers" \
+        (cd "$DRIVER" && \
           nohup ./node_modules/.bin/playwright-repl --silent --http \
             --http-port "$port" -s "agent-$i" \
             >"$STATE/agent-$i.log" 2>&1 &)

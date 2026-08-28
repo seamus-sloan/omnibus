@@ -14,7 +14,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.5",
-    "@playwright/test": "~1.59.0",
+    "@playwright/test": "~1.61.0",
     "@types/node": "^22.10.0",
     "jszip": "^3.10.1",
     "tsx": "^4.21.0",
