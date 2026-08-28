@@ -113,6 +113,23 @@ fn remaining_at_rate_falls_back_unscaled_for_invalid_rates() {
     assert!((remaining_at_rate(600.0, f64::INFINITY) - 600.0).abs() < f64::EPSILON);
 }
 
+// Issue #2246 (AC1): the chapter list and the transport total are the same
+// scaling applied to the same book seconds, so the parts still sum to the
+// whole at any speed — a chapter list that stayed at 1x summed to a
+// different book than the total beside it.
+#[test]
+fn remaining_at_rate_keeps_chapter_durations_summing_to_the_total() {
+    let chapters = [1800.0, 1500.0, 300.0];
+    let duration: f64 = chapters.iter().sum();
+    for rate in [0.5, 1.0, 1.5, 2.0, 3.0] {
+        let scaled: f64 = chapters.iter().map(|d| remaining_at_rate(*d, rate)).sum();
+        assert!(
+            (scaled - remaining_at_rate(duration, rate)).abs() < 1e-9,
+            "rate {rate}"
+        );
+    }
+}
+
 #[test]
 fn remaining_at_rate_keeps_elapsed_and_remaining_labels_on_one_basis() {
     // The scrubber-row contract (mirrors the iOS `scrubberRowLabelsAgree`

@@ -137,6 +137,22 @@ pub(super) async fn touch_book_last_modified(
     Ok(())
 }
 
+/// Drop the library-composition cache after an override write commits.
+///
+/// Three of the five composition dimensions are override-sourced — genres live
+/// *only* in `metadata_overrides -> '$.genres'` (migration `0066`), and
+/// publisher / language overrides materialize into the link tables the
+/// dimensions read — so `Worker::execute`'s post-scan hook cannot keep them
+/// fresh on its own: no editor's save is a `Task`. Without this, a genre added
+/// on the book-detail page is invisible on `/stats` for the whole 900s TTL.
+///
+/// Called **after** commit, never inside the transaction: a bump before the
+/// write lands lets a concurrent reader recompute from pre-commit state and
+/// re-cache the very value the bump meant to drop.
+pub(super) fn invalidate_composition_cache() {
+    crate::stats::invalidate_library_composition();
+}
+
 /// Best-effort removal of a book's cached export-EPUB after its override
 /// state clears entirely. No-op when `book_id` is `None` (the uuid had no
 /// live book row to resolve). Runs on the blocking pool since
@@ -256,6 +272,7 @@ pub async fn upsert_metadata_overrides(
     upsert_one_in_tx(&mut tx, book_uuid, overrides, has_cover_override, user_id).await?;
     tx.commit().await?;
 
+    invalidate_composition_cache();
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
         tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override upsert failed");
     }
@@ -362,6 +379,7 @@ pub async fn delete_metadata_overrides(
     // export EPUB has nothing left to bake — remove it rather than leaving
     // it orphaned on disk (#1395).
     invalidate_export_epub_cache_for(book_id).await;
+    invalidate_composition_cache();
     Ok(())
 }
 

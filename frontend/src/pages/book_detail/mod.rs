@@ -3,7 +3,8 @@
 //!
 //! Owns the data fetch and shared markup primitives; the loaded-book view
 //! composition lives in [`view`], the web stage in [`marquee`] and its stop
-//! submodules, and shared discovery sections in [`body`].
+//! submodules, shared discovery sections in [`body`], and the metadata
+//! table's identifier rows in [`identifiers`].
 
 use dioxus::prelude::*;
 use omnibus_shared::physical::WishlistEntry;
@@ -16,6 +17,7 @@ mod dates;
 mod delete;
 mod discovery;
 mod file_picker;
+mod identifiers;
 mod immersive;
 mod journal;
 mod journal_editor;

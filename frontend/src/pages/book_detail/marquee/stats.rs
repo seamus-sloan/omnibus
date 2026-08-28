@@ -13,6 +13,7 @@ use omnibus_shared::{BookInsights, DayActivity};
 pub(super) use crate::components::session_log::duration_label;
 use crate::components::SessionLogList;
 use crate::date_fmt::civil_from_days;
+use crate::format::count_label;
 use crate::time::now_unix;
 
 use crate::pages::book_detail::rating::BdRatingWidget;
@@ -71,8 +72,8 @@ fn render_stats(i: &BookInsights, progress: &MarqueeProgress, audio_only: bool) 
     let max = spark.iter().copied().max().unwrap_or(0).max(1);
     rsx! {
         div { class: "bdmq-stats", "data-testid": "bdmq-stats",
-            {stat_cell("Started", &started_short, &format!("{days_in} days in"))}
-            {stat_cell(time_label, &duration_label(i.seconds_total), &format!("{} sessions", i.sessions))}
+            {stat_cell("Started", &started_short, &format!("{} in", count_label(days_in, "day")))}
+            {stat_cell(time_label, &duration_label(i.seconds_total), &count_label(i.sessions, "session"))}
             {stat_cell("Pickups", &i.sessions.to_string(), &format!("avg sit {avg}"))}
             {stat_cell("Longest sit", &duration_label(i.longest_seconds), &short_date(i.longest_started_at))}
         }
@@ -251,7 +252,7 @@ mod tests {
         assert_eq!(duration_label(-100), "0m");
     }
 
-    fn insights(
+    pub(super) fn insights(
         seconds_total: i64,
         sessions: i64,
         sitting_seconds: i64,
@@ -292,7 +293,7 @@ mod tests {
     }
 
     /// A `MarqueeProgress` carrying one reading position at `pct`.
-    fn progress_at(pct: i64) -> MarqueeProgress {
+    pub(super) fn progress_at(pct: i64) -> MarqueeProgress {
         MarqueeProgress {
             reading: Some(omnibus_shared::ProgressRecord {
                 book_uuid: "uuid-1".into(),
@@ -343,5 +344,37 @@ mod tests {
     #[test]
     fn short_date_formats_utc_month_day() {
         assert_eq!(short_date(1_700_000_000), "Nov 14");
+    }
+}
+
+// Render-smoke coverage of the stat grid's counted nouns — a separate module
+// because SSR (`dioxus::ssr`) needs the `server` feature.
+#[cfg(all(test, feature = "server"))]
+mod render_tests {
+    use super::tests::{insights, progress_at};
+    use super::*;
+    use crate::test_support::render;
+
+    // Regression for issue #2250: a count of one renders a singular noun.
+    // `days_in` counts inclusively from `started_at`, so a book started this
+    // second is on day one.
+    #[test]
+    fn stat_grid_renders_singular_nouns_for_a_count_of_one() {
+        let mut i = insights(3_600, 1, 3_600, 3_600);
+        i.started_at = now_unix();
+        let html = render(render_stats(&i, &progress_at(50), false));
+        assert!(html.contains("1 day in"), "{html}");
+        assert!(html.contains("1 session"), "{html}");
+        assert!(!html.contains("1 days in"), "{html}");
+        assert!(!html.contains("1 sessions"), "{html}");
+    }
+
+    #[test]
+    fn stat_grid_keeps_plural_nouns_above_one() {
+        let mut i = insights(3_600, 4, 3_600, 3_600);
+        i.started_at = now_unix() - 3 * 86_400;
+        let html = render(render_stats(&i, &progress_at(50), false));
+        assert!(html.contains("4 days in"), "{html}");
+        assert!(html.contains("4 sessions"), "{html}");
     }
 }

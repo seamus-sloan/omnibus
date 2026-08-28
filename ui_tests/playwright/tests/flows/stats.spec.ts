@@ -170,14 +170,43 @@ test("headline tiles render finished, avg rating, pages, and listening", async (
   await expect(page.getByTestId("stats-tile-avg-rating")).toContainText(
     /\d\.\d\s*★/,
   );
-  // #1029: the finished journal seeded in beforeAll gives the Pages tile a
-  // real (spine-word-count-derived) estimate — a digit, not the em-dash
-  // placeholder. The exact count depends on fixture text length, covered by
-  // db::stats unit tests instead of pinned here.
-  await expect(page.getByTestId("stats-tile-pages")).toContainText(/\d/);
+  // #2139: the tile counts pages *turned* in the window, not the length of the
+  // books finished in it, so the finished journal seeded in beforeAll no longer
+  // gives it a value — only real position writes do, and this spec deliberately
+  // makes none. They would join the Continue fan the landing specs assert on,
+  // and land on a book those specs read. Both a digit and the em-dash are
+  // legitimate here; the label is the contract this test pins, and the
+  // arithmetic lives in the db::stats unit tests.
+  const pages = page.getByTestId("stats-tile-pages");
+  await expect(pages).toContainText("Pages read");
+  await expect(pages).toContainText(/\d|—/);
   await expect(page.getByTestId("stats-tile-listening")).toContainText(
     /\d+\s*(m|h)/,
   );
+});
+
+test("the Pages read drill-in explains its coverage and states the cutover", async ({
+  page,
+}) => {
+  await gotoReady(page, "/stats");
+
+  await page.getByTestId("stats-tile-pages").click();
+  const drillIn = page.getByTestId("stats-drill-in");
+  await expect(drillIn).toBeVisible();
+  await expect(drillIn).toContainText("Pages read");
+
+  // AC6: the panel renders content rather than opening to nothing, whatever
+  // the window holds.
+  await expect(page.getByTestId("stats-drill-pages-note")).toBeVisible();
+  // AC9: page progress is differenced from stored positions and none exist
+  // before the ledger began, so the tile changes meaning at a date — which the
+  // UI states rather than leaving it as an unexplained discontinuity.
+  await expect(page.getByTestId("stats-drill-pages-cutover")).toContainText(
+    /Page tracking began \d{4}-\d{2}-\d{2}/,
+  );
+
+  await page.getByTestId("stats-drill-close").click();
+  await expect(drillIn).toHaveCount(0);
 });
 
 test("a tile's grip opens its drill-in and the close button dismisses it", async ({
@@ -634,6 +663,140 @@ test("a library measured for nothing renders no size card at all", async ({
   // the backfill.
   await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
   await expect(page.getByTestId("stats-library-size")).toHaveCount(0);
+});
+
+// A composition with one dimension deliberately absent, so the empty-state
+// assertion has something to bite on.
+const COMPOSITION = {
+  books: 1510,
+  ghosted_books: 4,
+  formats: {
+    slices: [
+      { label: "EPUB", books: 1400 },
+      { label: "M4B", books: 180 },
+    ],
+    // 1,580 placements over 1,510 books: seventy are held in both formats.
+    coverage: { total: 1580, books: 1510 },
+  },
+  languages: {
+    slices: [{ label: "eng", books: 1180 }],
+    coverage: { total: 1180, books: 1180 },
+  },
+  // No publisher metadata anywhere — the AC7 case.
+  publishers: { slices: [], coverage: { total: 0, books: 0 } },
+  decades: {
+    slices: [
+      { label: "1990s", books: 200 },
+      { label: "2000s", books: 620 },
+    ],
+    coverage: { total: 820, books: 820 },
+  },
+  genres: {
+    slices: [
+      { label: "Fantasy", books: 40 },
+      { label: "Horror", books: 22 },
+    ],
+    // 62 placements over 58 books — genres are hand-assigned, so this is a
+    // sample of the 1,510, and the card has to say so.
+    coverage: { total: 62, books: 58 },
+  },
+};
+
+test("the library-composition card states each dimension with its coverage", async ({
+  page,
+}) => {
+  // Route-mocked: the real mix depends on what the shared fixture library
+  // holds, which no spec can pin without mutating it for every other one.
+  await page.route("**/api/rpc/library-composition", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(COMPOSITION),
+    }),
+  );
+  await gotoReady(page, "/stats");
+
+  const card = page.getByTestId("stats-library-composition");
+  await expect(card).toBeVisible();
+  // Named apart from the period-scoped "How you consumed them" split, which
+  // is read-vs-listened seconds rather than the shelf's own format mix.
+  await expect(card).toContainText("What your library is made of");
+  await expect(card.getByTestId("stats-composition-formats")).toContainText(
+    "EPUB",
+  );
+  await expect(card.getByTestId("stats-composition-decades")).toContainText(
+    "1990s",
+  );
+  // The genre coverage is the whole point: genres are hand-assigned, so the
+  // slices describe 58 books, not 1,510.
+  await expect(card.getByTestId("stats-composition-genres")).toContainText(
+    "hand-assigned \u2014 across 58 of 1,510 books",
+  );
+  // Dual-format books are counted in both bars, and said so.
+  await expect(card.getByTestId("stats-composition-formats")).toContainText(
+    "+70 books held in more than one format",
+  );
+  // Ghosted rows are named rather than left to make the bars not add up.
+  await expect(card.getByTestId("stats-composition-ghosted")).toContainText(
+    "4 books excluded",
+  );
+
+  // It sits in the all-time section, so it must not move with the switcher.
+  const before = await card.textContent();
+  const menu = await openPeriodMenu(page);
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/stats",
+      expectedBody: { range: "week" },
+      expectedStatus: 200,
+    },
+    async () => menu.getByRole("button", { name: "Week" }).click(),
+  );
+  await expect(
+    page.getByRole("heading", { name: "Your reading week" }),
+  ).toBeVisible();
+  await expect.poll(() => card.textContent()).toBe(before);
+});
+
+test("a composition dimension with no data renders an empty state, not an empty chart", async ({
+  page,
+}) => {
+  await page.route("**/api/rpc/library-composition", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(COMPOSITION),
+    }),
+  );
+  await gotoReady(page, "/stats");
+
+  const publishers = page.getByTestId("stats-composition-publishers");
+  await expect(publishers).toContainText("No publisher metadata yet.");
+  // An axis with no bars on it is the failure this replaces.
+  await expect(publishers.getByTestId("stats-composition-bar")).toHaveCount(0);
+});
+
+test("a library with nothing to describe renders no composition card at all", async ({
+  page,
+}) => {
+  await page.route("**/api/rpc/library-composition", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ books: 0 }),
+    }),
+  );
+  // The card is also absent when the fetch never happened, so waiting on the
+  // mocked response is what makes this test fail if the route moves rather
+  // than pass for the wrong reason.
+  const answered = page.waitForResponse("**/api/rpc/library-composition");
+  await gotoReady(page, "/stats");
+  await answered;
+
+  await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
+  await expect(page.getByTestId("stats-library-composition")).toHaveCount(0);
 });
 
 test("the all-time section does not change with the switcher", async ({

@@ -114,6 +114,30 @@ Agents drive their browser with `driver.sh run <n> "<command>"`, which prints
 `{"text": ..., "isError": ...}`. Tear down with `driver.sh down` when the run
 ends, whatever the outcome.
 
+Then **guard each agent** before any of them starts:
+
+```bash
+scripts/explore/driver.sh guard <n> agent-<n> <comma-separated-uuids>
+```
+
+The uuids come from the journals, never from the agent:
+
+```bash
+scripts/explore/driver.sh guard 1 agent-1 "$(scripts/explore/owned.sh agent-1)"
+```
+
+`owned.sh` reads **every** journal, not just this run's — ownership is
+provenance and is durable, which is the same reason `provision.sh` keeps
+usernames stable.
+
+Without this, ownership is only a sentence in `start.md`, and every exploration
+account is an admin — so nothing stops one agent destroying another's books.
+With it, the request is refused in the browser before it is sent.
+
+After the run, `driver.sh refusals <n>` lists what each agent was stopped from
+doing. **A non-empty list is a finding about the agent or the flow document,
+not about the app** — report it as such.
+
 ## 7. Fan out
 
 One subagent per actor, in parallel, each given **only**:

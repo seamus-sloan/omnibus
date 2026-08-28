@@ -5,6 +5,7 @@
 //! by [`crate::ScreenLayout`] so the nav chrome stays consistent.
 
 use dioxus::prelude::*;
+use dioxus_router::navigation::NavigationTarget;
 use dioxus_router::Routable;
 
 use crate::pages::*;
@@ -464,6 +465,23 @@ pub fn Register() -> Element {
     rsx! { RegisterPage {} }
 }
 
+/// A navigation target for `route` with the dangling `?` trimmed off.
+///
+/// dioxus-router's macro writes the query separator unconditionally, so a
+/// route with an *absent* optional query argument — `Route::BookListen {
+/// file_id: None }`, `Route::Settings { section: None }` — renders its href
+/// as `/listen/<uuid>?`, which looks broken in a URL a reader copies or
+/// bookmarks. Trimming it changes nothing about routing: the router parses a
+/// missing query and an empty one identically. Use this anywhere such a
+/// route becomes a `Link`'s `to` or a `Navigator::push`.
+pub fn link_target(route: Route) -> NavigationTarget {
+    let url = route.to_string();
+    match url.strip_suffix('?') {
+        Some(trimmed) => NavigationTarget::Internal(trimmed.to_string()),
+        None => NavigationTarget::Internal(url),
+    }
+}
+
 /// Where a "Continue" affordance resumes: the player (carrying the point's
 /// `book_file_id` as `?file_id=`, since a bare `/listen/:uuid` opens the
 /// first audio file) or the reader.
@@ -517,6 +535,49 @@ mod tests {
             chapter_count: None,
             playback_rate: None,
         }
+    }
+
+    #[test]
+    fn link_target_drops_the_separator_when_no_query_argument_is_set() {
+        // The reported Files-section Listen href: `/listen/book-a?`.
+        assert_eq!(
+            link_target(Route::BookListen {
+                uuid: "book-a".into(),
+                file_id: None,
+            }),
+            NavigationTarget::Internal("/listen/book-a".into())
+        );
+        assert_eq!(
+            link_target(Route::Settings { section: None }),
+            NavigationTarget::Internal("/settings".into())
+        );
+    }
+
+    #[test]
+    fn link_target_keeps_a_query_argument_that_is_set() {
+        assert_eq!(
+            link_target(Route::BookListen {
+                uuid: "book-a".into(),
+                file_id: Some(917),
+            }),
+            NavigationTarget::Internal("/listen/book-a?file_id=917".into())
+        );
+        assert_eq!(
+            link_target(Route::Settings {
+                section: Some("library".into()),
+            }),
+            NavigationTarget::Internal("/settings?section=library".into())
+        );
+    }
+
+    #[test]
+    fn link_target_leaves_a_route_with_no_query_segment_alone() {
+        assert_eq!(
+            link_target(Route::BookRead {
+                uuid: "book-a".into(),
+            }),
+            NavigationTarget::Internal("/read/book-a".into())
+        );
     }
 
     #[test]

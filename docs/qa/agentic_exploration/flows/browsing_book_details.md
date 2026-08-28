@@ -18,7 +18,7 @@ turn up something cosmetic that no assertion would catch.
    dates, identifiers, tags, genres, ratings, saved passages, suggestions.
    There is **no page or chapter count** on this page — do not go looking for
    one, and do not report its absence.
-3. Ask of each thing: is this plausible? A negative page count, a date in 1900,
+3. Ask of each thing: is this plausible? A publication year of 0101, a date in 1900,
    an author of "Unknown, Unknown", a description that is raw HTML, a cover
    that belongs to another book — all findings.
 4. Then do **each** of the following, in whatever order you like. You do not

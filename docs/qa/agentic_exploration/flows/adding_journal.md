@@ -27,7 +27,9 @@ your own entry appearing without the "you" marker.
    indexed, so a search returning nothing is not a finding.
 3. Use at least one piece of formatting: bold, italic, a quote, or a list. Vary
    which one across runs.
-4. Occasionally embed an image from the corpus.
+4. Occasionally embed an image. The corpus carries one beside most books —
+   `cover.jpg`, in the same folder as the book file — and that is the one to
+   use; there is no separate image library.
 5. Save it, and confirm it renders — the formatting applied, the text intact.
 6. Come back later in the run, find it again, and confirm it is unchanged.
 7. Occasionally edit it and confirm the edit sticks; occasionally delete it and

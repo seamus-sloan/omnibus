@@ -7,7 +7,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::{ShelfKind, ShelfSummary, Visibility};
 
-use crate::components::shelves_rail::{cog_icon, heart_icon};
+use crate::components::shelves_rail::{cog_icon, heart_icon, shows_owner_attribution};
 use crate::components::CreateShelfModal;
 use crate::shelf_selection::ShelfSelection;
 
@@ -15,30 +15,49 @@ use crate::shelf_selection::ShelfSelection;
 /// a hint of the shelf without becoming a mosaic again.
 pub(super) const PEEK_COVERS: usize = 3;
 
-/// Caption meta line: `"N books"`, plus `Public` when the shelf is shared.
-/// Kind is carried by the badge glyph beside it rather than a second word.
-pub(super) fn shelf_meta_line(count: i64, visibility: Visibility) -> String {
-    let books = if count == 1 {
+/// Caption meta line: `"N books"`, plus `Public` when the shelf is shared,
+/// plus `by <owner>` when the viewer doesn't own it. Kind is carried by the
+/// badge glyph beside it rather than a second word.
+pub(super) fn shelf_meta_line(count: i64, visibility: Visibility, owner: Option<&str>) -> String {
+    let mut line = if count == 1 {
         "1 book".to_string()
     } else {
         format!("{count} books")
     };
     if visibility == Visibility::Public {
-        format!("{books} \u{00b7} Public")
-    } else {
-        books
+        line.push_str(" \u{00b7} Public");
     }
+    // Admins see every shelf, so without this an owner's private shelf is
+    // indistinguishable from the viewer's own (#2248).
+    if let Some(owner) = owner {
+        line.push_str(&format!(" \u{00b7} by {owner}"));
+    }
+    line
 }
 
 /// Spoken label for a shelf entry. The kind badge is a decorative glyph, so
 /// "Smart" / "Wishlist" has to reach a screen reader through the label.
-pub(super) fn shelf_aria_label(name: &str, count: i64, kind: ShelfKind, vis: Visibility) -> String {
+pub(super) fn shelf_aria_label(
+    name: &str,
+    count: i64,
+    kind: ShelfKind,
+    vis: Visibility,
+    owner: Option<&str>,
+) -> String {
     let kind_word = match kind {
         ShelfKind::Smart => "Smart shelf ",
         ShelfKind::Wishlist => "Wishlist ",
         ShelfKind::Manual => "",
     };
-    format!("{kind_word}{name}, {}", shelf_meta_line(count, vis))
+    format!("{kind_word}{name}, {}", shelf_meta_line(count, vis, owner))
+}
+
+/// The owner name a gallery entry should attribute to, or `None` when the
+/// shelf is the viewer's own (or the viewer isn't resolved yet). Delegates
+/// the rule to the rail so the two surfaces can't drift.
+pub(super) fn attributed_owner(shelf: &ShelfSummary, viewer_id: Option<i64>) -> Option<&str> {
+    shows_owner_attribution(viewer_id, shelf.owner_user_id, shelf.kind)
+        .then_some(shelf.owner_username.as_str())
 }
 
 /// The slab line above the row, which doubles as the receipt for what the
@@ -79,6 +98,9 @@ pub(super) fn ShelfGallery(props: ShelfGalleryProps) -> Element {
         on_created,
     } = props;
     let mut show_create = use_signal(|| false);
+    // `None` until the boot effect resolves the viewer (SSR + first paint), so
+    // attribution stays withheld rather than guessed — same rule as the rail.
+    let viewer_id = crate::use_current_user_summary()().map(|u| u.id);
     let all_active = selection == ShelfSelection::All;
     let all_meta = match all_count {
         Some(1) => "1 book".to_string(),
@@ -139,6 +161,7 @@ pub(super) fn ShelfGallery(props: ShelfGalleryProps) -> Element {
                             shelf: s.clone(),
                             active: selection == ShelfSelection::Shelf(s.id),
                             server_url: server_url.clone(),
+                            viewer_id,
                             on_select,
                         }
                     }
@@ -164,11 +187,19 @@ fn ShelfRowEntry(
     shelf: ShelfSummary,
     active: bool,
     server_url: String,
+    viewer_id: Option<i64>,
     on_select: EventHandler<ShelfSelection>,
 ) -> Element {
     let id = shelf.id;
-    let meta = shelf_meta_line(shelf.book_count, shelf.visibility);
-    let label = shelf_aria_label(&shelf.name, shelf.book_count, shelf.kind, shelf.visibility);
+    let owner = attributed_owner(&shelf, viewer_id);
+    let meta = shelf_meta_line(shelf.book_count, shelf.visibility, owner);
+    let label = shelf_aria_label(
+        &shelf.name,
+        shelf.book_count,
+        shelf.kind,
+        shelf.visibility,
+        owner,
+    );
     let badge = match shelf.kind {
         ShelfKind::Smart => Some(cog_icon()),
         ShelfKind::Wishlist => Some(heart_icon()),

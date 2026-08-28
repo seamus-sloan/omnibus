@@ -3537,8 +3537,13 @@ a.idx-letter-on:focus-visible {
 }
 
 /* Speed panel */
+/* Anchored over the cover column, never over the transport. Bottom-right put
+   the panel on top of play/pause, the +/-30s seeks and its own trigger, so the
+   control that opened it could not close it (#2242). The width tracks the
+   stage's left grid column — (100vw - 2*56px padding - 80px gap) / 2 — so it
+   can never cross the gap into the controls at any viewport width. */
 .lp-speed-panel {
-  right: 56px; bottom: 104px; width: 468px; padding: 28px;
+  left: 56px; bottom: 104px; width: min(468px, calc(50vw - 96px)); padding: 28px;
 }
 .lp-speed-value {
   font-family: var(--mono); font-size: 40px;
@@ -3613,8 +3618,9 @@ a.idx-letter-on:focus-visible {
 }
 
 /* Sleep panel */
+/* Same cover-column anchor as `.lp-speed-panel` above, same reason. */
 .lp-sleep-panel {
-  right: 56px; bottom: 104px; width: 430px; padding: 28px;
+  left: 56px; bottom: 104px; width: min(430px, calc(50vw - 96px)); padding: 28px;
 }
 .lp-sleep-status { text-align: right; }
 .lp-sleep-status-value {
@@ -3978,8 +3984,12 @@ a.idx-letter-on:focus-visible {
   }
   .lp-cover-ring { width: min(280px, 60%); }
   .lp-title { font-size: clamp(28px, 8vw, 48px); }
-  .lp-speed-panel { width: calc(100vw - 48px); right: 24px; bottom: 80px; }
-  .lp-sleep-panel { width: calc(100vw - 48px); right: 24px; bottom: 80px; }
+  /* The stage is one column here, cover above controls, so a bottom-anchored
+     panel lands straight on the transport. Anchor to the top instead — over
+     the cover, clear of play/pause and both triggers (#2242). */
+  .lp-speed-panel, .lp-sleep-panel {
+    left: 24px; right: 24px; width: auto; top: 72px; bottom: auto;
+  }
   .lp-drawer { width: 100%; }
 
   /* Shed the secondary controls (chapter jumps, ±30 seeks, volume, speed
@@ -6124,6 +6134,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-scrim { position: absolute; inset: 0; z-index: 8;
   background: color-mix(in oklch, var(--bg-0) 55%, transparent);
   backdrop-filter: blur(1.5px); }
+/* While the Aa panel is open its trigger has to stay clickable, so the top
+   bar (normally z-index 6, under the scrim) is lifted over the scrim — but
+   left under the panel itself at 16. The panel hangs below the bar, so this
+   changes nothing visually. */
+.rd-top.rd-top-over-scrim { z-index: 9; }
 .rd-scrim-clear { background: transparent; backdrop-filter: none; z-index: 18; }
 
 /* ── Selection popover (highlights) ────────────────────────────── */
@@ -8949,6 +8964,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   text-overflow: ellipsis; white-space: nowrap;
 }
 .st-drill-finished-author { font-size: 11px; color: var(--ink-3); }
+
+/* Pages read drill-in prose: coverage plus the tracking-cutover date. Stacked
+   rather than run together so the cutover line reads as its own caveat. */
+.st-drill-pages-note { display: flex; flex-direction: column; gap: 6px; }
 .st-drill-finished-rating { font-size: 12px; color: var(--ink-2); flex: 0 0 auto; }
 
 @media (min-width: 721px) {
@@ -9157,6 +9176,25 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-sup-detail { font-size: 12px; color: var(--ink-2); }
 .st-sup-note { margin: 0; font-size: 11.5px; color: var(--ink-3); }
 
+/* ── Library-composition card ─────────────────────────────────────── */
+.st-comp-card { display: flex; flex-direction: column; gap: 14px; }
+/* auto-fit: a dimension the library carries no metadata for renders a
+   sentence rather than an axis, so the panel count varies. */
+.st-comp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 22px 24px;
+}
+.st-comp-panel { min-width: 0; }
+.st-comp-title {
+  margin: 0; font-family: var(--serif); font-weight: 600;
+  font-size: 15px; color: var(--ink-1);
+}
+/* The coverage line beneath each panel's bars — the denominator that keeps a
+   partial distribution from reading as the whole library. */
+.st-comp-note { margin: 12px 0 0; font-size: 11px; color: var(--ink-3); }
+.st-comp-ghosted { margin: 2px 0 0; font-size: 11px; color: var(--ink-3); }
+
 /* ── Scaffold cards (shown while a section's fetch is in flight) ──── */
 .st-summary-card { display: flex; flex-direction: column; gap: 8px; }
 .st-summary-line { font-size: 14px; color: var(--ink-1); }
@@ -9181,6 +9219,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
   /* Composition cards stack; the donut legend flows below the ring. */
   .st-compose { grid-template-columns: 1fr; gap: 12px; }
+  .st-comp-grid { grid-template-columns: 1fr; gap: 18px; }
   .st-donut-body { flex-direction: column; gap: 16px; }
   .st-donut-legend { width: 100%; }
 
@@ -10446,7 +10485,15 @@ html {
 .bdmq-by { margin-top: 12px; font-size: 16px; color: var(--ink-1); }
 .bdmq-by .bd-author-link:hover { color: var(--accent); }
 
-.bdmq-chips { display: flex; gap: 8px 10px; margin-top: 16px; flex-wrap: wrap; align-items: center; }
+/* Genres and tags each get their own line: run together on one wrapping row,
+   the "+ genres" pill lands above the tag chips and the two sets read as one
+   list. */
+.bdmq-chips { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.bd-chip-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+/* Fixed width so the two rows' chips line up under each other. */
+.bd-chip-row-label { flex: 0 0 auto; min-width: 52px; color: var(--ink-3); }
+/* The row supplies the vertical rhythm, so the list inside it doesn't. */
+.bd-chip-row .bd-tag-list { margin-top: 0; }
 .bdmq-desc { margin-top: 18px; font-size: 15px; color: var(--ink-1); line-height: 1.6; max-width: 560px; }
 /* Long blurbs must not push the CTA row off the stop. */
 .bdmq-desc {

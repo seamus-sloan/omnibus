@@ -1,6 +1,6 @@
 //! Tests for the drill-in's delta/trend math and Finished-book mapping.
 
-use omnibus_shared::PeriodComparison;
+use omnibus_shared::{PeriodComparison, TrendPoint};
 
 use super::*;
 
@@ -202,4 +202,126 @@ fn finished_book_as_ebook_carries_title_author_and_cover() {
     assert_eq!(ebook.creators[0].name, "Frank Herbert");
     assert_eq!(ebook.unique_identifier.as_deref(), Some("u1"));
     assert_eq!(ebook.cover_url.as_deref(), Some("/api/covers/u1"));
+}
+
+#[test]
+fn trend_points_for_pages_reads_the_per_day_ledger_series() {
+    let mut summary = StatsSummary {
+        pages_detail: PagesReadDetail {
+            daily: vec![
+                TrendPoint {
+                    label: "2026-08-03".to_string(),
+                    value: 41.0,
+                },
+                TrendPoint {
+                    label: "2026-08-04".to_string(),
+                    value: 12.0,
+                },
+            ],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    summary.pages_read = Some(53);
+
+    let points = trend_points(Metric::Pages, &summary);
+
+    assert_eq!(
+        points,
+        vec![("03".to_string(), 41.0), ("04".to_string(), 12.0)]
+    );
+}
+
+#[test]
+fn delta_for_pages_compares_against_the_previous_windows_pages() {
+    let summary = StatsSummary {
+        pages_read: Some(120),
+        previous: PeriodComparison {
+            pages_read: 100,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let d = delta_for(Metric::Pages, &summary, StatsRange::Month).unwrap();
+
+    assert_eq!(d.label, "20%");
+    assert_eq!(d.css_class, "up");
+}
+
+#[test]
+fn delta_for_pages_treats_an_unmeasured_window_as_zero_not_as_missing() {
+    // `None` is "nothing measurable happened", which against a real baseline is
+    // a drop to zero — not an absent comparison.
+    let summary = StatsSummary {
+        pages_read: None,
+        previous: PeriodComparison {
+            pages_read: 200,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let d = delta_for(Metric::Pages, &summary, StatsRange::Month).unwrap();
+
+    assert_eq!(d.label, "100%");
+    assert_eq!(d.css_class, "down");
+}
+
+#[test]
+fn measured_line_singularizes_a_one_book_window() {
+    let one = PagesReadDetail {
+        measured_books: 1,
+        ..Default::default()
+    };
+    assert_eq!(measured_line(&one), "Across 1 book this period.");
+    let many = PagesReadDetail {
+        measured_books: 4,
+        ..Default::default()
+    };
+    assert_eq!(measured_line(&many), "Across 4 books this period.");
+}
+
+#[test]
+fn unmeasured_line_names_the_books_the_total_leaves_out() {
+    assert!(unmeasured_line(1, true).starts_with("1 more book has"));
+    assert!(unmeasured_line(3, true).starts_with("3 more books have"));
+    // Nothing was measured, so the line above it reported no page progress at
+    // all — "more" would have no antecedent, and the singular needs "it".
+    assert_eq!(
+        unmeasured_line(1, false),
+        "1 book has no known length yet, so nothing it contributed is counted."
+    );
+    assert!(unmeasured_line(3, false).starts_with("3 books have"));
+    assert!(unmeasured_line(3, false).ends_with("nothing they contributed is counted."));
+}
+
+#[test]
+fn cutover_line_warns_only_when_the_window_reaches_past_the_epoch() {
+    // A Month window starting after the epoch is fully covered, so the date is
+    // context; a Lifetime one is partly unmeasurable and has to say so.
+    assert_eq!(
+        cutover_line("2026-08-01", false),
+        "Page tracking began 2026-08-01."
+    );
+    assert!(cutover_line("2026-08-01", true).contains("only partly covered"));
+}
+
+#[test]
+fn predates_ledger_follows_the_servers_overlap_answer_not_the_range() {
+    assert!(PagesReadDetail {
+        since_day: Some("2026-08-01".to_string()),
+        window_predates_ledger: true,
+        ..Default::default()
+    }
+    .predates_ledger());
+    // A window that opens after the epoch gets the date as context and no
+    // caveat, whichever range produced it.
+    assert!(!PagesReadDetail {
+        since_day: Some("2026-08-01".to_string()),
+        ..Default::default()
+    }
+    .predates_ledger());
+    // No epoch recorded, nothing to warn about.
+    assert!(!PagesReadDetail::default().predates_ledger());
 }

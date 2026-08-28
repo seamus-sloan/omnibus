@@ -1,11 +1,10 @@
 //! Shared discovery sections of the book-detail page — "From the same hand"
-//! (author lead + cover stack) and the Hardcover suggestions strip — plus the
-//! identifier-label helpers the files stop's metadata table reuses. The marquee
-//! stops compose these from `marquee.rs`.
+//! (author lead + cover stack) and the Hardcover suggestions strip. The
+//! marquee stops compose these from `marquee.rs`.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{BookSuggestion, EbookMetadata, Identifier, SuggestionsResponse};
+use omnibus_shared::{BookSuggestion, EbookMetadata, SuggestionsResponse};
 
 use crate::components::atrium::Cover;
 use crate::Route;
@@ -277,49 +276,3 @@ fn SuggestionsConnectCard(is_admin: bool) -> Element {
         }
     }
 }
-
-/// Collision-free list key for an identifier row. A book can carry several
-/// identifiers sharing one `scheme` (the projection keeps every distinct
-/// value per scheme), so the key folds in `value` to stay unique among the
-/// keyed siblings — Dioxus panics when two keyed siblings share a key.
-///
-/// Both fields are `Debug`-quoted (not joined with a plain separator): a raw
-/// `scheme|value` join collides when the data itself contains the delimiter
-/// (`scheme="a|b", value="c"` vs `scheme="a", value="b|c"`), which would
-/// reintroduce the very panic this guards against. `Debug` escapes embedded
-/// quotes/backslashes, so the `(scheme, value)` pair maps injectively to the
-/// key.
-pub(super) fn bd_identifier_key(ident: &Identifier) -> String {
-    format!("{:?}\u{1f}{:?}", ident.scheme, ident.value)
-}
-
-/// Label for a file-details identifier row: a known scheme renders as-is; a missing or `unknown` scheme is inferred from the value's shape as `ISBN` or `Identifier`.
-pub(super) fn bd_identifier_label(ident: &Identifier) -> String {
-    match ident.scheme.as_deref() {
-        Some(scheme) if !scheme.eq_ignore_ascii_case("unknown") => scheme.to_string(),
-        _ if bd_looks_like_isbn(&ident.value) => "ISBN".to_string(),
-        _ => "Identifier".to_string(),
-    }
-}
-
-/// True when `value`, with hyphens and whitespace stripped, is the right length for an ISBN-10 or ISBN-13, digits-only except a trailing ISBN-10 `X` check digit.
-fn bd_looks_like_isbn(value: &str) -> bool {
-    let cleaned: Vec<char> = value
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != '-')
-        .collect();
-    match cleaned.len() {
-        10 => {
-            let last = cleaned.len() - 1;
-            cleaned
-                .iter()
-                .enumerate()
-                .all(|(i, c)| c.is_ascii_digit() || (i == last && c.eq_ignore_ascii_case(&'x')))
-        }
-        13 => cleaned.iter().all(|c| c.is_ascii_digit()),
-        _ => false,
-    }
-}
-
-#[cfg(test)]
-mod tests;

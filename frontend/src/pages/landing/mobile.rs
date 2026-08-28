@@ -306,7 +306,7 @@ fn resume_card(
         .map(|c| c.name.clone())
         .unwrap_or_default();
     let is_audio = point.record.format == ProgressFormat::Audio;
-    let to = crate::routes::resume_route(point);
+    let to = crate::routes::link_target(crate::routes::resume_route(point));
     let (meta, pct) = resume_meta(point);
     let bust = crate::contexts::cover_bust_for(cover_bust, &uuid);
     let (src, _srcset) = thumb_srcs(&book, &uuid, server_url, bust);

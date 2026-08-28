@@ -5,6 +5,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::ChapterInfo;
 
+use super::super::helpers::remaining_at_rate;
 use super::state::{format_countdown, sleep_remaining, SleepState, SLEEP_PRESETS};
 use super::view::format_ms;
 
@@ -59,7 +60,11 @@ pub(super) struct ChaptersListView {
     pub current_index: usize,
     /// Seconds elapsed in the whole book (drives the current row's bar).
     pub elapsed: f64,
-    /// Formatted total-duration label shown in the sheet header.
+    /// Current playback rate — each row's duration divides by it so the sheet
+    /// and the transport read one clock (#2246).
+    pub rate: f64,
+    /// Formatted total-duration label shown in the sheet header, already on
+    /// that same rate-adjusted basis.
     pub total_label: String,
 }
 
@@ -83,6 +88,7 @@ pub(super) fn ChaptersSheet(props: ChaptersSheetProps) -> Element {
                 chapters,
                 current_index,
                 elapsed,
+                rate,
                 total_label,
             },
         on_seek,
@@ -99,7 +105,7 @@ pub(super) fn ChaptersSheet(props: ChaptersSheetProps) -> Element {
             on_close,
             div { class: "m-sheet-list",
                 for (i, ch) in chapters.iter().enumerate() {
-                    {chapter_row(i, ch, current_index, elapsed, &on_seek)}
+                    {chapter_row(i, ch, current_index, elapsed, rate, &on_seek)}
                 }
             }
         }
@@ -112,6 +118,7 @@ fn chapter_row(
     ch: &ChapterInfo,
     current_index: usize,
     elapsed: f64,
+    rate: f64,
     on_seek: &EventHandler<f64>,
 ) -> Element {
     let is_current = i == current_index;
@@ -141,7 +148,10 @@ fn chapter_row(
             } else if is_done {
                 span { class: "m-ch-trail m-ch-done", "\u{2713}" }
             } else {
-                span { class: "mono m-ch-trail m-ch-dur", "{format_ms(ch.duration_seconds)}" }
+                span {
+                    class: "mono m-ch-trail m-ch-dur",
+                    "{format_ms(remaining_at_rate(ch.duration_seconds, rate))}"
+                }
             }
         }
     }

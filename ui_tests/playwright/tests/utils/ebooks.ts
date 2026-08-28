@@ -91,19 +91,29 @@ function expectedSeriesText(book: ExpectedBook): string {
 }
 
 const MONTH_NAMES = [
-  "January",
-  "February",
-  "March",
-  "April",
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
   "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
 ];
+
+/** English ordinal suffix for a day of the month — mirrors
+ *  `ordinal_suffix` in `frontend/src/format.rs`. */
+function ordinalSuffix(day: number): string {
+  if (day % 100 >= 11 && day % 100 <= 13) return "th";
+  if (day % 10 === 1) return "st";
+  if (day % 10 === 2) return "nd";
+  if (day % 10 === 3) return "rd";
+  return "th";
+}
 
 // Calibre's "no publish date" placeholder (`UNDEFINED_DATE =
 // datetime(101, 1, 1, tzinfo=utc)`) and anything at or before it in year —
@@ -112,10 +122,10 @@ const SENTINEL_YEAR_MAX = 101;
 
 /**
  * Expected text for the published cell, mirroring
- * `frontend::format::format_date_short` (#1905): a stored `YYYY[-MM[-DD]]`
- * date renders as `"Month D, YYYY"`, narrowing to `"Month YYYY"` or `"YYYY"`
- * as the source narrows; an absent, unparsable, or sentinel date renders as
- * an em dash. Keep the two formatters in lockstep.
+ * `frontend::format::format_date_short` (#1905, #2244): a stored
+ * `YYYY[-MM[-DD]]` date renders as `"Mon Dth, YYYY"`, narrowing to
+ * `"Mon YYYY"` or `"YYYY"` as the source narrows; an absent, unparsable, or
+ * sentinel date renders as an em dash. Keep the two formatters in lockstep.
  */
 function expectedPublishedText(raw: string): string {
   const datePart = raw.trim().split(/[T ]/)[0] ?? "";
@@ -133,7 +143,8 @@ function expectedPublishedText(raw: string): string {
     dayNum !== undefined && dayNum >= 1 && dayNum <= 31 ? dayNum : undefined;
   const monthName =
     month && month >= 1 && month <= 12 ? MONTH_NAMES[month - 1] : undefined;
-  if (monthName && day) return `${monthName} ${day}, ${year}`;
+  if (monthName && day)
+    return `${monthName} ${day}${ordinalSuffix(day)}, ${year}`;
   if (monthName) return `${monthName} ${year}`;
   return `${year}`;
 }

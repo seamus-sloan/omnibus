@@ -121,10 +121,10 @@ test("Settings link routes to the settings page", async ({ page }) => {
   await gotoReady(page, "/");
   await page.getByTestId("user-menu-trigger").click();
   await page.getByRole("link", { name: "Settings" }).click();
-  // `Route::Settings { section: None }` serializes with a trailing `?` (dioxus
-  // renders the absent optional query param), so allow it — the section-less
-  // URL lands on the default Account section either way.
-  await expect(page).toHaveURL(/\/settings\??$/);
+  // `routes::link_target` trims the bare trailing `?` dioxus-router writes
+  // for the absent optional query param (#2256); the section-less URL lands
+  // on the default Account section.
+  await expect(page).toHaveURL(/\/settings$/);
 });
 
 test("the dropdown no longer surfaces the folded-in rows (#1324)", async ({
@@ -165,11 +165,11 @@ for (const sample of [
       name: `${sample.action} ${latest.title}`,
     });
     await expect(action).toBeVisible();
-    // The `/listen/:uuid?:file_id` route serializes an unset file_id as a bare
-    // trailing `?`, so tolerate it (the `/read` destination stays clean).
+    // `routes::link_target` trims the bare trailing `?` dioxus-router writes
+    // for an unset `?file_id` (#2256), so both destinations are clean.
     await expect(action).toHaveAttribute(
       "href",
-      new RegExp(`^/${sample.path}/${latest.uuid}\\??$`),
+      new RegExp(`^/${sample.path}/${latest.uuid}$`),
     );
 
     // The cover instead routes to the book detail page.

@@ -28,6 +28,18 @@ fn progress_pct_treats_non_finite_elapsed_as_zero() {
 }
 
 #[test]
+fn progress_pct_treats_non_finite_duration_as_zero() {
+    assert_eq!(progress_pct(10.0, f64::NAN), 0.0);
+    assert_eq!(progress_pct(10.0, f64::INFINITY), 0.0);
+}
+
+#[test]
+fn time_left_text_is_none_when_duration_is_non_finite() {
+    assert_eq!(time_left_text(10.0, f64::NAN, 1.0), None);
+    assert_eq!(time_left_text(10.0, f64::INFINITY, 1.0), None);
+}
+
+#[test]
 fn time_left_text_is_none_when_duration_unknown() {
     assert_eq!(time_left_text(10.0, 0.0, 1.0), None);
     assert_eq!(time_left_text(f64::NAN, 100.0, 1.0), None);

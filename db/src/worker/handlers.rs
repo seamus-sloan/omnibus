@@ -154,15 +154,20 @@ pub(super) fn resizes_library(task: &Task) -> bool {
 }
 
 impl Worker {
-    /// Run a queued [`Task`], then drop the library-size cache if the task
-    /// could have changed the library's own content — which is what stops a
-    /// just-finished scan reporting the size of the library the reader had
-    /// before it.
+    /// Run a queued [`Task`], then drop the library-scoped stats caches if the
+    /// task could have changed the library's own content.
+    ///
+    /// `db::stats::library`'s totals and `db::stats::composition`'s dimension
+    /// rollups are library-wide and cached behind a long TTL, because a
+    /// collection changes on a scan rather than on a sitting. These four tasks
+    /// are what move them, and dropping the entries after one is what stops a
+    /// just-finished scan describing the library the reader had before it.
     pub(super) async fn execute(self: &Arc<Self>, task: Task, id: TaskId) -> TaskOutcome {
         let resizes = resizes_library(&task);
         let outcome = self.dispatch(task, id).await;
         if resizes {
             crate::stats::invalidate_library_size();
+            crate::stats::invalidate_library_composition();
         }
         outcome
     }

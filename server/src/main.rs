@@ -131,12 +131,21 @@ mod server {
     /// the refresh flows in next time the page loads. Treat read errors as
     /// "stale" so a malformed timestamp doesn't silently suppress the
     /// recovery scan.
+    ///
+    /// A library that *isn't* due a scan still gets the word-count backfill
+    /// posted, because that is how a migration which re-derives `word_count`
+    /// (`0084`) reaches a running install: the backfill is otherwise only
+    /// posted by a successful scan, so an up-to-date library would carry NULL
+    /// counts until its scan interval next elapsed. The task is a no-op once
+    /// every EPUB has a count, so this costs one empty query per boot.
     async fn kick_recovery_scans(pool: &SqlitePool, worker: &Arc<Worker>) {
         if let Ok(settings) = omnibus_db::get_settings(pool).await {
             if let Some(path) = settings.ebook_library_path {
                 let stale = indexer::is_stale(pool, &path).await.unwrap_or(true);
                 if stale {
                     worker.post(Task::Scan { library_path: path });
+                } else {
+                    worker.post(Task::BackfillWordCounts { library_path: path });
                 }
             }
             if let Some(path) = settings.audiobook_library_path {

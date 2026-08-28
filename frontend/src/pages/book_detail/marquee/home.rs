@@ -36,7 +36,7 @@ pub(super) fn MarqueeHomeStop(
     insights: Option<BookInsights>,
     alignment: Option<AlignmentView>,
     /// How many books of this series the library holds — the kicker's
-    /// "Book N of M". `None` until the stage's series fetch resolves.
+    /// "M in your library". `None` until the stage's series fetch resolves.
     series_total: Option<usize>,
     phys: PhysSignals,
     refresh: Signal<u32>,
@@ -248,8 +248,8 @@ struct HomeKicker {
     tail: String,
 }
 
-/// `Series · Book N · YYYY` (series linked) / `Genre · standalone · YYYY` /
-/// `On your wishlist · <source>`.
+/// `Series · Book N · M in your library · YYYY` (series linked) /
+/// `Genre · standalone · YYYY` / `On your wishlist · <source>`.
 fn home_kicker(
     b: &EbookMetadata,
     view: &MarqueeViewFacts,
@@ -267,25 +267,24 @@ fn home_kicker(
             tail: String::new(),
         };
     }
-    let year = b
+    let year_tail = b
         .published
         .as_deref()
-        .and_then(|p| p.get(0..4))
-        .unwrap_or("")
-        .to_string();
-    let year_tail = if year.is_empty() {
-        String::new()
-    } else {
-        format!(" \u{b7} {year}")
-    };
+        .and_then(crate::format::format_year)
+        .map(|year| format!(" \u{b7} {year}"))
+        .unwrap_or_default();
     // The bare series name, not the `Name #N` label: the position follows it
     // as its own "Book N of M" clause, per the design.
     if let Some(series) = b.series.clone().or_else(|| view.series.clone()) {
-        // The design's "Kingkiller Chronicle · Book 1 of 3 · 2007": the
-        // position comes from the book's own series index, the total from
-        // how many of the series the library holds.
+        // "Kingkiller Chronicle · Book 1 · 3 in your library". The index is
+        // the book's position *in the series*, and the count is how many of
+        // the series the library holds — two unrelated numbers, so they are
+        // never phrased as a fraction ("Book 2 of 1" is what that produced).
+        // Same wording as the Shelf stop's own header further down the page.
         let position = match (b.series_index.as_deref(), series_total) {
-            (Some(n), Some(total)) if total > 0 => format!(" \u{b7} Book {n} of {total}"),
+            (Some(n), Some(total)) if total > 0 => {
+                format!(" \u{b7} Book {n} \u{b7} {total} in your library")
+            }
             (Some(n), _) => format!(" \u{b7} Book {n}"),
             (None, _) => String::new(),
         };

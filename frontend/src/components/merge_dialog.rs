@@ -335,12 +335,12 @@ fn render_candidate(
     let year = book
         .published
         .as_deref()
-        .and_then(|p| p.get(0..4))
-        .unwrap_or("");
+        .and_then(crate::format::format_year)
+        .unwrap_or_default();
     let meta = match (author.is_empty(), year.is_empty()) {
         (false, false) => format!("{author} \u{00b7} {year}"),
         (false, true) => author,
-        (true, false) => year.to_string(),
+        (true, false) => year,
         (true, true) => String::new(),
     };
     // A shared series is the strongest "same book, other format" signal —
