@@ -1256,6 +1256,18 @@ struct RatingBucket: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// One bar of the book-length distribution: a page-range label and how many
+/// books finished in the window fall into it.
+///
+/// The server owns the boundaries *and* their labels, so nothing here
+/// re-derives a range. One bucket is the unknown bucket — a book no rung of
+/// the length ladder can measure — and it is rendered rather than dropped.
+struct LengthBucket: Codable, Hashable, Sendable, Identifiable {
+    var label: String
+    var books: Int64
+    var id: String { label }
+}
+
 struct StatsSummary: Codable, Sendable {
     var range: StatsRange = .month
     var readingSeconds: Int64 = 0
@@ -1283,6 +1295,9 @@ struct StatsSummary: Codable, Sendable {
     /// flattens away. All ten buckets arrive, zeros included.
     var ratingHistogram: [RatingBucket] = []
     var pagesRead: Int64?
+    /// Books finished in the window by length, plus the unknown bucket. Every
+    /// bucket arrives; an all-zero set means nothing was finished.
+    var lengthBuckets: [LengthBucket] = []
 
     enum CodingKeys: String, CodingKey {
         case range, sessions, heatmap
@@ -1304,6 +1319,7 @@ struct StatsSummary: Codable, Sendable {
         case booksPerMonth = "books_per_month"
         case ratingHistogram = "rating_histogram"
         case pagesRead = "pages_read"
+        case lengthBuckets = "length_buckets"
     }
 
     var totalSeconds: Int64 { readingSeconds + listeningSeconds }

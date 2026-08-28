@@ -15,7 +15,7 @@ mod heatmap;
 mod monthly;
 mod tiles;
 
-use donut::{FormatSplit, GenreDonut};
+use donut::{FormatSplit, GenreDonut, LengthSplit};
 use drill_in::{DrillIn, Metric};
 use heatmap::HeatmapCard;
 use monthly::MonthlyChart;
@@ -296,9 +296,9 @@ fn focus_range_menu(evt: &MountedEvent) {
 fn focus_range_menu(_evt: &MountedEvent) {}
 
 /// The period-scoped module stack: headline tiles, then the composition row
-/// (genre donut + format split). A placeholder card until the first fetch
-/// lands. `expanded` is forwarded to the tiles so a grip click can open that
-/// metric's drill-in.
+/// (genre donut + format split, with the length distribution beneath them). A
+/// placeholder card until the first fetch lands. `expanded` is forwarded to the
+/// tiles so a grip click can open that metric's drill-in.
 #[component]
 fn PeriodSummary(
     period: Signal<Option<StatsSummary>>,
@@ -319,6 +319,7 @@ fn PeriodSummary(
         div { class: "st-compose",
             GenreDonut { summary: summary.clone() }
             FormatSplit { summary: summary.clone() }
+            LengthSplit { summary: summary.clone() }
         }
     }
 }

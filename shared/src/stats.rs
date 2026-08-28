@@ -190,6 +190,21 @@ impl RatingBucket {
     }
 }
 
+/// One bar of the book-length distribution: a page-range label and how many
+/// books finished in the window fall into it.
+///
+/// The server owns both the boundaries and their labels (`db::stats::pages`),
+/// so a client never re-derives a range and disagrees about where 499 pages
+/// belongs. One bucket is the **unknown** bucket — a book no rung of the
+/// length ladder can measure — and it must be rendered, not dropped: an
+/// audiobook has no page analogue, and silently omitting it reports a
+/// distribution over fewer books than the window contains.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LengthBucket {
+    pub label: String,
+    pub books: i64,
+}
+
 /// Scalar aggregates for the **same elapsed slice** of the preceding period —
 /// feeds each metric tile's drill-in delta. The current window is
 /// period-to-date, so this is month-to-date against the same days last month
@@ -295,6 +310,12 @@ pub struct StatsSummary {
     /// stored estimate, driving the tile's em-dash empty state.
     #[serde(default)]
     pub pages_read: Option<i64>,
+    /// Books finished in the window bucketed by length, plus the unknown
+    /// bucket. Every bucket is present, zeros included; an all-zero set means
+    /// nothing was finished, which the surfaces render as an empty state
+    /// rather than flat bars.
+    #[serde(default)]
+    pub length_buckets: Vec<LengthBucket>,
 }
 
 impl StatsSummary {
