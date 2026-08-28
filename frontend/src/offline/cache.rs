@@ -122,6 +122,10 @@ pub mod keys {
     pub fn library_size() -> String {
         "library_size".into()
     }
+    /// `GET /api/library-composition`. Unkeyed, for the same reason.
+    pub fn library_composition() -> String {
+        "library_composition".into()
+    }
     /// `GET /api/ebooks/{uuid}/suggestions`.
     pub fn suggestions(uuid: &str) -> String {
         format!("suggestions:{uuid}")

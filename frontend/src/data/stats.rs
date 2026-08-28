@@ -1,11 +1,13 @@
-//! Reading-stats transport. Wraps the per-user summary fetch and the
-//! library-scale totals beside it for mobile (`GET /api/stats` and
-//! `GET /api/library-size` via reqwest) and web/SSR (the matching server
-//! functions). Both variants share their signatures so the stats page stays
-//! platform-agnostic; the `#[cfg]` gates carry the split.
+//! Reading-stats transport. Wraps the per-user summary fetch and the two
+//! library-scoped reads beside it for mobile (`GET /api/stats`,
+//! `GET /api/library-size`, `GET /api/library-composition` via reqwest) and
+//! web/SSR (the matching server functions). Both variants share their
+//! signatures so the stats page stays platform-agnostic; the `#[cfg]` gates
+//! carry the split.
 
 use omnibus_shared::{
-    LibrarySize, ReadingGoal, ReadingGoalUpdate, SessionLogPage, StatsRange, StatsSummary,
+    LibraryComposition, LibrarySize, ReadingGoal, ReadingGoalUpdate, SessionLogPage, StatsRange,
+    StatsSummary,
 };
 
 #[cfg(not(feature = "mobile"))]
@@ -102,6 +104,35 @@ pub async fn save_reading_goal(
     update: &ReadingGoalUpdate,
 ) -> Result<Option<ReadingGoal>, DataError> {
     crate::rpc::rpc_set_reading_goal(update.clone())
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// GET `/api/library-composition` — what the library is made of. Not per-user
+/// and not windowed, so it carries no query.
+#[cfg(feature = "mobile")]
+pub async fn fetch_library_composition(server_url: &str) -> Result<LibraryComposition, DataError> {
+    let url = server_url.to_string();
+    crate::offline::cache::read_through(
+        crate::offline::cache::keys::library_composition(),
+        async move {
+            let response = with_bearer(http_client().get(format!("{url}/api/library-composition")))
+                .send()
+                .await?;
+            let status = note_status(response.status());
+            if !status.is_success() {
+                return Err(drain_error(response, status).await);
+            }
+            Ok(response.json::<LibraryComposition>().await?)
+        },
+    )
+    .await
+}
+
+/// Web/SSR `fetch_library_composition` — proxies to `rpc_library_composition`.
+#[cfg(not(feature = "mobile"))]
+pub async fn fetch_library_composition(_server_url: &str) -> Result<LibraryComposition, DataError> {
+    crate::rpc::rpc_library_composition()
         .await
         .map_err(note_server_fn_err)
 }

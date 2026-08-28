@@ -867,6 +867,14 @@ enum UserDataService {
         return goal
     }
 
+    /// What the library is made of — format, language, publisher, decade, and
+    /// genre mix. Its own read for the same reason `librarySize` is.
+    static func libraryComposition() -> AsyncThrowingStream<CacheRead<LibraryComposition>, Error> {
+        Cache.live(CacheKey.libraryComposition) {
+            try await APIClient.shared.get("/api/library-composition")
+        }
+    }
+
     /// One page of the reader's own session log, newest sitting first. `book`
     /// scopes it to a single book; `before` is the previous page's
     /// `nextBefore`, echoed back verbatim.

@@ -26,7 +26,7 @@ const LIBRARY_TTL_SECS: i64 = 900;
 /// from the denominator — their bytes are gone, so counting them would both
 /// overstate the library and drag every coverage fraction down for rows
 /// nothing can measure.
-const LIVE_BOOK: &str = "EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)";
+pub(super) const LIVE_BOOK: &str = "EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)";
 
 /// The audio formats an audiobook can be served from, mirroring
 /// `hls::query::resolve_audiobook_file`. A duration total that admitted
@@ -129,7 +129,7 @@ async fn compute(pool: &SqlitePool) -> Result<LibrarySize, StatsError> {
 }
 
 /// Books with at least one file on disk — the denominator.
-async fn live_book_count(pool: &SqlitePool) -> Result<i64, StatsError> {
+pub(super) async fn live_book_count(pool: &SqlitePool) -> Result<i64, StatsError> {
     Ok(
         sqlx::query_scalar(&format!("SELECT COUNT(*) FROM books b WHERE {LIVE_BOOK}"))
             .fetch_one(pool)
