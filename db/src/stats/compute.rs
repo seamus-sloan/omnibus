@@ -545,17 +545,10 @@ pub(super) async fn finished_books(
 /// of the preceding period. `None` for [`StatsRange::AllTime`] — there is no
 /// window before "all of it".
 ///
-/// The current window runs from its period start to *now*, so on the 3rd of the
-/// month it covers three days. Measuring it against the whole of the previous
-/// month compared three days against thirty-one and rendered a red ▼ on the
-/// drill-in for every reader in the first week of every month; the Year range
-/// did the same thing to the whole of January. Taking the same offset into the
-/// previous period instead makes the two sides commensurable — month-to-date
-/// against the same days last month.
-///
-/// `end` is clamped to the current period's start so a long month cannot run
-/// the baseline off the end of a shorter one: 30 days elapsed in March maps
-/// onto a February that only has 28, and the baseline is that whole February.
+/// The current window is period-to-date, so the baseline has to be the same
+/// offset into the previous period for the two to be commensurable. `end` is
+/// clamped to the current period's start, since the elapsed offset can exceed
+/// a shorter previous period (30 days into March against a 28-day February).
 pub(super) async fn prev_window_bounds(
     pool: &SqlitePool,
     range: StatsRange,
@@ -579,13 +572,27 @@ pub(super) async fn prev_window_bounds(
     ))
     .fetch_one(pool)
     .await?;
-    let prev_start: i64 = row.get("prev_start");
-    let cur_start: i64 = row.get("cur_start");
-    let now: i64 = row.get("now_secs");
+    Ok(Some(prev_window_from(
+        row.get("prev_start"),
+        row.get("cur_start"),
+        row.get("now_secs"),
+    )))
+}
 
+/// The bounds arithmetic of [`prev_window_bounds`], split from its clock so it
+/// can be tested on fixed dates — reading SQLite's `now` makes the clamp
+/// reachable on only a handful of days a year.
+///
+/// Yields `[prev_start, prev_start + elapsed)`, clamped to `cur_start` so the
+/// baseline never runs past the period it belongs to. `elapsed` is zero for the
+/// first second of a period, which yields an empty baseline — correct, since
+/// the current window is equally empty then.
+pub(super) fn prev_window_from(prev_start: i64, cur_start: i64, now: i64) -> (i64, i64) {
     let elapsed = now.saturating_sub(cur_start).max(0);
-    let end = prev_start.saturating_add(elapsed).min(cur_start);
-    Ok(Some((prev_start, end)))
+    (
+        prev_start,
+        prev_start.saturating_add(elapsed).min(cur_start),
+    )
 }
 
 /// The window immediately preceding `range`'s current one — feeds the drill-in's
