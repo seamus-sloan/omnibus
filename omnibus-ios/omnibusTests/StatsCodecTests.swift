@@ -139,6 +139,27 @@ struct StatsSummaryCodecTests {
         #expect(!summary.hasTimePatterns)
         #expect(summary.unzonedSeconds == 600, "the excluded time is still disclosed")
     }
+    @Test("superlatives decode, and an omitted one stays omitted")
+    func decodesSuperlatives() throws {
+        let longest = #"{"book_uuid":"u1","title":"Doorstopper","author":"A. Writer","value":900}"#
+        let day = #"{"day":"2023-11-14","seconds":7200}"#
+        let extra = #","superlatives":{"longest_book":\#(longest),"biggest_day":\#(day)}"#
+        let summary = try decodeSummary(summaryJSON(extra: extra))
+        #expect(summary.superlatives.longestBook?.title == "Doorstopper")
+        #expect(summary.superlatives.longestBook?.value == 900)
+        #expect(summary.superlatives.biggestDay?.seconds == 7200)
+        // An absent superlative is `nil`, never a zero — a zero would render
+        // as a finding.
+        #expect(summary.superlatives.shortestBook == nil)
+        #expect(summary.superlatives.fastestRead == nil)
+        #expect(!summary.superlatives.isEmpty)
+    }
+
+    @Test("a server that predates superlatives still decodes")
+    func decodesWithoutSuperlatives() throws {
+        let summary = try decodeSummary(summaryJSON())
+        #expect(summary.superlatives.isEmpty)
+    }
 }
 
 @Suite("Session report timezone capture")
@@ -166,6 +187,58 @@ struct SessionReportZoneTests {
         let json = try JSONSerialization.jsonObject(
             with: try JSONEncoder().encode(report)) as? [String: Any]
         #expect(json?["utc_offset_minutes"] as? Int == -420)
+    }
+}
+
+@Suite("Standout rows")
+struct StandoutRowTests {
+    private func book(_ title: String, _ value: Int64) -> BookSuperlative {
+        BookSuperlative(bookUUID: title, title: title, author: nil, value: value)
+    }
+
+    @Test("only the superlatives the window supports become rows")
+    func omitsAbsentSuperlatives() throws {
+        var summary = StatsSummary()
+        summary.superlatives.longestBook = book("Doorstopper", 900)
+        summary.superlatives.fastestRead = book("Sprint", 3)
+
+        let rows = StatsView.standoutRows(summary)
+
+        #expect(rows.map(\.label) == ["Longest book", "Fastest read"])
+        // `#expect` records and continues, so a dropped row would leave the
+        // indexed reads below to trap the whole test process rather than fail.
+        try #require(rows.count == 2)
+        #expect(rows[0].detail == "900 pages")
+        #expect(rows[1].detail == "in 3 days")
+    }
+
+    @Test("a bare window produces no rows at all")
+    func emptyWindowHasNoRows() {
+        #expect(StatsView.standoutRows(StatsSummary()).isEmpty)
+    }
+
+    @Test("the busiest week needs seconds, not just a date")
+    func busiestWeekNeedsSeconds() {
+        // The field rides on every payload and is zeroed for an empty window;
+        // rendering it off the date alone claims a week that never happened.
+        var summary = StatsSummary()
+        summary.busiestWeekStart = "2023-11-13"
+        #expect(StatsView.standoutRows(summary).isEmpty)
+
+        summary.busiestWeekSeconds = 14_400
+        let rows = StatsView.standoutRows(summary)
+        #expect(rows.first?.headline == "Week of 13 Nov 2023")
+        #expect(rows.first?.detail == "4h")
+    }
+
+    @Test("day and count details read as sentences, not as raw numbers")
+    func detailsSingularize() {
+        #expect(StatsView.pagesDetail(1) == "1 page")
+        #expect(StatsView.pagesDetail(412) == "412 pages")
+        #expect(StatsView.daysDetail(1) == "in a day")
+        #expect(StatsView.daysDetail(3) == "in 3 days")
+        #expect(StatsView.prettyDay("2023-11-14") == "14 Nov 2023")
+        #expect(StatsView.prettyDay("not-a-day") == "not-a-day")
     }
 }
 

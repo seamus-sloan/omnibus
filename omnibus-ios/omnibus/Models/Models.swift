@@ -1367,6 +1367,71 @@ struct WeekdayBucket: Codable, Hashable, Sendable, Identifiable {
     var id: Int64 { weekday }
 }
 
+/// One superlative that names a book: which book won, and the figure it won
+/// with.
+///
+/// `value`'s unit is the *field's*, not this type's — pages for the length
+/// superlatives, seconds for the longest sit, days for the fastest read. The
+/// rows in `StatsView` supply it; nothing here should guess.
+struct BookSuperlative: Codable, Hashable, Sendable {
+    var bookUUID: String
+    var title: String
+    var author: String?
+    var value: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case title, author, value
+        case bookUUID = "book_uuid"
+    }
+}
+
+/// The window's single most-X figures. Every field is optional, and an absent
+/// one means the window can't support that superlative — it is omitted, never
+/// rendered as a zero or an em-dash.
+struct Superlatives: Codable, Sendable {
+    var longestBook: BookSuperlative?
+    var shortestBook: BookSuperlative?
+    var biggestDay: DayActivity?
+    var longestSit: BookSuperlative?
+    /// Fewest days from a book's first *tracked* session to its completion. A
+    /// lower bound — reading done before session tracking, or on a device that
+    /// reports nothing, is invisible here — which the section states.
+    var fastestRead: BookSuperlative?
+
+    enum CodingKeys: String, CodingKey {
+        case longestBook = "longest_book"
+        case shortestBook = "shortest_book"
+        case biggestDay = "biggest_day"
+        case longestSit = "longest_sit"
+        case fastestRead = "fastest_read"
+    }
+
+    init() {}
+
+    /// Decoded field-by-field for the same reason `StatsSummary` is: every
+    /// field is `#[serde(default)]` on the Rust side, and an app running
+    /// ahead of its server must lose a row rather than the whole tab.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        longestBook = try c.decodeIfPresent(BookSuperlative.self, forKey: .longestBook)
+        shortestBook = try c.decodeIfPresent(BookSuperlative.self, forKey: .shortestBook)
+        biggestDay = try c.decodeIfPresent(DayActivity.self, forKey: .biggestDay)
+        longestSit = try c.decodeIfPresent(BookSuperlative.self, forKey: .longestSit)
+        fastestRead = try c.decodeIfPresent(BookSuperlative.self, forKey: .fastestRead)
+    }
+
+    var isEmpty: Bool {
+        longestBook == nil && shortestBook == nil && biggestDay == nil && longestSit == nil
+            && fastestRead == nil
+    }
+
+    /// Recorded time a book needs before the server will crown it the fastest
+    /// read — `omnibus_shared::FASTEST_READ_MIN_SECS`. Mirrored here so the
+    /// caveat on the Stats tab states the real floor rather than a sentence
+    /// that quietly stops being true when the server's changes.
+    static let fastestReadMinSeconds: Int64 = 1800
+}
+
 struct StatsSummary: Codable, Sendable {
     var range: StatsRange = .month
     var readingSeconds: Int64 = 0
@@ -1417,6 +1482,10 @@ struct StatsSummary: Codable, Sendable {
     /// before the server started recording one. Disclosed rather than folded
     /// in: bucketing them as UTC would put a reader's evening at 4am.
     var unzonedSeconds: Int64 = 0
+    /// The window's single most-X figures. Every field inside is optional; an
+    /// all-empty set means the window supports no superlative and the section
+    /// is omitted.
+    var superlatives = Superlatives()
     /// The reader's goal for the current calendar year, `nil` when none is
     /// set. Unwindowed, like `currentStreakDays` — a goal is annual, so it
     /// reads the same whichever range the picker is on.
@@ -1447,6 +1516,7 @@ struct StatsSummary: Codable, Sendable {
         case hourOfDay = "hour_of_day"
         case dayOfWeek = "day_of_week"
         case unzonedSeconds = "unzoned_seconds"
+        case superlatives
         case goal
     }
 
@@ -1491,6 +1561,8 @@ struct StatsSummary: Codable, Sendable {
         hourOfDay = try c.decodeIfPresent([HourBucket].self, forKey: .hourOfDay) ?? []
         dayOfWeek = try c.decodeIfPresent([WeekdayBucket].self, forKey: .dayOfWeek) ?? []
         unzonedSeconds = try c.decodeIfPresent(Int64.self, forKey: .unzonedSeconds) ?? 0
+        superlatives = try c.decodeIfPresent(Superlatives.self, forKey: .superlatives)
+            ?? Superlatives()
         goal = try c.decodeIfPresent(ReadingGoal.self, forKey: .goal)
     }
 

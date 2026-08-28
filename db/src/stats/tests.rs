@@ -294,7 +294,24 @@ async fn busiest_week_picks_highest_seconds_week() {
 
     let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
     assert_eq!(s.busiest_week_seconds, 5000);
-    assert!(s.busiest_week_start.is_some());
+    // The winning session falls on Tue 2023-11-28; the field is the week's own
+    // Monday, not the first day the reader was active in it, so that surfaces
+    // can label it "Week of …" without naming a Tuesday as a week start.
+    assert_eq!(s.busiest_week_start.as_deref(), Some("2023-11-27"));
+}
+
+#[tokio::test]
+async fn busiest_week_start_is_the_weeks_monday_not_its_first_active_day() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    // A reader who only read Wed/Thu of the week beginning Mon 2023-11-13.
+    reading_session(&pool, user, "uuid-1", T0 + DAY, 1000).await;
+    reading_session(&pool, user, "uuid-1", T0 + 2 * DAY, 1000).await;
+
+    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    assert_eq!(s.busiest_week_start.as_deref(), Some("2023-11-13"));
 }
 
 #[tokio::test]

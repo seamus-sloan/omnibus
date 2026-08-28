@@ -175,6 +175,18 @@ struct StatsView: View {
                     }
                 }
 
+                // Omitted rather than emptied: the section's own length is
+                // what reports how much the window holds.
+                let standouts = Self.standoutRows(summary)
+                if !standouts.isEmpty {
+                    section("The standouts") {
+                        StandoutList(
+                            rows: standouts,
+                            showFastestReadNote: summary.superlatives.fastestRead != nil
+                        )
+                    }
+                }
+
                 if !summary.topAuthors.isEmpty {
                     section("Top authors") {
                         RankedList(entries: summary.topAuthors) { entry in
@@ -546,6 +558,90 @@ struct StatsView: View {
         }
     }
 
+    /// Every standout the window supports, in the same order as the web card,
+    /// so a reader switching surfaces reads the same list.
+    ///
+    /// The two rankings the web card ends with are deliberately absent: this
+    /// tab already renders `topAuthors` / `topTags` in full below, and a
+    /// one-line restatement above a whole list is noise.
+    static func standoutRows(_ summary: StatsSummary) -> [StandoutRow] {
+        let s = summary.superlatives
+        let book = { (label: String, sup: BookSuperlative?, detail: (Int64) -> String) in
+            sup.map { StandoutRow(label: label, headline: $0.title, detail: detail($0.value)) }
+        }
+        // Zero seconds means the window has no busiest week, whatever date
+        // rode along beside it.
+        let busiestWeek = summary.busiestWeekSeconds > 0
+            ? summary.busiestWeekStart.map {
+                StandoutRow(
+                    label: "Busiest week",
+                    headline: "Week of \(Self.prettyDay($0))",
+                    detail: Format.humanDuration(summary.busiestWeekSeconds)
+                )
+            }
+            : nil
+        return [
+            book("Longest book", s.longestBook, Self.pagesDetail),
+            book("Shortest book", s.shortestBook, Self.pagesDetail),
+            book("Fastest read", s.fastestRead, Self.daysDetail),
+            book("Longest sitting", s.longestSit, Format.humanDuration),
+            s.biggestDay.map {
+                StandoutRow(
+                    label: "Biggest day",
+                    headline: Self.prettyDay($0.day),
+                    detail: Format.humanDuration($0.seconds)
+                )
+            },
+            busiestWeek,
+        ].compactMap { $0 }
+    }
+
+    /// Parses the server's UTC `YYYY-MM-DD`. Fixed-format, so it is pinned to
+    /// `en_US_POSIX` and Gregorian — a device on a non-Gregorian calendar
+    /// would otherwise fail to read the wire format at all.
+    private static let wireDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// Renders "14 Nov 2023". Also pinned to `en_US_POSIX`: the surrounding
+    /// copy ("Week of …", "Biggest day") is English, and the device locale
+    /// would splice a translated month into it — "Week of 13 nov. 2023".
+    private static let displayDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "d MMM yyyy"
+        return f
+    }()
+
+    /// A UTC `YYYY-MM-DD` as "14 Nov 2023", passing anything unparseable
+    /// through — a malformed day is better company for its figure than none.
+    ///
+    /// Both formatters are cached statics: `DateFormatter` construction is
+    /// expensive and this runs for every standout row on every render.
+    static func prettyDay(_ day: String) -> String {
+        guard let date = wireDayFormatter.date(from: day) else { return day }
+        return displayDayFormatter.string(from: date)
+    }
+
+    /// "412 pages" / "1 page" — the unit is the row's, since
+    /// `BookSuperlative.value` carries a bare number.
+    static func pagesDetail(_ pages: Int64) -> String {
+        "\(pages) page\(pages == 1 ? "" : "s")"
+    }
+
+    /// "in 3 days" / "in a day" — the server already collapses a same-day
+    /// read to 1, so zero never reaches here.
+    static func daysDetail(_ days: Int64) -> String {
+        days == 1 ? "in a day" : "in \(days) days"
+    }
+
     private func section<Content: View>(
         _ title: String, @ViewBuilder content: () -> Content
     ) -> some View {
@@ -746,6 +842,63 @@ private struct SplitBar: View {
         .frame(maxHeight: .infinity, alignment: .bottom)
         .opacity(reading + listening > 0 ? 1 : 0)
         .accessibilityHidden(true)
+    }
+}
+
+/// One standout: what it measures, what won, and by how much. Built by
+/// `StatsView.standoutRows`, which is where the units live.
+struct StandoutRow: Identifiable, Hashable {
+    let label: String
+    let headline: String
+    let detail: String
+
+    var id: String { label }
+}
+
+private struct StandoutList: View {
+    let rows: [StandoutRow]
+    let showFastestReadNote: Bool
+
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            ForEach(rows) { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.label)
+                        .font(.ui(11.5))
+                        .foregroundStyle(palette.ink3Color)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(row.headline)
+                            .font(.display(17))
+                            .foregroundStyle(palette.ink0Color)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                        Spacer(minLength: 0)
+                        Text(row.detail)
+                            .font(.monoUI(11.5))
+                            .foregroundStyle(palette.ink2Color)
+                            .layoutPriority(1)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+            if showFastestReadNote {
+                // The floor is part of the claim, not an aside: without it a
+                // book read mostly on another device reads as a sprint. The
+                // lower-bound clause mirrors the web note — `shared`'s
+                // `fastest_read` doc requires every surface to state it.
+                Text(
+                    "Fastest read counts days from your first tracked session, over books with "
+                        + "at least \(Format.humanDuration(Superlatives.fastestReadMinSeconds)) "
+                        + "of recorded time — reading done before tracking, or on a device that "
+                        + "reports nothing, can only make a book look faster than it was."
+                )
+                .font(.ui(11))
+                .foregroundStyle(palette.ink3Color)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
