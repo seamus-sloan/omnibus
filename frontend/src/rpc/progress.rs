@@ -198,6 +198,7 @@ mod tests {
             progress_units: 1,
             device_id: None,
             client_id: None,
+            utc_offset_minutes: None,
         }
     }
 

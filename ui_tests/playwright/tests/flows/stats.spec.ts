@@ -64,6 +64,10 @@ test.beforeAll(async ({ request }) => {
     started_at: startedAt,
     ended_at: startedAt + secs,
     progress_units: secs,
+    // The time-pattern strips bucket on the offset the recording device
+    // stamped at capture; a report without one is excluded from them by
+    // design, so these seeds carry a fixed non-UTC zone.
+    utc_offset_minutes: -420,
   });
   const resp = await request.post("/api/progress/sessions", {
     data: [
@@ -136,6 +140,9 @@ test("renders the stats page layout", async ({ page }) => {
 
   // Period-scoped section above, explicitly divided all-time section below.
   await expect(page.getByTestId("stats-period-section")).toBeVisible();
+  // The time-pattern card renders in both its states (strips or the
+  // no-local-time note), so its presence is structural.
+  await expect(page.getByTestId("stats-when")).toBeVisible();
   await expect(page.getByText("Not tied to the period above.")).toBeVisible();
   await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
 });
@@ -594,4 +601,117 @@ test("a user with no activity sees the friendly empty state", async ({
   await expect(page.getByText("No reading activity yet")).toBeVisible();
   await expect(page.getByTestId("stats-period-section")).toHaveCount(0);
   await expect(page.getByTestId("stats-alltime-section")).toHaveCount(0);
+});
+
+/**
+ * A summary carrying whatever time-pattern fields a test wants to pin,
+ * over the same minimal scaffold the other route-mocked tests here use.
+ */
+function summaryWith(extra: Record<string, unknown>) {
+  return {
+    range: "month",
+    reading_seconds: 18720,
+    listening_seconds: 0,
+    sessions: 2,
+    active_days: 2,
+    longest_streak_days: 1,
+    current_streak_days: 1,
+    busiest_week_start: null,
+    busiest_week_seconds: 18720,
+    books_finished: 1,
+    heatmap: [],
+    top_authors: [],
+    top_tags: [],
+    finished_books: [],
+    ...extra,
+  };
+}
+
+test("the time-pattern card charts every local hour and weekday", async ({
+  page,
+}) => {
+  // Route-mocked so the buckets are pinned: the suite shares one server and
+  // one user, and any other spec posting a session moves these bars.
+  const hours = Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    seconds: hour === 21 ? 15120 : hour === 9 ? 3600 : 0,
+  }));
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(
+    (label, weekday) => ({
+      weekday,
+      label,
+      seconds: label === "Sun" ? 15120 : 0,
+    }),
+  );
+  await page.route("**/api/rpc/stats", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        summaryWith({
+          hour_of_day: hours,
+          day_of_week: days,
+          unzoned_seconds: 15120,
+        }),
+      ),
+    }),
+  );
+
+  await gotoReady(page, "/stats");
+
+  // All 24 columns render, quiet hours included — the shape of a day is the
+  // information, so an omitted hour would misdescribe it. Every third one is
+  // labelled; the rest keep their place with a blank label.
+  const hourStrip = page.getByTestId("stats-when-hours");
+  await expect(hourStrip).toBeVisible();
+  const hourLabels = hourStrip.getByTestId("stats-when-col-label");
+  await expect(hourLabels).toHaveCount(24);
+  await expect
+    .poll(() => hourLabels.allInnerTexts().then((t) => t.filter(Boolean)))
+    .toEqual(["00", "03", "06", "09", "12", "15", "18", "21"]);
+  // The magnitude nobody can read off a bar rides the hover title, as a
+  // clock time rather than a bare number.
+  await expect(hourStrip.locator('[title="21:00 · 4h 12m"]')).toBeVisible();
+
+  // Weekdays are the server's own labels in the server's own order — the web
+  // never decides where the week starts.
+  const dayStrip = page.getByTestId("stats-when-weekdays");
+  await expect
+    .poll(() => dayStrip.getByTestId("stats-when-col-label").allInnerTexts())
+    .toEqual(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
+  await expect(dayStrip.locator('[title="Sun · 4h 12m"]')).toBeVisible();
+
+  // Activity the server couldn't place on a local clock is disclosed, not
+  // folded into a UTC hour.
+  await expect(page.getByTestId("stats-when-unzoned")).toContainText("4h 12m");
+});
+
+test("the time-pattern card says so rather than drawing flat bars", async ({
+  page,
+}) => {
+  // A window whose sessions all predate capture-time timezones: the strips are
+  // zero-filled to a fixed width, so drawing them would show 24 empty columns
+  // that look like a measured day.
+  await page.route("**/api/rpc/stats", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        summaryWith({
+          hour_of_day: Array.from({ length: 24 }, (_, hour) => ({
+            hour,
+            seconds: 0,
+          })),
+          day_of_week: [],
+          unzoned_seconds: 18720,
+        }),
+      ),
+    }),
+  );
+
+  await gotoReady(page, "/stats");
+
+  await expect(page.getByTestId("stats-when-empty")).toBeVisible();
+  await expect(page.getByTestId("stats-when-hours")).toHaveCount(0);
+  await expect(page.getByTestId("stats-when-unzoned")).toContainText("5h 12m");
 });

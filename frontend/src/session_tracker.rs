@@ -149,7 +149,41 @@ fn build_report(uuid: &str, format: ProgressFormat, start: i64, end: i64) -> Opt
         // Web posts a report once, on unmount, and never retries it — there
         // is no replay for a handle to make idempotent.
         client_id: None,
+        utc_offset_minutes: local_utc_offset_minutes(),
     })
+}
+
+/// Minutes east of UTC on this device right now — `-420` in Los Angeles,
+/// `330` in Kolkata. Stamped onto every session so the server can bucket it
+/// on the reader's own clock (`db::stats::patterns`) instead of on UTC.
+///
+/// Read at capture time rather than at render time on purpose: it is a fact
+/// about where the reading happened, and a reader who later travels must not
+/// have last month's evenings relabelled.
+///
+/// Not a hydration concern (rule 07): this runs from the tracker's flush
+/// path, never from a component body, so no markup depends on it.
+fn local_utc_offset_minutes() -> Option<i64> {
+    #[cfg(feature = "web")]
+    {
+        // JS reports minutes *west* of UTC (UTC-7 → 420), the opposite sign
+        // to every other convention here and to what the column stores.
+        let west = js_sys::Date::new_0().get_timezone_offset();
+        if !west.is_finite() {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let east = -west.round() as i64;
+        Some(east)
+    }
+    // The Android shell builds native, where `std` exposes no local offset and
+    // the crate carries no date library to ask. Its sessions record without
+    // one and stay out of the local-time strips (they still count everywhere
+    // else) until it grows a source for it.
+    #[cfg(not(feature = "web"))]
+    {
+        None
+    }
 }
 
 /// Shared handle: the hooks mutate the tracker from effect closures, JS

@@ -308,6 +308,7 @@ fn session_report_rejects_inverted_time_range() {
         progress_units: 0,
         device_id: None,
         client_id: None,
+        utc_offset_minutes: None,
     };
     let err = r.validate().expect_err("ended < started must be rejected");
     assert!(err.contains("ended_at"), "got: {err}");
@@ -323,6 +324,7 @@ fn session_report_rejects_negative_progress_units() {
         progress_units: -5,
         device_id: None,
         client_id: None,
+        utc_offset_minutes: None,
     };
     let err = r
         .validate()
@@ -340,6 +342,7 @@ fn session_report_rejects_blank_client_id() {
         progress_units: 10,
         device_id: None,
         client_id: Some("   ".into()),
+        utc_offset_minutes: None,
     };
     let err = r.validate().expect_err("a blank handle must be rejected");
     assert!(err.contains("client_id"), "got: {err}");
@@ -355,6 +358,7 @@ fn session_report_rejects_overlong_client_id() {
         progress_units: 10,
         device_id: None,
         client_id: Some("a".repeat(SessionReport::CLIENT_ID_MAX_LEN + 1)),
+        utc_offset_minutes: None,
     };
     let err = r
         .validate()
@@ -374,6 +378,7 @@ fn session_report_accepts_a_client_id_at_the_cap() {
         progress_units: 10,
         device_id: None,
         client_id: Some("é".repeat(SessionReport::CLIENT_ID_MAX_LEN)),
+        utc_offset_minutes: None,
     };
     assert!(r.validate().is_ok());
 }
@@ -389,6 +394,7 @@ fn session_report_accepts_a_missing_client_id() {
         progress_units: 10,
         device_id: None,
         client_id: None,
+        utc_offset_minutes: None,
     };
     assert!(r.validate().is_ok());
 }
@@ -405,4 +411,46 @@ fn parse_comic_page_anchor_rejects_real_cfis_and_junk() {
     assert_eq!(parse_comic_page_anchor("comic-page:"), None);
     assert_eq!(parse_comic_page_anchor("comic-page:-3"), None);
     assert_eq!(parse_comic_page_anchor(""), None);
+}
+
+#[test]
+fn session_report_rejects_an_out_of_range_utc_offset() {
+    // The offset is a shift applied to a timestamp, so an absurd value doesn't
+    // look wrong in the row — it silently relabels the session's local hour.
+    let r = SessionReport {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 200,
+        progress_units: 10,
+        device_id: None,
+        client_id: None,
+        utc_offset_minutes: Some(SessionReport::UTC_OFFSET_MAX_MINUTES + 1),
+    };
+    let err = r
+        .validate()
+        .expect_err("an offset past UTC+14:00 must be rejected");
+    assert!(err.contains("utc_offset_minutes"), "got: {err}");
+}
+
+#[test]
+fn session_report_accepts_the_real_span_of_utc_offsets() {
+    // Both extremes plus a half-hour zone: Kiritimati, Baker Island, Kolkata.
+    for offset in [
+        SessionReport::UTC_OFFSET_MIN_MINUTES,
+        SessionReport::UTC_OFFSET_MAX_MINUTES,
+        330,
+    ] {
+        let r = SessionReport {
+            book_uuid: "x".into(),
+            format: ProgressFormat::Epub,
+            started_at: 100,
+            ended_at: 200,
+            progress_units: 10,
+            device_id: None,
+            client_id: None,
+            utc_offset_minutes: Some(offset),
+        };
+        assert!(r.validate().is_ok(), "offset {offset} must be accepted");
+    }
 }

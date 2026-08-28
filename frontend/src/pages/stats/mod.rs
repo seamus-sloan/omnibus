@@ -14,6 +14,7 @@ mod drill_in;
 mod heatmap;
 mod library;
 mod monthly;
+mod patterns;
 mod tiles;
 
 use donut::{FormatSplit, GenreDonut, LengthSplit};
@@ -21,6 +22,7 @@ use drill_in::{DrillIn, Metric};
 use heatmap::HeatmapCard;
 use library::LibrarySizeCard;
 use monthly::MonthlyChart;
+use patterns::TimePatternsCard;
 use tiles::HeadlineTiles;
 
 /// Group a non-negative integer's digits in threes with `,` separators.
@@ -366,6 +368,7 @@ fn PeriodSummary(
             FormatSplit { summary: summary.clone() }
             LengthSplit { summary: summary.clone() }
         }
+        TimePatternsCard { summary: summary.clone() }
     }
 }
 

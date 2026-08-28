@@ -100,6 +100,67 @@ struct StatsSummaryCodecTests {
         let summary = try decodeSummary(summaryJSON())
         #expect(summary.pagesPerHour == nil)
     }
+
+    @Test("the time-pattern strips decode with the server's own bucket order")
+    func decodesTimePatterns() throws {
+        // Both are server-owned: the hour is already local (bucketed against
+        // the offset each session recorded) and the weekday carries its label
+        // so nothing here decides where the week starts.
+        let extra =
+            #","hour_of_day":[{"hour":0,"seconds":0},{"hour":21,"seconds":900}],"#
+            + #""day_of_week":[{"weekday":0,"label":"Mon","seconds":0},"#
+            + #"{"weekday":6,"label":"Sun","seconds":900}],"unzoned_seconds":1200"#
+        let summary = try decodeSummary(summaryJSON(extra: extra))
+        #expect(summary.hourOfDay.count == 2)
+        #expect(summary.hourOfDay.last?.hour == 21)
+        #expect(summary.hourOfDay.last?.seconds == 900)
+        #expect(summary.dayOfWeek.first?.label == "Mon")
+        #expect(summary.dayOfWeek.last?.weekday == 6)
+        #expect(summary.unzonedSeconds == 1200)
+        #expect(summary.hasTimePatterns)
+    }
+
+    @Test("a server that predates the time-pattern strips still decodes")
+    func decodesWithoutTimePatterns() throws {
+        let summary = try decodeSummary(summaryJSON())
+        #expect(summary.hourOfDay.isEmpty)
+        #expect(summary.dayOfWeek.isEmpty)
+        #expect(summary.unzonedSeconds == 0)
+        // The section is hidden rather than drawn as flat bars, and an older
+        // server must land on that path rather than on an error state.
+        #expect(!summary.hasTimePatterns)
+    }
+
+    @Test("an all-zero hour strip reads as no pattern, not as a flat day")
+    func zeroFilledStripIsNotAPattern() throws {
+        let extra =
+            #","hour_of_day":[{"hour":0,"seconds":0},{"hour":1,"seconds":0}],"unzoned_seconds":600"#
+        let summary = try decodeSummary(summaryJSON(extra: extra))
+        #expect(!summary.hasTimePatterns)
+        #expect(summary.unzonedSeconds == 600, "the excluded time is still disclosed")
+    }
+}
+
+@Suite("Session report timezone capture")
+struct SessionReportZoneTests {
+    @Test("a report stamps the device's current offset in whole minutes")
+    func stampsLocalOffset() {
+        let report = SessionReport(
+            bookUUID: "uuid", format: .epub, startedAt: 0, endedAt: 60, progressUnits: 60,
+            deviceId: nil)
+        #expect(report.utcOffsetMinutes == Int64(TimeZone.current.secondsFromGMT() / 60))
+    }
+
+    @Test("the offset rides the wire under its snake_case key")
+    func encodesOffsetKey() throws {
+        var report = SessionReport(
+            bookUUID: "uuid", format: .epub, startedAt: 0, endedAt: 60, progressUnits: 60,
+            deviceId: nil)
+        report.utcOffsetMinutes = -420
+        let json = try JSONSerialization.jsonObject(
+            with: try JSONEncoder().encode(report)) as? [String: Any]
+        #expect(json?["utc_offset_minutes"] as? Int == -420)
+    }
 }
 
 @Suite("Rating bucket labelling")

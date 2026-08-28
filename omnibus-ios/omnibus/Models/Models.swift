@@ -604,6 +604,20 @@ struct SessionReport: Codable, Sendable {
     /// second row each time and the reading time it represents was counted
     /// twice. Resolved server-side against a unique index (migration 0052).
     var clientID: String = AnnotationID.mint()
+    /// Minutes east of UTC on this device when the session was captured —
+    /// `-420` in Los Angeles, `330` in Kolkata. The server buckets the
+    /// time-of-day and day-of-week charts against this rather than against
+    /// UTC, so a reader outside UTC sees their own evening as an evening and
+    /// a session recorded while travelling stays anchored where it happened.
+    ///
+    /// Defaulted at init, which is capture time for every call site here:
+    /// each of them builds the report as it ends the sitting.
+    var utcOffsetMinutes: Int64? = SessionReport.localOffsetMinutes()
+
+    /// This device's current offset from UTC, in whole minutes.
+    static func localOffsetMinutes() -> Int64 {
+        Int64(TimeZone.current.secondsFromGMT() / 60)
+    }
 
     enum CodingKeys: String, CodingKey {
         case format
@@ -613,6 +627,7 @@ struct SessionReport: Codable, Sendable {
         case progressUnits = "progress_units"
         case deviceId = "device_id"
         case clientID = "client_id"
+        case utcOffsetMinutes = "utc_offset_minutes"
     }
 }
 
@@ -1317,6 +1332,36 @@ struct LibrarySize: Codable, Sendable {
     var isEmpty: Bool { words.isEmpty && pages.isEmpty && listeningSeconds.isEmpty }
 }
 
+/// One column of the time-of-day strip: an hour of the reader's **local** day
+/// and the active seconds recorded in it, reading and listening together.
+///
+/// The hour is resolved server-side from the UTC offset each session carried
+/// at capture time — never from this device's zone, which would make the same
+/// account read differently on a phone abroad than on the desktop at home.
+/// All 24 arrive, ascending, zeros included.
+struct HourBucket: Codable, Hashable, Sendable, Identifiable {
+    var hour: Int64
+    var seconds: Int64
+    var id: Int64 { hour }
+
+    /// `21:00` — a bare "21" beside a duration reads ambiguously.
+    var clockLabel: String { String(format: "%02d:00", hour) }
+}
+
+/// One column of the day-of-week strip: a weekday in the reader's local
+/// calendar and the active seconds recorded on it.
+///
+/// `weekday` is 0 = Monday ... 6 = Sunday, and `label` comes down with it:
+/// week-start is a convention, and deciding it here would silently draw every
+/// column one place out from what the web renders. All 7 arrive, Monday
+/// first, zeros included.
+struct WeekdayBucket: Codable, Hashable, Sendable, Identifiable {
+    var weekday: Int64
+    var label: String
+    var seconds: Int64
+    var id: Int64 { weekday }
+}
+
 struct StatsSummary: Codable, Sendable {
     var range: StatsRange = .month
     var readingSeconds: Int64 = 0
@@ -1355,6 +1400,18 @@ struct StatsSummary: Codable, Sendable {
     /// Books finished in the window by length, plus the unknown bucket. Every
     /// bucket arrives; an all-zero set means nothing was finished.
     var lengthBuckets: [LengthBucket] = []
+    /// Active seconds by local hour of day — all 24, ascending, zeros
+    /// included, so the shape of a day stays readable. Reading and listening
+    /// together, like every other activity metric here.
+    var hourOfDay: [HourBucket] = []
+    /// Active seconds by local weekday — all 7, Monday first, zeros included.
+    /// Same sessions as `hourOfDay`, so the two strips always sum alike.
+    var dayOfWeek: [WeekdayBucket] = []
+    /// Active seconds in the window from sessions carrying no capture-time
+    /// UTC offset, and so not placeable on a local clock — rows written
+    /// before the server started recording one. Disclosed rather than folded
+    /// in: bucketing them as UTC would put a reader's evening at 4am.
+    var unzonedSeconds: Int64 = 0
 
     enum CodingKeys: String, CodingKey {
         case range, sessions, heatmap
@@ -1378,6 +1435,9 @@ struct StatsSummary: Codable, Sendable {
         case pagesRead = "pages_read"
         case pagesPerHour = "pages_per_hour"
         case lengthBuckets = "length_buckets"
+        case hourOfDay = "hour_of_day"
+        case dayOfWeek = "day_of_week"
+        case unzonedSeconds = "unzoned_seconds"
     }
 
     init() {}
@@ -1418,9 +1478,22 @@ struct StatsSummary: Codable, Sendable {
         pagesRead = try c.decodeIfPresent(Int64.self, forKey: .pagesRead)
         pagesPerHour = try c.decodeIfPresent(Double.self, forKey: .pagesPerHour)
         lengthBuckets = try c.decodeIfPresent([LengthBucket].self, forKey: .lengthBuckets) ?? []
+        hourOfDay = try c.decodeIfPresent([HourBucket].self, forKey: .hourOfDay) ?? []
+        dayOfWeek = try c.decodeIfPresent([WeekdayBucket].self, forKey: .dayOfWeek) ?? []
+        unzonedSeconds = try c.decodeIfPresent(Int64.self, forKey: .unzonedSeconds) ?? 0
     }
 
     var totalSeconds: Int64 { readingSeconds + listeningSeconds }
+
+    /// Whether the time-pattern strips have anything to draw.
+    ///
+    /// Both are zero-filled to a fixed width, so "no data" and "a full day of
+    /// nothing" render identically — this tells them apart. Mirrors
+    /// `StatsSummary::has_time_patterns` in `omnibus_shared`, and checks the
+    /// hour strip alone for the same reason: one rollup feeds both, so a
+    /// populated weekday strip without a populated hour strip is not a state
+    /// the server can produce.
+    var hasTimePatterns: Bool { hourOfDay.contains { $0.seconds > 0 } }
 }
 
 // MARK: - Settings & health

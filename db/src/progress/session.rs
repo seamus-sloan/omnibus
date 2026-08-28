@@ -1,6 +1,9 @@
 //! Session-report recording: batched inserts into the per-format
 //! `reading_sessions` / `listening_sessions` tables, replay-idempotent via
-//! the `(user_id, client_id)` partial unique index (migration 0052).
+//! the `(user_id, client_id)` partial unique index (migration 0052). The
+//! device's capture-time UTC offset rides along (migration 0080) — NULL when
+//! the client sends none, which `db::stats::patterns` reads as "can't place
+//! this on a local clock" rather than as UTC.
 
 use omnibus_shared::{ProgressFormat, SessionReport};
 use sqlx::{Sqlite, SqlitePool, Transaction};
@@ -62,8 +65,9 @@ pub async fn insert_session_tx(
         ProgressFormat::Epub => {
             sqlx::query(
                 "INSERT OR IGNORE INTO reading_sessions
-                    (user_id, book_uuid, started_at, ended_at, seconds_read, device_id, client_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (user_id, book_uuid, started_at, ended_at, seconds_read, device_id,
+                     client_id, utc_offset_minutes)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(user_id)
             .bind(canonical_uuid)
@@ -72,14 +76,16 @@ pub async fn insert_session_tx(
             .bind(report.progress_units)
             .bind(report.device_id)
             .bind(report.client_id.as_deref())
+            .bind(report.utc_offset_minutes)
             .execute(&mut **tx)
             .await?;
         }
         ProgressFormat::Audio => {
             sqlx::query(
                 "INSERT OR IGNORE INTO listening_sessions
-                    (user_id, book_uuid, started_at, ended_at, seconds_listened, device_id, client_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (user_id, book_uuid, started_at, ended_at, seconds_listened, device_id,
+                     client_id, utc_offset_minutes)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(user_id)
             .bind(canonical_uuid)
@@ -88,6 +94,7 @@ pub async fn insert_session_tx(
             .bind(report.progress_units)
             .bind(report.device_id)
             .bind(report.client_id.as_deref())
+            .bind(report.utc_offset_minutes)
             .execute(&mut **tx)
             .await?;
         }

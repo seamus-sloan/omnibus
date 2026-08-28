@@ -294,3 +294,32 @@ fn library_size_round_trips_its_totals_with_their_coverage() {
     assert!(wire.contains(r#""listening_seconds":{"total":8121600,"books":96}"#));
     assert_eq!(serde_json::from_str::<LibrarySize>(&wire).unwrap(), size);
 }
+
+#[test]
+fn has_time_patterns_is_true_only_when_some_local_hour_carries_activity() {
+    let mut s = StatsSummary {
+        hour_of_day: (0..24)
+            .map(|hour| HourBucket { hour, seconds: 0 })
+            .collect(),
+        ..Default::default()
+    };
+    // Zero-filled to 24 either way, so the count can't be the predicate.
+    assert!(!s.has_time_patterns());
+    s.hour_of_day[21].seconds = 600;
+    assert!(s.has_time_patterns());
+}
+
+#[test]
+fn time_pattern_fields_default_on_a_payload_from_an_older_server() {
+    let s: StatsSummary = serde_json::from_str(
+        r#"{"range":"month","reading_seconds":0,"listening_seconds":0,"sessions":0,
+            "active_days":0,"longest_streak_days":0,"busiest_week_start":null,
+            "busiest_week_seconds":0,"books_finished":0,"heatmap":[],
+            "top_authors":[],"top_tags":[],"finished_books":[]}"#,
+    )
+    .unwrap();
+    assert!(s.hour_of_day.is_empty());
+    assert!(s.day_of_week.is_empty());
+    assert_eq!(s.unzoned_seconds, 0);
+    assert!(!s.has_time_patterns());
+}
