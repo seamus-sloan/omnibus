@@ -6,6 +6,7 @@
 
 use omnibus_shared::ProgressFormat;
 
+mod ledger;
 mod resume;
 mod session;
 mod state;
@@ -14,6 +15,7 @@ mod upsert;
 #[cfg(test)]
 mod tests;
 
+pub use ledger::pages_ledger_epoch;
 pub use resume::{recent_progress, resume_points};
 pub use session::{insert_session_tx, record_session, record_session_tx};
 pub use state::{

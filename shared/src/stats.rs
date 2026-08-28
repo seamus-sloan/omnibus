@@ -378,6 +378,66 @@ impl Superlatives {
     }
 }
 
+/// What the Pages tile could and could not measure in the window, and the day
+/// before which it cannot measure anything at all.
+///
+/// The tile's headline is a single number that has three different empty
+/// states, and they mean different things: a window with no activity, a window
+/// whose only activity was listening (audio has no page analogue, so zero pages
+/// is the *correct* answer rather than an unknown one), and a window of real
+/// reading in books whose length no rung of the ladder resolves. Collapsing all
+/// three into an em-dash tells a reader who listened all week that the server
+/// has no idea what they did.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct PagesReadDetail {
+    /// UTC `YYYY-MM-DD` the forward-progress ledger began recording. Reading
+    /// before it left no position trail to difference and is unrecoverable, so
+    /// a window reaching back past this date is reporting on part of itself —
+    /// which the surfaces state outright rather than leaving as an unexplained
+    /// discontinuity.
+    #[serde(default)]
+    pub since_day: Option<String>,
+    /// Distinct books that contributed measured page progress in the window.
+    pub measured_books: i64,
+    /// Distinct books read in the window whose length no rung of the ladder
+    /// resolves — real reading the total cannot include.
+    pub unmeasured_books: i64,
+    /// Distinct books listened to in the window. Audiobooks contribute no
+    /// pages by design; this is what separates "listened, so zero pages" from
+    /// "nothing happened".
+    pub audio_books: i64,
+    /// Pages per UTC day within the window, active days only, ascending — the
+    /// tile's drill-in trend.
+    #[serde(default)]
+    pub daily: Vec<TrendPoint>,
+    /// Whether this window opens before [`Self::since_day`], so part of it is
+    /// unmeasurable no matter what the reader did.
+    ///
+    /// Computed server-side against the window's real start rather than
+    /// inferred from the [`StatsRange`], because the range is not the fact: a
+    /// Year window in the calendar year *after* the epoch is fully covered, and
+    /// a Week window in the days right after it is not. Only the server knows
+    /// where a period starts — that calendar math lives in SQLite — so it is
+    /// the only side that can answer this without guessing.
+    #[serde(default)]
+    pub window_predates_ledger: bool,
+}
+
+impl PagesReadDetail {
+    /// True when the window holds listening and no reading at all — the one
+    /// empty state whose honest headline is `0`, not an em-dash.
+    pub fn audio_only(&self) -> bool {
+        self.audio_books > 0 && self.measured_books == 0 && self.unmeasured_books == 0
+    }
+
+    /// True when the window starts before the ledger did, so part of it is
+    /// unmeasurable no matter what the reader did — and there is an epoch to
+    /// name in the disclosure.
+    pub fn predates_ledger(&self) -> bool {
+        self.since_day.is_some() && self.window_predates_ledger
+    }
+}
+
 /// Scalar aggregates for the **same elapsed slice** of the preceding period —
 /// feeds each metric tile's drill-in delta. The current window is
 /// period-to-date, so this is month-to-date against the same days last month
@@ -388,6 +448,11 @@ pub struct PeriodComparison {
     pub books_finished: i64,
     pub avg_stars: Option<f64>,
     pub listening_seconds: i64,
+    /// Pages read over the baseline window. Day-grained, unlike its siblings
+    /// here — the ledger buckets by UTC day — so the baseline includes the whole
+    /// of its boundary day, matching the current window's own partial today.
+    #[serde(default)]
+    pub pages_read: i64,
 }
 
 /// The full aggregate payload for one user over one [`StatsRange`].
@@ -396,10 +461,12 @@ pub struct PeriodComparison {
 /// explicit `book_read_status` of `finished`, never from the session tables
 /// (which carry duration but no progress). A book finished both ways counts
 /// once, and every completion metric on this struct — `books_finished`,
-/// `finished_books`, `books_per_month`, `pages_read`, `pages_per_hour`,
-/// `length_buckets` and `previous` — shares that one definition, live books
-/// only. They must not
-/// drift apart: several of them render on the same screen.
+/// `finished_books`, `books_per_month`, `pages_per_hour`, `length_buckets`
+/// and `previous` — shares that one definition, live books only. They must
+/// not drift apart: several of them render on the same screen.
+///
+/// `pages_read` is pointedly **not** one of them. It measures ground covered,
+/// not books completed, and sources from the forward-progress ledger instead.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct StatsSummary {
     pub range: StatsRange,
@@ -483,16 +550,23 @@ pub struct StatsSummary {
     /// bucket counts sum to the set the mean is taken over.
     #[serde(default)]
     pub rating_histogram: Vec<RatingBucket>,
-    /// Pages read in the window — the Pages tile. Each book finished in the
-    /// window contributes its length as resolved by the one ladder in
-    /// `db::stats::pages`: a print-edition page count from the metadata
-    /// overrides, else a comic's exact image-page count, else the EPUB word
-    /// estimate. Exact for some books and an estimate for others, which is why
-    /// the tile labels itself as an estimate.
+    /// Pages read in the window — the Pages tile. Sums the ground each book
+    /// was actually carried over inside the window (the forward-progress
+    /// ledger, migration `0083`) against its length as resolved by the one
+    /// ladder in `db::stats::pages`: a print-edition page count from the
+    /// metadata overrides, else a comic's exact image-page count, else the EPUB
+    /// word estimate. Exact for some books and an estimate for others, which is
+    /// why the surfaces keep the estimate disclosure in the drill-in.
     ///
-    /// `None` when no finished book in the window resolves a length on any
-    /// rung — an unmeasured book contributes nothing rather than zero — which
-    /// drives the tile's em-dash empty state.
+    /// Deliberately **not** the length of the books finished in the window:
+    /// that figure reported nothing for a reader who finished nothing, and
+    /// dumped a whole book's length into whichever window its status flip
+    /// happened to land in.
+    ///
+    /// `None` when no book read in the window resolves a length on any rung —
+    /// an unmeasured book contributes nothing rather than zero. See
+    /// [`Self::pages_detail`] before rendering that as "no data": it also
+    /// covers the audio-only window, whose honest answer is zero.
     #[serde(default)]
     pub pages_read: Option<i64>,
     /// Estimated reading speed over the window, in pages per hour — the
@@ -503,10 +577,15 @@ pub struct StatsSummary {
     /// resolve a length *and* carry recorded reading time: a book that
     /// contributes pages contributes the hours behind them, so a book begun
     /// before the window reports a plausible rate instead of its whole length
-    /// against one window's hours. Narrower than `pages_read`'s population by
-    /// the books nobody has recorded reading time on, and by those whose
-    /// length resolves to zero pages: a total carries a zero harmlessly, but a
-    /// rate would spend that book's hours against none of its pages.
+    /// against one window's hours.
+    ///
+    /// Scoped to books *finished* in the window, where `pages_read` beside it
+    /// is scoped to ground *covered* in it: the two answer different questions
+    /// over different sets of books, so dividing one by the other — or by
+    /// `reading_seconds` — is not this figure. Narrowed further by the books
+    /// nobody has recorded reading time on, and by those whose length resolves
+    /// to zero pages: a total carries a zero harmlessly, but a rate would spend
+    /// that book's hours against none of its pages.
     ///
     /// Reading time only — listening is excluded, since narration speed is
     /// the narrator's, not the reader's. A book read partly in audio
@@ -563,6 +642,11 @@ pub struct StatsSummary {
     /// [`StatsRange`] and a period switch never moves it.
     #[serde(default)]
     pub goal: Option<ReadingGoal>,
+    /// What `pages_read` could and could not see in this window, plus the day
+    /// the ledger behind it started. Server-owned so the web tile and the iOS
+    /// tile cannot disagree about which empty state a window is in.
+    #[serde(default)]
+    pub pages_detail: PagesReadDetail,
 }
 
 impl StatsSummary {

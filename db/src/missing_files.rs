@@ -54,6 +54,11 @@ pub async fn gc_books_missing_files(
             AND NOT EXISTS (SELECT 1 FROM reading_progress     WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM bookmarks            WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM reading_sessions     WHERE book_uuid = b.uuid)
+            -- The day buckets are reading history; the `reading_progress_marks`
+            -- row beside them is bookkeeping derived from a progress row that
+            -- is already guarded above, so it doesn't need its own arm.
+            AND NOT EXISTS (SELECT 1 FROM reading_progress_daily
+                                                        WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM listening_sessions   WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM annotations          WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM user_ratings         WHERE book_uuid = b.uuid)
