@@ -16,6 +16,7 @@ pub mod toc;
 mod wordcount;
 
 pub use accent::extract_accent;
+pub use cover::extract_cover;
 pub(crate) use cover::resolve_cover_with;
 pub use parse::{parse_ebook_targets, parse_ebook_targets_with_progress, ParseTarget};
 pub use stat::{stat_ebook_library, StatEntry, StatScanResult};
@@ -191,6 +192,75 @@ pub(crate) mod test_support {
         let target = dest.join(name);
         std::fs::copy(fixture(name), &target).expect("copy fixture");
         target
+    }
+
+    /// Copy a fixture epub into `dest`, rewriting its OPF so the cover is
+    /// declared the legacy EPUB2 way — `<meta name="cover" content="…"/>`
+    /// pointing at a manifest id — instead of the EPUB3
+    /// `properties="cover-image"` the generator emits. The package `version`
+    /// stays `3.0`, which is precisely the combination `EpubDoc::get_cover`
+    /// refuses to resolve (#2240).
+    ///
+    /// Real bytes throughout: same zip, same image, only the declaration
+    /// moves. Panics if the fixture doesn't carry the EPUB3 form, so a
+    /// regenerated fixture can't silently turn this into a no-op test.
+    pub(crate) fn copy_fixture_with_legacy_cover(
+        name: &str,
+        dest: &Path,
+        out_name: &str,
+    ) -> std::path::PathBuf {
+        use std::io::{Read, Write};
+
+        let mut archive =
+            zip::ZipArchive::new(std::fs::File::open(fixture(name)).expect("open fixture"))
+                .expect("fixture is a zip");
+        let target = dest.join(out_name);
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&target).expect("create epub"));
+        let opts = zip::write::SimpleFileOptions::default();
+        let mut rewrote = false;
+
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).expect("read entry");
+            let entry_name = entry.name().to_string();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).expect("read entry bytes");
+            if entry_name.ends_with(".opf") {
+                bytes = to_legacy_cover_opf(&bytes).into_bytes();
+                rewrote = true;
+            }
+            writer.start_file(&entry_name, opts).expect("start entry");
+            writer.write_all(&bytes).expect("write entry");
+        }
+        writer.finish().expect("finish epub");
+        assert!(rewrote, "fixture {name} has no OPF to rewrite");
+        target
+    }
+
+    /// Move an OPF's cover declaration from the EPUB3 manifest property to the
+    /// legacy `<meta name="cover">` pointer. See
+    /// [`copy_fixture_with_legacy_cover`].
+    fn to_legacy_cover_opf(bytes: &[u8]) -> String {
+        const PROPERTY: &str = " properties=\"cover-image\"";
+        let opf = String::from_utf8(bytes.to_vec()).expect("opf is utf-8");
+        let property_at = opf
+            .find(PROPERTY)
+            .expect("fixture OPF declares an EPUB3 cover-image property");
+        let item_at = opf[..property_at]
+            .rfind("<item")
+            .expect("cover-image property sits on a manifest item");
+        let id = attr_value(&opf[item_at..property_at], "id=\"").expect("manifest item has an id");
+
+        opf.replace(PROPERTY, "").replace(
+            "</metadata>",
+            &format!("<meta name=\"cover\" content=\"{id}\"/></metadata>"),
+        )
+    }
+
+    /// The double-quoted value following `key` (e.g. `id="`) in `fragment`.
+    fn attr_value(fragment: &str, key: &str) -> Option<String> {
+        let start = fragment.find(key)? + key.len();
+        let len = fragment[start..].find('"')?;
+        Some(fragment[start..start + len].to_string())
     }
 
     /// Locate the materialized sidecar in `dir` for `<stem>` — checks both

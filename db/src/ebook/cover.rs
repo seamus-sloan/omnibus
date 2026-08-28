@@ -29,7 +29,7 @@ pub(crate) fn resolve_cover<R: std::io::Read + std::io::Seek>(
     opts: &ScanOptions,
 ) -> Option<(String, Vec<u8>)> {
     resolve_cover_with(path, opts, || {
-        doc.get_cover().map(|(bytes, mime)| {
+        embedded_cover(doc).map(|(bytes, mime)| {
             let mime = if mime.is_empty() {
                 "image/jpeg".to_string()
             } else {
@@ -38,6 +38,43 @@ pub(crate) fn resolve_cover<R: std::io::Read + std::io::Seek>(
             (mime, bytes)
         })
     })
+}
+
+/// Re-resolve the cover of an already-indexed EPUB at `path`, outside a scan.
+///
+/// Takes the same sidecar-first path a scan does, but read-only: a backfill's
+/// job is to fill in a cover the scan missed, not to start writing sidecars
+/// into someone's library. Returns `None` for an unreadable file or a book
+/// that genuinely has no cover.
+pub fn extract_cover(path: &Path) -> Option<(String, Vec<u8>)> {
+    let mut doc = EpubDoc::new(path).ok()?;
+    resolve_cover(path, &mut doc, &ScanOptions::default())
+}
+
+/// The EPUB's own cover image, trying the crate's resolver first and the
+/// legacy EPUB2 declaration second.
+///
+/// `EpubDoc::get_cover` picks its strategy from the package `version`: a
+/// `3.0` package is searched only for a manifest item carrying
+/// `properties="cover-image"`. A great many real 3.0 packages still declare
+/// their cover the EPUB2 way instead, and for those the crate returns
+/// nothing — so the fallback below is what keeps them from landing in the
+/// library coverless.
+fn embedded_cover<R: std::io::Read + std::io::Seek>(
+    doc: &mut EpubDoc<R>,
+) -> Option<(Vec<u8>, String)> {
+    doc.get_cover().or_else(|| legacy_cover(doc))
+}
+
+/// Follow the legacy `<meta name="cover" content="<manifest-id>"/>` pointer
+/// to the manifest item it names. The crate parses that `<meta>` into its
+/// metadata table for every package version, so only the id -> resource hop
+/// is ours to make.
+fn legacy_cover<R: std::io::Read + std::io::Seek>(
+    doc: &mut EpubDoc<R>,
+) -> Option<(Vec<u8>, String)> {
+    let id = doc.mdata("cover")?.value.clone();
+    doc.get_resource(&id)
 }
 
 /// Format-agnostic core of [`resolve_cover`]: the sidecar-first lookup and

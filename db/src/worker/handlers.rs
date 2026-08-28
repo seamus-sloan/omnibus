@@ -202,6 +202,9 @@ impl Worker {
             Task::BackfillEpubStructure { library_path } => {
                 self.handle_backfill_epub_structure(library_path, id).await
             }
+            Task::BackfillCovers { library_path } => {
+                self.handle_backfill_covers(library_path, id).await
+            }
             Task::BackfillThumbs { library_path } => {
                 self.handle_backfill_thumbs(library_path, id).await
             }
@@ -360,6 +363,21 @@ impl Worker {
         )
     }
 
+    /// `Task::BackfillCovers`: re-extract covers the indexer left blank.
+    async fn handle_backfill_covers(
+        self: &Arc<Self>,
+        library_path: String,
+        id: TaskId,
+    ) -> TaskOutcome {
+        anyhow_outcome(
+            "cover backfill",
+            crate::indexer::backfill_covers(&self.pool, &library_path, |processed, total, item| {
+                self.report_item_progress(id, processed, total, item);
+            })
+            .await,
+        )
+    }
+
     /// `Task::BackfillThumbs`: warm the thumbnail cache for stale covers.
     async fn handle_backfill_thumbs(
         self: &Arc<Self>,
@@ -497,13 +515,14 @@ impl Worker {
     }
 
     /// Reindex an ebook library, then (on success) post the follow-up
-    /// word-count, page-count, and thumbnail-warm-up backfill tasks
-    /// for any rows this library still needs them for, plus a library-cleanup
-    /// detection pass so fresh dedup suggestions appear after an
-    /// import without any admin action. All four share the scan's resource
-    /// key except `DetectCleanup`, which runs under its own `cleanup` key so
-    /// it doesn't wait behind (or block) a same-library rescan; the posts
-    /// themselves are instant. Mirrors the audiobook chapter backfill.
+    /// word-count, page-count, cover re-extract, and thumbnail-warm-up
+    /// backfill tasks for any rows this library still needs them for, plus a
+    /// library-cleanup detection pass so fresh dedup suggestions appear after
+    /// an import without any admin action. All of them share the scan's
+    /// resource key except `DetectCleanup`, which runs under its own
+    /// `cleanup` key so it doesn't wait behind (or block) a same-library
+    /// rescan; the posts themselves are instant. Mirrors the audiobook
+    /// chapter backfill.
     async fn handle_scan(self: &Arc<Self>, library_path: String, id: TaskId) -> TaskOutcome {
         // Owned clone: the verbose callback rides into the indexer's
         // blocking parse phase, which needs `Send + 'static`.
@@ -522,6 +541,11 @@ impl Worker {
                     library_path: library_path.clone(),
                 });
                 self.post(Task::BackfillEpubStructure {
+                    library_path: library_path.clone(),
+                });
+                // Before BackfillThumbs, which shares the resource key and so
+                // runs after it — any cover this fills is thumbnailed there.
+                self.post(Task::BackfillCovers {
                     library_path: library_path.clone(),
                 });
                 self.post(Task::BackfillThumbs { library_path });

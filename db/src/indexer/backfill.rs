@@ -661,6 +661,128 @@ pub(crate) async fn backfill_epub_structure(
     Ok(())
 }
 
+/// `(book id, uuid, display title, on-disk path)` for every EPUB book under
+/// `library_path` the indexer left without an extracted cover — the
+/// [`backfill_covers`] work set.
+///
+/// Joins the book's lowest-ordinal EPUB file, which is the one a scan would
+/// have parsed. `has_cover = 0` is the whole predicate: a book carrying only
+/// an uploaded override still qualifies, and gaining an extracted cover
+/// alongside it changes nothing a reader sees (the override wins in
+/// `covers::get_cover`) while restoring the "revert to scanned cover" path.
+async fn fetch_cover_candidates(
+    pool: &SqlitePool,
+    library_path: &str,
+) -> anyhow::Result<Vec<(i64, String, String, PathBuf)>> {
+    let rows: Vec<(i64, String, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT b.id, b.uuid, COALESCE(NULLIF(b.title, ''), b.scan_key), \
+                COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
+                bf.filename, bf.format \
+         FROM books b \
+         JOIN scan_roots l ON b.library_id = l.id \
+         JOIN book_files bf ON bf.id = ( \
+             SELECT id FROM book_files \
+             WHERE book_id = b.id AND format = 'EPUB' COLLATE NOCASE \
+             ORDER BY ordinal LIMIT 1) \
+         WHERE l.path = ? AND b.has_cover = 0 \
+         ORDER BY b.id",
+    )
+    .bind(library_path)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, uuid, title, lib, dir, stem, fmt)| {
+            let path = std::path::Path::new(&lib)
+                .join(&dir)
+                .join(format!("{stem}.{}", fmt.to_lowercase()));
+            (id, uuid, title, path)
+        })
+        .collect())
+}
+
+/// Re-extract covers for EPUB books the indexer left coverless.
+///
+/// The reindex diff only re-parses a file whose stat moved, so a scanner fix
+/// that teaches the extractor a new cover declaration would otherwise reach
+/// only books touched afterwards — every book already in the library would
+/// stay blank forever (#2240). This runs after each ebook scan and is a
+/// no-op once every book either has a cover or has been shown not to have
+/// one: a book that still comes back empty is simply re-tried next scan,
+/// which costs one zip open for a library's genuinely coverless books.
+///
+/// Per-book failures (unreadable file, unwritable covers dir) are logged and
+/// skipped rather than aborting the batch. `on_progress(processed, total,
+/// item)` mirrors the sibling backfills.
+pub(crate) async fn backfill_covers(
+    pool: &SqlitePool,
+    library_path: &str,
+    mut on_progress: impl FnMut(u32, u32, &str),
+) -> anyhow::Result<()> {
+    let candidates = fetch_cover_candidates(pool, library_path).await?;
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let total = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
+    tracing::info!(count = total, "re-extracting covers for coverless ebooks");
+
+    let mut processed = 0u32;
+    for (book_id, uuid, title, path) in candidates {
+        processed = processed.saturating_add(1);
+        on_progress(processed, total, &title);
+        if let Some(accent) = extract_one_cover(book_id, &uuid, path).await {
+            sqlx::query(
+                "UPDATE books SET has_cover = 1, accent_color = COALESCE(accent_color, ?) \
+                 WHERE id = ?",
+            )
+            .bind(accent)
+            .bind(book_id)
+            .execute(pool)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Extract and store one book's cover, returning its accent color (`None`
+/// when no cover was found, or when the write failed). Decode + zip read are
+/// CPU/IO-bound, so both run on the blocking pool.
+async fn extract_one_cover(book_id: i64, uuid: &str, path: PathBuf) -> Option<Option<String>> {
+    let uuid = uuid.to_string();
+    let stored = tokio::task::spawn_blocking(move || {
+        let (mime, bytes) = ebook::extract_cover(&path)?;
+        let accent = ebook::extract_accent(&bytes);
+        match covers::write_cover_file(&uuid, &mime, &bytes) {
+            Ok(()) => Some(accent),
+            Err(e) => {
+                tracing::warn!(error = %e, "cover backfill: write failed; skipping");
+                None
+            }
+        }
+    })
+    .await;
+    match stored {
+        Ok(accent) => {
+            // Thumbnails cached against the old (absent) cover would keep
+            // serving the placeholder; the sibling `BackfillThumbs` task,
+            // posted after this one, re-encodes what this invalidates.
+            if accent.is_some() {
+                thumbs::invalidate_thumbs(book_id);
+            }
+            accent
+        }
+        Err(join_err) => {
+            tracing::warn!(
+                book_id,
+                %join_err,
+                is_panic = join_err.is_panic(),
+                "cover backfill: extraction task failed; skipping"
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
