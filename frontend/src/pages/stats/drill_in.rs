@@ -379,7 +379,11 @@ fn render_bars(bars: &[TrendBar], testid: &str, aria_label: &str) -> Element {
                     div { class: "st-drill-trend-track",
                         div { class: "st-drill-trend-bar", style: "height: {bar.height_pct}%;" }
                     }
-                    div { class: "st-drill-trend-label mono", "{bar.label}" }
+                    div {
+                        class: "st-drill-trend-label mono",
+                        "data-testid": "stats-drill-bar-label",
+                        "{bar.label}"
+                    }
                 }
             }
         }

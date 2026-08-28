@@ -6,20 +6,9 @@
 
 use super::*;
 use crate::init_db;
-use crate::test_support::seed_minimal_books;
+use crate::test_support::{seed_minimal_books, seed_user};
 
 const T0: i64 = 1_700_000_000;
-
-async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
-    sqlx::query_scalar::<_, i64>(
-        "INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
-         VALUES (?, '!x', 0, 0, 0, 1) RETURNING id",
-    )
-    .bind(name)
-    .fetch_one(pool)
-    .await
-    .unwrap()
-}
 
 async fn rate_book(pool: &SqlitePool, user: i64, uuid: &str, half_stars: i64, updated_at: i64) {
     sqlx::query(

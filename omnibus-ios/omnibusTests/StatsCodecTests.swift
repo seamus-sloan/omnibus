@@ -48,4 +48,45 @@ struct StatsSummaryCodecTests {
         #expect(summary.currentStreakDays == 0)
         #expect(summary.longestStreakDays == 9, "the record still decodes")
     }
+
+    @Test("the rating histogram decodes its half-star buckets in order")
+    func decodesRatingHistogram() throws {
+        let json = summaryJSON(
+            extra: #","rating_histogram":[{"half_stars":1,"books":0},{"half_stars":7,"books":2}]"#
+        )
+        let summary = try decodeSummary(json)
+        #expect(summary.ratingHistogram.count == 2)
+        #expect(summary.ratingHistogram.first?.halfStars == 1)
+        #expect(summary.ratingHistogram.last?.books == 2)
+    }
+
+    @Test("a server that predates the rating histogram still decodes")
+    func decodesWithoutRatingHistogram() throws {
+        let summary = try decodeSummary(summaryJSON())
+        #expect(summary.ratingHistogram.isEmpty)
+    }
+}
+
+@Suite("Rating bucket labelling")
+struct RatingBucketTests {
+    @Test("buckets label themselves in stars, never in the stored half-stars")
+    func labelsInStars() {
+        // The wire scale is 1...10. Labelling it raw would present the chart as
+        // a ten-point scale, which is the one way this axis can lie.
+        let label = { (half: Int64) in RatingBucket(halfStars: half, books: 0).starLabel }
+        #expect(label(1) == "0.5")
+        #expect(label(2) == "1")
+        #expect(label(7) == "3.5")
+        #expect(label(10) == "5")
+    }
+
+    @Test("the axis filter keeps whole stars and drops the half steps")
+    func wholeStarsOnly() {
+        // `StatsView` hides any label containing "." so ten of them don't crowd
+        // a phone's width — the half-star bars still draw, unlabelled.
+        let kept = (1...10)
+            .map { RatingBucket(halfStars: Int64($0), books: 0).starLabel }
+            .filter { !$0.contains(".") }
+        #expect(kept == ["1", "2", "3", "4", "5"])
+    }
 }

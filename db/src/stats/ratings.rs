@@ -1,19 +1,7 @@
 //! Star-rating aggregation for the stats page's Avg rating tile and its
 //! drill-in: the window mean, the previous window's mean, the trailing-12-month
-//! mean trend, and the half-star distribution.
-//!
-//! **Every metric here windows on `user_ratings.updated_at` — when the reader
-//! rated the book, not when they finished it.** The alternative (windowing on
-//! the completion event) was considered when the histogram landed and
-//! rejected: a rating is an act the reader performs, `updated_at` is when they
-//! performed it, and keying on completion would drop every rating on a book
-//! carrying no completion event at all — a book abandoned and rated, or rated
-//! without ever being marked finished. That silent exclusion is a worse
-//! distortion than the one it fixes. The consequence to know: re-rating a book
-//! read years ago pulls it into the current window, and a book finished this
-//! month but rated last month falls out. Whichever answer this module uses,
-//! all four functions must use the same one, or the mean and the distribution
-//! below it describe different sets of books.
+//! mean trend, and the half-star distribution. Every function here shares one
+//! window key, [`avg_stars`]'s — they must not diverge on it.
 
 use omnibus_shared::{RatingBucket, TrendPoint};
 use sqlx::{Row, SqlitePool};
@@ -34,6 +22,16 @@ const LIVE_RATINGS: &str = "\
 /// Mean star rating over books the user rated within the window, in stars —
 /// `half_stars` is 1..=10, so the SQL mean halves it. `None` when nothing was
 /// rated in the window. Live books only, per [`LIVE_RATINGS`].
+///
+/// **The window key is `user_ratings.updated_at` — when the reader rated the
+/// book, not when they finished it**, and every other function in this module
+/// follows. Keying on the completion event would drop every rating on a book
+/// carrying no completion event at all (abandoned and rated, or rated without
+/// ever being marked finished), which is a worse distortion than the one it
+/// fixes. The consequence to know: re-rating a book read years ago pulls it
+/// into the current window, and a book finished this month but rated last
+/// month falls out. Whichever key is in force, the mean and the distribution
+/// under it must share it or they describe different sets of books.
 pub(super) async fn avg_stars(
     pool: &SqlitePool,
     user_id: i64,

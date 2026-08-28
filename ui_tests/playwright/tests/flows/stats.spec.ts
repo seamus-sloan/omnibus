@@ -239,7 +239,7 @@ test("the Avg rating drill-in charts every half-star bucket on a star axis", asy
   const chart = page.getByTestId("stats-drill-histogram");
   await expect(chart).toBeVisible();
   await expect
-    .poll(() => chart.locator(".st-drill-trend-label").allInnerTexts())
+    .poll(() => chart.getByTestId("stats-drill-bar-label").allInnerTexts())
     .toEqual(["0.5", "1", "1.5", "2", "2.5", "3", "3.5", "4", "4.5", "5"]);
   // The tallest bucket carries its book count on hover.
   await expect(chart.locator('[title="5 ★ · 3 books"]')).toBeVisible();

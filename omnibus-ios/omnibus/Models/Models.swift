@@ -1341,6 +1341,8 @@ struct StatsSummary: Codable, Sendable {
         genreShare = try c.decodeIfPresent([GenreShare].self, forKey: .genreShare) ?? []
         finishedBooks = try c.decodeIfPresent([FinishedBook].self, forKey: .finishedBooks) ?? []
         booksPerMonth = try c.decodeIfPresent([MonthCount].self, forKey: .booksPerMonth) ?? []
+        ratingHistogram =
+            try c.decodeIfPresent([RatingBucket].self, forKey: .ratingHistogram) ?? []
         pagesRead = try c.decodeIfPresent(Int64.self, forKey: .pagesRead)
     }
 
