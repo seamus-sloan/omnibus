@@ -73,6 +73,9 @@ pub(super) struct LandingViewState {
     /// True while the palette query is non-empty — hero + gallery hide, and
     /// the search result set renders exactly as before the redesign.
     pub(super) is_search: bool,
+    /// True when the gallery pick is a shelf — the book area's empty state
+    /// says the shelf is empty rather than reporting a failed search.
+    pub(super) is_shelf: bool,
 }
 
 /// Snapshot every signal the markup needs in one place. Reads are cheap, but
@@ -171,6 +174,7 @@ pub(super) fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) ->
         section_title: section_title(selection, &shelves),
         sweep_key: format!("{selection:?}·{is_search}"),
         is_search,
+        is_shelf: source == VisibleSource::Shelf,
     }
 }
 

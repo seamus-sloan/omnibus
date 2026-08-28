@@ -191,6 +191,7 @@ fn render_header_and_content(
                     page_error: view.page_error,
                     has_more: view.has_more,
                     is_loading_more: view.is_loading_more,
+                    is_shelf: view.is_shelf,
                 },
                 prefs,
                 ctx: BookTableContext {

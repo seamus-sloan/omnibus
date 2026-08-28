@@ -144,6 +144,29 @@ test("returns to All Books and restores the full library", async ({
     .toBeGreaterThanOrEqual(FIXTURE_BOOKS.length);
 });
 
+test("an empty shelf says it is empty, not that a search found nothing", async ({
+  page,
+  request,
+}) => {
+  // A shelf of its own, created empty — nothing shared is mutated, and the
+  // wording must not claim a format the shelf isn't restricted to (#2253).
+  const name = `E2E Gallery Empty ${Date.now()}`;
+  const shelfId = await createManualShelf(request, name, []);
+
+  await gotoReady(page, "/");
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/shelves/page", expectedStatus: 200 },
+    async () => page.getByTestId(`gallery-shelf-${shelfId}`).click(),
+  );
+
+  await expect(page.getByTestId("lib-section-title")).toContainText(name);
+  await expect(page.getByTestId("lib-empty")).toHaveText(
+    "No books in this shelf.",
+  );
+  await expect(page.getByTestId("lib-page-error")).toHaveCount(0);
+});
+
 test("edits the selected shelf from the landing header pencil", async ({
   page,
   request,
