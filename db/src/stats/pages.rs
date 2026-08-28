@@ -1,7 +1,10 @@
-//! Book-length aggregation for the stats page: the Est. pages tile's total and
-//! the length-distribution chart beside it. Both resolve a book's length
-//! through the one ladder in [`book_pages_source`] — every input is persisted
-//! at index time, so no EPUB or archive is opened at query time.
+//! Book-length aggregation for the stats page: the Est. pages tile's total,
+//! the reading rate behind it, and the length-distribution chart beside it.
+//! All three resolve a book's length through the one ladder in
+//! [`book_pages_source`] — every input is persisted at index time, so no EPUB
+//! or archive is opened at query time. They differ only in what they do with a
+//! book the ladder resolves to zero pages: the rate drops it, because it alone
+//! divides by the hours behind it.
 
 use omnibus_shared::LengthBucket;
 use sqlx::{Row, SqlitePool};
@@ -72,7 +75,7 @@ pub(super) fn book_pages_source() -> String {
 }
 
 /// The distinct live books a user finished in the window — the shared scope of
-/// both aggregates here, and the same completion definition as
+/// all three aggregates here, and the same completion definition as
 /// `compute::finished_count` (a 100% journal entry or an explicit read-status
 /// `finished`, on a book that still exists). A book finished twice counts once.
 /// Bind order is `user_id, user_id, start`.
@@ -110,6 +113,80 @@ pub(super) async fn pages_read(
         .bind(start)
         .fetch_one(pool)
         .await?)
+}
+
+/// One `(book_uuid, secs)` row per book the user has ever read, carrying that
+/// book's **lifetime** reading seconds. Lifetime rather than windowed on
+/// purpose: a book begun in March and finished in April would otherwise pair
+/// April's whole length with April's hours alone and print an absurd rate.
+///
+/// `reading_sessions` only — pages per hour is a reading-speed figure, and
+/// folding `listening_sessions` in would measure the narrator instead.
+/// One bind: `user_id`.
+const BOOK_READING_SECS: &str = "\
+    SELECT book_uuid, SUM(seconds_read) AS secs FROM reading_sessions \
+        WHERE user_id = ? GROUP BY book_uuid";
+
+/// Estimated pages read per hour over the window: a seconds-weighted mean,
+/// not a mean of per-book rates.
+///
+/// Both sides describe **the same books** — every distinct live book finished
+/// in the window that resolves a length *and* carries recorded reading time.
+/// A book with length but no reading seconds contributes neither, since its
+/// words with nobody's hours behind them would inflate the rate; a book with
+/// hours but no resolvable length is dropped for the mirror-image reason.
+///
+/// `None` when that set is empty, which drives the same em-dash empty state
+/// [`pages_read`] does. Books read partly in audio over-report here — their
+/// listening time is excluded from the denominator by design — which is why
+/// the surfaces label this an estimate.
+///
+/// A book resolving to **zero** pages is dropped, where [`pages_read`] sums it
+/// harmlessly. Two ways to get one: `estimate_word_count` yields `Some(0)` for
+/// an EPUB whose spine loads but strips to no words (image-only or
+/// fixed-layout), and the ladder's own rounding sends anything under half a
+/// page there too. Either way it donates its hours while contributing no
+/// pages, dragging the rate down — and as the only qualifying book it would
+/// print a "0 pages an hour" that is exactly the claim the empty state exists
+/// to avoid. `pages_read` and [`length_buckets`] keep their existing treatment
+/// of a stored zero; only a figure with a denominator is hurt by one.
+pub(super) async fn pages_per_hour(
+    pool: &SqlitePool,
+    user_id: i64,
+    start: i64,
+) -> Result<Option<f64>, StatsError> {
+    let sql = format!(
+        "SELECT SUM(p.pages) AS pages, SUM(t.secs) AS secs
+         FROM ({}) fin
+         JOIN ({}) p ON p.uuid = fin.uuid
+         JOIN ({BOOK_READING_SECS}) t ON t.book_uuid = fin.uuid
+         WHERE p.pages > 0 AND t.secs > 0",
+        finished_in_window(),
+        book_pages_source()
+    );
+    let row = sqlx::query(&sql)
+        .bind(user_id)
+        .bind(user_id)
+        .bind(start)
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(hourly_rate(row.get("pages"), row.get("secs")))
+}
+
+/// Pages per hour from the summed pair, or `None` when either side is absent
+/// (`SUM` over zero rows is SQL NULL) or the seconds are non-positive. Split
+/// out so the guard against a zero denominator is one expression rather than
+/// something the SQL's `t.secs > 0` filter is silently trusted for.
+fn hourly_rate(pages: Option<i64>, secs: Option<i64>) -> Option<f64> {
+    let (pages, secs) = (pages?, secs?);
+    if secs <= 0 {
+        return None;
+    }
+    // Page and second totals sit far below f64's 2^52 exact-integer range.
+    #[allow(clippy::cast_precision_loss)]
+    let rate = pages as f64 / (secs as f64 / 3600.0);
+    Some(rate)
 }
 
 /// How the books finished in the window are distributed across

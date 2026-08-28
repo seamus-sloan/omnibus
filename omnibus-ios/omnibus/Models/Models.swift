@@ -1346,6 +1346,12 @@ struct StatsSummary: Codable, Sendable {
     /// flattens away. All ten buckets arrive, zeros included.
     var ratingHistogram: [RatingBucket] = []
     var pagesRead: Int64?
+    /// Estimated pages an hour over the window — the rate `pagesRead` is
+    /// missing. Weighted by seconds across the books finished in the window
+    /// that resolve a non-zero length and carry recorded reading time;
+    /// listening time is excluded, so a partly-heard book reads fast here.
+    /// `nil` when no finished book qualifies.
+    var pagesPerHour: Double?
     /// Books finished in the window by length, plus the unknown bucket. Every
     /// bucket arrives; an all-zero set means nothing was finished.
     var lengthBuckets: [LengthBucket] = []
@@ -1370,6 +1376,7 @@ struct StatsSummary: Codable, Sendable {
         case booksPerMonth = "books_per_month"
         case ratingHistogram = "rating_histogram"
         case pagesRead = "pages_read"
+        case pagesPerHour = "pages_per_hour"
         case lengthBuckets = "length_buckets"
     }
 
@@ -1409,6 +1416,7 @@ struct StatsSummary: Codable, Sendable {
         ratingHistogram =
             try c.decodeIfPresent([RatingBucket].self, forKey: .ratingHistogram) ?? []
         pagesRead = try c.decodeIfPresent(Int64.self, forKey: .pagesRead)
+        pagesPerHour = try c.decodeIfPresent(Double.self, forKey: .pagesPerHour)
         lengthBuckets = try c.decodeIfPresent([LengthBucket].self, forKey: .lengthBuckets) ?? []
     }
 

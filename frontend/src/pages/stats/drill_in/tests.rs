@@ -175,6 +175,19 @@ fn short_month_and_short_day_fall_back_on_malformed_input() {
 }
 
 #[test]
+fn rate_value_keeps_a_decimal_only_below_ten_pages_an_hour() {
+    // Rounds half away from zero, like `avg_stars_value` — `{:.1}` alone would
+    // give 4.2 here on round-half-to-even.
+    assert_eq!(rate_value(4.25), "4.3");
+    assert_eq!(rate_value(9.94), "9.9");
+    // The branch is on the rounded figure: one decimal would read "10.0",
+    // which isn't "under ten" however it got there.
+    assert_eq!(rate_value(9.96), "10");
+    assert_eq!(rate_value(32.4), "32");
+    assert_eq!(rate_value(32.6), "33");
+}
+
+#[test]
 fn finished_book_as_ebook_carries_title_author_and_cover() {
     let book = FinishedBook {
         book_uuid: "u1".to_string(),

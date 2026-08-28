@@ -8933,6 +8933,13 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    trend and the distribution below it) don't read as one broken chart. */
 .st-drill-section-label { margin-bottom: -8px; }
 
+.st-drill-rate { font-size: 13px; color: var(--ink-2); }
+.st-drill-rate-value {
+  font-family: var(--serif); font-size: 28px; color: var(--ink-0); margin-right: 5px;
+}
+/* Pulled up under the figure it qualifies, against the body's 18px gap. */
+.st-drill-rate-note { font-size: 12px; color: var(--ink-3); margin-top: -12px; }
+
 .st-drill-finished-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .st-drill-finished-row { display: flex; align-items: center; gap: 12px; padding: 6px 2px; }
 .st-drill-finished-cover { width: 40px; flex: 0 0 40px; }
