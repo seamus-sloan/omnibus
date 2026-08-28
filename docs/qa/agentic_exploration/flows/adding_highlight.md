@@ -16,9 +16,10 @@ must never affect what you see.
 1. While reading, select a passage — a sentence or two, not a single word and
    not a whole chapter.
 2. Save it as a highlight. Pick a colour if offered one.
-3. **Half the time, attach a note.** Write something a person would write, and
-   include a distinctive word so you can find it again later. Journal the exact
-   text.
+3. **Half the time, attach a note.** Write something a person would write — a
+   reaction, a question, a cross-reference — and work in a word you will
+   recognise again when you scan the list later. A memorable word, not a
+   generated token: no ids, no timestamps. Journal the exact text.
 4. Carry on reading for a page or two.
 5. Open the list of saved passages and confirm yours is there, with its colour
    and note intact.

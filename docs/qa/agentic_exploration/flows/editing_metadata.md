@@ -20,9 +20,16 @@ content.
 
 1. From a book's detail page, open its metadata editor.
 2. Read the current values before changing anything, and journal them.
-3. Change one or two fields. Good candidates: title suffix, subtitle, series
-   name or number, publisher, tags, genres, description. Append rather than
-   replace where you can — `Foo (ed. agent-3)` beats overwriting `Foo`.
+3. Change one or two fields. Good candidates: subtitle, series name or number,
+   publisher, tags, genres, description. Make it a **plausible** value — a real
+   publisher, a genre the book could actually be. Fill a field that is empty;
+   where one already has content, add to it rather than replacing it — a
+   `maritime` tag beside the existing tags, not instead of them.
+
+   Do **not** sign your edit. A title reading `Foo (ed. agent-3)` is
+   library-wide and permanent — every reader sees it, on a book nobody owns —
+   and your journal entry already records that you made the change. See *What
+   you type into the app* in [start.md](../start.md).
 4. Occasionally replace the cover image instead. Use **that book's own**
    `cover.jpg` sidecar from the corpus — another book's cover would make the
    shared library worse, which this flow tells you not to do. Note that the
