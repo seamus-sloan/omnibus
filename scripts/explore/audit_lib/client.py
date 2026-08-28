@@ -106,6 +106,9 @@ class Client:
     def put(self, path: str, payload: Any) -> tuple[int, str]:
         return self._request(path, payload, method="PUT")
 
+    def patch(self, path: str, payload: Any) -> tuple[int, str]:
+        return self._request(path, payload, method="PATCH")
+
     def login(self, username: str, password: str, sleep=time.sleep) -> None:
         """Authenticate, failing loudly rather than reading as an empty account."""
         body = {"username": username, "password": password}

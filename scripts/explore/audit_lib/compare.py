@@ -11,7 +11,10 @@ whether one is raised at all:
 * `duplicate` — landed more than once.
 
 The bias throughout is against false positives. An expectation the audit
-could not read never becomes a finding (it is `unverifiable` instead), an
+could not read never becomes a finding (it is `unverifiable` instead) — and
+its slot still counts as journalled: `unexpected` subtracts `Claims`, the
+slots every entry addressed whether or not it was judged, because a write the
+audit declined to read usually still landed. An
 absent read-status row is read as `unread` because that is what the column
 means, and a saved position is checked for existence on the right axis rather
 than for an exact number — the reader keeps writing after the journal line is
@@ -29,7 +32,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from .expectations import Expectation, normalise_text
+from .client import ApiError
+from .expectations import Claims, Expectation, normalise_text
 from .state import ActorState
 
 MISSING = "missing"
@@ -69,6 +73,28 @@ def check(exp: Expectation, state: ActorState) -> Finding | None:
     if handler is None:  # pragma: no cover - guarded by the vocabulary table
         return _finding(exp, MISSING, f"audit has no check for family {exp.family!r}")
     return handler(exp, state)
+
+
+def check_all(
+    exps: list[Expectation], state: ActorState
+) -> tuple[list[Finding], list[tuple[Expectation, str]]]:
+    """Check every expectation, containing a failed read to that expectation.
+
+    One agent journalling a slug where a uuid belongs makes the state read
+    error (the RPC 500s on an unresolvable uuid, and `Client.rpc` raises).
+    That must cost the run one unverifiable entry, not the whole `audit.json`.
+    """
+    findings: list[Finding] = []
+    failed: list[tuple[Expectation, str]] = []
+    for exp in exps:
+        try:
+            finding = check(exp, state)
+        except ApiError as exc:
+            failed.append((exp, f"{exp.what} on {exp.target}: state read failed — {exc}"))
+            continue
+        if finding is not None:
+            findings.append(finding)
+    return findings, failed
 
 
 def _check_rating(exp: Expectation, state: ActorState) -> Finding | None:
@@ -134,19 +160,34 @@ def _check_journal(exp: Expectation, state: ActorState) -> Finding | None:
     return _finding(exp, MISMATCH, f"{len(rows)} journal entr(y/ies) on the book, none carrying this text")
 
 
+# The identifying keys an annotation expectation may carry, and the row field
+# each one is compared against.
+_ANNOTATION_FIELDS = (("note", "note"), ("quote", "text"), ("label", "title"))
+
+
 def _annotation_matches(row: dict[str, Any], keys: dict[str, Any]) -> bool:
-    note, quote = keys.get("note"), keys.get("quote")
-    if note and normalise_text(note) not in normalise_text(str(row.get("note") or "")):
+    for key, row_field in _ANNOTATION_FIELDS:
+        wanted = keys.get(key)
+        if wanted and normalise_text(str(wanted)) not in normalise_text(str(row.get(row_field) or "")):
+            return False
+    colour = keys.get("colour")
+    if colour and str(colour).strip().lower() != str(row.get("color") or "").strip().lower():
         return False
-    if quote and normalise_text(quote) not in normalise_text(str(row.get("text") or "")):
-        return False
+    # A position is comparable only when it is a machine location — prose
+    # ("Prologue, first page") never equals the stored CFI, and comparing it
+    # would fail every honestly-journalled bookmark.
+    position = keys.get("position")
+    if position and "epubcfi(" in str(position):
+        if normalise_text(str(position)) != normalise_text(str(row.get("position") or "")):
+            return False
     return True
 
 
 def _check_annotation(exp: Expectation, state: ActorState, rows: list[dict[str, Any]], noun: str) -> Finding | None:
     keys = exp.value if isinstance(exp.value, dict) else {}
     hits = [r for r in rows if _annotation_matches(r, keys)]
-    if len(hits) > 1 and (keys.get("note") or keys.get("quote")):
+    identified = any(keys.get(k) for k in ("note", "quote", "label"))
+    if len(hits) > 1 and identified:
         return _finding(exp, DUPLICATE, f"{len(hits)} {noun}s match")
     if hits:
         return None
@@ -220,9 +261,16 @@ def unexpected(
     actor: str,
     state: ActorState,
     baseline: dict[str, Any] | None,
-    expectations: list[Expectation],
+    claims: Claims,
 ) -> list[Finding]:
     """State that appeared during the run and no journal entry explains.
+
+    Subtracts `Claims` — every slot the journal *addressed*, judged or not —
+    rather than only the checked expectations: an unverifiable write usually
+    still landed, and re-reporting it here would contradict the journal line
+    that names it. The claims also carry the read-status slots of every book
+    an agent merely opened, because the reading surfaces auto-write status
+    with nothing journalled (frontend/src/read_status_auto.rs).
 
     Requires a baseline. Without one there is nothing to subtract, and every
     fact left behind by an earlier run would be reported as a surprise.
@@ -231,31 +279,33 @@ def unexpected(
         return []
     before = (baseline.get("actors") or {}).get(actor) or {}
     books = before.get("books") or {}
-    claimed = {(e.family, e.target) for e in expectations}
     out: list[Finding] = []
 
     for uuid in baseline.get("library") or []:
         was = books.get(uuid) or {}
-        if ("rating", uuid) not in claimed:
+        if ("rating", uuid) not in claims.slots:
             now = state.rating(uuid)
             if now is not None and was.get("rating") != now:
                 out.append(_bare(actor, UNEXPECTED, "rating", uuid, "nothing journalled", _describe_rating(now)))
-        if ("read_status", uuid) not in claimed:
+        if ("read_status", uuid) not in claims.slots:
             now_status = state.read_status(uuid)
             if now_status and was.get("read_status") != now_status:
                 out.append(_bare(actor, UNEXPECTED, "read status", uuid, "nothing journalled", f"{now_status!r}"))
-        if ("journal", uuid) not in claimed:
+        if ("journal", uuid) not in claims.slots:
             seen = {normalise_text(j.get("body_md") or "") for j in (was.get("journals") or [])}
             for row in state.journals(uuid):
                 body = normalise_text(row.get("body_md") or "")
                 if body not in seen:
                     out.append(_bare(actor, UNEXPECTED, "journal entry", uuid, "nothing journalled", body[:80]))
 
+    if claims.shelf_any:
+        # A shelf write nothing could attribute to a name: any shelf-level
+        # surprise may be it, so the sweep has nothing sound to report.
+        return out
     shelves_before = set(before.get("shelves") or [])
-    claimed_names = {e.value for e in expectations if e.family == "shelf"}
     for shelf in state.shelves():
         name = shelf.get("name")
-        if name not in shelves_before and name not in claimed_names:
+        if name not in shelves_before and name not in claims.shelf_names:
             out.append(_bare(actor, UNEXPECTED, "shelf", None, "nothing journalled", f"shelf {name!r}"))
     return out
 

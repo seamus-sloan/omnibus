@@ -265,10 +265,14 @@ def normalise(action: str) -> tuple[str, ...]:
 
 
 def noun_of(action: str) -> str | None:
-    """The noun an action name is about, aliases resolved."""
+    """The noun an action name is about, aliases and compounds resolved."""
     segments = normalise(action)
     if not segments:
         return None
+    if len(segments) > 1:
+        compound = COMPOUND_NOUNS.get(tuple(segments[:2]))
+        if compound:
+            return compound
     return NOUN_ALIASES.get(segments[0], segments[0])
 
 

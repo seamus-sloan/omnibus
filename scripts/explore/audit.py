@@ -44,6 +44,18 @@ def resolve_accounts(args: argparse.Namespace) -> dict[str, Account]:
     return load_accounts(json.loads(raw))
 
 
+def actor_reader(url: str, account: Account) -> tuple[state.ActorState | None, str | None]:
+    """Open one actor's state; a failure is contained to that actor.
+
+    One expired password — or a 429 that outlasted the login retry — must
+    cost that actor's checks, not the whole run's `audit.json`.
+    """
+    try:
+        return state.open_actor(url, account), None
+    except ApiError as exc:
+        return None, f"cannot read {account.actor}'s state: {exc}"
+
+
 def base_url(args: argparse.Namespace) -> str:
     url = args.url or os.environ.get("OMNIBUS_EXPLORE_URL")
     if not url:
@@ -96,7 +108,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     for actor in seen_actors:
         mine = journal.actor_entries(entries, actor)
-        exps, unver, tally = expectations.expectations_for(actor, mine)
+        exps, unver, tally, claims = expectations.expectations_for(actor, mine)
         unverifiable.extend(unver)
         for kind, count in tally.items():
             tallies[kind] = tallies.get(kind, 0) + count
@@ -107,13 +119,20 @@ def cmd_check(args: argparse.Namespace) -> int:
                 for e in exps
             )
             continue
-        reader = state.open_actor(url, account)
-        for exp in exps:
-            checked += 1
-            found = compare.check(exp, reader)
-            if found is not None:
-                findings.append(found)
-        findings.extend(compare.unexpected(actor, reader, baseline, exps))
+        reader, login_error = actor_reader(url, account)
+        if reader is None:
+            unverifiable.extend(expectations.Unverifiable(actor, e.seq, login_error or "") for e in exps)
+            continue
+        found, failed = compare.check_all(exps, reader)
+        checked += len(exps) - len(failed)
+        findings.extend(found)
+        unverifiable.extend(expectations.Unverifiable(actor, exp.seq, why) for exp, why in failed)
+        try:
+            findings.extend(compare.unexpected(actor, reader, baseline, claims))
+        except ApiError as exc:
+            unverifiable.append(
+                expectations.Unverifiable(actor, None, f"unexpected-state sweep failed: {exc}")
+            )
 
     report = {
         "run": args.run,
@@ -161,7 +180,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
         if account is None:
             raise SystemExit(f"no credential for {actor} in --accounts")
         mine = [e for e in journal.actor_entries(entries, actor) if (e.seq or 0) >= args.start]
-        exps, _, _ = expectations.expectations_for(actor, mine)
+        exps, _, _, _ = expectations.expectations_for(actor, mine)
         if args.dry_run:
             reader = None
         else:

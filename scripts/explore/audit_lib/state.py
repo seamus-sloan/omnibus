@@ -195,4 +195,8 @@ def _thin_journal(rec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _thin_annotation(rec: dict[str, Any]) -> dict[str, Any]:
-    return {k: rec.get(k) for k in ("id", "note", "text", "color", "label", "cfi") if k in rec}
+    # Field names as the wire actually spells them: highlights carry
+    # note/text/color/epub_cfi_range, bookmarks carry position/title. A wrong
+    # list here keeps only `id`, and baseline rows become indistinguishable.
+    keep = ("id", "note", "text", "color", "epub_cfi_range", "position", "title")
+    return {k: rec.get(k) for k in keep if k in rec}

@@ -16,12 +16,17 @@ Not everything is replayable, and the refusals are the honest part:
   first, and the source file may no longer exist.
 * **Shelf membership** names its shelf by the display name in `params`, which
   is not a handle: two runs can leave two shelves with the same name.
+* **A highlight without a machine location** cannot be placed — the server
+  takes an `epub_cfi_range`, and prose ("chapter 4, para 12") is not one.
 
-Each of those is reported as a refusal naming the reason, never skipped.
+Each refusal names its reason, and says whether the journal or the replayer
+is what falls short — a refusal that reads as "the journal was deficient"
+when the capability was never built teaches agents the wrong lesson.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -77,8 +82,11 @@ def replay_one(exp: Expectation, state: ActorState) -> Step:
         return Step(exp.actor, exp.seq, exp.family, uuid, f"set status {exp.value}", status, body[:160])
 
     if exp.family == "playback_rate":
+        # The server function takes two arguments — the uuid and the update
+        # struct — and the struct's field is `playback_rate`, range 0.5..=3.
         status, body = client.post(
-            "/api/rpc/audiobooks/playback-rate/set", {"update": {"book_uuid": uuid, "rate": float(exp.value)}}
+            "/api/rpc/audiobooks/playback-rate/set",
+            {"uuid": uuid, "update": {"playback_rate": float(exp.value)}},
         )
         return Step(exp.actor, exp.seq, exp.family, uuid, f"set rate {exp.value:g}x", status, body[:160])
 
@@ -95,27 +103,49 @@ def replay_one(exp: Expectation, state: ActorState) -> Step:
 
     if exp.family == "highlight":
         keys = exp.value if isinstance(exp.value, dict) else {}
-        cfi = exp.extra.get("cfi") or keys.get("cfi")
+        cfi = keys.get("cfi") or exp.extra.get("cfi")
         if not cfi:
-            return _refuse(exp, "no epub_cfi_range in params — a highlight cannot be placed without one")
+            return _refuse(
+                exp,
+                "params carry no epubcfi range — a highlight is placed at the machine "
+                "location, and prose cannot stand in for it",
+            )
         payload: dict[str, Any] = {
             "book_uuid": uuid,
             "epub_cfi_range": cfi,
-            "color": (keys.get("colour") or "amber").lower(),
+            "color": str(keys.get("colour") or "amber").lower(),
         }
         if keys.get("quote"):
             payload["text"] = keys["quote"]
-        if keys.get("note"):
-            payload["note"] = keys["note"]
         status, body = client.post("/api/highlights", payload)
+        note = keys.get("note")
+        if note and 200 <= status < 300:
+            # `CreateHighlight` has no note field, and unknown fields are
+            # silently dropped — sending it inline would 200 and lose the
+            # note. It lands via its own PATCH on the created row.
+            try:
+                highlight_id = json.loads(body).get("id")
+            except (json.JSONDecodeError, AttributeError):
+                highlight_id = None
+            if highlight_id is None:
+                return Step(
+                    exp.actor, exp.seq, exp.family, uuid,
+                    "create highlight (note NOT set — no id in the create response)",
+                    status, body[:160],
+                )
+            status, body = client.patch(f"/api/highlights/{highlight_id}/note", {"note": note})
+            return Step(exp.actor, exp.seq, exp.family, uuid, "create highlight + note", status, body[:160])
         return Step(exp.actor, exp.seq, exp.family, uuid, "create highlight", status, body[:160])
 
     if exp.family == "bookmark":
         keys = exp.value if isinstance(exp.value, dict) else {}
-        position = exp.extra.get("position") or keys.get("quote")
+        position = keys.get("position") or exp.extra.get("position")
         if not position:
-            return _refuse(exp, "no position in params — a bookmark cannot be placed without one")
-        status, body = client.post("/api/bookmarks", {"book_uuid": uuid, "position": position})
+            return _refuse(exp, "params carry no position — a bookmark cannot be placed without one")
+        payload = {"book_uuid": uuid, "position": position}
+        if keys.get("label"):
+            payload["title"] = keys["label"]
+        status, body = client.post("/api/bookmarks", payload)
         return Step(exp.actor, exp.seq, exp.family, uuid, "create bookmark", status, body[:160])
 
     if exp.family == "shelf":
