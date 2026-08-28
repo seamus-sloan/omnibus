@@ -111,13 +111,24 @@ struct HeatCell {
     future: bool,
 }
 
-/// Build the cell list: 52 week columns of 7 rows (Monday-first), ending in
-/// the week containing `anchor`. Unix day 0 is a Thursday, so Monday-aligning
-/// subtracts `(n + 3) % 7` — the same convention as `db::stats`' busiest-week
-/// bucketing.
-fn build_cells(anchor: i64, by_day: &HashMap<i64, i64>, max: i64) -> Vec<HeatCell> {
+/// Epoch day of the grid's first cell: the Monday of `anchor`'s week, 51 weeks
+/// back. Unix day 0 is a Thursday, so Monday-aligning subtracts `(n + 3) % 7`
+/// — the same convention as `db::stats`' busiest-week bucketing.
+///
+/// Shared with the caller's `by_day` filter so the intensity scale is
+/// normalized over exactly the days the grid draws. A fixed `anchor - 363`
+/// kept up to six days falling before the first Monday, and `max` comes from
+/// those values — so one heavy day just off the left edge flattened every
+/// visible cell against a peak the reader could not see.
+fn grid_start(anchor: i64) -> i64 {
     let monday = anchor - (anchor + 3).rem_euclid(7);
-    let start = monday - (WEEKS - 1) * 7;
+    monday - (WEEKS - 1) * 7
+}
+
+/// Build the cell list: 52 week columns of 7 rows (Monday-first), ending in
+/// the week containing `anchor`.
+fn build_cells(anchor: i64, by_day: &HashMap<i64, i64>, max: i64) -> Vec<HeatCell> {
+    let start = grid_start(anchor);
     (start..start + WEEKS * 7)
         .map(|n| {
             let secs = by_day.get(&n).copied().unwrap_or(0);
@@ -148,7 +159,7 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
         return rsx! { div { class: "card st-card-placeholder", aria_hidden: "true" } };
     };
 
-    let window_start = anchor - WEEKS * 7 + 1;
+    let window_start = grid_start(anchor);
     let by_day: HashMap<i64, i64> = summary
         .heatmap
         .iter()
@@ -243,6 +254,19 @@ mod tests {
         let cells = build_cells(wed, &HashMap::new(), 0);
         assert_eq!(cells.iter().filter(|c| c.future).count(), 4);
         assert_eq!(cells.last().unwrap().day, "2026-07-12");
+    }
+
+    #[test]
+    fn grid_start_is_the_monday_of_the_anchor_week_fifty_one_weeks_back() {
+        // 2026-07-06 is a Monday, 2026-07-12 the Sunday that closes its week:
+        // both weeks start on the same Monday, so both grids start together.
+        let monday = day_number("2026-07-06").unwrap();
+        let sunday = day_number("2026-07-12").unwrap();
+        assert_eq!(grid_start(monday), grid_start(sunday));
+        assert_eq!(day_string(grid_start(sunday)), "2025-07-14");
+        // Every rendered cell sits at or after it.
+        let cells = build_cells(sunday, &HashMap::new(), 0);
+        assert_eq!(cells.first().unwrap().day, day_string(grid_start(sunday)));
     }
 
     #[test]

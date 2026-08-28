@@ -111,6 +111,7 @@ pub(super) async fn compute(
     let top_authors = top_authors(pool, user_id, start).await?;
     let top_tags = top_tags(pool, user_id, start).await?;
     let genre_share = genre_share(pool, user_id, start).await?;
+    let genre_tagged_books = genre_tagged_books(pool, user_id, start).await?;
     let books_active = books_active(pool, user_id, start).await?;
     let as_of_day = as_of_day(pool).await?;
     let finished_books = finished_books(pool, user_id, start).await?;
@@ -138,6 +139,7 @@ pub(super) async fn compute(
         top_authors,
         top_tags,
         genre_share,
+        genre_tagged_books,
         finished_books,
         books_per_month,
         previous,
@@ -390,6 +392,14 @@ async fn ranked(
 /// seconds) so a multi-genre book counts once per genre but never twice per
 /// genre.
 ///
+/// Returns **every** genre, not a top-N. The donut renders four slices and
+/// folds the rest into "Other", and it can only size that fold honestly if it
+/// is given the whole tail — a `LIMIT 8` here made "Other" mean "ranks five
+/// through eight" while the percentages still summed to 100%, so a library
+/// with a dozen genres understated it with no indication anything was
+/// dropped. Genres are a user-curated vocabulary (`0066_genres.sql`), so the
+/// row count is bounded by what a reader has actually assigned.
+///
 /// Reads the user-assigned genres, which live only in the
 /// `metadata_overrides` JSON blob (the table itself predates them, from
 /// `0007`; `0066_genres.sql` adds the vocabulary table this joins for the
@@ -418,14 +428,13 @@ pub(super) async fn genre_share(
              JOIN json_each(mo.overrides, '$.genres') je
              JOIN genres g ON g.name = je.value COLLATE NOCASE
             WHERE json_type(mo.overrides, '$.genres') IS NOT NULL
-         GROUP BY g.id ORDER BY books DESC, g.name ASC LIMIT ?"
+         GROUP BY g.id ORDER BY books DESC, g.name ASC"
     );
     let rows = sqlx::query(&sql)
         .bind(user_id)
         .bind(start)
         .bind(user_id)
         .bind(start)
-        .bind(TOP_N)
         .fetch_all(pool)
         .await?;
 
@@ -438,8 +447,38 @@ pub(super) async fn genre_share(
         .collect())
 }
 
-/// Distinct books with any session activity in the window — the genre
-/// donut's center count.
+/// Distinct books with a genre *and* session activity in the window — the
+/// population the donut's slices are drawn from, and so the number its center
+/// reports.
+///
+/// Not [`books_active`]: a book with no genre contributes to that count but to
+/// no slice, so using it made the ring claim a total it did not describe — "12
+/// books" around a ring covering four. Counted distinctly, so a book carrying
+/// three genres still counts once here even though it appears in three slices.
+pub(super) async fn genre_tagged_books(
+    pool: &SqlitePool,
+    user_id: i64,
+    start: i64,
+) -> Result<i64, StatsError> {
+    let sql = format!(
+        "SELECT COUNT(DISTINCT b.uuid)
+             FROM (SELECT DISTINCT book_uuid FROM ({SESSION_BOOK_SECS})) x
+             JOIN books b ON b.uuid = x.book_uuid
+             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+             JOIN json_each(mo.overrides, '$.genres') je
+             JOIN genres g ON g.name = je.value COLLATE NOCASE
+            WHERE json_type(mo.overrides, '$.genres') IS NOT NULL"
+    );
+    Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .bind(start)
+        .bind(user_id)
+        .bind(start)
+        .fetch_one(pool)
+        .await?)
+}
+
+/// Distinct books with any session activity in the window.
 pub(super) async fn books_active(
     pool: &SqlitePool,
     user_id: i64,

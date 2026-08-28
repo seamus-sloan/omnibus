@@ -252,12 +252,18 @@ test("the heatmap and genre donut render from seeded activity", async ({
   expect(await heatmap.locator('[title*=" on "]').count()).toBeGreaterThan(0);
 
   // Donut: the seeded genre appears in the legend with a percentage; the
-  // center shows the active-book count.
+  // center counts the books the ring actually describes ("tagged"), not every
+  // active book. This spec seeds activity on an ungenred book too, so the
+  // untagged disclosure always renders — matched by pattern because the suite
+  // shares one server and other specs contribute their own active books.
   const donut = page.getByTestId("stats-genre-donut");
   await expect(donut).toBeVisible();
   await expect(donut).toContainText(DONUT_GENRE);
   await expect(donut).toContainText("%");
-  await expect(donut).toContainText("books");
+  await expect(donut).toContainText("tagged");
+  await expect(page.getByTestId("stats-donut-untagged")).toHaveText(
+    /^\+\d+ books? without a genre$/,
+  );
 
   // Format split: both seeded formats appear with percentages.
   const split = page.getByTestId("stats-format-split");

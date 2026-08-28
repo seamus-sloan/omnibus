@@ -121,8 +121,11 @@ pub struct BookInsights {
     pub as_of_day: String,
 }
 
-/// One genre-donut slice: a tag and how many distinct books carrying it had
+/// One genre-donut slice: a genre and how many distinct books carrying it had
 /// session activity in the window (share by book count, not seconds).
+///
+/// The server sends every genre, not a top-N, so the donut can size its
+/// "Other" fold over the real tail instead of over a silently truncated one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GenreShare {
     pub name: String,
@@ -206,10 +209,16 @@ pub struct StatsSummary {
     pub busiest_week_start: Option<String>,
     pub busiest_week_seconds: i64,
     pub books_finished: i64,
-    /// Distinct books with any session activity in the window — the genre
-    /// donut's center count.
+    /// Distinct books with any session activity in the window.
     #[serde(default)]
     pub books_active: i64,
+    /// Distinct books with a genre *and* activity in the window — the
+    /// population `genre_share`'s slices are drawn from, and the donut's
+    /// center count. Always `<= books_active`; the difference is reading the
+    /// ring cannot describe, which the card discloses rather than absorbing
+    /// into a total that would overstate what the slices cover.
+    #[serde(default)]
+    pub genre_tagged_books: i64,
     /// The server's current UTC day (`YYYY-MM-DD`) when the summary was
     /// computed. Anchors the heatmap's trailing-year grid so the client
     /// never bakes its own clock into render (rule 07).

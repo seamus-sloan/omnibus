@@ -30,8 +30,8 @@ use sqlx::SqlitePool;
 #[cfg(test)]
 use compute::{
     avg_stars, books_active, books_per_month, finished_books, finished_count, genre_share,
-    listening_daily, prev_window_bounds, previous_period, rating_monthly, window_start,
-    FINISHED_BOOKS_LIMIT,
+    genre_tagged_books, listening_daily, prev_window_bounds, previous_period, rating_monthly,
+    window_start, FINISHED_BOOKS_LIMIT,
 };
 use compute::{compute, FINISHED_EVENTS};
 
