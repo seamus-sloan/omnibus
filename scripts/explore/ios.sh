@@ -187,10 +187,14 @@ case "$cmd" in
     forced="$(ios::forced_offline)"
     running=false
     ios::is_running && running=true
-    online=true
-    [ "$forced" = true ] && online=false
-    [ "$forced" = unknown ] && online=unknown
-    echo "{\"online\": $online, \"running\": $running, \"forced_offline\": $forced}"
+    # An unreadable plist must still yield valid JSON — downstream parsers get
+    # null, which is "can't tell", never a bare identifier they choke on.
+    case "$forced" in
+      true)  online=false;   forced_json=true ;;
+      false) online=true;    forced_json=false ;;
+      *)     online=null;    forced_json=null ;;
+    esac
+    echo "{\"online\": $online, \"running\": $running, \"forced_offline\": $forced_json}"
     ;;
 
   outbox)

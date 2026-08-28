@@ -181,22 +181,18 @@ python3 scripts/explore/report.py $RUN          # -> <journal dir>/$RUN/report.m
 python3 scripts/explore/report.py $RUN --out -  # to stdout
 ```
 
-It reads the run's `journal.jsonl`, the `audit.json` beside it if #2202 has
-written one, and the instance's JSON log sink over ssh, and emits one markdown
-document: a verdict paragraph, a severity-ranked anomaly list where every row
-cites the journal line to replay from, the server-log findings joined to the
-agent action that caused each one, the audit's unconfirmed writes, and a
-collapsed timeline. Sections with nothing in them are omitted, so a clean run is
-a short document — but an input it could not read is always named in the verdict
-rather than passing as clean.
+It reads the run's `journal.jsonl`, the `audit.json` beside it, and the
+instance's JSON log sink over ssh, and emits one markdown document: verdict,
+severity-ranked anomalies each citing their replay line, server-log findings
+joined to the causing agent action, the audit's unconfirmed writes, a collapsed
+timeline. Empty sections are omitted — but an input it could not read is always
+named in the verdict rather than passing as clean.
 
-Two flags matter when the instance is unreachable: `--no-server-log` skips the
-fetch, and `--server-log <file>` reads a log you already have. `--window`
-widens the correlation search either side of a log line (default 90s).
+Instance unreachable? `--no-server-log` skips the fetch, `--server-log <file>`
+reads one you have; `--window` widens correlation (default 90s).
 
-Then verify anything high-severity yourself before repeating it to the user. The
-first run produced one retracted finding and one root-caused CSP bug; the
-difference was checking.
+Then verify anything high-severity yourself before repeating it to the user —
+the difference between a finding and an anecdote has always been the check.
 
 State plainly what was excluded, what was left on the instance, and the snapshot
 name to roll back to.
