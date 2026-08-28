@@ -756,7 +756,10 @@ async fn previous_period_month_sums_only_last_calendar_months_activity() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 1).await;
     let user = seed_user(&pool, "alice").await;
-    let last_month = months_ago_secs(&pool, 1).await;
+    // Anchored to the first second of last month rather than its middle: the
+    // baseline is the *elapsed* slice of the previous period, so a mid-month
+    // seed would fall outside it whenever the suite runs early in a month.
+    let last_month = prev_period_start(&pool, StatsRange::Month).await;
     let two_months_back = months_ago_secs(&pool, 2).await;
     let now = now_secs();
 
@@ -925,13 +928,10 @@ async fn previous_period_excludes_a_completion_whose_book_is_gone() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 2).await;
     let user = seed_user(&pool, "alice").await;
-    // Mid-previous-month, safely inside the Month range's previous window.
-    let prev: i64 = sqlx::query_scalar(
-        "SELECT CAST(strftime('%s','now','start of month','-1 month','+14 days') AS INTEGER)",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    // The first second of last month. Not mid-month: the baseline is now the
+    // *elapsed* slice of the previous period, so a day-15 seed falls outside it
+    // for the first fortnight of every month.
+    let prev = prev_period_start(&pool, StatsRange::Month).await;
     finish_read_status(&pool, user, "uuid-1", prev).await;
     finish_read_status(&pool, user, "uuid-2", prev).await;
     drop_book_row(&pool, "uuid-2").await;
@@ -978,6 +978,92 @@ async fn rating_monthly_excludes_a_rating_whose_book_is_gone() {
     );
 }
 
+/// First second of the period preceding `range`'s current one.
+async fn prev_period_start(pool: &SqlitePool, range: StatsRange) -> i64 {
+    prev_window_bounds(pool, range).await.unwrap().unwrap().0
+}
+
+#[tokio::test]
+async fn prev_window_bounds_cover_the_elapsed_slice_of_the_previous_period() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    for range in [StatsRange::Week, StatsRange::Month, StatsRange::Year] {
+        let (start, end) = prev_window_bounds(&pool, range).await.unwrap().unwrap();
+        let cur_start = window_start(&pool, range).await.unwrap();
+        let elapsed = now_secs() - cur_start;
+
+        // The baseline sits wholly before the current window …
+        assert!(
+            end <= cur_start,
+            "{range:?}: baseline must not overlap the current window ({end} > {cur_start})"
+        );
+        // Empty only at the exact first second of a period, where the current
+        // window is equally empty — asserted as a bound, not as non-emptiness.
+        assert!(start <= end, "{range:?}: baseline must not be inverted");
+        // … and covers the same elapsed offset, never the whole period. The
+        // slack absorbs the second or two between the two `now` reads; the
+        // clamp can only ever make the slice shorter, never longer.
+        let slice = end - start;
+        assert!(
+            slice <= elapsed + 2,
+            "{range:?}: baseline slice {slice}s exceeds the elapsed {elapsed}s"
+        );
+    }
+}
+
+#[tokio::test]
+async fn previous_period_aggregates_only_within_the_baseline_bounds() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    // Seeded from the bounds themselves, so this asserts that the aggregates
+    // honour the window — that the window is the *right* window is
+    // `prev_window_bounds_cover_the_elapsed_slice_of_the_previous_period`'s
+    // job, and only that test detects a regression in the bounds arithmetic.
+    let (start, end) = prev_window_bounds(&pool, StatsRange::Week)
+        .await
+        .unwrap()
+        .unwrap();
+    listening_session(&pool, user, "uuid-1", start, 500).await;
+    // `end` is exclusive. Seeded a second past it: `previous_period` re-reads
+    // the bounds, and for Week `end` advances with the wall clock, so a seed
+    // exactly on it can slip inside when a second boundary falls between.
+    listening_session(&pool, user, "uuid-1", end + 1, 999).await;
+    listening_session(&pool, user, "uuid-1", start - 1, 777).await;
+
+    let prev = previous_period(&pool, user, StatsRange::Week)
+        .await
+        .unwrap();
+    assert_eq!(prev.listening_seconds, 500);
+}
+
+#[test]
+fn prev_window_from_takes_the_elapsed_offset_into_the_previous_period() {
+    // Fixed dates, so the clamp and the degenerate cases are exercised on every
+    // run rather than on the handful of calendar days that reach them live.
+    const DAY: i64 = 86_400;
+    // 2026-03-01 00:00 UTC, 2026-02-01 00:00 UTC.
+    let mar1 = 1_772_323_200;
+    let feb1 = mar1 - 28 * DAY;
+
+    // Three days into March → the first three days of February.
+    let (s, e) = prev_window_from(feb1, mar1, mar1 + 3 * DAY);
+    assert_eq!((s, e), (feb1, feb1 + 3 * DAY));
+
+    // Thirty days into March → clamped to the whole of a 28-day February,
+    // never past the period it belongs to.
+    let (s, e) = prev_window_from(feb1, mar1, mar1 + 30 * DAY);
+    assert_eq!((s, e), (feb1, mar1));
+    assert_eq!(e - s, 28 * DAY);
+
+    // The exact first second of the period: nothing elapsed, so the baseline
+    // is empty rather than the whole previous month.
+    assert_eq!(prev_window_from(feb1, mar1, mar1), (feb1, feb1));
+
+    // A clock that reads behind the period start cannot invert the window.
+    assert_eq!(prev_window_from(feb1, mar1, mar1 - 5), (feb1, feb1));
+}
+
 #[tokio::test]
 async fn previous_period_avg_stars_excludes_a_rating_whose_book_is_gone() {
     let pool = init_db("sqlite::memory:").await.unwrap();
@@ -994,17 +1080,4 @@ async fn previous_period_avg_stars_excludes_a_rating_whose_book_is_gone() {
         .await
         .unwrap();
     assert_eq!(previous.avg_stars, Some(5.0));
-}
-
-/// First second of the period preceding `range`'s current one.
-async fn prev_period_start(pool: &SqlitePool, range: StatsRange) -> i64 {
-    sqlx::query_scalar(match range {
-        StatsRange::Month => {
-            "SELECT CAST(strftime('%s','now','start of month','-1 month') AS INTEGER)"
-        }
-        _ => unreachable!("only Month is used here"),
-    })
-    .fetch_one(pool)
-    .await
-    .unwrap()
 }
