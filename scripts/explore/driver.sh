@@ -11,9 +11,9 @@
 # Why one server per agent rather than one shared browser:
 #   Run r-20260828-01 died because three subagents shared a single browser tab.
 #   They shared a cookie jar, so "three different users" collapsed into one and
-#   two agents correctly aborted rather than journal entries under a wrong
-#   actor. A server per agent gives a browser per agent, which makes that class
-#   of failure impossible rather than merely unlikely.
+#   two agents correctly aborted rather than write journal entries under a
+#   wrong actor. A server per agent gives a browser per agent, which makes that
+#   class of failure impossible rather than merely unlikely.
 #
 # Why not playwright-repl's own MCP mode:
 #   N MCP clients against one server land back in a shared browser. The HTTP
@@ -47,7 +47,12 @@ driver::ensure_deps() {
   fi
   if [ ! -x "$DRIVER/node_modules/.bin/playwright-repl" ]; then
     echo "installing driver deps (first run)…" >&2
-    (cd "$DRIVER" && npm install --no-audit --no-fund >/dev/null 2>&1)
+    # `npm ci` from the committed lockfile: reproducible across machines, and
+    # it cannot rewrite package-lock.json, so `driver.sh up` never dirties the
+    # worktree. The pinned playwright version is the whole point — an install
+    # free to resolve differently would silently stop sharing the flake's
+    # Chromium.
+    (cd "$DRIVER" && npm ci --no-audit --no-fund >/dev/null 2>&1)
   fi
 }
 
@@ -91,11 +96,20 @@ case "$cmd" in
     ;;
 
   run)
-    n="${2:?usage: driver.sh run <n> <command>}"
+    n="${2:?usage: driver.sh run <n> \"<command>\"}"
+    [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] \
+      || { echo "agent number must be a positive integer (got: $n)" >&2; exit 2; }
     shift 2
+    # Exactly one argument, so an unquoted command cannot be silently
+    # reassembled with collapsed whitespace — which would change the JS being
+    # evaluated without anyone noticing.
+    [ "$#" -eq 1 ] || {
+      echo "expected exactly one command argument — quote it: driver.sh run $n \"<command>\"" >&2
+      exit 2
+    }
     port="$(driver::port "$n")"
     driver::alive "$port" || { echo "agent-$n has no server on $port — run driver.sh up first" >&2; exit 1; }
-    body="$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "$*")"
+    body="$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "$1")"
     curl -sS --max-time 180 -X POST "http://127.0.0.1:$port/run" \
       -H 'Content-Type: application/json' -d "$body"
     echo
@@ -111,8 +125,20 @@ for e in json.load(open(sys.argv[1])): print(e["actor"], e["port"])' "$MANIFEST"
     ;;
 
   down)
+    # Stop exactly what `up` recorded. A fixed port window would strand
+    # servers whenever the run had more agents than the window covers, and the
+    # manifest is deleted here, so nothing would ever find them again.
+    ports=""
+    if [ -f "$MANIFEST" ]; then
+      ports="$(python3 -c 'import json,sys
+for e in json.load(open(sys.argv[1])): print(e["port"])' "$MANIFEST")"
+    else
+      # No manifest (a crashed run, or `down` before `up`): fall back to the
+      # default window so stray servers are still reachable.
+      ports="$(seq "$PORT_BASE" $((PORT_BASE + 31)))"
+    fi
     stopped=0
-    for port in $(seq "$PORT_BASE" $((PORT_BASE + 31))); do
+    for port in $ports; do
       pid="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
       [ -n "$pid" ] && { kill $pid 2>/dev/null || true; stopped=$((stopped + 1)); }
     done
