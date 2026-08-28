@@ -43,8 +43,8 @@ scripts/explore/snapshot.sh take pre-run
 ```
 
 The database accretes forever and is never reset, so this is the only way back
-from a run that corrupts something, and it is the baseline the audit (#2202)
-will diff against. Never skip it because a run "looks safe". Print the name.
+from a run that corrupts something. Never skip it because a run "looks safe".
+Print the name — the audit records it, and it is the rollback you hand back.
 
 ## 3. Provision accounts
 
@@ -52,50 +52,54 @@ will diff against. Never skip it because a run "looks safe". Print the name.
 scripts/explore/provision.sh <N>
 ```
 
-Emits JSON: `actor`, `username`, `password`, `action`. Idempotent — usernames
-are **stable across runs** because provenance ownership is keyed on the actor,
-so a fresh account each run would orphan every book previous runs uploaded.
-Passwords are rotated per run and never stored.
-
-Hand each agent only its own credential.
+Emits JSON: `actor`, `username`, `password`, `action`. **Save it** — the audit
+needs it in steps 5 and 8, and passwords are rotated per run, never stored.
+Idempotent; usernames are stable across runs because provenance ownership is
+keyed on the actor, so fresh accounts would orphan every book previous runs
+uploaded. Hand each agent only its own credential.
 
 ## 4. Decide the draw
 
-Check whether the library has anything in it:
-
 ```bash
 explore::login_admin && explore::curl -b "$EXPLORE_JAR" "$EXPLORE_URL/api/ebooks?limit=1"
-```
-
-Then sample:
-
-```bash
 scripts/explore/sample.py --agents N --flows-per-agent K --seed S --run <run-id> \
   [--library-empty] [--exclude flow1,flow2]
 ```
 
-- **`--library-empty`** when no books exist: ten of the flows have nothing to
-  act on, so `adding_book` is forced first for every agent.
-- **`--exclude`** a flow the corpus cannot supply. A corpus with no audio files
-  makes `listening_to_audiobook` structurally impossible, not merely blocked —
-  handing it over wastes a slot. Say in the report what you excluded and why;
-  a silent exclusion reads as coverage that never happened.
+- **`--library-empty`** when no books exist: ten flows have nothing to act on,
+  so `adding_book` is forced first for every agent.
+- **`--exclude`** a flow the corpus cannot supply — no audio files makes
+  `listening_to_audiobook` impossible, not merely blocked. Say what you
+  excluded and why; a silent exclusion reads as coverage that never happened.
 
-Weights are parsed from the catalog table in `flows/README.md`, which is the
-single source of truth. The sampler exits non-zero if that table cannot be
-parsed or its top-level weights do not sum to 100 — treat that as a bug in the
-catalog, not a reason to sample by hand.
+Weights are parsed from `flows/README.md`, the single source of truth. The
+sampler exits non-zero if that table cannot be parsed or its weights do not sum
+to 100 — a bug in the catalog, not a reason to sample by hand.
 
 ## 5. Set up the run
 
 ```bash
 RUN=r-$(date -u +%Y%m%d)-01
-mkdir -p .claude/runtime/explore/$RUN && : > .claude/runtime/explore/$RUN/journal.jsonl
+JOURNAL=$(scripts/explore/journal.py path --run $RUN)
+mkdir -p "$(dirname "$JOURNAL")" && : > "$JOURNAL"
 ```
 
-One journal per run, shared by every agent. Six transcripts is something nobody
-reads; one timestamped timeline is what lets the report correlate an agent's
-500 with another's merge two seconds earlier.
+One journal per run, shared by every agent: one timestamped timeline is what
+lets the report correlate an agent's 500 with another agent's merge two
+seconds earlier. It lives under `$OMNIBUS_EXPLORE_JOURNAL_DIR`, **not** under
+`.claude/runtime/`: the journal is the ownership ledger and
+`.claude/runtime/` is per-worktree, so keeping it in the repo means a
+`wt switch` orphans every book a previous run uploaded. Agents append with
+`scripts/explore/journal.py append`, which locks the file and mints `seq`
+under that lock; a bare `>>` can split a long record in half.
+
+Then capture the audit's baseline, so it can tell this run's writes from state
+earlier runs left behind:
+
+```bash
+scripts/explore/audit.py --accounts <accounts.json> \
+  capture --run $RUN --snapshot <snapshot name from step 2>
+```
 
 ## 6. Start the browsers
 
@@ -128,7 +132,7 @@ another's books; with it, the request is refused before it is sent.
 
 After the run, `driver.sh refusals <n>` lists what each agent was stopped from
 doing. **A non-empty list is a finding about the agent or the flow document,
-not about the app** — report it as such.
+not about the app.**
 
 ### 6a. Start the iOS agent, if `--ios`
 
@@ -154,51 +158,34 @@ One subagent per actor, in parallel, each given **only**:
 - the absolute path to `docs/qa/agentic_exploration/start.md`, to read in full first;
 - its `actor`, its `surface` (`web`, or `ios` for the one iOS agent), the base URL, and its own username and password;
 - its sampled sequence — hand over **one flow document at a time**, never the list;
-- the corpus path, and the journal path;
+- the corpus path, and `scripts/explore/journal.py append` — the only way to
+  write the journal, since a bare `>>` can tear a line;
 - the run id;
 - **its agent number**, for `driver.sh run <n>` — never another agent's. The iOS agent gets `ios.sh` instead, which takes no agent number.
 
-Tell each agent, verbatim in the brief:
-
-- Read [`pitfalls.md`](../../../docs/qa/agentic_exploration/pitfalls.md) before
-  reporting anything. Most false alarms this system has produced are on it.
-- `uncertain` is a real verdict. An honest `uncertain` beats a guessed `fail`,
-  because a false finding costs a human an investigation.
-- Never report a step as done that it did not perform and observe.
+Tell each agent, verbatim in the brief: read
+[`pitfalls.md`](../../../docs/qa/agentic_exploration/pitfalls.md) before
+reporting anything, since most false alarms this system has produced are on
+it; `uncertain` is a real verdict and beats a guessed `fail`, because a false
+finding costs a human an investigation; and never report a step as done that
+you did not perform and observe.
 
 Ask each for: a verdict table, every anomaly with severity and the journal `seq`
 to replay from, and **anything wrong or ambiguous in the flow documents
-themselves**. That last one has been the most valuable output of every run so
-far — the catalog is as much under test as the app.
+themselves** — the catalog is as much under test as the app, and that has been
+the most valuable output of every run so far.
 
-## 8. Report back
+## 8. Audit the run, then report back
 
-The report is generated, not written by hand — agent prose is unverified, and
-the journal plus the server log are the only records that are not.
-
-```bash
-python3 scripts/explore/report.py $RUN          # -> <journal dir>/$RUN/report.md
-python3 scripts/explore/report.py $RUN --out -  # to stdout
-```
-
-It reads the run's `journal.jsonl`, the `audit.json` beside it, and the
-instance's JSON log sink over ssh, and emits one markdown document: verdict,
-severity-ranked anomalies each citing their replay line, server-log findings
-joined to the causing agent action, the audit's unconfirmed writes, a collapsed
-timeline. Empty sections are omitted — but an input it could not read is always
-named in the verdict rather than passing as clean.
-
-Instance unreachable? `--no-server-log` skips the fetch, `--server-log <file>`
-reads one you have; `--window` widens correlation (default 90s).
-
-Then verify anything high-severity yourself before repeating it to the user —
+Follow [after-run.md](after-run.md): run `audit.py check` (it writes
+`audit.json` next to the journal — findings carry the `seq` to replay from,
+`unverifiable` names what it declined to judge, and a low `checked` count means
+under-filled journals, not a healthy app), then generate the report with
+`report.py`, then verify anything high-severity yourself before repeating it —
 the difference between a finding and an anecdote has always been the check.
-
-State plainly what was excluded, what was left on the instance, and the snapshot
-name to roll back to.
 
 ## Related
 
 - Catalog + contract: [`docs/qa/agentic_exploration/`](../../../docs/qa/agentic_exploration/start.md)
-- iOS lane: [`ios_lane.md`](../../../docs/qa/agentic_exploration/ios_lane.md)
-- Journal + audit: #2202 · Report: #2203
+- Journal + audit: `scripts/explore/{journal,audit}.py` (#2202) · Report: `report.py` (#2203)
+- iOS lane: [`ios_lane.md`](../../../docs/qa/agentic_exploration/ios_lane.md) (#2204)

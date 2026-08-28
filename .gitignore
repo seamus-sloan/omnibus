@@ -111,3 +111,7 @@ DerivedData/
 # Swift Package Manager local state (Package.resolved stays committed).
 .swiftpm/
 .build/
+
+# Byte-compiled caches from the exploration scripts (scripts/explore/audit_lib).
+__pycache__/
+*.py[cod]

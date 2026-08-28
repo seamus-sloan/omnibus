@@ -57,6 +57,12 @@ dev-bounce:
 fixtures:
     scripts/fetch-fixtures.sh
 
+# Unit tests for the agentic-exploration audit (scripts/explore/audit_lib).
+# Stdlib unittest on the system python3 — no nix shell, no pytest, ~0.2s — so
+# it hangs off `test` rather than living as a lane nobody remembers to run.
+explore-test:
+    cd scripts/explore && python3 -m unittest audit_lib.tests
+
 # Run the full unit/integration test matrix via cargo-nextest (the same runner
 # CI uses, so local and CI results match; no doctests in the tree, which is all
 # nextest can't run). A bare `--workspace` is a trap here — it silently skips
@@ -68,7 +74,7 @@ fixtures:
 # The `omnibus-mobile` shell crate itself has no tests (lint covers it via
 # `just lint`).
 # Self-wraps in the slim nix shell so it works from a bare checkout too.
-test: fixtures
+test: fixtures explore-test
     scripts/with-dev-env.sh default bash -ec '\
         cargo nextest run -p omnibus-db && \
         cargo nextest run -p omnibus && \
