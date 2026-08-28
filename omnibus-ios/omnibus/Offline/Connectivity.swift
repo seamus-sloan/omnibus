@@ -66,7 +66,20 @@ final class Connectivity {
         }
     }
 
-    private func apply(online: Bool) {
+    #if DEBUG
+    /// Adopt the DEBUG-only simulated-offline switch. Everything a real
+    /// reachability change causes — the pill, the probe, the drain on the way
+    /// back — has to follow from it too, or the simulation is only skin deep.
+    func applyForcedOffline(_ on: Bool) { apply(online: !on) }
+    #endif
+
+    private func apply(online requested: Bool) {
+        var online = requested
+        #if DEBUG
+        // A path update can land at any moment and would otherwise cancel the
+        // switch out from under an agent mid-scenario.
+        if DebugOffline.isForced { online = false }
+        #endif
         let wasOffline = !isOnline
         isOnline = online
         Task { await APIClient.shared.setOnline(online) }
