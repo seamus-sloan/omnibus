@@ -24,19 +24,22 @@ chapter seams are testable even when file seams are not.
 ## Steps
 
 1. Reach the book and start listening.
-2. Let it play. Do not sit in silence watching a counter; use the controls the
-   way a listener does — skip back thirty seconds after losing the thread, skip
-   forward past something dull.
+2. **Skip ahead to roughly 10% of the book** rather than listening through to
+   it — a tenth of a ten-hour audiobook is an hour of wall clock, and nothing
+   here tests your patience. Play a stretch at each place you land so you can
+   hear that audio actually runs, and use the controls the way a listener does:
+   skip back thirty seconds after losing the thread, skip forward past
+   something dull.
 3. Change the playback speed at least once, and let it play on at the new rate.
 4. If the book has several files or chapters, cross at least one boundary and
    watch what happens at the seam.
 5. Occasionally set a sleep timer and watch it count down; you need not wait
    for it to fire.
-6. Leave the player and check the book's detail page reflects where you got to.
-   There is no single "exit" control: the book title links back to the detail
-   page, and once you are elsewhere the persistent mini-player offers "Stop and
-   close player". Leaving via the title does **not** stop playback — the
-   mini-player keeps going, which is intended.
+6. **Go back to the library, then close the mini-player.** Follow the book title
+   out of the player, then use the persistent mini-player's "Stop and close
+   player". There is no single exit control, and leaving via the title does
+   **not** stop playback — the mini-player keeps going, which is intended.
+   Then check the book's detail page reflects where you got to.
 
 ## Journal
 
