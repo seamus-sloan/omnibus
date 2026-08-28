@@ -383,6 +383,78 @@ struct ReadingGoalCodecTests {
     }
 }
 
+@Suite("Session log decoding")
+struct SessionLogCodecTests {
+    private static let pageJSON = """
+        {"entries":[
+          {"book_uuid":"uuid-1","title":"Title 1","format":"mixed",
+           "started_at":1700000000,"ended_at":1700003600,"seconds":3000}
+        ],"next_before":"1700000000:uuid-1"}
+        """
+
+    private func decodePage(_ json: String) throws -> SessionLogPage {
+        try JSONDecoder().decode(SessionLogPage.self, from: Data(json.utf8))
+    }
+
+    @Test("an entry decodes every snake_case key into its own field")
+    func decodesEntry() throws {
+        let page = try decodePage(Self.pageJSON)
+        let entry = try #require(page.entries.first)
+        #expect(entry.bookUUID == "uuid-1")
+        #expect(entry.title == "Title 1")
+        #expect(entry.format == .mixed)
+        // Distinct values on purpose: equal ones would let a swapped CodingKey
+        // through, and the row renders the start beside the length.
+        #expect(entry.startedAt == 1_700_000_000)
+        #expect(entry.endedAt == 1_700_003_600)
+        // Recorded seconds, not the wall-clock span — a paused sitting spans
+        // more than it recorded.
+        #expect(entry.seconds == 3000)
+        #expect(page.nextBefore == "1700000000:uuid-1")
+    }
+
+    @Test("the end of the log decodes with no cursor")
+    func decodesFinalPage() throws {
+        let page = try decodePage(#"{"entries":[],"next_before":null}"#)
+        #expect(page.entries.isEmpty)
+        #expect(page.nextBefore == nil)
+        // The Rust field is `#[serde(default)]`, so an absent key is the same
+        // end-of-log answer rather than a hard decode failure.
+        #expect(try decodePage(#"{"entries":[]}"#).nextBefore == nil)
+    }
+
+    @Test("every session format decodes from its snake_case wire name")
+    func decodesFormats() throws {
+        for (wire, expected) in [
+            ("reading", SessionFormat.reading),
+            ("listening", .listening),
+            ("mixed", .mixed),
+        ] {
+            let json = Self.pageJSON.replacingOccurrences(
+                of: #""format":"mixed""#, with: #""format":"\#(wire)""#)
+            #expect(try decodePage(json).entries.first?.format == expected)
+        }
+    }
+
+    @Test("an entry's id distinguishes two sittings of the same book")
+    func idsAreUniquePerSitting() {
+        // `ForEach` keys on this: a collision would drop a row from the list.
+        let entry = { (start: Int64) in
+            SessionLogEntry(
+                bookUUID: "uuid-1", title: "Title 1",
+                format: .reading, startedAt: start, endedAt: start + 600, seconds: 600)
+        }
+        #expect(entry(1).id != entry(2).id)
+    }
+
+    @Test("formats label themselves in the past tense")
+    func formatLabels() {
+        #expect(SessionFormat.reading.label == "Read")
+        #expect(SessionFormat.listening.label == "Listened")
+        #expect(SessionFormat.mixed.label == "Read & listened")
+    }
+}
+
 @Suite("Pages read detail")
 struct PagesReadDetailCodecTests {
     @Test("the pages detail decodes every key the server sends")
