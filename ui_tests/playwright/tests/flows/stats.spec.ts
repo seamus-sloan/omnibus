@@ -303,8 +303,10 @@ test("the Pages drill-in reports a reading rate, and says so when it can't", asy
   await gotoReady(page, "/stats");
   await page.getByTestId("stats-tile-pages").click();
 
+  // The copy names both halves — either a missing length or missing time
+  // produces this state, and the tile must not blame only one of them.
   await expect(page.getByTestId("stats-drill-pages-rate")).toContainText(
-    "recorded reading time",
+    "both a measurable length and recorded reading time",
   );
 });
 

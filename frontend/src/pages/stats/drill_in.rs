@@ -416,9 +416,13 @@ fn render_trend(metric: Metric, bars: &[TrendBar]) -> Element {
 /// A reading rate for display: one decimal under ten pages an hour, whole
 /// pages above it. Nobody reads at 32.4 pages an hour reproducibly, and the
 /// decimal would dress an estimate as a measurement.
+///
+/// The branch tests the **rounded** figure, not the raw one: 9.96 at one
+/// decimal is "10.0", which is not "under ten" however it got there.
 fn rate_value(rate: f64) -> String {
-    if rate < 10.0 {
-        format!("{rate:.1}")
+    let one_decimal = (rate * 10.0).round() / 10.0;
+    if one_decimal < 10.0 {
+        format!("{one_decimal:.1}")
     } else {
         format!("{:.0}", rate.round())
     }
@@ -428,13 +432,14 @@ fn rate_value(rate: f64) -> String {
 /// missing, and the number a reader actually compares against their own past.
 ///
 /// Absent rather than zeroed when there's nothing to divide: "0 pages per
-/// hour" is a claim about how this reader reads, and no finished book having
-/// recorded time is not that claim.
+/// hour" is a claim about how this reader reads, and no finished book carrying
+/// both a resolvable length and recorded time is not that claim. The empty
+/// copy names **both** halves, since either one missing produces it.
 fn render_pages_rate(rate: Option<f64>) -> Element {
     let Some(rate) = rate else {
         return rsx! {
             p { class: "st-drill-delta-empty", "data-testid": "stats-drill-pages-rate",
-                "No book finished in this window has recorded reading time yet."
+                "No book finished in this window has both a measurable length and recorded reading time yet."
             }
         };
     };

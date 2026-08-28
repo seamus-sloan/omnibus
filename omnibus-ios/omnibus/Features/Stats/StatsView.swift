@@ -355,8 +355,14 @@ struct StatsView: View {
     /// pages above. Mirrors the web drill-in's `rate_value` — nobody reads at
     /// 32.4 pages an hour reproducibly, and the decimal would dress an
     /// estimate as a measurement.
+    ///
+    /// The branch tests the **rounded** figure, not the raw one: 9.96 at one
+    /// decimal is "10.0", which is not "under ten" however it got there.
     private static func rateValue(_ rate: Double) -> String {
-        String(format: rate < 10 ? "%.1f" : "%.0f", rate)
+        let oneDecimal = (rate * 10).rounded() / 10
+        return oneDecimal < 10
+            ? String(format: "%.1f", oneDecimal)
+            : String(format: "%.0f", rate.rounded())
     }
 
     private func finishedRail(_ books: [FinishedBook]) -> some View {
