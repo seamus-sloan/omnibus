@@ -107,6 +107,7 @@ Not queued, by test:
 | `POST /api/settings`, API keys, SMTP | 1 — instance configuration |
 | `POST /api/account/kindle-email` | 1 — account configuration |
 | `POST /api/account/profile`, avatar upload/delete | 1 — account configuration |
+| `PUT /api/stats/goal` (annual reading goal) | 1 — account configuration |
 | Metadata overrides | 1 — library-wide, every user sees it |
 | Book uploads | 1 — library-wide (and a GB-scale body has no business in `ops`) |
 | Reindex, scan, FTS rebuild | 2 — commands |

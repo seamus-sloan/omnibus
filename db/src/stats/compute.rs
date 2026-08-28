@@ -10,7 +10,7 @@ use omnibus_shared::{
 };
 use sqlx::{Row, SqlitePool};
 
-use super::{genre, pages, patterns, ratings, sessionize, streak, StatsError};
+use super::{genre, goals, pages, patterns, ratings, sessionize, streak, StatsError};
 
 /// How many rows the top-authors / top-tags rollups return.
 const TOP_N: i64 = 8;
@@ -110,6 +110,10 @@ pub(super) async fn compute(
     let pages_per_hour = pages::pages_per_hour(pool, user_id, start).await?;
     let length_buckets = pages::length_buckets(pool, user_id, start).await?;
     let time_patterns = patterns::time_patterns(pool, user_id, start).await?;
+    // Deliberately not windowed on `range`: a goal is annual, so the same
+    // current-year value rides every summary and a period switch never moves
+    // it (the analogue of `current_streak_days`).
+    let goal = goals::current_goal(pool, user_id).await?;
 
     Ok(StatsSummary {
         range,
@@ -142,6 +146,7 @@ pub(super) async fn compute(
         hour_of_day: time_patterns.hour_of_day,
         day_of_week: time_patterns.day_of_week,
         unzoned_seconds: time_patterns.unzoned_seconds,
+        goal,
     })
 }
 
@@ -553,7 +558,7 @@ async fn sum_seconds_bounded(
 /// [`FINISHED_EVENTS`]) with the completion moment in `[start, end)`. Shares
 /// [`finished_count`]'s definition exactly, so the drill-in's delta compares
 /// two counts of the same thing.
-async fn finished_count_bounded(
+pub(super) async fn finished_count_bounded(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,

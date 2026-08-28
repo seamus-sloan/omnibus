@@ -15,6 +15,9 @@ struct StatsView: View {
     @State private var librarySize: LibrarySize?
     @State private var isLoading = true
     @State private var error: String?
+    @State private var isEditingGoal = false
+    @State private var goalDraft = ""
+    @State private var goalError: String?
 
     var body: some View {
         NavigationStack {
@@ -46,6 +49,12 @@ struct StatsView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 30) {
                 Masthead(title: "Stats") { rangeMenu }
+
+                // Above the range menu's own section stack and never keyed on
+                // it: the goal is annual, so a period switch must not move it.
+                if let year = goalYear(summary) {
+                    goalCard(summary.goal, year: year)
+                }
 
                 headline(summary)
                 tiles(summary)
@@ -229,6 +238,122 @@ struct StatsView: View {
             .overlay(Capsule().strokeBorder(palette.line2.color, lineWidth: 0.5))
         }
         .accessibilityLabel("Time range")
+    }
+
+    // MARK: - Annual goal
+
+    /// The calendar year the card labels itself with, taken from the server's
+    /// `asOfDay` rather than the device clock so the card and the count it
+    /// renders can never straddle different years. `nil` on a server too old
+    /// to send the day, which also hides the card.
+    private func goalYear(_ summary: StatsSummary) -> String? {
+        let day = summary.asOfDay
+        guard day.count >= 4 else { return nil }
+        return String(day.prefix(4))
+    }
+
+    private var isOnline: Bool { Connectivity.shared.isOnline }
+
+    /// Progress toward the year's goal, or an invitation to set one — never a
+    /// zero-of-zero ring, which reports a goal the reader never made.
+    private func goalCard(_ goal: ReadingGoal?, year: String) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(year) READING GOAL")
+                    .font(.monoUI(10, weight: .medium))
+                    .tracking(0.8)
+                    .foregroundStyle(palette.accentColor)
+                Spacer(minLength: 8)
+                Button(goal == nil ? "Set a goal" : "Edit") {
+                    goalDraft = goal.map { "\($0.target)" } ?? ""
+                    goalError = nil
+                    isEditingGoal = true
+                }
+                .font(.ui(12.5, weight: .medium))
+                .foregroundStyle(isOnline ? palette.accentColor : palette.ink3Color)
+                .disabled(!isOnline)
+            }
+
+            if let goal {
+                Text("\(goal.current) of \(goal.target) \(goal.target == 1 ? "book" : "books")")
+                    .font(.display(30))
+                    .foregroundStyle(palette.ink0Color)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .contentTransition(.numericText())
+
+                GoalBar(fraction: goal.fraction, isMet: goal.isMet)
+                    .frame(height: 8)
+
+                Text(goal.isMet ? "Goal met" : "\(goal.remaining) to go")
+                    .font(.ui(12.5))
+                    .foregroundStyle(palette.ink2Color)
+            } else {
+                Text("Set a target for how many books you'd like to finish this year.")
+                    .font(.ui(13))
+                    .foregroundStyle(palette.ink2Color)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let goalError {
+                Text(goalError)
+                    .font(.ui(12))
+                    .foregroundStyle(palette.warnColor)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Spacing.lg)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                .fill(palette.bg1Color)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                .strokeBorder(palette.line2.color, lineWidth: 0.5)
+        )
+        .animation(Motion.settle, value: goal?.current)
+        .screenPadding()
+        .alert("Reading goal", isPresented: $isEditingGoal) {
+            TextField("Books this year", text: $goalDraft)
+                .keyboardType(.numberPad)
+            Button("Save") { Task { await saveGoal() } }
+            if goal != nil {
+                Button("Clear", role: .destructive) { Task { await clearGoal() } }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("How many books would you like to finish in \(year)?")
+        }
+    }
+
+    /// Rule 08 test 1: a goal is account configuration, so this is a direct
+    /// call whose failure is surfaced — never a queued op, and the control
+    /// that reaches it is disabled while offline.
+    private func saveGoal() async {
+        guard let target = Int64(goalDraft.trimmingCharacters(in: .whitespaces)),
+            target >= 1, target <= 10_000
+        else {
+            goalError = "Enter a whole number of books between 1 and 10,000."
+            return
+        }
+        await writeGoal(target)
+    }
+
+    private func clearGoal() async {
+        await writeGoal(nil)
+    }
+
+    private func writeGoal(_ target: Int64?) async {
+        do {
+            let saved = try await UserDataService.setReadingGoal(target: target)
+            // Fold the server's answer straight into the rendered summary
+            // rather than waiting on the reload, so the bar moves at once.
+            summary?.goal = saved
+            goalError = nil
+            await load(force: true)
+        } catch {
+            goalError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
     }
 
     // MARK: - Numbers
@@ -569,6 +694,30 @@ private struct LibrarySizeSection: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The annual goal's progress bar. Its own view so the width animation is
+/// driven by `fraction` alone rather than by every summary field changing.
+private struct GoalBar: View {
+    let fraction: Double
+    let isMet: Bool
+
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(palette.bg2Color)
+                Capsule()
+                    .fill(isMet ? palette.okColor : palette.accentColor)
+                    .frame(width: max(0, geometry.size.width * fraction))
+            }
+        }
+        .animation(Motion.settle, value: fraction)
+        .accessibilityElement()
+        .accessibilityLabel("Reading goal progress")
+        .accessibilityValue("\(Int((fraction * 100).rounded())) percent")
     }
 }
 

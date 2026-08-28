@@ -847,6 +847,26 @@ enum UserDataService {
         }
     }
 
+    /// Set, change (`target`), or clear (`nil`) the caller's annual reading
+    /// goal, returning the server's recomputed goal.
+    ///
+    /// Rule 08 test 1: a goal is account configuration — set rarely and
+    /// deliberately, and a replay days later would silently reset a target the
+    /// reader has since raised. So this is a direct call that `throws`, never a
+    /// queued op, and the control is disabled while offline.
+    static func setReadingGoal(target: Int64?) async throws -> ReadingGoal? {
+        let goal: ReadingGoal? = try await APIClient.shared.put(
+            "/api/stats/goal",
+            body: ReadingGoalUpdate(target: target)
+        )
+        // Every cached summary carries the goal, not just the range the picker
+        // happens to be on, so all four are now behind.
+        for range in StatsRange.allCases {
+            await OfflineStore.shared.cacheDelete(CacheKey.stats(range))
+        }
+        return goal
+    }
+
     // MARK: - Offline prefetch
 
     /// Pull down everything a book needs to be *usable* with no network: where

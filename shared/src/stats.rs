@@ -466,6 +466,12 @@ pub struct StatsSummary {
     /// total, not an error.
     #[serde(default)]
     pub unzoned_seconds: i64,
+    /// The caller's goal for the **current calendar year**, `None` when none
+    /// is set. Like `current_streak_days` this is deliberately *not* windowed:
+    /// a goal is annual by definition, so it reads the same on every
+    /// [`StatsRange`] and a period switch never moves it.
+    #[serde(default)]
+    pub goal: Option<ReadingGoal>,
 }
 
 impl StatsSummary {
@@ -495,5 +501,134 @@ impl StatsSummary {
     /// strip is not a state the server can produce.
     pub fn has_time_patterns(&self) -> bool {
         self.hour_of_day.iter().any(|b| b.seconds > 0)
+    }
+}
+
+/// The only goal kind today: distinct books finished in the calendar year.
+/// The wire carries the string so a later pages/minutes goal is an added
+/// value rather than a breaking shape change.
+pub const GOAL_KIND_BOOKS: &str = "books";
+
+/// Inclusive upper bound on a stored goal target. Not a judgement about how
+/// much anyone can read — it exists so the progress bar's arithmetic and the
+/// column's width stay bounded by something other than what a client happened
+/// to POST.
+pub const MAX_GOAL_TARGET: i64 = 10_000;
+
+/// Earliest goal year the write path accepts. Bounds the column at both ends
+/// so a typo'd year can't file a row no surface will ever read.
+pub const MIN_GOAL_YEAR: i64 = 1900;
+/// Latest goal year the write path accepts.
+pub const MAX_GOAL_YEAR: i64 = 2999;
+
+/// One reader's goal for one calendar year, paired with progress toward it.
+///
+/// `current` uses the **same completion definition as every other completion
+/// metric on [`StatsSummary`]** — a 100% journal entry or an explicit
+/// `finished` read status, on a live book, counted once per book. It is
+/// bounded to the goal's own year, so raising this year's target never moves
+/// last year's number.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadingGoal {
+    /// What is being counted — [`GOAL_KIND_BOOKS`] today.
+    pub kind: String,
+    /// The target the reader set. Always `>= 1`; a cleared goal is an absent
+    /// [`ReadingGoal`], never a zero target.
+    pub target: i64,
+    /// Progress toward `target` within `year`. May exceed it — a reader past
+    /// their goal is the good case, and clamping it here would hide it.
+    pub current: i64,
+    /// The calendar year (UTC) this goal and its `current` count belong to.
+    pub year: i64,
+}
+
+impl ReadingGoal {
+    /// Progress as a 0..=100 percentage, clamped for rendering. Use
+    /// [`Self::current`] against [`Self::target`] for the honest ratio; this
+    /// is only the bar's width.
+    pub fn percent(&self) -> i64 {
+        if self.target <= 0 {
+            return 0;
+        }
+        let pct = self.current.saturating_mul(100) / self.target;
+        pct.clamp(0, 100)
+    }
+
+    /// Books still to go, `0` once the goal is met or passed.
+    pub fn remaining(&self) -> i64 {
+        (self.target - self.current).max(0)
+    }
+
+    /// Whether the reader has reached the target.
+    pub fn is_met(&self) -> bool {
+        self.current >= self.target
+    }
+}
+
+/// Write payload for `PUT /api/stats/goal`.
+///
+/// `year` and `kind` default to the server's current year and
+/// [`GOAL_KIND_BOOKS`], so the common client sends `{"target": 24}` alone and
+/// never bakes its own clock into the request. A `null` / absent `target`
+/// **clears** the goal for that `(year, kind)` — there is no separate DELETE
+/// route, because "no goal" and "a goal of zero" must not both be
+/// representable.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ReadingGoalUpdate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub year: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Omitted rather than sent as `null` when clearing — the two decode
+    /// identically, and an omitted key keeps the wire honest about how little
+    /// the usual write carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<i64>,
+}
+
+impl ReadingGoalUpdate {
+    /// A set-this-year's-books-goal update — the shape every surface sends.
+    pub fn books(target: i64) -> Self {
+        Self {
+            year: None,
+            kind: None,
+            target: Some(target),
+        }
+    }
+
+    /// A clear-this-year's-books-goal update.
+    pub fn clear_books() -> Self {
+        Self {
+            year: None,
+            kind: None,
+            target: None,
+        }
+    }
+
+    /// The kind this update names, defaulting to [`GOAL_KIND_BOOKS`].
+    pub fn kind_or_default(&self) -> &str {
+        self.kind.as_deref().unwrap_or(GOAL_KIND_BOOKS)
+    }
+
+    /// Reject an unsupported kind, an out-of-range target, or an out-of-range
+    /// year. Handlers translate `Err(_)` into 400; the db layer re-checks the
+    /// same bounds as typed variants, since it is also reachable from the RPC.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.kind_or_default() != GOAL_KIND_BOOKS {
+            return Err(format!("unsupported goal kind: {}", self.kind_or_default()));
+        }
+        if let Some(target) = self.target {
+            if !(1..=MAX_GOAL_TARGET).contains(&target) {
+                return Err(format!("target must be between 1 and {MAX_GOAL_TARGET}"));
+            }
+        }
+        if let Some(year) = self.year {
+            if !(MIN_GOAL_YEAR..=MAX_GOAL_YEAR).contains(&year) {
+                return Err(format!(
+                    "year must be between {MIN_GOAL_YEAR} and {MAX_GOAL_YEAR}"
+                ));
+            }
+        }
+        Ok(())
     }
 }

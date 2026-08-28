@@ -6,7 +6,9 @@ use dioxus::fullstack::post;
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use omnibus_db as db;
-use omnibus_shared::{BookInsights, LibrarySize, StatsRange, StatsSummary};
+use omnibus_shared::{
+    BookInsights, LibrarySize, ReadingGoal, ReadingGoalUpdate, StatsRange, StatsSummary,
+};
 
 #[cfg(feature = "server")]
 use super::{internal_rpc_error, AuthUser, PoolExt};
@@ -45,4 +47,17 @@ pub async fn rpc_library_size() -> Result<LibrarySize> {
     Ok(db::stats::library_size(&pool.0)
         .await
         .map_err(|e| internal_rpc_error("library size", e))?)
+}
+
+/// Set, change, or clear the current user's annual reading goal, returning the
+/// resulting goal (`None` once cleared) with its progress recomputed.
+///
+/// Account configuration under rule 08 — never queued by the offline outbox.
+/// `db::stats::set_goal` drops this user's cached summaries, so the refetch
+/// that follows a save reads the new target rather than the cached one.
+#[post("/api/rpc/stats-goal", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_set_reading_goal(update: ReadingGoalUpdate) -> Result<Option<ReadingGoal>> {
+    Ok(db::stats::set_goal(&pool.0, user.id, &update)
+        .await
+        .map_err(|e| internal_rpc_error("set reading goal", e))?)
 }

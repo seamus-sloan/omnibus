@@ -11254,3 +11254,94 @@ html {
   .lmq .lib-tile:hover .lib-tile-art { transform: none; }
   .lmq-scrollhint .arr { animation: none; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   ANNUAL READING GOAL — the band under the /stats masthead.
+
+   Anchored to the calendar year, so it sits outside the
+   period-scoped section and is untouched by the switcher. Its eyebrow
+   is a span rather than a heading: the band is one figure, not a
+   section of the document outline.
+   ═══════════════════════════════════════════════════════════════════ */
+.st-goal { display: flex; flex-direction: column; gap: 10px; }
+.st-goal-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.st-goal-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.st-goal-trigger {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--accent);
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+@media (hover: hover) { .st-goal-trigger:hover { border-bottom-color: var(--accent); } }
+.st-goal-trigger:disabled { color: var(--ink-3); cursor: not-allowed; }
+
+.st-goal-figure {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 30px;
+  line-height: 1.1;
+}
+.st-goal-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.st-goal-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  /* Width is the only animated property; a just-saved target should slide
+     rather than jump. */
+  transition: width .35s var(--st-ease-settle, ease);
+}
+.st-goal-fill.met { background: color-mix(in oklch, var(--accent) 78%, var(--ink-0)); }
+.st-goal-note { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+.st-goal-invite { margin: 0; color: var(--ink-2); max-width: 56ch; }
+
+.st-goal-editor { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.st-goal-label {
+  flex: 0 0 100%;
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.st-goal-input {
+  width: 120px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  color: var(--ink-0);
+  font: inherit;
+  padding: 0.5rem 0.7rem;
+}
+.st-goal-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.st-goal-actions { display: flex; gap: 8px; }
+.st-goal-offline { flex: 0 0 100%; margin: 0; font-size: 12.5px; color: var(--ink-3); }
+.st-goal-error { margin: 0; font-size: 12.5px; color: var(--bad); }
+
+@media (max-width: 720px) {
+  .st-goal-figure { font-size: 26px; }
+  .st-goal-input { width: 100%; }
+  .st-goal-actions { width: 100%; }
+  .st-goal-actions .btn { flex: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .st-goal-fill { transition: none; }
+}
