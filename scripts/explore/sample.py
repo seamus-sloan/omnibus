@@ -85,7 +85,9 @@ def draw(top, subs, count, rng, first=None):
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--agents", type=int, default=1)
+    # Matches the default the skill's argument table shows the user, so the
+    # two cannot drift into disagreeing about what a bare run means.
+    ap.add_argument("--agents", type=int, default=2)
     ap.add_argument("--flows-per-agent", type=int, default=4)
     ap.add_argument("--seed", type=int, default=None,
                     help="omit to draw one; the seed used is always emitted, "

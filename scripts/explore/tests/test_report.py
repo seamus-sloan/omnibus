@@ -401,11 +401,60 @@ class ReportTests(unittest.TestCase):
                     params={"verdict": "fail", "reason": "r"}),
             ])
             text = render("r-tmp", "--journal-dir", tmp, "--no-server-log")
-        # Every ranked row carries its line, whether or not it earns a detail block.
-        self.assertIn("| 1 | high | agent-1 | reading_a_book | 10:00:10 | `L2` (seq 2) |", text)
-        self.assertIn("| 2 | low | agent-1 | reading_a_book | 10:00:15 | `L3` (seq 3) |", text)
+        # Every row carries its line, whether or not it earns a detail block.
+        self.assertIn("| 1 | high | the thing went wrong (`L2`) | agent-1 |", text)
+        self.assertIn("| 2 | low | cosmetic (`L3`) | agent-1 |", text)
         self.assertIn("**Repro** open the book twice", text)
         self.assertIn("**Replay** `sed -n '2p'", text)
+
+    def test_report_splits_defects_from_execution_issues_on_the_agents_own_kind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_journal(Path(tmp) / "r-tmp", "r-tmp", [
+                row("2026-08-28T10:00:00Z", "agent-1", "flow.start", seq=1),
+                row("2026-08-28T10:00:10Z", "agent-1", "anomaly", seq=2,
+                    params={"severity": "high", "expected": "a", "observed": "b"},
+                    note="the cover never loaded"),
+                row("2026-08-28T10:00:15Z", "agent-2", "anomaly", seq=1,
+                    params={"severity": "medium", "kind": "issue"},
+                    note="the shelf picker took 20s to respond"),
+                row("2026-08-28T10:00:20Z", "agent-1", "flow.end", seq=3,
+                    params={"verdict": "fail", "reason": "r"}),
+            ])
+            text = render("r-tmp", "--journal-dir", tmp, "--no-server-log")
+        self.assertIn("## Defects\n\n| # | Priority | Description | Agent |", text)
+        self.assertIn("| 1 | high | the cover never loaded (`L2`) | agent-1 |", text)
+        self.assertIn("## Execution issues\n\n| # | Priority | Description | Agent |", text)
+        self.assertIn("| 1 | medium | the shelf picker took 20s to respond (`L3`) | agent-2 |",
+                      text)
+        # Each table restarts at 1, so the detail block says which list it is in.
+        self.assertIn("#### Defect 1.", text)
+        self.assertIn("#### Issue 1.", text)
+
+    def test_an_anomaly_without_a_kind_is_reported_as_a_defect(self):
+        """Misfiling friction costs a row; misfiling a defect loses it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            write_journal(Path(tmp) / "r-tmp", "r-tmp", [
+                row("2026-08-28T10:00:10Z", "agent-1", "anomaly", seq=1,
+                    params={"severity": "high", "kind": "whatever"}, note="n"),
+            ])
+            text = render("r-tmp", "--journal-dir", tmp, "--no-server-log")
+        self.assertIn("## Defects", text)
+        self.assertNotIn("## Execution issues", text)
+
+    def test_report_ends_with_the_journal_file_locations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_journal(Path(tmp) / "r-tmp", "r-tmp", [
+                row("2026-08-28T10:00:00Z", "agent-1", "flow.start", seq=1),
+                row("2026-08-28T10:00:20Z", "agent-1", "flow.end", seq=2,
+                    params={"verdict": "pass", "reason": "r"}),
+            ])
+            text = render("r-tmp", "--journal-dir", tmp, "--no-server-log")
+            self.assertIn("## Journal files", text)
+            self.assertIn(f"- Run directory — `{Path(tmp) / 'r-tmp'}`", text)
+            self.assertIn(f"- Journal — `{Path(tmp) / 'r-tmp' / 'journal.jsonl'}` "
+                          "(2 entries)", text)
+            # An absent audit is named, not omitted — same rule as the verdict.
+            self.assertIn("- Audit — not written", text)
 
     def test_clean_run_says_so_in_its_first_paragraph(self):  # AC3
         text = render(CLEAN, "--server-log", str(FIXTURES / CLEAN / "server.log"))
@@ -419,7 +468,9 @@ class ReportTests(unittest.TestCase):
     def test_clean_run_omits_every_section_that_would_say_nothing(self):  # AC3
         text = render(CLEAN, "--server-log", str(FIXTURES / CLEAN / "server.log"))
         headings = [l for l in text.splitlines() if l.startswith("## ")]
-        self.assertEqual(headings, ["## Coverage", "## Timeline"])
+        # "Journal files" is the one section that always renders: it is never
+        # empty, and every citation above it is useless without the path.
+        self.assertEqual(headings, ["## Coverage", "## Timeline", "## Journal files"])
 
     def test_clean_run_verdict_states_the_caveat_when_an_input_was_not_read(self):
         text = render(CLEAN, "--no-server-log")
