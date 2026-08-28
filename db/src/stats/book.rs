@@ -9,15 +9,16 @@ use sqlx::{Row, SqlitePool};
 
 use super::{sessionize, StatsError};
 
-/// One `(book_uuid, started_at, ended_at, secs)` union of reading + listening
-/// checkpoint rows scoped to a single book. Bind order is
+/// One `(book_uuid, started_at, ended_at, secs, is_audio)` union of reading +
+/// listening checkpoint rows scoped to a single book. `is_audio` discriminates
+/// the two tables for [`sessionize::stitched`]. Bind order is
 /// `user_id, book_uuid, user_id, book_uuid`.
 const BOOK_SESSIONS: &str = "\
-    SELECT book_uuid, started_at, ended_at, seconds_read AS secs FROM reading_sessions \
-        WHERE user_id = ? AND book_uuid = ? \
+    SELECT book_uuid, started_at, ended_at, seconds_read AS secs, 0 AS is_audio \
+        FROM reading_sessions WHERE user_id = ? AND book_uuid = ? \
     UNION ALL \
-    SELECT book_uuid, started_at, ended_at, seconds_listened AS secs FROM listening_sessions \
-        WHERE user_id = ? AND book_uuid = ?";
+    SELECT book_uuid, started_at, ended_at, seconds_listened AS secs, 1 AS is_audio \
+        FROM listening_sessions WHERE user_id = ? AND book_uuid = ?";
 
 /// Aggregate one user's reading/listening insights for a single book:
 /// earliest session start, total seconds and sitting count across both

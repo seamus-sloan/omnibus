@@ -1,12 +1,17 @@
 //! Stop 03 · Stats — what this read has looked like: the 2×2 record grid
 //! (Started / Time in book / Pickups / Longest sit), a time-left note, the
-//! per-day activity spark over the last 22 days, and the rating widget.
+//! per-day activity spark over the last 22 days, the session log behind those
+//! figures, and the rating widget.
 //! Insights arrive from the stage's shared post-mount fetch; books with no
 //! sessions (and wishlist-only books) get the design's quiet empty state.
 
 use dioxus::prelude::*;
 use omnibus_shared::{BookInsights, DayActivity};
 
+// The log renders directly beneath this grid, so a sitting's length and
+// the "Longest sit" above it must be spelled the same way.
+pub(super) use crate::components::session_log::duration_label;
+use crate::components::SessionLogList;
 use crate::date_fmt::civil_from_days;
 use crate::time::now_unix;
 
@@ -31,6 +36,8 @@ pub(super) fn MarqueeStatsStop(
         match insights {
             Some(i) if i.sessions > 0 && !wish_mode => rsx! {
                 {render_stats(&i, &progress, audio_only)}
+                div { class: "bdmq-k bdmq-logk", "The sittings behind it" }
+                SessionLogList { book: Some(uuid.clone()), compact: true }
             },
             _ => rsx! {
                 div { class: "bdmq-bigquiet", "data-testid": "bdmq-no-stats", "No stats yet." }
@@ -130,18 +137,6 @@ fn time_left_note(i: &BookInsights, progress: &MarqueeProgress) -> Option<String
         "\u{2248} {} to go at your pace \u{b7} {pct}% in",
         duration_label(left)
     ))
-}
-
-/// "Xh Ym" / "Xm" duration label (moved from the old Insights card).
-pub(super) fn duration_label(secs: i64) -> String {
-    let secs = secs.max(0);
-    let hours = secs / 3600;
-    let minutes = (secs % 3600) / 60;
-    match (hours, minutes) {
-        (0, m) => format!("{m}m"),
-        (h, 0) => format!("{h}h"),
-        (h, m) => format!("{h}h {m}m"),
-    }
 }
 
 /// Short "Mon D" date from unix seconds (UTC — same bucketing as the data).

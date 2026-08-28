@@ -81,6 +81,30 @@ pub(crate) fn require_online() -> Result<(), DataError> {
     Ok(())
 }
 
+/// Percent-encode one query-string **value**, RFC 3986 unreserved set only.
+///
+/// `reqwest`'s own `query()` builder is not available here — the workspace
+/// pins it with `default-features = false` — so every free-form value a
+/// mobile URL carries (an FTS query, a session-log cursor) goes through this.
+#[cfg(feature = "mobile")]
+pub(crate) fn encode_query_value(raw: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(raw.len());
+    for b in raw.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            // Infallible into a String; the write! is only for the hex format.
+            _ => {
+                let _ = write!(out, "%{b:02X}");
+            }
+        }
+    }
+    out
+}
+
 #[cfg(feature = "mobile")]
 pub(crate) fn with_bearer(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     if let Some(token) = token_store::get() {

@@ -939,3 +939,46 @@ test("a failed goal save surfaces the error and leaves the goal unset", async ({
   await expect(page.getByTestId("stats-goal-invite")).toBeVisible();
   await expect(page.getByTestId("stats-goal-progress")).toHaveCount(0);
 });
+
+test("the session log lists stitched sittings under the aggregates", async ({
+  page,
+}) => {
+  await gotoReady(page, "/stats");
+
+  const log = page.getByTestId("session-log");
+  await expect(log).toBeVisible();
+  await expect(log.getByRole("heading", { name: "Session log" })).toBeVisible();
+
+  // The list arrives from its own post-mount fetch, so poll rather than
+  // asserting against the first paint.
+  const rows = page.getByTestId("session-log-row");
+  await expect.poll(() => rows.count()).toBeGreaterThan(0);
+
+  // AC2 — book, start time, format, and length on every row. Asserted by
+  // shape: other specs share this user and add sittings of their own, and the
+  // arithmetic is pinned by the db::stats unit tests.
+  const first = rows.first();
+  await expect(first).toContainText(/\d{4}/); // the year in the start stamp
+  await expect(first).toContainText(/Read|Listened/);
+  await expect(first).toContainText(/\d+(h|m)/);
+
+  // AC3 (the stitch itself) is pinned by the db::stats::sessions unit tests,
+  // not here: this is the user-wide log for a user every other spec also
+  // records sittings against, so any one seeded sitting can be pushed off the
+  // newest page by a parallel spec and must not be asserted by identity.
+  await expect(page.getByTestId("session-log-empty")).toHaveCount(0);
+});
+
+test("a failed session-log fetch surfaces an error without blanking the page", async ({
+  page,
+}) => {
+  await page.route("**/api/rpc/stats/sessions", (route) =>
+    route.fulfill({ status: 500, body: "boom" }),
+  );
+
+  await gotoReady(page, "/stats");
+  await expect(page.getByTestId("session-log-error")).toBeVisible();
+  await expect(page.getByTestId("session-log-row")).toHaveCount(0);
+  // The aggregates above it are unaffected — the log is its own read.
+  await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
+});
