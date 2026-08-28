@@ -24,7 +24,7 @@ async fn add_wishlist_entry_returns_the_entry() {
     assert_eq!(entry.source, WishlistSource::Scan);
 }
 
-/// Migration 0083 widened the `source` CHECK to admit the title-search door
+/// Migration 0085 widened the `source` CHECK to admit the title-search door
 /// (#2247); without it this insert fails the constraint outright.
 #[tokio::test]
 async fn add_wishlist_entry_accepts_the_title_search_source() {

@@ -126,7 +126,7 @@ async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
     // seeds existing users; this catches gaps and future rows).
     crate::shelves::provision_wishlist_shelves(pool).await?;
     // #2245 nav-sized avatar thumbnails for uploads that predate migration
-    // 0084. Unlike its neighbours this one decodes and re-encodes an image,
+    // 0086. Unlike its neighbours this one decodes and re-encodes an image,
     // but it is bounded by the number of users who have set an avatar and
     // touches no filesystem.
     crate::auth::backfill_avatar_thumbs(pool).await?;

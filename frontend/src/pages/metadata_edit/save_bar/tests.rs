@@ -1,10 +1,7 @@
-//! What the save bar claims about the editor's state — in particular that a
-//! replaced cover is neither "No changes" nor a reason to leave Save disabled
-//! (#2241).
-//!
-//! The bar's `Discard` link needs a parent router these harnesses don't
-//! provide, so it renders as an error boundary here and its label is asserted
-//! in `metadata_edit.spec.ts` instead.
+//! What the save bar claims about the editor's state, in particular that a
+//! replaced cover is neither "No changes" nor a reason to leave Save
+//! disabled. The bar's `Discard` link needs a parent router these harnesses
+//! lack, so it renders as an error boundary and is asserted in Playwright.
 
 use super::*;
 use crate::test_support::render_in_vdom;

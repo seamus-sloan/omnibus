@@ -123,7 +123,7 @@ pub async fn delete_user_avatar(pool: &SqlitePool, user_id: i64) -> AuthResult<(
 }
 
 /// Fill `thumb_bytes` for avatars uploaded before the column existed
-/// (migration `0084`).
+/// (migration `0086`).
 ///
 /// Boot backfill, and a no-op once every row either has a thumbnail or has
 /// been shown not to produce one. Bytes no decoder accepts stay NULL and are

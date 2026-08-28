@@ -148,7 +148,7 @@ async fn get_user_avatar_variant_falls_back_to_the_original_without_a_thumbnail(
     assert_eq!(thumb.bytes, PNG);
 }
 
-/// An avatar uploaded before migration 0084 has no thumbnail until the boot
+/// An avatar uploaded before migration 0086 has no thumbnail until the boot
 /// backfill derives one — and the pass converges rather than re-encoding
 /// every boot.
 #[tokio::test]
