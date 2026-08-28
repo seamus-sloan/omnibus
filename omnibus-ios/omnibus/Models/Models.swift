@@ -2174,3 +2174,69 @@ struct AudiobookInspection: Codable, Hashable, Sendable {
 struct UploadCommitResult: Codable, Hashable, Sendable {
     var uuid: String
 }
+
+// MARK: - Reading session log
+
+/// Which of the two session tables a stitched sitting drew from. Mirrors
+/// `omnibus_shared::SessionFormat`.
+///
+/// `mixed` is not a fallback: a dual-format book read and listened to in one
+/// stretch stitches into a single sitting server-side, and naming it as one
+/// format alone would claim time the reader didn't spend there.
+enum SessionFormat: String, Codable, Hashable, Sendable {
+    case reading
+    case listening
+    case mixed
+
+    /// Past tense — a logged sitting is over.
+    var label: String {
+        switch self {
+        case .reading: "Read"
+        case .listening: "Listened"
+        case .mixed: "Read & listened"
+        }
+    }
+}
+
+/// One sitting in the reading-session log — adjacent checkpoint rows stitched
+/// back together, so a row is a sit rather than a heartbeat flush. Mirrors
+/// `omnibus_shared::SessionLogEntry`.
+///
+/// `seconds` is the *recorded* time, not `endedAt - startedAt`: a sitting the
+/// reader paused mid-way spans more wall clock than it recorded, and the
+/// recorded figure is what every other stats surface reports.
+struct SessionLogEntry: Codable, Hashable, Sendable, Identifiable {
+    var bookUUID: String
+    var title: String
+    var format: SessionFormat
+    var startedAt: Int64
+    var endedAt: Int64
+    var seconds: Int64
+
+    /// `(book, start)` is unique per sitting — two sittings of one book cannot
+    /// share a start.
+    var id: String { bookUUID + ":" + String(startedAt) }
+
+    enum CodingKeys: String, CodingKey {
+        case title, format, seconds
+        case bookUUID = "book_uuid"
+        case startedAt = "started_at"
+        case endedAt = "ended_at"
+    }
+}
+
+/// One page of the session log, newest first. Mirrors
+/// `omnibus_shared::SessionLogPage`.
+///
+/// `nextBefore` is an opaque keyset cursor: echo it back as `before` to get the
+/// page that continues after the last entry here, `nil` at the end of the log.
+/// Not an offset — a sitting landing mid-scroll would shift every later page.
+struct SessionLogPage: Codable, Hashable, Sendable {
+    var entries: [SessionLogEntry]
+    var nextBefore: String?
+
+    enum CodingKeys: String, CodingKey {
+        case entries
+        case nextBefore = "next_before"
+    }
+}

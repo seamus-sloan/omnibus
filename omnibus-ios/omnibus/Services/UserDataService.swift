@@ -875,6 +875,21 @@ enum UserDataService {
         }
     }
 
+    /// One page of the reader's own session log, newest sitting first. `book`
+    /// scopes it to a single book; `before` is the previous page's
+    /// `nextBefore`, echoed back verbatim.
+    ///
+    /// A direct read rather than a `Cache.live` one: a page is keyed by a
+    /// cursor the device only learns from the page before it, so a cached
+    /// page one would be the only thing a reader could ever see offline. The
+    /// section surfaces the error instead.
+    static func sessionLog(book: String? = nil, before: String? = nil) async throws
+        -> SessionLogPage
+    {
+        try await APIClient.shared.get(
+            "/api/stats/sessions", query: ["book": book, "before": before])
+    }
+
     // MARK: - Offline prefetch
 
     /// Pull down everything a book needs to be *usable* with no network: where
