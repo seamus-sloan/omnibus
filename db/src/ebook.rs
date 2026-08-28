@@ -159,21 +159,7 @@ pub(crate) mod test_support {
     // every db test reaches for the same unique-per-invocation builder.
     // Re-export here so existing `use crate::ebook::test_support::*;`
     // globs keep resolving without touching every callsite.
-    pub(crate) use crate::test_support::make_test_dir;
-
-    /// Build an in-memory PNG of a single solid color. Used to drive
-    /// `extract_accent` without baking a fixture cover into the repo.
-    pub(crate) fn solid_color_png(r: u8, g: u8, b: u8, w: u32, h: u32) -> Vec<u8> {
-        let img = image::RgbImage::from_pixel(w, h, image::Rgb([r, g, b]));
-        let mut bytes = Vec::new();
-        image::DynamicImage::ImageRgb8(img)
-            .write_to(
-                &mut std::io::Cursor::new(&mut bytes),
-                image::ImageFormat::Png,
-            )
-            .expect("png encode");
-        bytes
-    }
+    pub(crate) use crate::test_support::{make_test_dir, solid_color_png};
 
     /// Path to a real fixture epub from `test_data/epubs/generated/` so
     /// cover-related tests have real OPF + embedded image bytes to work

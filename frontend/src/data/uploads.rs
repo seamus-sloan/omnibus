@@ -149,11 +149,7 @@ pub async fn upload_ebook(
 /// Append a text field only when the user actually filled it, so a blank
 /// optional field never reaches the server as an empty override.
 #[cfg(feature = "web")]
-fn append_optional_str(
-    form: &web_sys::FormData,
-    name: &str,
-    value: &str,
-) -> Result<(), DataError> {
+fn append_optional_str(form: &web_sys::FormData, name: &str, value: &str) -> Result<(), DataError> {
     if value.trim().is_empty() {
         return Ok(());
     }
