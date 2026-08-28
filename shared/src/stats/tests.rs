@@ -502,3 +502,138 @@ fn reading_goal_update_sends_only_the_fields_it_names() {
         "{}"
     );
 }
+
+#[test]
+fn composition_dimension_overlap_and_uncovered_never_go_negative() {
+    // The two halves of the coverage pair answer different questions:
+    // `overlap` is books counted in more than one bucket (formats), and
+    // `uncovered` is live books the dimension can't speak for (genres).
+    let formats = CompositionDimension {
+        slices: vec![
+            CompositionSlice {
+                label: "EPUB".into(),
+                books: 1_400,
+            },
+            CompositionSlice {
+                label: "M4B".into(),
+                books: 180,
+            },
+        ],
+        coverage: MeasuredTotal {
+            total: 1_580,
+            books: 1_510,
+        },
+    };
+
+    assert_eq!(formats.overlap(), 70);
+    assert_eq!(formats.uncovered(1_510), 0);
+
+    // Mutually exclusive buckets: every book lands in exactly one, so there
+    // is no overlap to disclose and the unknowns show up as uncovered.
+    let decades = CompositionDimension {
+        slices: vec![CompositionSlice {
+            label: "1990s".into(),
+            books: 820,
+        }],
+        coverage: MeasuredTotal {
+            total: 820,
+            books: 820,
+        },
+    };
+
+    assert_eq!(decades.overlap(), 0);
+    assert_eq!(decades.uncovered(1_510), 690);
+    // A denominator smaller than the coverage can only come from a
+    // mismatched pair; clamp rather than print a negative book count.
+    assert_eq!(decades.uncovered(10), 0);
+}
+
+#[test]
+fn composition_dimension_is_empty_without_coverage_or_without_slices() {
+    let no_coverage = CompositionDimension {
+        slices: vec![CompositionSlice {
+            label: "eng".into(),
+            books: 3,
+        }],
+        coverage: MeasuredTotal::default(),
+    };
+    let no_slices = CompositionDimension {
+        slices: Vec::new(),
+        coverage: MeasuredTotal { total: 3, books: 3 },
+    };
+
+    assert!(CompositionDimension::default().is_empty());
+    assert!(no_coverage.is_empty());
+    assert!(no_slices.is_empty());
+}
+
+#[test]
+fn library_composition_is_empty_without_books_or_without_a_single_dimension() {
+    let one_dimension = LibraryComposition {
+        books: 1_510,
+        formats: CompositionDimension {
+            slices: vec![CompositionSlice {
+                label: "EPUB".into(),
+                books: 1_510,
+            }],
+            coverage: MeasuredTotal {
+                total: 1_510,
+                books: 1_510,
+            },
+        },
+        ..Default::default()
+    };
+    // Ghosted rows alone are nothing to describe — they carry no dimension.
+    let ghosts_only = LibraryComposition {
+        ghosted_books: 4,
+        ..Default::default()
+    };
+
+    assert!(LibraryComposition::default().is_empty());
+    assert!(ghosts_only.is_empty());
+    assert!(!one_dimension.is_empty());
+}
+
+#[test]
+fn library_composition_dimensions_default_when_absent_from_the_wire() {
+    // The older-server contract the iOS decoder mirrors: an app ahead of its
+    // server loses a dimension, never the whole screen.
+    let c: LibraryComposition = serde_json::from_str(r#"{"books":40}"#).unwrap();
+
+    assert_eq!(c.books, 40);
+    assert_eq!(c.ghosted_books, 0);
+    assert!(c.formats.is_empty());
+    assert!(c.genres.is_empty());
+    assert!(c.is_empty());
+}
+
+#[test]
+fn library_composition_round_trips_each_dimension_with_its_coverage() {
+    let c = LibraryComposition {
+        books: 1_510,
+        ghosted_books: 4,
+        genres: CompositionDimension {
+            slices: vec![CompositionSlice {
+                label: "Fantasy".into(),
+                books: 40,
+            }],
+            coverage: MeasuredTotal {
+                total: 40,
+                books: 38,
+            },
+        },
+        ..Default::default()
+    };
+
+    let wire = serde_json::to_string(&c).unwrap();
+
+    // The coverage pair has to survive the wire: a genre distribution that
+    // arrived without its denominator is a 4%-of-library sample presented as
+    // the whole shelf.
+    assert!(wire.contains(r#""coverage":{"total":40,"books":38}"#));
+    assert!(wire.contains(r#""ghosted_books":4"#));
+    assert_eq!(
+        serde_json::from_str::<LibraryComposition>(&wire).unwrap(),
+        c
+    );
+}
