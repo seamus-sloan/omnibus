@@ -594,3 +594,62 @@ fn pages_read_detail_round_trips_over_the_wire() {
     assert!(json.contains("\"unmeasured_books\""), "{json}");
     assert!(json.contains("\"window_predates_ledger\""), "{json}");
 }
+
+#[test]
+fn session_cursor_round_trips_through_its_wire_form() {
+    let c = SessionCursor {
+        started_at: 1_700_000_000,
+        book_uuid: "7f3a-uuid".into(),
+    };
+    assert_eq!(c.encode(), "1700000000:7f3a-uuid");
+    assert_eq!(SessionCursor::parse(&c.encode()), Some(c));
+}
+
+#[test]
+fn session_cursor_parse_rejects_malformed_input() {
+    for raw in ["", "1700000000", "notanumber:uuid", "1700000000:", ":uuid"] {
+        assert_eq!(SessionCursor::parse(raw), None, "accepted {raw:?}");
+    }
+}
+
+#[test]
+fn session_cursor_parse_keeps_a_negative_start_and_splits_on_the_first_colon() {
+    let c = SessionCursor::parse("-5:a:b").unwrap();
+    assert_eq!(c.started_at, -5);
+    assert_eq!(c.book_uuid, "a:b");
+}
+
+#[test]
+fn session_format_labels_name_the_activity_in_the_past_tense() {
+    assert_eq!(SessionFormat::Reading.label(), "Read");
+    assert_eq!(SessionFormat::Listening.label(), "Listened");
+    assert_eq!(SessionFormat::Mixed.label(), "Read & listened");
+}
+
+#[test]
+fn session_format_serializes_as_snake_case() {
+    assert_eq!(
+        serde_json::to_string(&SessionFormat::Mixed).unwrap(),
+        "\"mixed\""
+    );
+}
+
+#[test]
+fn session_log_page_defaults_its_cursor_when_absent_from_the_wire() {
+    let page: SessionLogPage = serde_json::from_str(r#"{"entries":[]}"#).unwrap();
+    assert!(page.entries.is_empty());
+    assert_eq!(page.next_before, None);
+}
+
+#[test]
+fn session_log_entry_cursor_names_its_own_start_and_book() {
+    let entry = SessionLogEntry {
+        book_uuid: "uuid-1".into(),
+        title: "Title 1".into(),
+        format: SessionFormat::Reading,
+        started_at: 42,
+        ended_at: 100,
+        seconds: 58,
+    };
+    assert_eq!(entry.cursor().encode(), "42:uuid-1");
+}
