@@ -98,7 +98,7 @@ fn MiniDockBar(
     } = view;
     let idx = chapter_index_for_elapsed(&chapters, elapsed);
     let chapter_sub = chapter_sub_text(&chapters, idx);
-    let sub = dock_sub_text(chapter_sub, elapsed, duration);
+    let sub = dock_sub_text(chapter_sub, elapsed, duration, rate);
     let title = book.display_title();
     let fill = format!("width: {:.1}%", progress_pct(elapsed, duration));
     // Book-accent theming, mirroring the full player's `accent_style`.

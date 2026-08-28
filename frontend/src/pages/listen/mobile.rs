@@ -10,7 +10,7 @@ use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
 use omnibus_shared::{EbookMetadata, ProgressFormat, ProgressUpdate};
 
-use super::helpers::effective_scrub_position;
+use super::helpers::{effective_scrub_position, remaining_at_rate};
 use crate::components::atrium::Cover;
 use crate::contexts::use_server_url;
 use crate::data;
@@ -32,7 +32,7 @@ use bookmarks_sheet::{use_mobile_bookmarks, BookmarksSheet, MobileBookmarks};
 use effects::{use_marquee_title_refresh, use_retarget_playback};
 use sheets::{snap_rate, ChaptersSheet, SleepSheet, SpeedSheet};
 use state::{sleep_pill_label, use_mobile_playback, SleepState};
-use view::{chapter_index_for_elapsed, format_hms, format_ms, PlayerView};
+use view::{chapter_index_for_elapsed, format_hm, format_hms, format_ms, PlayerView};
 
 pub use host::MobileAudioHost;
 pub(crate) use mini::mobile_dock_is_active;
@@ -297,24 +297,28 @@ fn derive_player_state(
     );
     let current = view.chapters.get(disp_index);
     let chapter_start = current.map(|c| c.start_seconds).unwrap_or(0.0);
-    // Every displayed time is book time — the same clock the chapter list's
-    // own durations are stated in. Dividing these by the rate made the
-    // transport disagree with the chapter list at any speed but 1x, and ran
-    // elapsed *backwards* on a speed-up (#2246).
-    let chapter_dur = current.map(|c| c.duration_seconds).unwrap_or(0.0);
-    let within = (effective - chapter_start).max(0.0);
-    let chapter_left = view::remaining_in_chapter(&view.chapters, disp_index, effective);
+    // Every displayed time shares one rate-adjusted wall-clock basis — a 1x
+    // elapsed or chapter-total label beside a rate-adjusted "left" disagrees
+    // with its own row off 1x (#2108, matching the iOS player). `effective`
+    // and `scrub_max` stay 1x book-time: they're the range input's seek
+    // coordinate, not a readout.
+    let chapter_dur = remaining_at_rate(current.map(|c| c.duration_seconds).unwrap_or(0.0), rate);
+    let within = remaining_at_rate((effective - chapter_start).max(0.0), rate);
+    let chapter_left = remaining_at_rate(
+        view::remaining_in_chapter(&view.chapters, disp_index, effective),
+        rate,
+    );
 
     PlayerDerived {
         effective,
-        elapsed_book: effective,
+        elapsed_book: remaining_at_rate(effective, rate),
         chapter_no: disp_index + 1,
         chapter_count: view.chapters.len(),
         chapter_title: current.map(|c| c.title.clone()).unwrap_or_default(),
         within,
         chapter_dur,
         chapter_left,
-        remaining_book: eff_remaining,
+        remaining_book: remaining_at_rate(eff_remaining, rate),
         scrub_max: if duration > 0.0 { duration } else { 1.0 },
         accent_style: view
             .accent
@@ -428,7 +432,9 @@ fn render_player(p: PlayerProps) -> Element {
     let sheet_props = SheetProps {
         uuid: uuid.clone(),
         chapters,
-        total_label: view.total_label.clone(),
+        // Re-derived at the current rate rather than reused from the view:
+        // the sheet header sits above rate-adjusted row durations (#2246).
+        total_label: format_hm(remaining_at_rate(view.total_duration, rate)),
         elapsed,
         rate,
         sleep,
@@ -659,6 +665,7 @@ fn render_chapters_sheet(p: &SheetProps) -> Element {
                 chapters: p.chapters.as_ref().clone(),
                 current_index: p.chapter_index,
                 elapsed: p.elapsed,
+                rate: p.rate,
                 total_label: p.total_label.clone(),
             },
             on_seek: EventHandler::new(move |secs: f64| {

@@ -286,12 +286,50 @@ test("surfaces playback speed persistence failures without reverting playback", 
   );
 });
 
-// Regression for issue #2246. The transport used to divide elapsed/remaining/
-// total by the playback rate while the chapter list stayed in book time, so
-// off 1x the two disagreed with each other — and elapsed ran *backwards* on a
-// speed-up. Everything the player shows is book time now, so a speed change
-// moves nothing.
-test("a speed change moves neither the transport clock nor the chapter durations", async ({
+/** Seconds behind an `H:MM:SS` / `M:SS` label. */
+function hmsToSeconds(label: string): number {
+  const parts = label.split(":").map(Number);
+  return parts.reduce((acc, part) => acc * 60 + part, 0);
+}
+
+/** The transport's total (the third and last figure in the scrub-time row). */
+async function transportTotalSeconds(
+  page: import("@playwright/test").Page,
+): Promise<number> {
+  const text = (await page.getByTestId("listen-scrub-times").innerText())
+    .replace(/\s+/g, " ")
+    .trim();
+  const stamps = text.match(/\d+(?::\d\d)+/g) ?? [];
+  expect(stamps.length, `scrub row should carry three stamps: ${text}`).toBe(3);
+  return hmsToSeconds(stamps[2]!);
+}
+
+/** Every duration the chapters drawer lists, in seconds. */
+async function chapterDurationSeconds(
+  page: import("@playwright/test").Page,
+): Promise<number[]> {
+  const drawer = page.getByTestId("chapters-drawer");
+  await page.getByRole("button", { name: /^chapters/i }).click();
+  await expect(drawer).toBeVisible();
+  const text = (await drawer.innerText()).replace(/\s+/g, " ");
+  const stamps = text.match(/\d+(?::\d\d)+/g) ?? [];
+  expect(
+    stamps.length,
+    `drawer should list durations: ${text}`,
+  ).toBeGreaterThan(0);
+  // The drawer is painted over the toolbar it was opened from, so it closes
+  // by its own button rather than the toggle.
+  await drawer.getByRole("button", { name: /^Close/ }).click();
+  await expect(drawer).toHaveCount(0);
+  return stamps.map(hmsToSeconds);
+}
+
+// Regression for issue #2246. The transport divided its own figures by the
+// playback rate while the chapter list stayed in book time, so off 1x the two
+// described different books on one screen — a 7:05:08 total beside chapters
+// summing to 10:38:00. Both are rate-adjusted listening time now, so a 2x
+// listener sees the half-hour a one-hour book actually costs them.
+test("a speed change rescales the transport total and the chapter durations together", async ({
   page,
   request,
 }) => {
@@ -307,33 +345,27 @@ test("a speed change moves neither the transport clock nor the chapter durations
   );
   await gotoReady(page, `/listen/${uuid}`);
   await waitForPlayerReady(page);
+  await expect(page.getByTestId("listen-rate")).toHaveText("1.00×");
 
-  const times = page.getByTestId("listen-scrub-times");
-  await expect(times).toContainText("remaining");
-  const timesBefore = (await times.innerText()).trim();
-  expect(timesBefore).toMatch(/\d+:\d\d/);
-
-  const drawer = page.getByTestId("chapters-drawer");
-  await page.getByRole("button", { name: /^chapters/i }).click();
-  await expect(drawer).toBeVisible();
-  const chaptersBefore = (await drawer.innerText()).trim();
-  expect(chaptersBefore).toMatch(/\d+:\d\d/);
-  // The drawer's own Close, not the toolbar toggle: the drawer is painted
-  // over the toolbar it was opened from.
-  await drawer.getByRole("button", { name: /^Close/ }).click();
-  await expect(drawer).toHaveCount(0);
+  const totalAt1x = await transportTotalSeconds(page);
+  expect(totalAt1x).toBeGreaterThan(0);
+  const chaptersAt1x = await chapterDurationSeconds(page);
 
   await page.getByRole("button", { name: "Playback speed" }).click();
-  await page.getByRole("button", { name: "1.5×", exact: true }).click();
-  await expect(page.getByTestId("listen-rate")).toHaveText("1.50×");
+  await page.getByRole("button", { name: "2.0×", exact: true }).click();
+  await expect(page.getByTestId("listen-rate")).toHaveText("2.00×");
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("speed-panel")).toHaveCount(0);
 
-  // One clock for the whole screen: neither readout moved.
-  expect((await times.innerText()).trim()).toBe(timesBefore);
-  await page.getByRole("button", { name: /^chapters/i }).click();
-  await expect(drawer).toBeVisible();
-  expect((await drawer.innerText()).trim()).toBe(chaptersBefore);
+  // Both readouts halve, so they still describe the same book — and the
+  // listener sees the time the book will actually take them. One second of
+  // slack per figure absorbs the truncation in `format_hms`.
+  expect(await transportTotalSeconds(page)).toBeCloseTo(totalAt1x / 2, -0.5);
+  const chaptersAt2x = await chapterDurationSeconds(page);
+  expect(chaptersAt2x.length).toBe(chaptersAt1x.length);
+  chaptersAt2x.forEach((secs, i) => {
+    expect(secs).toBeCloseTo(chaptersAt1x[i]! / 2, -0.5);
+  });
 });
 
 // ---------------------------------------------------------------------------

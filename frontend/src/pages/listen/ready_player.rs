@@ -227,6 +227,7 @@ pub(super) fn ReadyPlayer(
                     chapters: chs.clone(),
                     current_chapter_index: ch_idx,
                     elapsed: elapsed(),
+                    rate: rate(),
                     on_seek: EventHandler::new(on_chapter_seek),
                 },
             }
@@ -368,6 +369,7 @@ pub(super) fn PlayerStageBinding(
                 elapsed: elapsed_now,
                 duration: dur,
                 remaining: (dur - elapsed_now).max(0.0),
+                rate: (signals.rate)(),
                 scrub_max: scrub_max(dur),
                 current_chapter_index: current_chapter_index(),
                 // Only meaningful once playback was actually requested — a
@@ -451,6 +453,9 @@ pub(super) struct ChapterNavData {
     pub chapters: Vec<ChapterInfo>,
     pub current_chapter_index: usize,
     pub elapsed: f64,
+    /// Current playback rate, threaded to the chapters drawer's duration
+    /// labels so they share the transport's clock (#2246).
+    pub rate: f64,
     pub on_seek: EventHandler<f64>,
 }
 
@@ -485,6 +490,7 @@ pub(super) fn PlayerOverlays(
         chapters,
         current_chapter_index,
         elapsed,
+        rate: chapter_rate,
         on_seek: on_chapter_seek,
     } = chapter_nav;
     rsx! {
@@ -525,6 +531,7 @@ pub(super) fn PlayerOverlays(
                 chapters: chapters.clone(),
                 current_chapter_index,
                 elapsed,
+                rate: chapter_rate,
                 on_seek: on_chapter_seek,
                 on_close: move |_| chapters_open.set(false),
             }

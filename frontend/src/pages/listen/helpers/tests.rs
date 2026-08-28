@@ -1,8 +1,6 @@
 use omnibus_shared::ChapterInfo;
 
-#[cfg(not(feature = "mobile"))]
-use super::remaining_at_rate;
-use super::{effective_scrub_position, format_hms};
+use super::{effective_scrub_position, format_hms, remaining_at_rate};
 
 fn ch(ordinal: i64, title: &str, start: f64, dur: f64) -> ChapterInfo {
     ChapterInfo {
@@ -100,7 +98,6 @@ fn format_hms_handles_negative_and_non_finite_as_zero() {
     assert_eq!(format_hms(f64::INFINITY), "0:00");
 }
 
-#[cfg(not(feature = "mobile"))]
 #[test]
 fn remaining_at_rate_divides_by_the_playback_rate() {
     assert!((remaining_at_rate(600.0, 2.0) - 300.0).abs() < f64::EPSILON);
@@ -108,7 +105,6 @@ fn remaining_at_rate_divides_by_the_playback_rate() {
     assert!((remaining_at_rate(600.0, 1.0) - 600.0).abs() < f64::EPSILON);
 }
 
-#[cfg(not(feature = "mobile"))]
 #[test]
 fn remaining_at_rate_falls_back_unscaled_for_invalid_rates() {
     assert!((remaining_at_rate(600.0, 0.0) - 600.0).abs() < f64::EPSILON);
@@ -117,12 +113,42 @@ fn remaining_at_rate_falls_back_unscaled_for_invalid_rates() {
     assert!((remaining_at_rate(600.0, f64::INFINITY) - 600.0).abs() < f64::EPSILON);
 }
 
-// The sleep timer's countdown is a real wall-clock timer, so it is the one
-// place the rate still divides: at 2x, the 30 book-minutes left in a chapter
-// arrive in 15 wall-clock minutes (#2246).
-#[cfg(not(feature = "mobile"))]
+// Issue #2246 (AC1): the chapter list and the transport total are the same
+// scaling applied to the same book seconds, so the parts still sum to the
+// whole at any speed — a chapter list that stayed at 1x summed to a
+// different book than the total beside it.
 #[test]
-fn remaining_at_rate_converts_a_book_span_into_wall_clock_seconds() {
-    assert_eq!(format_hms(remaining_at_rate(1800.0, 2.0)), "15:00");
-    assert_eq!(format_hms(remaining_at_rate(1800.0, 1.0)), "30:00");
+fn remaining_at_rate_keeps_chapter_durations_summing_to_the_total() {
+    let chapters = [1800.0, 1500.0, 300.0];
+    let duration: f64 = chapters.iter().sum();
+    for rate in [0.5, 1.0, 1.5, 2.0, 3.0] {
+        let scaled: f64 = chapters.iter().map(|d| remaining_at_rate(*d, rate)).sum();
+        assert!(
+            (scaled - remaining_at_rate(duration, rate)).abs() < 1e-9,
+            "rate {rate}"
+        );
+    }
+}
+
+#[test]
+fn remaining_at_rate_keeps_elapsed_and_remaining_labels_on_one_basis() {
+    // The scrubber-row contract (mirrors the iOS `scrubberRowLabelsAgree`
+    // test for #2108): a 60-minute span at 2x, 20 book-minutes in, reads
+    // 10:00 elapsed and 20:00 remaining, summing to the 30-minute
+    // rate-adjusted total. An elapsed label left in 1x book-time would show
+    // 20:00 beside 20:00 remaining at the one-third mark.
+    let duration = 3600.0;
+    let elapsed = 1200.0;
+    let rate = 2.0;
+    assert_eq!(format_hms(remaining_at_rate(elapsed, rate)), "10:00");
+    assert_eq!(
+        format_hms(remaining_at_rate(duration - elapsed, rate)),
+        "20:00"
+    );
+    assert!(
+        (remaining_at_rate(elapsed, rate) + remaining_at_rate(duration - elapsed, rate)
+            - remaining_at_rate(duration, rate))
+        .abs()
+            < f64::EPSILON
+    );
 }

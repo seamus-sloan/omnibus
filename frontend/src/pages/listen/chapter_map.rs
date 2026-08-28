@@ -122,6 +122,9 @@ pub(super) struct ChapterMapProps {
     pub duration: f64,
     /// Seconds remaining in the whole book.
     pub remaining: f64,
+    /// Current playback rate — every time readout (elapsed, remaining, total)
+    /// divides by it so the row is wall-clock listening time, not book time.
+    pub rate: f64,
     /// Index of the currently-playing chapter.
     pub current_chapter_index: usize,
     /// Fired with the target time in seconds when the bar is clicked or a
@@ -243,6 +246,7 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
         elapsed,
         duration,
         remaining,
+        rate,
         current_chapter_index,
         on_seek,
         buffering,
@@ -297,14 +301,14 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
                 {segment_bar(&chapters, eff_current, effective, duration)}
 
                 // Visible playhead + drag-time bubble. The bubble previews
-                // the same elapsed the row's left label shows, so the two
-                // can't disagree mid-drag.
+                // the same rate-adjusted elapsed the row's left label shows,
+                // so the two can't disagree mid-drag.
                 div { class: "lp-chapter-thumb", style: "left: {thumb:.3}%;" }
                 if is_scrubbing {
                     div {
                         class: "lp-chapter-bubble",
                         style: "left: {thumb:.3}%;",
-                        "{format_hms(effective)}"
+                        "{format_hms(helpers::remaining_at_rate(effective, rate))}"
                     }
                 }
 
@@ -323,17 +327,18 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
                 }
             }
 
-            // Book time, like every other clock in the player — the chapter
-            // list's durations, the chapters drawer, the bookmark stamps.
-            // Dividing these three by the rate made the transport disagree
-            // with the chapter list at any speed but 1x, and ran elapsed
-            // *backwards* on a speed-up (#2246).
+            // All three readouts share one rate-adjusted wall-clock basis
+            // (elapsed + remaining = total at the current speed), the same
+            // one the chapter list's durations use (#2246) — a 1x label
+            // beside a rate-adjusted one disagrees with it off 1x (#2108,
+            // matching the iOS player). Scaled after the scrub preview so a
+            // drag previews the rate-adjusted times too.
             div { class: "lp-scrub-times", "data-testid": "listen-scrub-times",
-                span { "{format_hms(effective)}" }
+                span { "{format_hms(helpers::remaining_at_rate(effective, rate))}" }
                 span { class: "lp-scrub-remaining",
-                    "\u{00b7} {format_hms(eff_remaining)} remaining"
+                    "\u{00b7} {format_hms(helpers::remaining_at_rate(eff_remaining, rate))} remaining"
                 }
-                span { "{format_hms(duration)}" }
+                span { "{format_hms(helpers::remaining_at_rate(duration, rate))}" }
             }
             if buffering {
                 div {
@@ -357,8 +362,9 @@ mod render_tests {
     use crate::test_support::render;
 
     #[component]
-    fn MapHarness() -> Element {
-        // Two 30-minute chapters, 20 book-minutes in.
+    fn MapHarness(rate: f64) -> Element {
+        // Two 30-minute chapters, 20 book-minutes in: at 2x the row must
+        // read 10:00 elapsed / 20:00 remaining / 30:00 total.
         rsx! {
             ChapterMap {
                 chapters: vec![
@@ -378,6 +384,7 @@ mod render_tests {
                 elapsed: 1200.0,
                 duration: 3600.0,
                 remaining: 2400.0,
+                rate,
                 current_chapter_index: 0,
                 on_seek: EventHandler::new(|_| {}),
                 buffering: false,
@@ -385,18 +392,23 @@ mod render_tests {
         }
     }
 
-    // Issue #2246: the transport reads book time, the same clock the
-    // chapter list's `duration_seconds` are stated in, so the two agree at
-    // every playback speed and elapsed never moves on a speed change.
     #[test]
-    fn chapter_map_renders_every_time_label_in_book_time() {
-        let html = render(rsx! { MapHarness {} });
+    fn chapter_map_renders_every_time_label_on_the_rate_adjusted_basis() {
+        let html = render(rsx! { MapHarness { rate: 2.0 } });
+        assert!(html.contains("10:00"), "{html}");
+        assert!(html.contains("20:00 remaining"), "{html}");
+        assert!(html.contains("30:00"), "{html}");
+        // The seek range stays in 1x book-time — it's a coordinate, not a
+        // readout.
+        assert!(html.contains("value=\"1200\""), "{html}");
+        assert!(html.contains("max=\"3600\""), "{html}");
+    }
+
+    #[test]
+    fn chapter_map_renders_unchanged_labels_at_1x() {
+        let html = render(rsx! { MapHarness { rate: 1.0 } });
         assert!(html.contains("20:00"), "{html}");
         assert!(html.contains("40:00 remaining"), "{html}");
         assert!(html.contains("1:00:00"), "{html}");
-        // The seek range shares that basis — it's the same coordinate the
-        // labels now read in.
-        assert!(html.contains("value=\"1200\""), "{html}");
-        assert!(html.contains("max=\"3600\""), "{html}");
     }
 }

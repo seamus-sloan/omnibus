@@ -10,6 +10,7 @@ use crate::components::atrium::Cover;
 use crate::contexts::use_server_url;
 use crate::Route;
 
+use super::super::helpers::remaining_at_rate;
 use super::state::use_mobile_playback;
 use super::view::{chapter_index_for_elapsed, format_hms, PlayerView};
 use super::{cover_src, interop};
@@ -55,8 +56,7 @@ pub fn MobileMiniPlayer() -> Element {
     } else {
         0.0
     };
-    // Book time, like every clock in the player (#2246).
-    let remaining = (duration - elapsed).max(0.0);
+    let remaining = remaining_at_rate((duration - elapsed).max(0.0), (ctx.rate)());
     let subtitle = if view.chapters.is_empty() {
         format!("{} left", format_hms(remaining))
     } else {
