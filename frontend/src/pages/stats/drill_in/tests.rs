@@ -68,6 +68,76 @@ fn build_trend_bars_scales_to_the_tallest_point_and_stays_zero_when_empty_of_act
     assert_eq!(zeroed[0].height_pct, 0);
 }
 
+fn bucket(half_stars: i64, books: i64) -> RatingBucket {
+    RatingBucket { half_stars, books }
+}
+
+#[test]
+fn star_label_renders_buckets_in_stars_never_in_half_stars() {
+    assert_eq!(star_label(&bucket(1, 0)), "0.5");
+    assert_eq!(star_label(&bucket(2, 0)), "1");
+    assert_eq!(star_label(&bucket(7, 0)), "3.5");
+    assert_eq!(star_label(&bucket(10, 0)), "5");
+}
+
+#[test]
+fn build_histogram_bars_normalizes_counts_and_titles_each_bar_with_its_total() {
+    let bars = build_histogram_bars(&[bucket(1, 1), bucket(2, 0), bucket(10, 4)]);
+
+    assert_eq!(bars[0].height_pct, 25);
+    assert_eq!(bars[1].height_pct, 0, "an empty bucket keeps its column");
+    assert_eq!(bars[2].height_pct, 100);
+    assert_eq!(bars[0].title, "0.5 \u{2605} \u{00B7} 1 book");
+    assert_eq!(bars[1].title, "1 \u{2605} \u{00B7} 0 books");
+    assert_eq!(bars[2].title, "5 \u{2605} \u{00B7} 4 books");
+}
+
+/// Whether a rendered chunk carries an exact testid — `stats-drill-histogram`
+/// is a prefix of `stats-drill-histogram-empty`, so a bare `contains` on the
+/// shorter name matches the empty state too.
+#[cfg(feature = "server")]
+fn has_testid(html: &str, testid: &str) -> bool {
+    html.contains(&format!(r#""{testid}""#))
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn render_histogram_shows_the_empty_state_rather_than_ten_flat_bars() {
+    // The window carries no ratings. Ten zero-height columns would draw a
+    // chart of nothing and read as a real distribution that happens to be
+    // flat, so the drill-in says so in words instead.
+    let none_rated = (1..=10).map(|h| bucket(h, 0)).collect::<Vec<_>>();
+    let html = crate::test_support::render(render_histogram(&none_rated));
+    assert!(has_testid(&html, "stats-drill-histogram-empty"), "{html}");
+    assert!(!has_testid(&html, "stats-drill-histogram"), "{html}");
+
+    // One rating anywhere is enough to be worth drawing.
+    let mut rated = none_rated;
+    rated[6] = bucket(7, 1);
+    let html = crate::test_support::render(render_histogram(&rated));
+    assert!(has_testid(&html, "stats-drill-histogram"), "{html}");
+    assert!(!has_testid(&html, "stats-drill-histogram-empty"), "{html}");
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn render_histogram_reuses_the_trend_chart_renderer() {
+    // The histogram is the trend strip with a different x-axis. A private copy
+    // of the bar markup would drift from it silently, so this pins that both
+    // come out of `render_bars`.
+    let bars = build_trend_bars(&[("J".to_string(), 1.0)]);
+    let trend = crate::test_support::render(render_trend(Metric::AvgRating, &bars));
+    let histogram = crate::test_support::render(render_histogram(&[bucket(10, 1)]));
+
+    for class in ["st-drill-trend", "st-drill-trend-col", "st-drill-trend-bar"] {
+        assert!(trend.contains(class), "trend missing {class}: {trend}");
+        assert!(
+            histogram.contains(class),
+            "histogram missing {class}: {histogram}"
+        );
+    }
+}
+
 #[test]
 fn delta_for_is_none_for_lifetime_regardless_of_metric() {
     let summary = StatsSummary::default();

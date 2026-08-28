@@ -165,6 +165,32 @@ fn current_streak_days_defaults_to_zero_when_absent_from_the_wire() {
 }
 
 #[test]
+fn rating_bucket_round_trips_through_json() {
+    let b = RatingBucket {
+        half_stars: 7,
+        books: 4,
+    };
+    let wire = serde_json::to_string(&b).unwrap();
+    assert_eq!(wire, r#"{"half_stars":7,"books":4}"#);
+    assert_eq!(serde_json::from_str::<RatingBucket>(&wire).unwrap(), b);
+}
+
+#[test]
+fn rating_histogram_defaults_to_empty_when_absent_from_the_wire() {
+    // Same older-payload contract as avg_stars/pages_read. Empty is
+    // distinguishable from "nothing was rated", which the server sends as ten
+    // zero buckets — see the field's docs.
+    let s: StatsSummary = serde_json::from_str(
+        r#"{"range":"month","reading_seconds":0,"listening_seconds":0,"sessions":0,
+            "active_days":0,"longest_streak_days":0,"busiest_week_start":null,
+            "busiest_week_seconds":0,"books_finished":0,"heatmap":[],
+            "top_authors":[],"top_tags":[],"finished_books":[]}"#,
+    )
+    .unwrap();
+    assert!(s.rating_histogram.is_empty());
+}
+
+#[test]
 fn as_query_matches_the_serde_wire_name() {
     for range in StatsRange::ALL {
         let wire = serde_json::to_string(&range).unwrap();

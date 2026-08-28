@@ -80,6 +80,42 @@ struct StatsView: View {
                     }
                 }
 
+                // Only when something was actually rated: ten flat bars
+                // describe an empty window less honestly than no chart does.
+                if summary.ratingHistogram.contains(where: { $0.books > 0 }) {
+                    section("How you rated them") {
+                        Chart(summary.ratingHistogram) { bucket in
+                            BarMark(
+                                x: .value("Rating", bucket.starLabel),
+                                y: .value("Books", bucket.books)
+                            )
+                            .foregroundStyle(palette.accentColor)
+                            .cornerRadius(3)
+                        }
+                        .chartXAxis {
+                            AxisMarks { value in
+                                AxisValueLabel {
+                                    // Whole stars only: ten labels crowd
+                                    // illegibly at a phone's width, and the
+                                    // half-star bars sit between the ones kept.
+                                    if let label = value.as(String.self),
+                                        !label.contains(".")
+                                    {
+                                        Text(label).font(.monoUI(9))
+                                    }
+                                }
+                            }
+                        }
+                        .chartYAxis {
+                            AxisMarks(position: .leading) { _ in
+                                AxisGridLine().foregroundStyle(palette.line2.color)
+                                AxisValueLabel().font(.monoUI(9))
+                            }
+                        }
+                        .frame(height: 132)
+                    }
+                }
+
                 if !summary.topAuthors.isEmpty {
                     section("Top authors") {
                         RankedList(entries: summary.topAuthors) { entry in

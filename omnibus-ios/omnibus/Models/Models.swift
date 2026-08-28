@@ -1232,6 +1232,30 @@ struct MonthCount: Codable, Hashable, Sendable, Identifiable {
     var id: String { month }
 }
 
+/// One bar of the star-rating distribution: a half-star bucket and how many
+/// books the reader rated into it within the window.
+///
+/// The wire scale is half-stars (1...10), so `starLabel` is the conversion
+/// every surface must use — labelling `halfStars` raw would present the chart
+/// as a ten-point scale.
+struct RatingBucket: Codable, Hashable, Sendable, Identifiable {
+    var halfStars: Int64
+    var books: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case books
+        case halfStars = "half_stars"
+    }
+
+    var id: Int64 { halfStars }
+    var stars: Double { Double(halfStars) / 2.0 }
+
+    /// Axis label in stars — "0.5", "1", "1.5" … "5".
+    var starLabel: String {
+        halfStars % 2 == 0 ? "\(halfStars / 2)" : String(format: "%.1f", stars)
+    }
+}
+
 struct StatsSummary: Codable, Sendable {
     var range: StatsRange = .month
     var readingSeconds: Int64 = 0
@@ -1257,6 +1281,9 @@ struct StatsSummary: Codable, Sendable {
     var genreShare: [GenreShare] = []
     var finishedBooks: [FinishedBook] = []
     var booksPerMonth: [MonthCount] = []
+    /// The window's ratings by half-star bucket — the shape `avgStars`
+    /// flattens away. All ten buckets arrive, zeros included.
+    var ratingHistogram: [RatingBucket] = []
     var pagesRead: Int64?
 
     enum CodingKeys: String, CodingKey {
@@ -1277,6 +1304,7 @@ struct StatsSummary: Codable, Sendable {
         case genreShare = "genre_share"
         case finishedBooks = "finished_books"
         case booksPerMonth = "books_per_month"
+        case ratingHistogram = "rating_histogram"
         case pagesRead = "pages_read"
     }
 
@@ -1313,6 +1341,8 @@ struct StatsSummary: Codable, Sendable {
         genreShare = try c.decodeIfPresent([GenreShare].self, forKey: .genreShare) ?? []
         finishedBooks = try c.decodeIfPresent([FinishedBook].self, forKey: .finishedBooks) ?? []
         booksPerMonth = try c.decodeIfPresent([MonthCount].self, forKey: .booksPerMonth) ?? []
+        ratingHistogram =
+            try c.decodeIfPresent([RatingBucket].self, forKey: .ratingHistogram) ?? []
         pagesRead = try c.decodeIfPresent(Int64.self, forKey: .pagesRead)
     }
 

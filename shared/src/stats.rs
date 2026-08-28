@@ -168,6 +168,28 @@ pub struct TrendPoint {
     pub value: f64,
 }
 
+/// One bar of the star-rating distribution: a half-star bucket and how many
+/// books the user rated into it within the window.
+///
+/// `half_stars` is the stored 1..=10 scale, **not** stars — renderers must
+/// halve it, or a 5-star rating reads as a 10-point scale. `stars()` is that
+/// conversion, so no surface reimplements it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RatingBucket {
+    pub half_stars: i64,
+    pub books: i64,
+}
+
+impl RatingBucket {
+    /// This bucket in stars (0.5 ..= 5.0) — the scale the UI displays.
+    pub fn stars(&self) -> f64 {
+        // Buckets are 1..=10 by construction, far inside f64's exact range.
+        #[allow(clippy::cast_precision_loss)]
+        let stars = self.half_stars as f64 / 2.0;
+        stars
+    }
+}
+
 /// Scalar aggregates for the **same elapsed slice** of the preceding period —
 /// feeds each metric tile's drill-in delta. The current window is
 /// period-to-date, so this is month-to-date against the same days last month
@@ -263,6 +285,13 @@ pub struct StatsSummary {
     /// same trailing-window convention as `books_per_month`.
     #[serde(default)]
     pub rating_monthly: Vec<TrendPoint>,
+    /// How the window's ratings are distributed across the ten half-star
+    /// buckets — the shape `avg_stars` flattens into one number. All ten
+    /// buckets are present, zeros included; an empty vec means the window
+    /// carries no ratings at all. Scoped exactly as `avg_stars` is, so the
+    /// bucket counts sum to the set the mean is taken over.
+    #[serde(default)]
+    pub rating_histogram: Vec<RatingBucket>,
     /// Estimated pages read in the window — the Pages tile. Summed from each
     /// finished book's persisted `word_count` estimate (`books.word_count`,
     /// set at index time) and converted to pages (see `db::stats` for the
