@@ -56,6 +56,13 @@ that lived only in this one gets asked for again.
 gitignored and per-worktree — so accepting it means the next `wt switch`
 orphans every book earlier runs uploaded.
 
+`check` also names a key that is **set twice**, which is why it can name one
+that plainly has a value. That is not tidiness: `lib.sh` reads the first
+occurrence and `audit_lib.env` the last, so a duplicate lets the shell and
+Python halves of one run target different instances — and the shell half is the
+one that deletes books. Answering the question sends it back through `set`,
+which collapses the duplicate.
+
 `set` writes into the repo's gitignored `.env`, replacing the key in place —
 commented or live — and dropping any duplicate: `lib.sh` reads the first
 occurrence and `audit_lib.env` the last, so a file carrying two would let the

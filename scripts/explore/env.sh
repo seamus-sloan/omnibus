@@ -31,17 +31,35 @@ OPTIONAL=(
 # An exported value wins over `.env`, matching explore::load_env and
 # audit_lib.env — so a caller pointing at another instance is not told to
 # write that instance into the file.
+#
+# `head -1` is not a coin toss: explore::load_env exports the *first*
+# occurrence, and it is what gates the run at preflight. Reading the last one
+# here would let `check` pass on a value the run never uses.
 explore_env::value() {
   local key="$1"
   if [ -n "${!key-}" ]; then printf '%s' "${!key}"; return; fi
   [ -f "$ENV_FILE" ] || return 0
-  grep -E "^${key}=" "$ENV_FILE" | tail -1 | cut -d= -f2- || true
+  grep -E "^${key}=" "$ENV_FILE" | head -1 | cut -d= -f2- || true
 }
 
+explore_env::count() {
+  [ -f "$ENV_FILE" ] || { echo 0; return; }
+  grep -cE "^${1}=" "$ENV_FILE" || true
+}
+
+# Named when missing, and also when duplicated. A duplicate is not cosmetic:
+# lib.sh takes the first occurrence and audit_lib.env the last, so the shell
+# and Python halves of one run would target different instances — and the
+# shell half is the one that deletes books. Naming it sends the key back
+# through `set`, which collapses the duplicate.
 explore_env::check() {
   local key
   for key in "${REQUIRED[@]}"; do
-    [ -n "$(explore_env::value "$key")" ] || echo "$key"
+    if [ -z "$(explore_env::value "$key")" ]; then
+      echo "$key"
+    elif [ "$(explore_env::count "$key")" -gt 1 ]; then
+      echo "$key"
+    fi
   done
 }
 

@@ -430,15 +430,24 @@ class ReportTests(unittest.TestCase):
         self.assertIn("#### Defect 1.", text)
         self.assertIn("#### Issue 1.", text)
 
-    def test_an_anomaly_without_a_kind_is_reported_as_a_defect(self):
-        """Misfiling friction costs a row; misfiling a defect loses it."""
+    def test_an_anomaly_with_no_kind_or_an_unknown_one_is_reported_as_a_defect(self):
+        """Misfiling friction costs a row; misfiling a defect loses it.
+
+        Both branches, because they are different contracts: an agent that
+        never learned about `kind` writes no key at all, and one that invented
+        a word writes an unrecognised one.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             write_journal(Path(tmp) / "r-tmp", "r-tmp", [
                 row("2026-08-28T10:00:10Z", "agent-1", "anomaly", seq=1,
-                    params={"severity": "high", "kind": "whatever"}, note="n"),
+                    params={"severity": "high"}, note="no kind at all"),
+                row("2026-08-28T10:00:11Z", "agent-1", "anomaly", seq=2,
+                    params={"severity": "low", "kind": "whatever"},
+                    note="a kind nobody defined"),
             ])
             text = render("r-tmp", "--journal-dir", tmp, "--no-server-log")
-        self.assertIn("## Defects", text)
+        self.assertIn("| 1 | high | no kind at all (`L1`) | agent-1 |", text)
+        self.assertIn("| 2 | low | a kind nobody defined (`L2`) | agent-1 |", text)
         self.assertNotIn("## Execution issues", text)
 
     def test_report_ends_with_the_journal_file_locations(self):
