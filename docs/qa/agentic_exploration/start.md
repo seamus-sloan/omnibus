@@ -73,9 +73,14 @@ Journals are kept forever next to the instance for exactly this reason.
 
 The baseline corpus was added by nobody, so **nobody may ever destroy it**.
 
-The server will not enforce any of this, because you are an admin. The flow
-helpers refuse the action, and the audit catches it if you go around them.
-Treat an ownership refusal as correct behaviour, not an obstacle.
+The server will not enforce any of this, because you are an admin — but your
+browser will. Destructive calls to a book you do not own are refused before
+they are sent, and you will see a `403` carrying `"error": "ownership_guard"`.
+
+**That refusal is correct behaviour, not a bug and not an obstacle.** Journal it
+`refused`, do not retry it, and do not go looking for another route to the same
+act. If a flow document appears to require one, the document is wrong — journal
+an `anomaly` against it.
 
 ## The journal
 

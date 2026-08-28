@@ -5,6 +5,9 @@
 # Usage:
 #   driver.sh up <agent-count>     start N servers, print the port manifest
 #   driver.sh run <n> <command>    send one command to agent n, print the result
+#   driver.sh guard <n> <actor> <uuids>
+#                                  enforce ownership for agent n: destructive
+#                                  calls to books outside <uuids> are refused
 #   driver.sh status               show which agents are up
 #   driver.sh down                 stop every server
 #
@@ -112,6 +115,45 @@ case "$cmd" in
     body="$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "$1")"
     curl -sS --max-time 180 -X POST "http://127.0.0.1:$port/run" \
       -H 'Content-Type: application/json' -d "$body"
+    echo
+    ;;
+
+  guard)
+    # Enforce the ownership rule instead of trusting the agent to follow it.
+    # start.md says an agent may only destroy what it added, but every
+    # exploration account is an admin, so the server will not stop agent-2
+    # deleting agent-5's book. Installing a route handler in the agent's own
+    # browser aborts the request before it is sent, which is the difference
+    # between a rule and a convention.
+    n="${2:?usage: driver.sh guard <n> <actor> <comma-separated-uuids>}"
+    actor="${3:?usage: driver.sh guard <n> <actor> <comma-separated-uuids>}"
+    uuids="${4-}"
+    [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] \
+      || { echo "agent number must be a positive integer (got: $n)" >&2; exit 2; }
+    port="$(driver::port "$n")"
+    driver::alive "$port" || { echo "agent-$n has no server on $port — run driver.sh up first" >&2; exit 1; }
+
+    owned_json="$(python3 -c 'import json,sys
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+print(json.dumps([u for u in raw.split(",") if u.strip()]))' "$uuids")"
+    js="$(python3 -c 'import sys
+src = open(sys.argv[1]).read()
+print(src.replace("__OWNED__", sys.argv[2]).replace("__ACTOR__", sys.argv[3]))' \
+      "$DRIVER/guard.js" "$owned_json" "$actor")"
+    body="$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "await $js")"
+    curl -sS --max-time 60 -X POST "http://127.0.0.1:$port/run" \
+      -H 'Content-Type: application/json' -d "$body" >/dev/null
+    echo "  agent-$n guarded: $(printf '%s' "$owned_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))') owned book(s)"
+    ;;
+
+  refusals)
+    # What the guard actually blocked. A non-empty list is a finding about the
+    # agent or the flow doc, not about the app.
+    n="${2:?usage: driver.sh refusals <n>}"
+    port="$(driver::port "$n")"
+    curl -sS --max-time 30 -X POST "http://127.0.0.1:$port/run" \
+      -H 'Content-Type: application/json' \
+      -d '{"command":"globalThis.__omnibusGuardRefusals || []"}'
     echo
     ;;
 
