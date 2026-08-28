@@ -1278,7 +1278,9 @@ struct StatsSummary: Codable, Sendable {
     var longestStreakDays: Int64 = 0
     /// The run of consecutive active days still going as of `asOfDay`, where
     /// `longestStreakDays` is the record. Server-computed rather than derived
-    /// from `heatmap` here, so this tab and any widget can't disagree.
+    /// from `heatmap` here, so this tab and any widget can't disagree — and
+    /// unwindowed on the server, so the tile reads the same whichever range
+    /// the picker is on.
     var currentStreakDays: Int64 = 0
     var busiestWeekStart: String?
     var busiestWeekSeconds: Int64 = 0
@@ -1320,6 +1322,45 @@ struct StatsSummary: Codable, Sendable {
         case ratingHistogram = "rating_histogram"
         case pagesRead = "pages_read"
         case lengthBuckets = "length_buckets"
+    }
+
+    init() {}
+
+    /// Decoded field-by-field with `decodeIfPresent`, because Swift's
+    /// synthesized `init(from:)` **ignores property defaults** — a single
+    /// missing key throws and `StatsView` renders its error state instead of
+    /// the tab.
+    ///
+    /// Most of these are `#[serde(default)]` on the Rust side precisely so an
+    /// older payload stays parseable, and that promise has to be kept on this
+    /// side of the wire too: the app ships ahead of a self-hosted server
+    /// routinely, and a stats field it hasn't learned yet must cost one tile,
+    /// not the whole screen.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        range = try c.decodeIfPresent(StatsRange.self, forKey: .range) ?? .month
+        readingSeconds = try c.decodeIfPresent(Int64.self, forKey: .readingSeconds) ?? 0
+        listeningSeconds = try c.decodeIfPresent(Int64.self, forKey: .listeningSeconds) ?? 0
+        avgStars = try c.decodeIfPresent(Double.self, forKey: .avgStars)
+        sessions = try c.decodeIfPresent(Int64.self, forKey: .sessions) ?? 0
+        activeDays = try c.decodeIfPresent(Int64.self, forKey: .activeDays) ?? 0
+        longestStreakDays = try c.decodeIfPresent(Int64.self, forKey: .longestStreakDays) ?? 0
+        currentStreakDays = try c.decodeIfPresent(Int64.self, forKey: .currentStreakDays) ?? 0
+        busiestWeekStart = try c.decodeIfPresent(String.self, forKey: .busiestWeekStart)
+        busiestWeekSeconds = try c.decodeIfPresent(Int64.self, forKey: .busiestWeekSeconds) ?? 0
+        booksFinished = try c.decodeIfPresent(Int64.self, forKey: .booksFinished) ?? 0
+        booksActive = try c.decodeIfPresent(Int64.self, forKey: .booksActive) ?? 0
+        asOfDay = try c.decodeIfPresent(String.self, forKey: .asOfDay) ?? ""
+        heatmap = try c.decodeIfPresent([DayActivity].self, forKey: .heatmap) ?? []
+        topAuthors = try c.decodeIfPresent([RankedEntity].self, forKey: .topAuthors) ?? []
+        topTags = try c.decodeIfPresent([RankedEntity].self, forKey: .topTags) ?? []
+        genreShare = try c.decodeIfPresent([GenreShare].self, forKey: .genreShare) ?? []
+        finishedBooks = try c.decodeIfPresent([FinishedBook].self, forKey: .finishedBooks) ?? []
+        booksPerMonth = try c.decodeIfPresent([MonthCount].self, forKey: .booksPerMonth) ?? []
+        ratingHistogram =
+            try c.decodeIfPresent([RatingBucket].self, forKey: .ratingHistogram) ?? []
+        pagesRead = try c.decodeIfPresent(Int64.self, forKey: .pagesRead)
+        lengthBuckets = try c.decodeIfPresent([LengthBucket].self, forKey: .lengthBuckets) ?? []
     }
 
     var totalSeconds: Int64 { readingSeconds + listeningSeconds }

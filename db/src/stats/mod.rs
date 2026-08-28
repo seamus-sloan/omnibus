@@ -33,7 +33,7 @@ use sqlx::SqlitePool;
 
 #[cfg(test)]
 use compute::{
-    books_active, books_per_month, finished_books, finished_count, listening_daily,
+    as_of, books_active, books_per_month, finished_books, finished_count, listening_daily,
     prev_window_bounds, prev_window_from, previous_period, window_start, FINISHED_BOOKS_LIMIT,
 };
 use compute::{compute, FINISHED_EVENTS};

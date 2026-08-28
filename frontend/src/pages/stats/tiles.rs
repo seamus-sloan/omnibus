@@ -1,6 +1,7 @@
 //! Headline metric tiles for the stats page: Finished (accent), Avg rating,
-//! Pages (a spine-word-count estimate — see `db::stats::pages` for the
-//! sourcing model), and Listening. All four are period-scoped and re-render
+//! Pages (each finished book's length resolved through the ladder in
+//! `db::stats::pages`, which prefers a real print page count and falls back to
+//! a word estimate), and Listening. All four are period-scoped and re-render
 //! when the switcher changes, and each carries a pull-to-expand grip that
 //! opens its drill-in (`drill_in.rs`).
 
@@ -37,7 +38,7 @@ fn avg_stars_value(avg: Option<f64>) -> String {
 
 /// Thousand-grouped page count ("9,214"), or the em-dash empty state when
 /// [`omnibus_shared::StatsSummary::pages_read`] is `None` — no finished book
-/// in the window yielded a word-count estimate (AC2).
+/// in the window resolved a length on any rung of the ladder (AC2).
 fn pages_value(pages: Option<i64>) -> String {
     match pages {
         Some(n) => group_thousands(n),
@@ -64,8 +65,9 @@ fn group_thousands(n: i64) -> String {
 }
 
 /// The four-tile headline row. Finished carries the accent tint; Pages is a
-/// spine-word-count estimate rather than a real page position, so
-/// its label is explicit about that. Takes only the scalar fields it
+/// resolved book length rather than a real page position — exact for a comic
+/// or a print-edition override, an estimate otherwise — so its label is
+/// explicit about that. Takes only the scalar fields it
 /// renders — never the whole `StatsSummary` — so a re-render doesn't clone
 /// the DTO's heatmap / finished-books vectors. `expanded` is set by a
 /// tile's grip to open its drill-in (`drill_in.rs`).

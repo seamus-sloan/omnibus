@@ -92,12 +92,50 @@ fn build_histogram_bars_normalizes_counts_and_titles_each_bar_with_its_total() {
     assert_eq!(bars[2].title, "5 \u{2605} \u{00B7} 4 books");
 }
 
-#[test]
-fn build_histogram_bars_keeps_every_bucket_flat_when_nothing_was_rated() {
-    let bars = build_histogram_bars(&(1..=10).map(|h| bucket(h, 0)).collect::<Vec<_>>());
+/// Whether a rendered chunk carries an exact testid — `stats-drill-histogram`
+/// is a prefix of `stats-drill-histogram-empty`, so a bare `contains` on the
+/// shorter name matches the empty state too.
+#[cfg(feature = "server")]
+fn has_testid(html: &str, testid: &str) -> bool {
+    html.contains(&format!(r#""{testid}""#))
+}
 
-    assert_eq!(bars.len(), 10);
-    assert!(bars.iter().all(|b| b.height_pct == 0));
+#[cfg(feature = "server")]
+#[test]
+fn render_histogram_shows_the_empty_state_rather_than_ten_flat_bars() {
+    // The window carries no ratings. Ten zero-height columns would draw a
+    // chart of nothing and read as a real distribution that happens to be
+    // flat, so the drill-in says so in words instead.
+    let none_rated = (1..=10).map(|h| bucket(h, 0)).collect::<Vec<_>>();
+    let html = crate::test_support::render(render_histogram(&none_rated));
+    assert!(has_testid(&html, "stats-drill-histogram-empty"), "{html}");
+    assert!(!has_testid(&html, "stats-drill-histogram"), "{html}");
+
+    // One rating anywhere is enough to be worth drawing.
+    let mut rated = none_rated;
+    rated[6] = bucket(7, 1);
+    let html = crate::test_support::render(render_histogram(&rated));
+    assert!(has_testid(&html, "stats-drill-histogram"), "{html}");
+    assert!(!has_testid(&html, "stats-drill-histogram-empty"), "{html}");
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn render_histogram_reuses_the_trend_chart_renderer() {
+    // The histogram is the trend strip with a different x-axis. A private copy
+    // of the bar markup would drift from it silently, so this pins that both
+    // come out of `render_bars`.
+    let bars = build_trend_bars(&[("J".to_string(), 1.0)]);
+    let trend = crate::test_support::render(render_trend(Metric::AvgRating, &bars));
+    let histogram = crate::test_support::render(render_histogram(&[bucket(10, 1)]));
+
+    for class in ["st-drill-trend", "st-drill-trend-col", "st-drill-trend-bar"] {
+        assert!(trend.contains(class), "trend missing {class}: {trend}");
+        assert!(
+            histogram.contains(class),
+            "histogram missing {class}: {histogram}"
+        );
+    }
 }
 
 #[test]

@@ -5,19 +5,9 @@
 
 use super::*;
 use crate::init_db;
+use crate::test_support::seed_user;
 
 const T0: i64 = 1_700_000_000;
-
-async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
-    sqlx::query_scalar::<_, i64>(
-        "INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
-         VALUES (?, '!x', 0, 0, 0, 1) RETURNING id",
-    )
-    .bind(name)
-    .fetch_one(pool)
-    .await
-    .unwrap()
-}
 
 async fn seed_lib(pool: &SqlitePool) -> i64 {
     sqlx::query_scalar(
@@ -122,6 +112,21 @@ async fn pages_read_uses_the_comic_page_count_when_no_print_pages_exist() {
     let lib = seed_lib(&pool).await;
     // A CBZ carries an exact image-page count and no word count.
     seed_book(&pool, lib, "uuid-a", None, Some(32)).await;
+    finish_journal(&pool, user, "uuid-a", T0).await;
+
+    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(32));
+}
+
+#[tokio::test]
+async fn pages_read_prefers_the_comic_page_count_over_the_word_estimate() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    // A comic whose word count was also backfilled. The image count is exact
+    // and the word estimate is not, so the ladder's middle rung must win —
+    // swapping the two COALESCE arms is otherwise invisible to every other
+    // test here, since each covers a rung in isolation.
+    seed_book(&pool, lib, "uuid-a", Some(275 * 40), Some(32)).await;
     finish_journal(&pool, user, "uuid-a", T0).await;
 
     assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(32));
@@ -374,6 +379,11 @@ fn bucket_case_sql_maps_null_to_unknown_and_falls_through_to_the_open_bucket() {
     assert!(sql.starts_with("CASE WHEN p.pages IS NULL THEN 3 "));
     assert!(sql.contains("WHEN p.pages < 300 THEN 0 "));
     assert!(sql.contains("WHEN p.pages < 500 THEN 1 "));
-    // The open-ended bucket has no bound of its own, so it's the fall-through.
-    assert!(sql.ends_with("ELSE 2 END"));
+    // The fall-through is the bucket with no upper bound, wherever it sits in
+    // the array — not "the last index".
+    let open = LENGTH_BUCKETS
+        .iter()
+        .position(|(_, upper)| upper.is_none())
+        .expect("one bucket must be open-ended");
+    assert!(sql.ends_with(&format!("ELSE {open} END")), "{sql}");
 }

@@ -23,8 +23,8 @@ const WORDS_PER_PAGE: f64 = 275.0;
 /// novel, a doorstopper. Finer buckets would split the middle into bars nobody
 /// reads any differently.
 ///
-/// Labels and bounds live in one array so a boundary can't move without its
-/// label moving with it.
+/// Labels and bounds sit in one array so a boundary and the bar naming it stay
+/// next to each other under any later edit.
 const LENGTH_BUCKETS: [(&str, Option<i64>); 3] = [
     ("Under 300", Some(300)),
     ("300\u{2013}499", Some(500)),
@@ -165,14 +165,21 @@ pub(super) async fn length_buckets(
 /// from, so a boundary and its bar can never disagree.
 fn bucket_case_sql(pages_col: &str) -> String {
     let unknown = LENGTH_BUCKETS.len();
+    // The fall-through is whichever bucket has no upper bound — *derived*, not
+    // assumed to be the last entry. Hardcoding the tail index would keep
+    // working right up until someone reorders the array, and then silently
+    // file every long book under whatever landed there.
+    let open = LENGTH_BUCKETS
+        .iter()
+        .position(|(_, upper)| upper.is_none())
+        .unwrap_or(unknown.saturating_sub(1));
     let mut sql = format!("CASE WHEN {pages_col} IS NULL THEN {unknown} ");
     for (i, (_, upper)) in LENGTH_BUCKETS.iter().enumerate() {
         if let Some(bound) = upper {
             sql.push_str(&format!("WHEN {pages_col} < {bound} THEN {i} "));
         }
     }
-    // The trailing bucket is open-ended, so it's the fall-through.
-    sql.push_str(&format!("ELSE {} END", unknown - 1));
+    sql.push_str(&format!("ELSE {open} END"));
     sql
 }
 

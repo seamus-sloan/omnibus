@@ -223,9 +223,9 @@ pub struct PeriodComparison {
 /// explicit `book_read_status` of `finished`, never from the session tables
 /// (which carry duration but no progress). A book finished both ways counts
 /// once, and every completion metric on this struct — `books_finished`,
-/// `finished_books`, `books_per_month`, `pages_read` and `previous` — shares
-/// that one definition, live books only. They must not drift apart: two of
-/// them render on the same screen.
+/// `finished_books`, `books_per_month`, `pages_read`, `length_buckets` and
+/// `previous` — shares that one definition, live books only. They must not
+/// drift apart: several of them render on the same screen.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct StatsSummary {
     pub range: StatsRange,
@@ -247,9 +247,13 @@ pub struct StatsSummary {
     /// ending earlier reports zero.
     ///
     /// Server-computed so every client renders the same number rather than
-    /// each deriving its own from `heatmap`. Windowed like every other figure
-    /// here, so a `Week` range caps it at 7 — the unbounded current streak is
-    /// the one on the `AllTime` summary.
+    /// each deriving its own from `heatmap`. **Not windowed**, unlike every
+    /// other figure here: a streak is a fact about right now, not about a
+    /// reporting period, so this reads the same on every `StatsRange`. Windowed
+    /// it would report 2 on the 2nd of the month for a reader 40 days deep —
+    /// and the web card (fed the all-time summary) and the iOS tile (fed the
+    /// period-scoped one) would disagree about the very field that exists to
+    /// stop clients disagreeing.
     #[serde(default)]
     pub current_streak_days: i64,
     /// First active day (UTC `YYYY-MM-DD`) of the busiest ISO week, if any.
@@ -303,11 +307,16 @@ pub struct StatsSummary {
     /// bucket counts sum to the set the mean is taken over.
     #[serde(default)]
     pub rating_histogram: Vec<RatingBucket>,
-    /// Estimated pages read in the window — the Pages tile. Summed from each
-    /// finished book's persisted `word_count` estimate (`books.word_count`,
-    /// set at index time) and converted to pages (see `db::stats` for the
-    /// sourcing model); `None` when no finished book in the window has a
-    /// stored estimate, driving the tile's em-dash empty state.
+    /// Pages read in the window — the Pages tile. Each book finished in the
+    /// window contributes its length as resolved by the one ladder in
+    /// `db::stats::pages`: a print-edition page count from the metadata
+    /// overrides, else a comic's exact image-page count, else the EPUB word
+    /// estimate. Exact for some books and an estimate for others, which is why
+    /// the tile labels itself as an estimate.
+    ///
+    /// `None` when no finished book in the window resolves a length on any
+    /// rung — an unmeasured book contributes nothing rather than zero — which
+    /// drives the tile's em-dash empty state.
     #[serde(default)]
     pub pages_read: Option<i64>,
     /// Books finished in the window bucketed by length, plus the unknown

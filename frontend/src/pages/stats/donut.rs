@@ -149,7 +149,7 @@ fn untagged_note(untagged: i64) -> String {
 /// distribution over fewer books than the window actually holds.
 #[component]
 pub(super) fn LengthSplit(summary: StatsSummary) -> Element {
-    let buckets = summary.length_buckets.clone();
+    let buckets = summary.length_buckets;
     let total: i64 = buckets.iter().map(|b| b.books).sum();
     if total <= 0 {
         return rsx! {
@@ -168,7 +168,7 @@ pub(super) fn LengthSplit(summary: StatsSummary) -> Element {
                     // Indexed rather than label-keyed: the bucket set is fixed
                     // and server-owned, and two of the labels could in
                     // principle be renamed to collide.
-                    div { key: "{i}", class: "st-format-row",
+                    div { key: "{i}", class: "st-format-row", "data-testid": "stats-length-row",
                         div { class: "st-format-row-head",
                             span { class: "st-format-name", "{bucket.label}" }
                             // The count, not the share: "3 books" answers the
@@ -281,6 +281,56 @@ mod tests {
         assert_eq!(folded[4], ("Other".to_string(), 8));
         let pct = percentages(&folded.iter().map(|(_, c)| *c).collect::<Vec<_>>());
         assert_eq!(pct.iter().sum::<i64>(), 100);
+    }
+
+    #[cfg(feature = "server")]
+    fn length_summary(buckets: &[(&str, i64)]) -> StatsSummary {
+        StatsSummary {
+            length_buckets: buckets
+                .iter()
+                .map(|(label, books)| omnibus_shared::LengthBucket {
+                    label: (*label).to_string(),
+                    books: *books,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn length_split_renders_every_bucket_the_server_sent_with_its_count() {
+        let summary = length_summary(&[
+            ("Under 300", 3),
+            ("300\u{2013}499", 2),
+            ("500+", 0),
+            ("Unknown", 1),
+        ]);
+        let html = crate::test_support::render(rsx! { LengthSplit { summary } });
+
+        // Including the empty bucket — a missing bar reads as a different
+        // distribution — and the unknown one, which is the whole point: an
+        // audiobook has no page analogue and must not be filed as short.
+        for label in ["Under 300", "300\u{2013}499", "500+", "Unknown"] {
+            assert!(html.contains(label), "missing {label}: {html}");
+        }
+        assert!(html.contains("stats-length-split"), "{html}");
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn length_split_says_nothing_was_finished_rather_than_drawing_flat_bars() {
+        // The server sends the zero-filled spine whether or not anything was
+        // finished, so the card decides on the total. Four zero-width bars
+        // would read as a real distribution over no books.
+        let summary = length_summary(&[("Under 300", 0), ("500+", 0), ("Unknown", 0)]);
+        let html = crate::test_support::render(rsx! { LengthSplit { summary } });
+
+        assert!(
+            html.contains("No books finished in this period yet."),
+            "{html}"
+        );
+        assert!(!html.contains("st-format-track"), "{html}");
     }
 
     #[test]

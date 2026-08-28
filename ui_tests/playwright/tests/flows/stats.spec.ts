@@ -239,7 +239,7 @@ test("the Avg rating drill-in charts every half-star bucket on a star axis", asy
   const chart = page.getByTestId("stats-drill-histogram");
   await expect(chart).toBeVisible();
   await expect
-    .poll(() => chart.locator(".st-drill-trend-label").allInnerTexts())
+    .poll(() => chart.getByTestId("stats-drill-bar-label").allInnerTexts())
     .toEqual(["0.5", "1", "1.5", "2", "2.5", "3", "3.5", "4", "4.5", "5"]);
   // The tallest bucket carries its book count on hover.
   await expect(chart.locator('[title="5 ★ · 3 books"]')).toBeVisible();
@@ -386,7 +386,7 @@ test("the length distribution buckets finished books and never hides the unknown
     await expect(card).toContainText(label);
   }
   // Counts, not shares: "3 books" needs no denominator to be read.
-  await expect(card.locator(".st-format-row").first()).toContainText("3");
+  await expect(card.getByTestId("stats-length-row").first()).toContainText("3");
 });
 
 test("the books-per-month chart renders twelve bars with the current month highlighted", async ({
