@@ -179,17 +179,75 @@ fn stage_for_close_match_flattens_the_wire_head_and_tail_into_one_picker() {
 
 #[test]
 fn close_match_copy_asks_which_one_only_when_several_books_are_offered() {
-    let one = CloseMatchCopy::for_count(false);
+    let one = CloseMatchCopy::for_lookup(false, FoundVia::IsbnEntry);
     assert_eq!(one.heading, "Is this the book?");
     assert_eq!(one.pick, "Yes, that's it");
     assert_eq!(one.decline, "No, different book");
 
-    let many = CloseMatchCopy::for_count(true);
+    let many = CloseMatchCopy::for_lookup(true, FoundVia::IsbnEntry);
     assert_eq!(many.heading, "Which one is this?");
     assert_eq!(many.pick, "This one");
     assert_eq!(many.decline, "None of these");
     // A picker that says "match this one" reads as a single suggestion.
     assert!(many.subtitle.ends_with("match these."), "{}", many.subtitle);
+}
+
+/// #2247: a title search supplies no ISBN, so neither the ISBN line nor the
+/// no-match sentence may claim the reader entered or scanned one.
+#[test]
+fn found_via_words_the_isbn_line_for_the_door_the_reader_came_through() {
+    assert_eq!(
+        FoundVia::IsbnEntry.isbn_line("9780441013593"),
+        "Entered ISBN 9780441013593"
+    );
+    assert_eq!(
+        FoundVia::BarcodeScan.isbn_line("9780441013593"),
+        "Scanned ISBN 9780441013593"
+    );
+    let searched = FoundVia::TitleSearch.isbn_line("9780441013593");
+    assert!(searched.contains("9780441013593"), "{searched}");
+    assert!(!searched.contains("Entered"), "{searched}");
+    assert!(!searched.contains("Scanned"), "{searched}");
+}
+
+#[test]
+fn found_via_words_the_no_library_match_sentence_for_each_door() {
+    assert!(FoundVia::IsbnEntry
+        .no_library_match(false)
+        .starts_with("The ISBN you entered"));
+    assert!(FoundVia::BarcodeScan
+        .no_library_match(false)
+        .starts_with("The ISBN you scanned"));
+    let searched = FoundVia::TitleSearch.no_library_match(false);
+    assert!(!searched.contains("you entered"), "{searched}");
+    assert!(!searched.contains("you scanned"), "{searched}");
+}
+
+/// Only the camera path is a scan; the keypad is a manual entry and a title
+/// search is neither.
+#[test]
+fn found_via_records_a_distinct_wishlist_provenance_per_door() {
+    assert_eq!(
+        FoundVia::BarcodeScan.wishlist_source(),
+        WishlistSource::Scan
+    );
+    assert_eq!(
+        FoundVia::IsbnEntry.wishlist_source(),
+        WishlistSource::Manual
+    );
+    assert_eq!(
+        FoundVia::TitleSearch.wishlist_source(),
+        WishlistSource::Search
+    );
+}
+
+/// The scanner is the one screen a barcode can come from; everything else
+/// that submits an ISBN is typing.
+#[test]
+fn found_via_from_stage_treats_only_the_camera_as_a_scan() {
+    assert_eq!(FoundVia::from_stage(&Stage::Scan), FoundVia::BarcodeScan);
+    assert_eq!(FoundVia::from_stage(&Stage::Entry), FoundVia::IsbnEntry);
+    assert_eq!(FoundVia::from_stage(&Stage::Lookup), FoundVia::IsbnEntry);
 }
 
 #[test]
@@ -220,11 +278,18 @@ fn some_if_filled_drops_blank_notes() {
 }
 
 #[test]
-fn wishlist_request_for_targets_the_online_meta_and_records_the_scan_source() {
-    let req = wishlist_request_for(&external());
+fn wishlist_request_for_targets_the_online_meta_and_records_how_it_was_found() {
+    let req = wishlist_request_for(&external(), FoundVia::BarcodeScan);
     assert!(req.book_uuid.is_none());
     assert_eq!(req.meta.map(|m| m.isbn13), Some("9780441013593".into()));
     assert_eq!(req.source, WishlistSource::Scan);
+
+    // The same chooser reached through a title search must not label its
+    // entry a scan (#2247).
+    assert_eq!(
+        wishlist_request_for(&external(), FoundVia::TitleSearch).source,
+        WishlistSource::Search
+    );
 }
 
 #[test]
@@ -290,6 +355,7 @@ fn go_to_search_opens_the_lookup_stage_and_clears_a_stale_error() {
             note: Signal::new(String::new()),
             busy: Signal::new(false),
             error: Signal::new(Some("Could not look that up".to_string())),
+            found_via: Signal::new(FoundVia::IsbnEntry),
         };
         go_to_search(state).call(());
 
@@ -360,6 +426,7 @@ fn go_to_link_opens_the_picker_with_the_scanned_isbn_and_a_way_back() {
             note: Signal::new(String::new()),
             busy: Signal::new(false),
             error: Signal::new(Some("Could not look that up".to_string())),
+            found_via: Signal::new(FoundVia::IsbnEntry),
         };
         go_to_link(state, "9780441013593".to_string(), origin).call(());
 

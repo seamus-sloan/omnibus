@@ -85,6 +85,13 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
     // write lands outside the save bar — today only a cover, which is the one
     // edit on this page that doesn't wait for Save.
     let mut live_book = use_signal(|| book.clone());
+    // Both cover surfaces route their write through here, so the save bar can
+    // stop claiming "No changes" over a cover the reader just replaced.
+    let mut cover_replaced = form.dirty.cover_replaced;
+    let on_cover_applied = EventHandler::new(move |updated: EbookMetadata| {
+        live_book.set(updated);
+        cover_replaced.set(true);
+    });
 
     rsx! {
         div { class: "me-root", style: "{form.accent_style}",
@@ -106,12 +113,13 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
                     suggestions: form.suggestions,
                     uuid: uuid.clone(),
                     book: live_book(),
-                    on_cover_applied: move |updated| live_book.set(updated),
+                    on_cover_applied,
                 }
                 Sidebar {
                     book: live_book(),
                     saving: form.status.saving,
                     on_revert: form.on_revert,
+                    on_cover_applied,
                 }
             }
 

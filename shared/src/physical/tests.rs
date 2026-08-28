@@ -9,6 +9,7 @@ fn wishlist_source_round_trips_through_the_db_string_for_every_variant() {
         WishlistSource::Scan,
         WishlistSource::Detail,
         WishlistSource::Manual,
+        WishlistSource::Search,
     ] {
         assert_eq!(
             WishlistSource::from_db(variant.as_str()),

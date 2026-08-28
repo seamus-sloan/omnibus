@@ -82,7 +82,6 @@ pub fn AddBooksPage() -> Element {
 
     let on_file = make_on_file(server_url.clone(), state);
     let on_submit = make_on_submit(server_url, state, nav);
-    let is_audiobook = (state.mode)() == UploadMode::Audiobook;
 
     if !can_upload() {
         return rsx! { AddBooksForbidden {} };
@@ -105,7 +104,6 @@ pub fn AddBooksPage() -> Element {
             if (state.inspected)() {
                 ConfirmForm {
                     state,
-                    audiobook: is_audiobook,
                     on_submit: EventHandler::new(on_submit),
                 }
             }
@@ -339,6 +337,8 @@ fn submit_audiobook(server_url: String, state: UploadState, nav: dioxus_router::
     let meta = AudiobookUploadMeta {
         title: confirmed_title,
         author: confirmed_author,
+        series: (s.series)().trim().to_string(),
+        series_index: (s.series_index)().trim().to_string(),
     };
     s.busy.set(true);
     s.status.set(Some("Adding to your library\u{2026}".into()));
@@ -476,10 +476,11 @@ fn FileDropZone(state: UploadState, on_file: EventHandler<Event<FormData>>) -> E
     }
 }
 
-/// Editable confirm form shown after a successful inspect. Audiobooks omit the
-/// series fields (the audiobook parser doesn't extract them).
+/// Editable confirm form shown after a successful inspect. Both upload types
+/// offer the series fields: the audiobook parser usually extracts nothing, and
+/// this is the only point in the flow where a series can be supplied.
 #[component]
-fn ConfirmForm(state: UploadState, audiobook: bool, on_submit: EventHandler<FormEvent>) -> Element {
+fn ConfirmForm(state: UploadState, on_submit: EventHandler<FormEvent>) -> Element {
     let mut title = state.title;
     let mut author = state.author;
     let mut series = state.series;
@@ -511,26 +512,24 @@ fn ConfirmForm(state: UploadState, audiobook: bool, on_submit: EventHandler<Form
                     oninput: move |e| author.set(e.value()),
                 }
             }
-            if !audiobook {
-                div { class: "settings-field",
-                    label { r#for: "add-books-series", "Series" }
-                    input {
-                        id: "add-books-series",
-                        r#type: "text",
-                        value: "{series}",
-                        disabled: busy(),
-                        oninput: move |e| series.set(e.value()),
-                    }
+            div { class: "settings-field",
+                label { r#for: "add-books-series", "Series" }
+                input {
+                    id: "add-books-series",
+                    r#type: "text",
+                    value: "{series}",
+                    disabled: busy(),
+                    oninput: move |e| series.set(e.value()),
                 }
-                div { class: "settings-field",
-                    label { r#for: "add-books-series-index", "Series index" }
-                    input {
-                        id: "add-books-series-index",
-                        r#type: "text",
-                        value: "{series_index}",
-                        disabled: busy(),
-                        oninput: move |e| series_index.set(e.value()),
-                    }
+            }
+            div { class: "settings-field",
+                label { r#for: "add-books-series-index", "Series index" }
+                input {
+                    id: "add-books-series-index",
+                    r#type: "text",
+                    value: "{series_index}",
+                    disabled: busy(),
+                    oninput: move |e| series_index.set(e.value()),
                 }
             }
 
@@ -550,6 +549,37 @@ fn ConfirmForm(state: UploadState, audiobook: bool, on_submit: EventHandler<Form
 #[cfg(all(test, feature = "server"))]
 mod render_tests {
     use super::*;
+
+    /// Switching the upload type to Audiobook must not take the series fields
+    /// away (#2254): the audiobook parser usually extracts nothing, so the
+    /// confirm form is the only place a series can be supplied.
+    #[test]
+    fn confirm_form_renders_series_fields_for_an_audiobook_upload() {
+        #[component]
+        fn Harness(mode: UploadMode) -> Element {
+            let state = UploadState {
+                mode: use_signal(|| mode),
+                filename: use_signal(String::new),
+                file_bytes: use_signal(|| None),
+                audio_files: use_signal(Vec::new),
+                title: use_signal(String::new),
+                author: use_signal(String::new),
+                series: use_signal(String::new),
+                series_index: use_signal(String::new),
+                inspected: use_signal(|| true),
+                busy: use_signal(|| false),
+                status: use_signal(|| None),
+                status_is_error: use_signal(|| false),
+            };
+            rsx! { ConfirmForm { state, on_submit: EventHandler::new(|_| {}) } }
+        }
+
+        for mode in [UploadMode::Audiobook, UploadMode::Ebook] {
+            let html = dioxus::ssr::render_element(rsx! { Harness { mode } });
+            assert!(html.contains("id=\"add-books-series\""));
+            assert!(html.contains("id=\"add-books-series-index\""));
+        }
+    }
 
     /// A user without `can_upload` sees the not-authorized state, not the
     /// upload form — the markup `AddBooksPage` returns via `AddBooksForbidden`

@@ -13,7 +13,10 @@ mod session_key;
 mod token;
 mod users;
 
-pub use avatars::{delete_user_avatar, get_user_avatar, upsert_user_avatar, UserAvatar};
+pub use avatars::{
+    backfill_avatar_thumbs, delete_user_avatar, get_user_avatar, get_user_avatar_variant,
+    upsert_user_avatar, AvatarVariant, UserAvatar,
+};
 pub use device::{
     list_devices_for_user, register_device, revoke_device, validate_client_version,
     validate_device_name, LIST_DEVICES_LIMIT, MAX_CLIENT_VERSION_CHARS, MAX_DEVICES_PER_USER,

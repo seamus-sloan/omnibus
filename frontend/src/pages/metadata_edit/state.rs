@@ -4,7 +4,7 @@
 
 use dioxus::prelude::*;
 use dioxus_router::navigator;
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{EbookMetadata, MetadataOverrides};
 
 use super::form_grid::{FormFields, FormSuggestions};
 use super::save_bar::{DirtyState, SaveStatus};
@@ -47,6 +47,10 @@ pub(super) fn use_metadata_edit_form_state(
 
     let dirty_fields = use_dirty_fields(orig, fields);
     let dirty_count = use_memo(move || dirty_fields().len());
+    // Set by the two surfaces that write a cover (the sidebar editor and the
+    // compare view's cover row). Starts `false`, so SSR and the first WASM
+    // paint render the same bar (rule 07).
+    let cover_replaced = use_signal(|| false);
 
     let (display_title, primary_author, primary_author_id, accent_style) = header_strings(book);
 
@@ -60,6 +64,7 @@ pub(super) fn use_metadata_edit_form_state(
         dirty: DirtyState {
             fields: dirty_fields,
             count: dirty_count,
+            cover_replaced,
         },
         status: SaveStatus {
             saving,
@@ -317,6 +322,10 @@ fn parse_print_pages_field(input: &str) -> Result<Option<i64>, String> {
 
 /// Save handler — builds the diff and POSTs to the overrides endpoint,
 /// then navigates back to the book detail page on success.
+///
+/// An empty diff skips the round trip and just leaves: the save bar enables
+/// Save with no dirty field only after a cover write, which has already
+/// landed server-side, so there is nothing left for the POST to carry (#2241).
 fn build_on_save(
     server_url: &str,
     uuid: &str,
@@ -379,6 +388,12 @@ fn build_on_save(
                     genres: &genres(),
                 },
             );
+
+            if overrides == MetadataOverrides::default() {
+                navigator().push(Route::BookDetail { uuid });
+                saving.set(false);
+                return;
+            }
 
             match data::save_overrides(&url, &uuid, &overrides).await {
                 Ok(_) => {

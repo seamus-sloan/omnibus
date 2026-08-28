@@ -20,15 +20,22 @@ pub struct PhysicalCopy {
 }
 
 /// Where a wishlist entry was added from. Persisted as the `source` column.
+///
+/// The check-in flow has three front doors and they are not interchangeable
+/// to a reader: a barcode read off the cover, an ISBN typed at the keypad,
+/// and a title search whose ISBN came from the *provider* rather than from
+/// the reader at all (#2247).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WishlistSource {
-    /// Added while resolving a barcode/ISBN scan.
+    /// Added after reading a barcode with the camera.
     Scan,
     /// Added from a book's detail page.
     Detail,
-    /// Added by hand (manual metadata entry).
+    /// Added after an ISBN was typed by hand rather than scanned.
     Manual,
+    /// Added after a title search — the reader supplied no ISBN at all.
+    Search,
 }
 
 impl WishlistSource {
@@ -38,6 +45,7 @@ impl WishlistSource {
             WishlistSource::Scan => "scan",
             WishlistSource::Detail => "detail",
             WishlistSource::Manual => "manual",
+            WishlistSource::Search => "search",
         }
     }
 
@@ -47,6 +55,7 @@ impl WishlistSource {
             "scan" => Some(WishlistSource::Scan),
             "detail" => Some(WishlistSource::Detail),
             "manual" => Some(WishlistSource::Manual),
+            "search" => Some(WishlistSource::Search),
             _ => None,
         }
     }

@@ -619,3 +619,98 @@ async fn backfill_thumbs_reports_progress_only_for_stale_covers_in_a_mixed_libra
     let _ = std::fs::remove_dir_all(&covers_dir);
     let _ = std::fs::remove_dir_all(&thumbs_dir);
 }
+
+// ---------- cover backfill (#2240 legacy EPUB2 cover declarations) ----------
+
+/// Index one EPUB from `bytes` with no cover (the shape a scan produced
+/// before the extractor learned the legacy declaration) and return its
+/// library path and uuid.
+async fn seed_coverless_epub(pool: &SqlitePool, tag: &str, dir: &std::path::Path) -> String {
+    crate::replace_books(
+        pool,
+        dir.to_str().unwrap(),
+        vec![crate::ebook::IndexedBook {
+            metadata: omnibus_shared::EbookMetadata {
+                filename: format!("{tag}.epub"),
+                title: Some("Coverless".into()),
+                ..Default::default()
+            },
+            cover: None,
+            mtime_epoch: 0,
+            size_bytes: 0,
+            word_count: None,
+        }],
+    )
+    .await
+    .unwrap();
+    sqlx::query_scalar("SELECT uuid FROM books LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// AC3 of #2240: a book already in the library — untouched on disk, so the
+/// reindex diff skips it forever — picks up the cover the fixed extractor
+/// can now see, with no manual intervention.
+#[tokio::test]
+async fn backfill_covers_fills_a_cover_the_earlier_scan_missed() {
+    let covers_dir = make_test_dir("cover-backfill-covers");
+    let _env = EnvVarGuard::set_os("OMNIBUS_COVERS_DIR", Some(covers_dir.as_os_str()));
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("cover-backfill-lib");
+    crate::ebook::test_support::copy_fixture_with_legacy_cover("alpha.epub", &dir, "legacy.epub");
+    let uuid = seed_coverless_epub(&pool, "legacy", &dir).await;
+
+    let mut seen = 0u32;
+    backfill_covers(&pool, dir.to_str().unwrap(), |_, _, _| seen += 1)
+        .await
+        .unwrap();
+    assert_eq!(seen, 1);
+
+    let has_cover: i64 = sqlx::query_scalar("SELECT has_cover FROM books WHERE uuid = ?")
+        .bind(&uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(has_cover, 1);
+    assert!(crate::covers::find_cover_file(&uuid).is_some());
+
+    // Converged: the candidate query keys on `has_cover`, so a second run
+    // visits nothing.
+    let mut second = 0u32;
+    backfill_covers(&pool, dir.to_str().unwrap(), |_, _, _| second += 1)
+        .await
+        .unwrap();
+    assert_eq!(second, 0);
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&covers_dir);
+}
+
+/// A book that genuinely has no cover stays a candidate rather than being
+/// marked covered — the same "unreadable is retried, not tombstoned" rule
+/// the structure backfill follows.
+#[tokio::test]
+async fn backfill_covers_leaves_a_genuinely_coverless_book_alone() {
+    let covers_dir = make_test_dir("cover-backfill-none-covers");
+    let _env = EnvVarGuard::set_os("OMNIBUS_COVERS_DIR", Some(covers_dir.as_os_str()));
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("cover-backfill-none-lib");
+    std::fs::write(dir.join("bare.epub"), b"not an epub").unwrap();
+    let uuid = seed_coverless_epub(&pool, "bare", &dir).await;
+
+    backfill_covers(&pool, dir.to_str().unwrap(), |_, _, _| {})
+        .await
+        .unwrap();
+
+    let has_cover: i64 = sqlx::query_scalar("SELECT has_cover FROM books WHERE uuid = ?")
+        .bind(&uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(has_cover, 0);
+    assert!(crate::covers::find_cover_file(&uuid).is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&covers_dir);
+}
