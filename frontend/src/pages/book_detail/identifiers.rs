@@ -74,22 +74,23 @@ fn bd_known_scheme_label(scheme: &str) -> Option<&'static str> {
 /// falls back to the value's own shape, so no row is ever labelled with a raw
 /// codelist number.
 fn bd_identifier_label_ranked(ident: &Identifier) -> (String, LabelRank) {
-    match ident.scheme.as_deref().map(str::trim) {
-        Some(scheme) if bd_known_scheme_label(scheme).is_some() => (
-            bd_known_scheme_label(scheme).unwrap_or(scheme).to_string(),
-            LabelRank::Known,
-        ),
-        Some(scheme)
-            if !scheme.is_empty()
-                && !scheme.eq_ignore_ascii_case("unknown")
-                // An unrecognized all-digit scheme is a codelist value this
-                // table doesn't know, not a name worth showing a reader.
-                && !scheme.chars().all(|c| c.is_ascii_digit()) =>
-        {
-            (scheme.to_string(), LabelRank::RawScheme)
+    if let Some(scheme) = ident.scheme.as_deref().map(str::trim) {
+        if let Some(label) = bd_known_scheme_label(scheme) {
+            return (label.to_string(), LabelRank::Known);
         }
-        _ if bd_looks_like_isbn(&ident.value) => ("ISBN".to_string(), LabelRank::Inferred),
-        _ => ("Identifier".to_string(), LabelRank::Inferred),
+        // An unrecognized all-digit scheme is a codelist value this table
+        // doesn't know, not a name worth showing a reader.
+        if !scheme.is_empty()
+            && !scheme.eq_ignore_ascii_case("unknown")
+            && !scheme.chars().all(|c| c.is_ascii_digit())
+        {
+            return (scheme.to_string(), LabelRank::RawScheme);
+        }
+    }
+    if bd_looks_like_isbn(&ident.value) {
+        ("ISBN".to_string(), LabelRank::Inferred)
+    } else {
+        ("Identifier".to_string(), LabelRank::Inferred)
     }
 }
 
