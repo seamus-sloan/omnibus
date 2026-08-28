@@ -102,11 +102,23 @@ transcripts are thrown away.
 |---|---|
 | `ts` | UTC, ms precision. The report correlates agents on this alone — never batch entries and stamp them later. |
 | `seq` | Your own counter, monotonic and unique **per actor**. Derive it from the journal filtered to your own `actor`, never from the line count — the journal is shared, so counting all lines numbers you by other agents' work. Starting above 1 is acceptable; going backwards or repeating is not. |
-| `action` | Dotted verb — `book.open`, `highlight.create`, `metadata.save`, `shelf.add`. |
+| `action` | `noun.verb`, lowercase — `book.open`, `highlight.create`, `shelf.add`. The noun list and the rules around it are [vocabulary.md](vocabulary.md); read it once. A name the audit cannot place is a write it cannot check. |
 | `target` | The book uuid or other entity id, **in full** — never abbreviated. Ownership is looked up on this exact string, so a truncated uuid loses the book forever. `null` when there isn't one. |
 | `params` | **Everything a replayer needs to redo this.** Under-filling it is the commonest way a real bug becomes an anecdote. |
-| `outcome` | `ok`, `error`, or `refused` (an ownership or permission refusal that was correct). |
+| `outcome` | `ok`, `error`, or `refused` (an ownership or permission refusal that was correct) — **those three and no others.** It describes what the app did, not how sure you are. |
 | `note` | One human sentence **about the outcome**. Required whenever `outcome` is not `ok`. Content the *user* wrote — a highlight's note, a journal entry — belongs in `params` under its own key (`note_text`), never here. |
+
+**Never write `outcome: "uncertain"`.** The audit skips every entry whose
+outcome is not `ok` as "not a completed write", so an uncertain outcome deletes
+that write from the very check that exists to resolve your uncertainty. If you
+performed the act and do not know whether it stuck, that is `ok` plus a `note`
+saying so — then let the audit answer it. `uncertain` is a *flow verdict*, and
+it stays that.
+
+Journal a machine-readable position wherever the app gives you one — an
+`epub_cfi`, an elapsed time in seconds — in `params` beside the human-readable
+location. Prose cannot be replayed; a percentage can be approximated; a cfi is
+exact.
 
 Three entries are special:
 
@@ -116,10 +128,10 @@ Three entries are special:
 - **`flow.end`** — last line. `params` carries `verdict` (`pass`, `fail`, or
   `uncertain`) and a one-sentence `reason`.
 
-Journal the **intent** as well as the act. "I highlighted the third paragraph
-of chapter four in green with the note 'check this'" is what the audit
-reconciles against the server later. If you do not write down what you meant to
-happen, nothing downstream can tell whether it did.
+Journal the **intent** as well as the act — "I highlighted the third paragraph
+of chapter four in green, note 'check this'" is what the audit reconciles
+against the server. Without what you meant to happen, nothing can tell whether
+it did.
 
 ## Deciding pass or fail
 
