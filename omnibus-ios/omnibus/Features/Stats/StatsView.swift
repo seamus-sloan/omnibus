@@ -596,19 +596,38 @@ struct StatsView: View {
         ].compactMap { $0 }
     }
 
+    /// Parses the server's UTC `YYYY-MM-DD`. Fixed-format, so it is pinned to
+    /// `en_US_POSIX` and Gregorian — a device on a non-Gregorian calendar
+    /// would otherwise fail to read the wire format at all.
+    private static let wireDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// Renders "14 Nov 2023". Also pinned to `en_US_POSIX`: the surrounding
+    /// copy ("Week of …", "Biggest day") is English, and the device locale
+    /// would splice a translated month into it — "Week of 13 nov. 2023".
+    private static let displayDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "d MMM yyyy"
+        return f
+    }()
+
     /// A UTC `YYYY-MM-DD` as "14 Nov 2023", passing anything unparseable
     /// through — a malformed day is better company for its figure than none.
+    ///
+    /// Both formatters are cached statics: `DateFormatter` construction is
+    /// expensive and this runs for every standout row on every render.
     static func prettyDay(_ day: String) -> String {
-        let wire = DateFormatter()
-        wire.calendar = Calendar(identifier: .gregorian)
-        wire.locale = Locale(identifier: "en_US_POSIX")
-        wire.timeZone = TimeZone(identifier: "UTC")
-        wire.dateFormat = "yyyy-MM-dd"
-        guard let date = wire.date(from: day) else { return day }
-        let out = DateFormatter()
-        out.timeZone = TimeZone(identifier: "UTC")
-        out.dateFormat = "d MMM yyyy"
-        return out.string(from: date)
+        guard let date = wireDayFormatter.date(from: day) else { return day }
+        return displayDayFormatter.string(from: date)
     }
 
     /// "412 pages" / "1 page" — the unit is the row's, since

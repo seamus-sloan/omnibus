@@ -1,10 +1,6 @@
-//! Superlatives card: the window's single most-X figures, the ranked
-//! one-liners the tiles' totals can't say. Every row is conditional — a window
-//! that can't support a superlative omits it rather than rendering an
-//! em-dash, so the card's own length reports how much the window holds.
-//!
-//! Two of the rows are figures the payload has always carried and no surface
-//! drew: the busiest week, and the top-ranked author and subject.
+//! Superlatives card for the `/stats` period section: the window's single
+//! most-X figures. Every row is conditional, so the card's own length reports
+//! how much the window holds — see [`build_rows`] for which fields feed it.
 
 use dioxus::prelude::*;
 use omnibus_shared::{BookSuperlative, RankedEntity, StatsSummary, FASTEST_READ_MIN_SECS};
@@ -73,6 +69,9 @@ fn ranked_row(label: &'static str, ranked: &[RankedEntity]) -> Option<Row> {
 /// Every superlative the window supports, in reading order. Book-length rows
 /// first (they're what a reader quotes), then the time-shaped ones, then the
 /// two rankings.
+///
+/// The last three come off fields the payload has always carried and no web
+/// surface drew: the busiest week, and the top-ranked author and subject.
 fn build_rows(summary: &StatsSummary) -> Vec<Row> {
     let s = &summary.superlatives;
     let busiest_week = summary
