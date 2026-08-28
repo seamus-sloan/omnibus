@@ -26,7 +26,13 @@ struct TimePatternCharts: View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
             if summary.hasTimePatterns {
                 strip("Hour of day") { hourChart }
-                strip("Day of week") { weekdayChart }
+                // `hasTimePatterns` keys on the hour strip alone, and
+                // `chartXScale` takes the weekday domain straight from the
+                // wire — so a payload carrying hours without weekdays would
+                // hand Charts an empty categorical domain.
+                if !summary.dayOfWeek.isEmpty {
+                    strip("Day of week") { weekdayChart }
+                }
             } else {
                 // Both strips are fixed-width, so drawing them here would show
                 // a measured-looking day made entirely of zeros.

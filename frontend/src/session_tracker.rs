@@ -149,39 +149,41 @@ fn build_report(uuid: &str, format: ProgressFormat, start: i64, end: i64) -> Opt
         // Web posts a report once, on unmount, and never retries it — there
         // is no replay for a handle to make idempotent.
         client_id: None,
-        utc_offset_minutes: local_utc_offset_minutes(),
+        utc_offset_minutes: local_utc_offset_minutes(start),
     })
 }
 
-/// Minutes east of UTC on this device right now — `-420` in Los Angeles,
-/// `330` in Kolkata. Stamped onto every session so the server can bucket it
-/// on the reader's own clock (`db::stats::patterns`) instead of on UTC.
+/// Minutes east of UTC on this device as of `unix_secs` — `-420` in Los
+/// Angeles, `330` in Kolkata. Stamped onto every session so the server can
+/// bucket it on the reader's own clock (`db::stats::patterns`) instead of on
+/// UTC.
 ///
-/// Read at capture time rather than at render time on purpose: it is a fact
-/// about where the reading happened, and a reader who later travels must not
-/// have last month's evenings relabelled.
+/// Asked about the segment's own start rather than about "now": the two
+/// differ by an hour across a DST transition, and the offset that belongs on
+/// the row is the one that was in effect while the reading happened. It is a
+/// fact about where and when the reading happened, so a reader who later
+/// travels — or reads through the small hours of a transition night — must
+/// not have those sittings relabelled.
 ///
 /// Not a hydration concern (rule 07): this runs from the tracker's flush
 /// path, never from a component body, so no markup depends on it.
-fn local_utc_offset_minutes() -> Option<i64> {
+fn local_utc_offset_minutes(unix_secs: i64) -> Option<i64> {
     #[cfg(feature = "web")]
     {
-        // JS reports minutes *west* of UTC (UTC-7 → 420), the opposite sign
-        // to every other convention here and to what the column stores.
-        let west = js_sys::Date::new_0().get_timezone_offset();
-        if !west.is_finite() {
-            return None;
-        }
-        #[allow(clippy::cast_possible_truncation)]
-        let east = -west.round() as i64;
-        Some(east)
+        // `time::local_utc_offset_secs` already owns the JS sign flip and the
+        // for-this-timestamp lookup; a second derivation here is how the two
+        // drift apart.
+        Some(crate::time::local_utc_offset_secs(unix_secs) / 60)
     }
     // The Android shell builds native, where `std` exposes no local offset and
-    // the crate carries no date library to ask. Its sessions record without
-    // one and stay out of the local-time strips (they still count everywhere
-    // else) until it grows a source for it.
+    // the crate carries no date library to ask. `local_utc_offset_secs`
+    // answers 0 there, which is a *claim* of UTC rather than an absence — so
+    // this reports `None` instead, and the session stays out of the
+    // local-time strips (it still counts everywhere else) until the shell
+    // grows a source for it.
     #[cfg(not(feature = "web"))]
     {
+        let _ = unix_secs;
         None
     }
 }

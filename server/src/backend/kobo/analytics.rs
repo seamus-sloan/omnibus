@@ -144,11 +144,12 @@ async fn ingest_session(
         // `devices.id` is the mobile-device table; a Kobo has no row there.
         device_id: None,
         client_id: (!event.id.is_empty()).then(|| format!("kobo:{}", event.id)),
-        // A Kobo's `LeaveContent` event carries a UTC timestamp and nothing
-        // about where the device is, so there is no capture-time offset to
-        // record. These sessions count towards every UTC-bucketed metric and
-        // sit outside the local-time strips, as `db::stats::patterns` says
-        // unzoned rows do.
+        // A Kobo's `LeaveContent` timestamp is RFC 3339, so it *may* carry an
+        // offset — but `Z` and a genuine `+00:00` device are indistinguishable
+        // in it, and trusting it would stamp every UTC-suffixed Kobo as a
+        // reader living at UTC. `None` is the honest answer: these sessions
+        // count towards every UTC-bucketed metric and sit outside the
+        // local-time strips, as `db::stats::patterns` says unzoned rows do.
         utc_offset_minutes: None,
     };
     // Same validator the web/mobile session-report path runs — rejects a

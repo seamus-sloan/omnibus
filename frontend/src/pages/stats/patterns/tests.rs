@@ -32,6 +32,10 @@ fn duration_label_drops_the_unit_that_would_read_as_zero() {
     assert_eq!(duration_label(15_120), "4h 12m");
     assert_eq!(duration_label(2_100), "35m");
     assert_eq!(duration_label(50), "50s");
+    // Whole hours and the empty column's title are where this used to drift
+    // from iOS `Format.humanDuration`, which renders them "1h" and "0m".
+    assert_eq!(duration_label(3_600), "1h");
+    assert_eq!(duration_label(0), "0m");
 }
 
 #[test]

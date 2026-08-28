@@ -615,8 +615,13 @@ struct SessionReport: Codable, Sendable {
     var utcOffsetMinutes: Int64? = SessionReport.localOffsetMinutes()
 
     /// This device's current offset from UTC, in whole minutes.
-    static func localOffsetMinutes() -> Int64 {
-        Int64(TimeZone.current.secondsFromGMT() / 60)
+    ///
+    /// `zone` is a seam for the tests. The sign is the bug this can really
+    /// have — the web tracker has to negate JavaScript's opposite convention
+    /// to reach the same number — and a test that re-derives it from
+    /// `TimeZone.current` cannot catch a flip.
+    static func localOffsetMinutes(in zone: TimeZone = .current) -> Int64 {
+        Int64(zone.secondsFromGMT() / 60)
     }
 
     enum CodingKeys: String, CodingKey {

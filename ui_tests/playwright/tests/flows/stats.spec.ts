@@ -143,6 +143,14 @@ test("renders the stats page layout", async ({ page }) => {
   // The time-pattern card renders in both its states (strips or the
   // no-local-time note), so its presence is structural.
   await expect(page.getByTestId("stats-when")).toBeVisible();
+  // The strips are the live end of the whole local-time path — the seeded
+  // reports' `utc_offset_minutes` reaching the session column, the shifted
+  // rollup, and the wire fields. Every other assertion in this file mocks
+  // `/api/rpc/stats`, so without this one a serde rename or a dropped bind
+  // would leave the suite green with the card stuck in its empty state.
+  await expect(page.getByTestId("stats-when-empty")).toHaveCount(0);
+  await expect(page.getByTestId("stats-when-hours")).toBeVisible();
+  await expect(page.getByTestId("stats-when-weekdays")).toBeVisible();
   await expect(page.getByText("Not tied to the period above.")).toBeVisible();
   await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
 });
@@ -702,7 +710,13 @@ test("the time-pattern card says so rather than drawing flat bars", async ({
             hour,
             seconds: 0,
           })),
-          day_of_week: [],
+          // Zero-filled to 7 like the server always sends it — the card's
+          // empty state keys on the hour strip, not on a missing weekday
+          // array, so the mock has no business being a shape the server
+          // can't produce.
+          day_of_week: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(
+            (label, weekday) => ({ weekday, label, seconds: 0 }),
+          ),
           unzoned_seconds: 18720,
         }),
       ),

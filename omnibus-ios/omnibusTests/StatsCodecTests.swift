@@ -148,7 +148,13 @@ struct SessionReportZoneTests {
         let report = SessionReport(
             bookUUID: "uuid", format: .epub, startedAt: 0, endedAt: 60, progressUnits: 60,
             deviceId: nil)
-        #expect(report.utcOffsetMinutes == Int64(TimeZone.current.secondsFromGMT() / 60))
+        #expect(report.utcOffsetMinutes == SessionReport.localOffsetMinutes())
+        // Minutes *east* of UTC, pinned against fixed zones rather than
+        // re-derived: Los Angeles is -420 and Kolkata 330, and a flipped sign
+        // would put a Los Angeles evening at 04:00 — the exact misreport this
+        // field exists to prevent.
+        #expect(SessionReport.localOffsetMinutes(in: TimeZone(secondsFromGMT: -25200)!) == -420)
+        #expect(SessionReport.localOffsetMinutes(in: TimeZone(secondsFromGMT: 19800)!) == 330)
     }
 
     @Test("the offset rides the wire under its snake_case key")

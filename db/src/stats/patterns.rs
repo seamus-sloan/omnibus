@@ -1,40 +1,18 @@
 //! Time-of-day and day-of-week rollups for [`super::user_stats`]: how the
 //! window's reading and listening seconds distribute across the 24 hours of a
-//! day and the 7 days of a week. Both are zero-filled to their full width, so
-//! the shape of a day stays legible instead of collapsing to the hours that
-//! happened to have activity.
+//! day and the 7 days of a week, zero-filled to their full width so the shape
+//! of a day stays legible instead of collapsing to the hours that happened to
+//! have activity.
 //!
 //! # Timezone
 //!
-//! **These buckets are local-time, resolved from the UTC offset each session
-//! recorded at capture time (`SessionReport::utc_offset_minutes`, migration
-//! 0080).** Every other rollup in `db::stats` buckets in UTC, which for a
-//! calendar-day heatmap is a rounding error a reader never notices. For an
-//! hour-of-day chart it is the whole signal: a reader at UTC-7 who reads at
-//! 21:00 would be reported reading at 04:00, and the chart would not be
-//! slightly off, it would be wrong.
-//!
-//! Of the three ways to get a local answer, this one is the only retroactively
-//! honest one. A stored per-user timezone re-labels a session with wherever
-//! the account is *now*, so a fortnight read in Tokyo becomes a fortnight of
-//! 4am reading the moment the reader flies home. Bucketing client-side puts
-//! web, iOS, and any widget on three independent derivations of one chart —
-//! the disagreement the server-computed fields on `StatsSummary` exist to
-//! prevent. Recording where the device was keeps a Tokyo evening a Tokyo
-//! evening, and keeps the bucketing in one place.
-//!
-//! **Rows with no offset are excluded, not defaulted.** Sessions written
-//! before migration 0080 carry no record of where the reader was; stamping
-//! them UTC would invent a fact, and stamping them with a later-observed
-//! offset would invent a different one. Their seconds come back as
-//! [`TimePatterns::unzoned_seconds`] so the surfaces can disclose that the
-//! strips cover less than the window's total rather than quietly under-report.
-//! A stored per-user timezone would compose here as a fallback for exactly
-//! those rows; nothing else in this module would change.
-//!
-//! Only these two charts are local-time. The heatmap, streaks, active days,
-//! and the period boundaries themselves remain UTC — that is a broader fix
-//! than this module's scope.
+//! **Local-time**, from the offset each session recorded at capture
+//! (`SessionReport::utc_offset_minutes`, migration 0080), applied to the
+//! timestamp before bucketing; every other rollup in `db::stats` stays UTC.
+//! **Rows with no offset are excluded, not defaulted** — a pre-0080 row says
+//! nothing about where the reader was — and come back as
+//! [`TimePatterns::unzoned_seconds`] instead. Rationale in
+//! `docs/architecture.md`.
 
 use omnibus_shared::{HourBucket, WeekdayBucket};
 use sqlx::{Row, SqlitePool};

@@ -1,12 +1,8 @@
-//! Period-scoped time-pattern card: a 24-column hour-of-day strip and a
-//! 7-column day-of-week strip, sharing the pure-CSS normalized-bar treatment
-//! the drill-in trend chart uses (no charting dependency).
-//!
-//! Both strips render exactly the buckets the server sent — hours 0..=23 and
-//! Monday..Sunday, zeros included — and nothing here re-derives a bucket from
-//! a timestamp. The local-time question is settled server-side in
-//! `db::stats::patterns` precisely so this card, the iOS Charts sections, and
-//! anything else drawn from the same payload cannot disagree.
+//! Period-scoped time-pattern card for `super::StatsPage`: a 24-column
+//! hour-of-day strip and a 7-column day-of-week strip on the drill-in trend's
+//! pure-CSS normalized-bar treatment. Renders exactly the buckets the server
+//! sent and re-derives nothing from a timestamp, so this card and the iOS
+//! Charts sections cannot disagree — see `db::stats::patterns`.
 
 use dioxus::prelude::*;
 use omnibus_shared::{HourBucket, StatsSummary, WeekdayBucket};
@@ -43,11 +39,24 @@ fn normalize(values: &[i64]) -> Vec<u32> {
         .collect()
 }
 
-/// "4h 12m" / "35m" / "50s" — the magnitude a reader can't take off a bar.
+/// "4h 12m" / "1h" / "35m" / "50s" — the magnitude a reader can't take off a
+/// bar.
+///
+/// Kept character-for-character in step with iOS `Format.humanDuration`: this
+/// is the one string both surfaces build from the same wire number, so a
+/// divergence here reads as the two charts disagreeing about the same
+/// seconds.
 fn duration_label(seconds: i64) -> String {
+    if seconds <= 0 {
+        return "0m".to_string();
+    }
     let (h, m) = (seconds / 3600, (seconds % 3600) / 60);
     if h > 0 {
-        return format!("{h}h {m}m");
+        return if m > 0 {
+            format!("{h}h {m}m")
+        } else {
+            format!("{h}h")
+        };
     }
     if m > 0 {
         return format!("{m}m");
