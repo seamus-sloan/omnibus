@@ -4,6 +4,7 @@
 mod concurrency;
 mod derive_percent;
 mod kobo_statistics;
+mod ledger_path;
 mod playback_rate;
 mod resume;
 mod session;

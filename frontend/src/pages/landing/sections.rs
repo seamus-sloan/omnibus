@@ -171,6 +171,21 @@ pub(super) struct BooksView {
     pub page_error: Option<String>,
     pub has_more: bool,
     pub is_loading_more: bool,
+    /// True when the gallery pick is a shelf rather than the whole library —
+    /// picks the empty-state wording (see [`empty_books_message`]).
+    pub is_shelf: bool,
+}
+
+/// What an empty book area says. A shelf with no members is empty, not a
+/// failed search — and shelves hold audiobooks too, so its wording names no
+/// format (#2253). "No ebooks found." is kept for the case it describes: the
+/// library or search that turned nothing up.
+pub(super) fn empty_books_message(is_shelf: bool) -> &'static str {
+    if is_shelf {
+        "No books in this shelf."
+    } else {
+        "No ebooks found."
+    }
 }
 
 /// Event handlers dispatched from the sidebar/grid/table/pagination row.
@@ -278,6 +293,7 @@ fn LandingBooksArea(
         page_error,
         has_more,
         is_loading_more,
+        is_shelf,
     } = books;
     let view_mode = prefs.view_mode;
 
@@ -317,11 +333,27 @@ fn LandingBooksArea(
                 }
             }
         } else if books_empty {
-            p { class: "library-empty", "No ebooks found." }
+            p {
+                class: "library-empty",
+                "data-testid": "lib-empty",
+                {empty_books_message(is_shelf)}
+            }
         } else {
             EmptyFiltered {
                 on_clear: move |_| on_clear_filters.call(()),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::empty_books_message;
+
+    #[test]
+    fn empty_books_message_says_a_shelf_is_empty_rather_than_naming_a_format() {
+        // A shelf holding only an audiobook must not read as "no ebooks".
+        assert_eq!(empty_books_message(true), "No books in this shelf.");
+        assert_eq!(empty_books_message(false), "No ebooks found.");
     }
 }

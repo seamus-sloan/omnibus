@@ -98,7 +98,47 @@ One journal per run, shared by every agent. Six transcripts is something nobody
 reads; one timestamped timeline is what lets the report correlate an agent's
 500 with another agent's merge two seconds earlier.
 
-## 6. Fan out
+## 6. Start the browsers
+
+```bash
+scripts/explore/driver.sh up <N>      # one server, session and browser per agent
+scripts/explore/driver.sh status
+```
+
+**One browser per agent is not a nicety.** Run `r-20260828-01` died because
+three subagents shared a single browser tab: they shared a cookie jar, three
+different users collapsed into one, and two agents correctly aborted rather than
+write journal entries under a wrong actor. The driver makes that impossible.
+
+Agents drive their browser with `driver.sh run <n> "<command>"`, which prints
+`{"text": ..., "isError": ...}`. Tear down with `driver.sh down` when the run
+ends, whatever the outcome.
+
+Then **guard each agent** before any of them starts:
+
+```bash
+scripts/explore/driver.sh guard <n> agent-<n> <comma-separated-uuids>
+```
+
+The uuids come from the journals, never from the agent:
+
+```bash
+scripts/explore/driver.sh guard 1 agent-1 "$(scripts/explore/owned.sh agent-1)"
+```
+
+`owned.sh` reads **every** journal, not just this run's — ownership is
+provenance and is durable, which is the same reason `provision.sh` keeps
+usernames stable.
+
+Without this, ownership is only a sentence in `start.md`, and every exploration
+account is an admin — so nothing stops one agent destroying another's books.
+With it, the request is refused in the browser before it is sent.
+
+After the run, `driver.sh refusals <n>` lists what each agent was stopped from
+doing. **A non-empty list is a finding about the agent or the flow document,
+not about the app** — report it as such.
+
+## 7. Fan out
 
 One subagent per actor, in parallel, each given **only**:
 
@@ -106,7 +146,8 @@ One subagent per actor, in parallel, each given **only**:
 - its `actor`, `surface: web`, the base URL, and its own username and password;
 - its sampled sequence — hand over **one flow document at a time**, never the list;
 - the corpus path, and the journal path;
-- the run id.
+- the run id;
+- **its agent number**, for `driver.sh run <n>` — never another agent's.
 
 Tell each agent, verbatim in the brief:
 
@@ -121,7 +162,7 @@ to replay from, and **anything wrong or ambiguous in the flow documents
 themselves**. That last one has been the most valuable output of every run so
 far — the catalog is as much under test as the app.
 
-## 7. Report back
+## 8. Report back
 
 Until #2203 lands there is no report generator, so summarise by hand from the
 journal — not from agent prose, which is unverified:

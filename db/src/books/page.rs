@@ -216,6 +216,7 @@ fn build_page_sql(
                {cursor_idx_sql} AS cursor_idx
           FROM books b
           JOIN scan_roots l ON l.id = b.library_id
+          LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
          WHERE ((l.path IN ({path_ph})
                  AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
              OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
@@ -227,20 +228,66 @@ fn build_page_sql(
     (sql, binds)
 }
 
-/// The `(primary, secondary)` `books` sort columns for each axis. `primary`
+/// SQL mirror of `apply_overrides`' precedence gate: does this book's scan
+/// root rank `omnibus_overrides` above `embedded_tags`? The stored list is
+/// validated whole on write, so a token's byte offset is its rank; a list
+/// carrying neither token falls back to overrides-win, as the Rust side does.
+macro_rules! overrides_win_sql {
+    () => {
+        "(instr(l.metadata_precedence, '\"omnibus_overrides\"') = 0
+           OR instr(l.metadata_precedence, '\"embedded_tags\"') = 0
+           OR instr(l.metadata_precedence, '\"omnibus_overrides\"')
+              > instr(l.metadata_precedence, '\"embedded_tags\"'))"
+    };
+}
+
+/// The user-facing value of one override field, or NULL when the book has no
+/// override for it (or its scan root ranks the override below the scan).
+macro_rules! override_sql {
+    ($path:literal) => {
+        concat!(
+            "NULLIF(CASE WHEN ",
+            overrides_win_sql!(),
+            " THEN json_extract(mo.overrides, '",
+            $path,
+            "') END, '')"
+        )
+    };
+}
+
+/// An axis keyed on the *displayed* value: the override where one exists, the
+/// scanned column otherwise. `COLLATE NOCASE` is restated because a `COALESCE`
+/// expression carries no implicit collation — without it the three text axes
+/// would silently become case-sensitive, unlike the NOCASE columns they wrap.
+macro_rules! effective_text_sql {
+    ($($path:literal),+ ; $scanned:literal) => {
+        concat!("COALESCE(", $(override_sql!($path), ", ",)+ $scanned, ") COLLATE NOCASE")
+    };
+}
+
+/// The `(primary, secondary)` sort expressions for each axis. `primary`
 /// always yields `TEXT`; `secondary` (the in-series index) is `Some` only for
 /// [`SortKey::Series`].
 ///
-/// The two time axes read INTEGER unix-seconds (migration 0038) but format
-/// them to fixed-width ISO here, for the same reason the projection does: the
-/// cursor round-trips the primary value as `Option<String>` and compares it
-/// lexicographically, which stays chronologically correct on ISO text. (The
-/// trade-off is that ordering by the expression can't use the raw-column
-/// keyset index — acceptable at a self-hosted library's scale.)
+/// The three metadata axes key on the *effective* value — a book renamed or
+/// re-attributed through `metadata_overrides` sorts where the page shows it,
+/// not where the scanned file put it (#2258). The two time axes read INTEGER
+/// unix-seconds (migration 0038) but format them to fixed-width ISO here, for
+/// the same reason the projection does: the cursor round-trips the primary
+/// value as `Option<String>` and compares it lexicographically, which stays
+/// chronologically correct on ISO text. (The trade-off, shared by every
+/// expression axis here, is that ordering by an expression can't use the
+/// raw-column keyset index — acceptable at a self-hosted library's scale.)
 fn axis_sort_columns(sort: SortKey) -> (&'static str, Option<&'static str>) {
     match sort {
-        SortKey::Title => ("b.sort", None),
-        SortKey::Author => ("b.author_sort", None),
+        SortKey::Title => (effective_text_sql!("$.title"; "b.sort"), None),
+        SortKey::Author => (
+            // A creators override replaces the whole list, so the displayed
+            // primary author is its first entry — file-as if it carries one,
+            // matching how the scanner fills `author_sort`.
+            effective_text_sql!("$.creators[0].file_as", "$.creators[0].name"; "b.author_sort"),
+            None,
+        ),
         SortKey::LastUpdated => (
             "strftime('%Y-%m-%dT%H:%M:%SZ', b.last_modified, 'unixepoch')",
             None,
@@ -249,7 +296,14 @@ fn axis_sort_columns(sort: SortKey) -> (&'static str, Option<&'static str>) {
             "strftime('%Y-%m-%dT%H:%M:%SZ', b.timestamp, 'unixepoch')",
             None,
         ),
-        SortKey::Series => ("b.series_sort", Some("b.series_index")),
+        SortKey::Series => (
+            effective_text_sql!("$.series"; "b.series_sort"),
+            Some(concat!(
+                "COALESCE(CAST(",
+                override_sql!("$.series_index"),
+                " AS REAL), b.series_index)"
+            )),
+        ),
         SortKey::RecentlyInteracted => (INTERACTED_AT_ISO, None),
     }
 }

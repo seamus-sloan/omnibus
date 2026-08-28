@@ -22,11 +22,15 @@ pub(super) const IDLE_GAP_SECS: i64 = 900;
 pub(super) const MIN_SITTING_SECS: i64 = 60;
 
 /// Wrap a session-row union in the gap-and-islands grouping, yielding one
-/// `(book_uuid, started_at, secs)` row per stitched sitting: the book, the
-/// first row's start, and the total seconds recorded across the sitting.
+/// `(book_uuid, started_at, ended_at, secs, min_audio, max_audio)` row per
+/// stitched sitting: the book, the first row's start, the last row's end, the
+/// total seconds recorded across the sitting, and which tables fed it.
 ///
-/// `inner` must select `book_uuid, started_at, ended_at, secs` and carries
-/// its own binds — this adds none, since the threshold is a const literal.
+/// `inner` must select `book_uuid, started_at, ended_at, secs, is_audio` (0
+/// for a reading row, 1 for a listening one) and carries its own binds — this
+/// adds none, since the threshold is a const literal. `min_audio < max_audio`
+/// is a sitting both tables fed, which the session log renders as a mixed
+/// format rather than picking one.
 ///
 /// Sittings are scoped per book, so the user-wide count stays the sum of
 /// every book's and the two surfaces can't disagree. Within a book the union
@@ -39,14 +43,16 @@ pub(super) fn stitched(inner: &str) -> String {
     // `started_at` can then end earlier than one before it, which LAG would
     // read as an idle gap and split a single sitting on.
     format!(
-        "SELECT book_uuid, MIN(started_at) AS started_at, SUM(secs) AS secs FROM (
-             SELECT book_uuid, started_at, secs,
+        "SELECT book_uuid, MIN(started_at) AS started_at, MAX(ended_at) AS ended_at,
+                 SUM(secs) AS secs,
+                 MIN(is_audio) AS min_audio, MAX(is_audio) AS max_audio FROM (
+             SELECT book_uuid, started_at, ended_at, secs, is_audio,
                     SUM(brk) OVER (
                         PARTITION BY book_uuid ORDER BY started_at, ended_at
                         ROWS UNBOUNDED PRECEDING
                     ) AS sitting
              FROM (
-                 SELECT book_uuid, started_at, ended_at, secs,
+                 SELECT book_uuid, started_at, ended_at, secs, is_audio,
                         CASE WHEN started_at - MAX(ended_at) OVER (
                                  PARTITION BY book_uuid ORDER BY started_at, ended_at
                                  ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING

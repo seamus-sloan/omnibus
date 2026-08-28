@@ -15,7 +15,9 @@ turn up something cosmetic that no assertion would catch.
 
 1. Reach a book's detail page from wherever you happen to be.
 2. Actually read the page. Cover, title, author, series, description, formats,
-   page count, dates, tags, genres, ratings, saved passages, suggestions.
+   dates, identifiers, tags, genres, ratings, saved passages, suggestions.
+   There is **no page or chapter count** on this page — do not go looking for
+   one, and do not report its absence.
 3. Ask of each thing: is this plausible? A negative page count, a date in 1900,
    an author of "Unknown, Unknown", a description that is raw HTML, a cover
    that belongs to another book — all findings.
@@ -24,11 +26,19 @@ turn up something cosmetic that no assertion would catch.
    - **Rate it.** Set a rating, confirm it takes, reload and confirm it stuck.
      Then clear it, confirm the clear sticks, and set it once more — leave a
      rating behind, because the audit reconciles against one.
-   - **Set a read status.** Move it between want, reading, and finished, and
-     watch what the home page does in response.
-   - **Follow a link out** — to the author, the series, a tag, or a genre — and
-     confirm the destination is about the thing you clicked.
-   - **Look at the suggestions** and follow one.
+   - **Set a read status.** The three states are **Unread**, **Reading** and
+     **Finished** — there is no "want" here; the wishlist is a separate thing
+     reached through Check in. Move between them and watch the home page.
+   - **Follow a link out** and confirm the destination is about the thing you
+     clicked. **Series is the only one reliably present.** Tag and genre chips
+     on a book page are inert, and some books show their author as plain text
+     with no link. A missing author link *is* worth journalling — but as an
+     observation about that book, not as a failure of this step.
+   - **Look at the suggestions.** These come from Hardcover and need a
+     server-wide API key. If the panel offers an "Add a Hardcover API key" CTA
+     instead of books, the feature is switched off — that is **not** a finding,
+     and you must not go to Settings to enable it. Note it and follow the
+     sibling "More by <author>" panel instead.
 5. Come back to the book and confirm the page is as you left it.
 
 ## Journal
@@ -61,5 +71,7 @@ clicked and where you landed.
   slow. An empty suggestions panel is not a finding; an error in it is.
 - **Another agent may have edited this book's metadata a moment ago.** Fields
   changing between two visits is expected in a shared library.
-- Read status changes here **do** move the book on and off the home page's
-  continue surface. That is the feature.
+- Read status changes move a book **off** the continue surface (Finished
+  removes it) but do not necessarily put one **on**: marking a never-opened book
+  as Reading adds nothing, because the surface is driven by reading progress.
+  Both directions are correct.

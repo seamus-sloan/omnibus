@@ -139,6 +139,27 @@ struct StatsSummaryCodecTests {
         #expect(!summary.hasTimePatterns)
         #expect(summary.unzonedSeconds == 600, "the excluded time is still disclosed")
     }
+    @Test("superlatives decode, and an omitted one stays omitted")
+    func decodesSuperlatives() throws {
+        let longest = #"{"book_uuid":"u1","title":"Doorstopper","author":"A. Writer","value":900}"#
+        let day = #"{"day":"2023-11-14","seconds":7200}"#
+        let extra = #","superlatives":{"longest_book":\#(longest),"biggest_day":\#(day)}"#
+        let summary = try decodeSummary(summaryJSON(extra: extra))
+        #expect(summary.superlatives.longestBook?.title == "Doorstopper")
+        #expect(summary.superlatives.longestBook?.value == 900)
+        #expect(summary.superlatives.biggestDay?.seconds == 7200)
+        // An absent superlative is `nil`, never a zero — a zero would render
+        // as a finding.
+        #expect(summary.superlatives.shortestBook == nil)
+        #expect(summary.superlatives.fastestRead == nil)
+        #expect(!summary.superlatives.isEmpty)
+    }
+
+    @Test("a server that predates superlatives still decodes")
+    func decodesWithoutSuperlatives() throws {
+        let summary = try decodeSummary(summaryJSON())
+        #expect(summary.superlatives.isEmpty)
+    }
 }
 
 @Suite("Session report timezone capture")
@@ -166,6 +187,58 @@ struct SessionReportZoneTests {
         let json = try JSONSerialization.jsonObject(
             with: try JSONEncoder().encode(report)) as? [String: Any]
         #expect(json?["utc_offset_minutes"] as? Int == -420)
+    }
+}
+
+@Suite("Standout rows")
+struct StandoutRowTests {
+    private func book(_ title: String, _ value: Int64) -> BookSuperlative {
+        BookSuperlative(bookUUID: title, title: title, author: nil, value: value)
+    }
+
+    @Test("only the superlatives the window supports become rows")
+    func omitsAbsentSuperlatives() throws {
+        var summary = StatsSummary()
+        summary.superlatives.longestBook = book("Doorstopper", 900)
+        summary.superlatives.fastestRead = book("Sprint", 3)
+
+        let rows = StatsView.standoutRows(summary)
+
+        #expect(rows.map(\.label) == ["Longest book", "Fastest read"])
+        // `#expect` records and continues, so a dropped row would leave the
+        // indexed reads below to trap the whole test process rather than fail.
+        try #require(rows.count == 2)
+        #expect(rows[0].detail == "900 pages")
+        #expect(rows[1].detail == "in 3 days")
+    }
+
+    @Test("a bare window produces no rows at all")
+    func emptyWindowHasNoRows() {
+        #expect(StatsView.standoutRows(StatsSummary()).isEmpty)
+    }
+
+    @Test("the busiest week needs seconds, not just a date")
+    func busiestWeekNeedsSeconds() {
+        // The field rides on every payload and is zeroed for an empty window;
+        // rendering it off the date alone claims a week that never happened.
+        var summary = StatsSummary()
+        summary.busiestWeekStart = "2023-11-13"
+        #expect(StatsView.standoutRows(summary).isEmpty)
+
+        summary.busiestWeekSeconds = 14_400
+        let rows = StatsView.standoutRows(summary)
+        #expect(rows.first?.headline == "Week of 13 Nov 2023")
+        #expect(rows.first?.detail == "4h")
+    }
+
+    @Test("day and count details read as sentences, not as raw numbers")
+    func detailsSingularize() {
+        #expect(StatsView.pagesDetail(1) == "1 page")
+        #expect(StatsView.pagesDetail(412) == "412 pages")
+        #expect(StatsView.daysDetail(1) == "in a day")
+        #expect(StatsView.daysDetail(3) == "in 3 days")
+        #expect(StatsView.prettyDay("2023-11-14") == "14 Nov 2023")
+        #expect(StatsView.prettyDay("not-a-day") == "not-a-day")
     }
 }
 
@@ -307,5 +380,168 @@ struct ReadingGoalCodecTests {
         let body = try JSONEncoder().encode(ReadingGoalUpdate(target: nil))
         let json = try #require(String(data: body, encoding: .utf8))
         #expect(json.contains("\"target\":null"))
+    }
+}
+
+@Suite("Session log decoding")
+struct SessionLogCodecTests {
+    private static let pageJSON = """
+        {"entries":[
+          {"book_uuid":"uuid-1","title":"Title 1","format":"mixed",
+           "started_at":1700000000,"ended_at":1700003600,"seconds":3000}
+        ],"next_before":"1700000000:uuid-1"}
+        """
+
+    private func decodePage(_ json: String) throws -> SessionLogPage {
+        try JSONDecoder().decode(SessionLogPage.self, from: Data(json.utf8))
+    }
+
+    @Test("an entry decodes every snake_case key into its own field")
+    func decodesEntry() throws {
+        let page = try decodePage(Self.pageJSON)
+        let entry = try #require(page.entries.first)
+        #expect(entry.bookUUID == "uuid-1")
+        #expect(entry.title == "Title 1")
+        #expect(entry.format == .mixed)
+        // Distinct values on purpose: equal ones would let a swapped CodingKey
+        // through, and the row renders the start beside the length.
+        #expect(entry.startedAt == 1_700_000_000)
+        #expect(entry.endedAt == 1_700_003_600)
+        // Recorded seconds, not the wall-clock span — a paused sitting spans
+        // more than it recorded.
+        #expect(entry.seconds == 3000)
+        #expect(page.nextBefore == "1700000000:uuid-1")
+    }
+
+    @Test("the end of the log decodes with no cursor")
+    func decodesFinalPage() throws {
+        let page = try decodePage(#"{"entries":[],"next_before":null}"#)
+        #expect(page.entries.isEmpty)
+        #expect(page.nextBefore == nil)
+        // The Rust field is `#[serde(default)]`, so an absent key is the same
+        // end-of-log answer rather than a hard decode failure.
+        #expect(try decodePage(#"{"entries":[]}"#).nextBefore == nil)
+    }
+
+    @Test("every session format decodes from its snake_case wire name")
+    func decodesFormats() throws {
+        for (wire, expected) in [
+            ("reading", SessionFormat.reading),
+            ("listening", .listening),
+            ("mixed", .mixed),
+        ] {
+            let json = Self.pageJSON.replacingOccurrences(
+                of: #""format":"mixed""#, with: #""format":"\#(wire)""#)
+            #expect(try decodePage(json).entries.first?.format == expected)
+        }
+    }
+
+    @Test("an entry's id distinguishes two sittings of the same book")
+    func idsAreUniquePerSitting() {
+        // `ForEach` keys on this: a collision would drop a row from the list.
+        let entry = { (start: Int64) in
+            SessionLogEntry(
+                bookUUID: "uuid-1", title: "Title 1",
+                format: .reading, startedAt: start, endedAt: start + 600, seconds: 600)
+        }
+        #expect(entry(1).id != entry(2).id)
+    }
+
+    @Test("formats label themselves in the past tense")
+    func formatLabels() {
+        #expect(SessionFormat.reading.label == "Read")
+        #expect(SessionFormat.listening.label == "Listened")
+        #expect(SessionFormat.mixed.label == "Read & listened")
+    }
+}
+
+@Suite("Pages read detail")
+struct PagesReadDetailCodecTests {
+    @Test("the pages detail decodes every key the server sends")
+    func decodesPagesDetail() throws {
+        let json = summaryJSON(
+            extra: #","pages_detail":{"since_day":"2026-08-01","measured_books":3,"unmeasured_books":1,"audio_books":2,"window_predates_ledger":true,"daily":[{"label":"2026-08-01","value":41.0}]}"#
+        )
+        let summary = try decodeSummary(json)
+        #expect(summary.pagesDetail.sinceDay == "2026-08-01")
+        // Distinct values on purpose: equal ones would let two swapped
+        // CodingKeys through.
+        #expect(summary.pagesDetail.measuredBooks == 3)
+        #expect(summary.pagesDetail.unmeasuredBooks == 1)
+        #expect(summary.pagesDetail.audioBooks == 2)
+        #expect(summary.pagesDetail.windowPredatesLedger)
+    }
+
+    @Test("a server that predates the pages detail still decodes")
+    func decodesWithoutPagesDetail() throws {
+        let summary = try decodeSummary(summaryJSON())
+        #expect(summary.pagesDetail.measuredBooks == 0)
+        #expect(summary.pagesRead == 12, "the headline still decodes")
+    }
+
+    @Test("audio-only is a window of listening and no reading at all")
+    func audioOnlyRequiresNoReading() throws {
+        var detail = PagesReadDetail()
+        detail.audioBooks = 2
+        #expect(detail.audioOnly)
+        // Any reading in the window — measurable or not — means the em-dash is
+        // the honest answer, because something happened that pages describe.
+        detail.unmeasuredBooks = 1
+        #expect(!detail.audioOnly)
+        detail.unmeasuredBooks = 0
+        detail.measuredBooks = 1
+        #expect(!detail.audioOnly)
+        #expect(!PagesReadDetail().audioOnly, "an empty window is not audio-only")
+    }
+}
+
+@Suite("Pages read tile")
+struct PagesReadTileTests {
+    @Test("a measured total renders as itself")
+    func rendersTheTotal() throws {
+        var summary = StatsSummary()
+        summary.pagesRead = 214
+        #expect(StatsView.pagesValue(summary) == "214")
+    }
+
+    @Test("an audio-only window reads as zero, not as unknown")
+    func audioOnlyReadsAsZero() throws {
+        var summary = StatsSummary()
+        summary.pagesDetail.audioBooks = 1
+        // Listening turns no pages, which the tile can state; the em-dash would
+        // claim the server has no idea what happened.
+        #expect(StatsView.pagesValue(summary) == "0")
+    }
+
+    @Test("an unmeasurable window keeps the em-dash")
+    func unmeasurableKeepsTheDash() throws {
+        var summary = StatsSummary()
+        summary.pagesDetail.unmeasuredBooks = 1
+        #expect(StatsView.pagesValue(summary) == "\u{2014}")
+        #expect(StatsView.pagesValue(StatsSummary()) == "\u{2014}")
+    }
+
+    @Test("the cutover note follows the server's overlap answer, not the range")
+    func cutoverNoteFollowsTheOverlap() throws {
+        var summary = StatsSummary()
+        summary.pagesDetail.sinceDay = "2026-08-01"
+        summary.pagesDetail.windowPredatesLedger = true
+        summary.range = .allTime
+        #expect(StatsView.pagesCutoverNote(summary)?.contains("2026-08-01") == true)
+        // A Week window in the days right after the epoch does reach past it,
+        // and the old range gate silently dropped the caveat there.
+        summary.range = .week
+        #expect(StatsView.pagesCutoverNote(summary) != nil)
+
+        // A Year window in the calendar year after the epoch is fully covered,
+        // and the old range gate claimed otherwise forever.
+        summary.pagesDetail.windowPredatesLedger = false
+        summary.range = .year
+        #expect(StatsView.pagesCutoverNote(summary) == nil)
+
+        // No epoch recorded, nothing to disclose.
+        summary.pagesDetail.windowPredatesLedger = true
+        summary.pagesDetail.sinceDay = nil
+        #expect(StatsView.pagesCutoverNote(summary) == nil)
     }
 }

@@ -1,0 +1,12 @@
+{
+  "name": "omnibus-explore-driver",
+  "private": true,
+  "description": "Browser driver for the agentic-exploration swarm. The transitive playwright dependency is pinned to the same version as the flake's playwright-driver.browsers bundle, so this shares the Nix Chromium instead of downloading its own. Bump both together.",
+  "dependencies": {
+    "playwright-repl": "0.27.3"
+  },
+  "overrides": {
+    "playwright": "1.61.1",
+    "playwright-core": "1.61.1"
+  }
+}

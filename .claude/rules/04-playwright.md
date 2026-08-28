@@ -16,7 +16,7 @@ The Playwright project (`ui_tests/playwright`) uses **pnpm** as its package mana
 
 The `playwright-driver.browsers` package in [flake.nix](../../flake.nix) provides the browser bundle, and the shellHook exports `PLAYWRIGHT_BROWSERS_PATH` into the Nix store. Do **not** run `pnpm exec playwright install` — it would re-download Chromium into `~/Library/Caches/ms-playwright/` and diverge from the flake.
 
-`@playwright/test` is pinned with a tilde range (`~1.59.0`) so pnpm stays on the same minor as nixpkgs. When bumping the version, update both together since each Playwright minor expects a specific Chromium build number.
+`@playwright/test` is pinned with a tilde range (`~1.61.0`) so pnpm stays on the same minor as the Chromium bundle. The bundle comes from a **dedicated** flake input, `nixpkgs-playwright`, pinned to a rev where `playwright-driver` is 1.61.1 — separate from `nixpkgs-unstable` so moving the browser does not also move the Rust toolchain, `dioxus-cli` and node. Each Playwright minor expects a specific Chromium build number, so **three things move together or not at all**: that flake input's rev, this tilde range, and the `overrides` in [`scripts/explore/driver/package.json`](../../scripts/explore/driver/package.json), which pins the agentic-exploration driver's transitive `playwright` to the same version so it shares the one bundle rather than downloading a second Chromium.
 
 ## Reporters — `list` + `junit`
 
