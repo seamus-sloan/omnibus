@@ -165,10 +165,12 @@ pub struct TrendPoint {
     pub value: f64,
 }
 
-/// Scalar aggregates for the window immediately preceding the current one
-/// (same length, ending where the current window starts) — feeds each metric
-/// tile's drill-in delta. `Default` (all zero / `None`) for [`StatsRange::AllTime`],
-/// which has no prior window to compare against.
+/// Scalar aggregates for the **same elapsed slice** of the preceding period —
+/// feeds each metric tile's drill-in delta. The current window runs from its
+/// period start to now, so the baseline runs from the previous period's start
+/// to the same offset into it: month-to-date against the same days last month,
+/// not against the whole of it. `Default` (all zero / `None`) for
+/// [`StatsRange::AllTime`], which has no prior window to compare against.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct PeriodComparison {
     pub books_finished: i64,

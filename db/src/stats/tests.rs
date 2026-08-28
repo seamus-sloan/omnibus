@@ -756,7 +756,10 @@ async fn previous_period_month_sums_only_last_calendar_months_activity() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 1).await;
     let user = seed_user(&pool, "alice").await;
-    let last_month = months_ago_secs(&pool, 1).await;
+    // Anchored to the first second of last month rather than its middle: the
+    // baseline is the *elapsed* slice of the previous period, so a mid-month
+    // seed would fall outside it whenever the suite runs early in a month.
+    let last_month = prev_period_start(&pool, StatsRange::Month).await;
     let two_months_back = months_ago_secs(&pool, 2).await;
     let now = now_secs();
 
@@ -973,4 +976,59 @@ async fn rating_monthly_excludes_a_rating_whose_book_is_gone() {
         (months.last().unwrap().value - 5.0).abs() < f64::EPSILON,
         "expected the current month to mean 5.0, got {months:?}"
     );
+}
+
+/// First second of the period preceding `range`'s current one.
+async fn prev_period_start(pool: &SqlitePool, range: StatsRange) -> i64 {
+    prev_window_bounds(pool, range).await.unwrap().unwrap().0
+}
+
+#[tokio::test]
+async fn prev_window_bounds_cover_the_elapsed_slice_of_the_previous_period() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    for range in [StatsRange::Week, StatsRange::Month, StatsRange::Year] {
+        let (start, end) = prev_window_bounds(&pool, range).await.unwrap().unwrap();
+        let cur_start = window_start(&pool, range).await.unwrap();
+        let elapsed = now_secs() - cur_start;
+
+        // The baseline sits wholly before the current window …
+        assert!(
+            end <= cur_start,
+            "{range:?}: baseline must not overlap the current window ({end} > {cur_start})"
+        );
+        assert!(start < end, "{range:?}: baseline must be non-empty");
+        // … and covers the same elapsed offset, never the whole period. The
+        // slack absorbs the second or two between the two `now` reads; the
+        // clamp can only ever make the slice shorter, never longer.
+        let slice = end - start;
+        assert!(
+            slice <= elapsed + 2,
+            "{range:?}: baseline slice {slice}s exceeds the elapsed {elapsed}s"
+        );
+    }
+}
+
+#[tokio::test]
+async fn previous_period_aggregates_only_within_the_baseline_bounds() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    // Seeded from the bounds themselves, so this asserts that the aggregates
+    // honour the window — that the window is the *right* window is
+    // `prev_window_bounds_cover_the_elapsed_slice_of_the_previous_period`'s
+    // job, and only that test detects a regression in the bounds arithmetic.
+    let (start, end) = prev_window_bounds(&pool, StatsRange::Week)
+        .await
+        .unwrap()
+        .unwrap();
+    listening_session(&pool, user, "uuid-1", start, 500).await;
+    // `end` is exclusive.
+    listening_session(&pool, user, "uuid-1", end, 999).await;
+    listening_session(&pool, user, "uuid-1", start - 1, 777).await;
+
+    let prev = previous_period(&pool, user, StatsRange::Week)
+        .await
+        .unwrap();
+    assert_eq!(prev.listening_seconds, 500);
 }

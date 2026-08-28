@@ -147,18 +147,27 @@ pub(super) async fn compute(
     })
 }
 
-/// Lower bound (unix secs, inclusive) of the reporting window. Computed with
-/// SQLite date functions so calendar math (start-of-year, month arithmetic)
-/// stays out of Rust. The `expr` is a fixed literal per range — no user input.
-pub(super) async fn window_start(pool: &SqlitePool, range: StatsRange) -> Result<i64, StatsError> {
-    let expr = match range {
+/// SQLite expression for a range's period start. Calendar math (start-of-year,
+/// month arithmetic) stays in SQLite rather than Rust; each arm is a fixed
+/// literal, never user input.
+///
+/// Shared by [`window_start`] and [`prev_window_bounds`] so the current window
+/// and the baseline it is compared against cannot drift onto different
+/// definitions of where a period begins.
+fn window_start_expr(range: StatsRange) -> &'static str {
+    match range {
         // Rolling 7 calendar days ending today — deliberately not aligned
         // to a weekday, per the converged stats design.
         StatsRange::Week => "strftime('%s', 'now', '-6 days', 'start of day')",
         StatsRange::Month => "strftime('%s', strftime('%Y-%m-01 00:00:00', 'now'))",
         StatsRange::Year => "strftime('%s', strftime('%Y-01-01 00:00:00', 'now'))",
         StatsRange::AllTime => "0",
-    };
+    }
+}
+
+/// Lower bound (unix secs, inclusive) of the reporting window.
+pub(super) async fn window_start(pool: &SqlitePool, range: StatsRange) -> Result<i64, StatsError> {
+    let expr = window_start_expr(range);
     Ok(
         sqlx::query_scalar(&format!("SELECT CAST({expr} AS INTEGER)"))
             .fetch_one(pool)
@@ -531,40 +540,52 @@ pub(super) async fn finished_books(
         .collect())
 }
 
-/// Bounds `(start, end)` (unix secs, `start` inclusive, `end` exclusive) of
-/// the window immediately preceding `range`'s current window, same length.
-/// `None` for [`StatsRange::AllTime`] — there is no window before "all of it".
-async fn prev_window_bounds(
+/// Bounds `(start, end)` (unix secs, `start` inclusive, `end` exclusive) of the
+/// baseline the current window is compared against: the **same elapsed slice**
+/// of the preceding period. `None` for [`StatsRange::AllTime`] — there is no
+/// window before "all of it".
+///
+/// The current window runs from its period start to *now*, so on the 3rd of the
+/// month it covers three days. Measuring it against the whole of the previous
+/// month compared three days against thirty-one and rendered a red ▼ on the
+/// drill-in for every reader in the first week of every month; the Year range
+/// did the same thing to the whole of January. Taking the same offset into the
+/// previous period instead makes the two sides commensurable — month-to-date
+/// against the same days last month.
+///
+/// `end` is clamped to the current period's start so a long month cannot run
+/// the baseline off the end of a shorter one: 30 days elapsed in March maps
+/// onto a February that only has 28, and the baseline is that whole February.
+pub(super) async fn prev_window_bounds(
     pool: &SqlitePool,
     range: StatsRange,
 ) -> Result<Option<(i64, i64)>, StatsError> {
-    let exprs = match range {
-        StatsRange::Week => Some((
-            "strftime('%s', 'now', '-13 days', 'start of day')",
-            "strftime('%s', 'now', '-6 days', 'start of day')",
-        )),
-        StatsRange::Month => Some((
-            // Month arithmetic runs on a month-start anchor: applying
-            // '-1 month' to a month-end 'now' (e.g. July 31) normalizes to
-            // day 1 of the *current* month and collapses the window.
-            "strftime('%s', 'now', 'start of month', '-1 month')",
-            "strftime('%s', 'now', 'start of month')",
-        )),
-        StatsRange::Year => Some((
-            "strftime('%s', strftime('%Y-01-01 00:00:00', 'now', '-1 year'))",
-            "strftime('%s', strftime('%Y-01-01 00:00:00', 'now'))",
-        )),
-        StatsRange::AllTime => None,
+    let prev_start_expr = match range {
+        StatsRange::Week => "strftime('%s', 'now', '-13 days', 'start of day')",
+        // Month arithmetic runs on a month-start anchor: applying '-1 month'
+        // to a month-end 'now' (e.g. July 31) normalizes to day 1 of the
+        // *current* month and collapses the window.
+        StatsRange::Month => "strftime('%s', 'now', 'start of month', '-1 month')",
+        StatsRange::Year => "strftime('%s', strftime('%Y-01-01 00:00:00', 'now', '-1 year'))",
+        StatsRange::AllTime => return Ok(None),
     };
-    let Some((start_expr, end_expr)) = exprs else {
-        return Ok(None);
-    };
+    let cur_start_expr = window_start_expr(range);
+    // One statement, so `now` is read from the same clock tick as both period
+    // starts and the elapsed offset can't straddle a second boundary.
     let row = sqlx::query(&format!(
-        "SELECT CAST({start_expr} AS INTEGER) AS s, CAST({end_expr} AS INTEGER) AS e"
+        "SELECT CAST({prev_start_expr} AS INTEGER) AS prev_start,
+                CAST({cur_start_expr} AS INTEGER) AS cur_start,
+                CAST(strftime('%s', 'now') AS INTEGER) AS now_secs"
     ))
     .fetch_one(pool)
     .await?;
-    Ok(Some((row.get("s"), row.get("e"))))
+    let prev_start: i64 = row.get("prev_start");
+    let cur_start: i64 = row.get("cur_start");
+    let now: i64 = row.get("now_secs");
+
+    let elapsed = now.saturating_sub(cur_start).max(0);
+    let end = prev_start.saturating_add(elapsed).min(cur_start);
+    Ok(Some((prev_start, end)))
 }
 
 /// The window immediately preceding `range`'s current one — feeds the drill-in's
