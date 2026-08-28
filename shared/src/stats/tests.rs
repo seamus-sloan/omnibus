@@ -639,6 +639,98 @@ fn library_composition_round_trips_each_dimension_with_its_coverage() {
 }
 
 #[test]
+fn pages_read_detail_audio_only_requires_no_reading_at_all() {
+    let listening = PagesReadDetail {
+        audio_books: 2,
+        ..Default::default()
+    };
+    assert!(listening.audio_only());
+    // Any reading in the window — measurable or not — means the em-dash is the
+    // honest answer, because something happened that pages describe.
+    assert!(!PagesReadDetail {
+        audio_books: 2,
+        unmeasured_books: 1,
+        ..Default::default()
+    }
+    .audio_only());
+    assert!(!PagesReadDetail {
+        audio_books: 2,
+        measured_books: 1,
+        ..Default::default()
+    }
+    .audio_only());
+    // An empty window is not audio-only; it is empty.
+    assert!(!PagesReadDetail::default().audio_only());
+}
+
+#[test]
+fn pages_read_detail_predates_ledger_needs_both_an_epoch_and_an_overlap() {
+    let overlapping = PagesReadDetail {
+        since_day: Some("2026-08-01".to_string()),
+        window_predates_ledger: true,
+        ..Default::default()
+    };
+    assert!(overlapping.predates_ledger());
+
+    // The server says this window opens after the epoch, so the date is
+    // context rather than a caveat — whatever range it came from. A Year
+    // window in the calendar year after the epoch lands here.
+    assert!(!PagesReadDetail {
+        since_day: Some("2026-08-01".to_string()),
+        ..Default::default()
+    }
+    .predates_ledger());
+
+    // Nothing recorded, nothing to disclose — even if the flag says otherwise.
+    assert!(!PagesReadDetail {
+        window_predates_ledger: true,
+        ..Default::default()
+    }
+    .predates_ledger());
+    assert!(!PagesReadDetail::default().predates_ledger());
+}
+
+#[test]
+fn stats_summary_decodes_a_payload_from_a_server_without_the_pages_detail() {
+    // The app ships ahead of a self-hosted server routinely; a stats field it
+    // hasn't learned yet must cost one tile, not the whole screen.
+    let json = r#"{"range":"month","reading_seconds":60,"listening_seconds":0,
+        "avg_stars":null,"sessions":1,"active_days":1,"longest_streak_days":1,
+        "busiest_week_start":null,"busiest_week_seconds":0,"books_finished":0,
+        "heatmap":[],"top_authors":[],"top_tags":[],"finished_books":[],
+        "pages_read":12}"#;
+    let summary: StatsSummary = serde_json::from_str(json).unwrap();
+
+    assert_eq!(summary.pages_read, Some(12));
+    assert_eq!(summary.pages_detail, PagesReadDetail::default());
+    assert_eq!(summary.previous.pages_read, 0);
+}
+
+#[test]
+fn pages_read_detail_round_trips_over_the_wire() {
+    let detail = PagesReadDetail {
+        since_day: Some("2026-08-01".to_string()),
+        measured_books: 3,
+        unmeasured_books: 1,
+        audio_books: 2,
+        daily: vec![TrendPoint {
+            label: "2026-08-01".to_string(),
+            value: 41.0,
+        }],
+        window_predates_ledger: true,
+    };
+    let json = serde_json::to_string(&detail).unwrap();
+    assert_eq!(
+        serde_json::from_str::<PagesReadDetail>(&json).unwrap(),
+        detail
+    );
+    // Snake-case on the wire, as every other field on the summary is.
+    assert!(json.contains("\"since_day\""), "{json}");
+    assert!(json.contains("\"unmeasured_books\""), "{json}");
+    assert!(json.contains("\"window_predates_ledger\""), "{json}");
+}
+
+#[test]
 fn session_cursor_round_trips_through_its_wire_form() {
     let c = SessionCursor {
         started_at: 1_700_000_000,

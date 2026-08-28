@@ -170,14 +170,43 @@ test("headline tiles render finished, avg rating, pages, and listening", async (
   await expect(page.getByTestId("stats-tile-avg-rating")).toContainText(
     /\d\.\d\s*★/,
   );
-  // #1029: the finished journal seeded in beforeAll gives the Pages tile a
-  // real (spine-word-count-derived) estimate — a digit, not the em-dash
-  // placeholder. The exact count depends on fixture text length, covered by
-  // db::stats unit tests instead of pinned here.
-  await expect(page.getByTestId("stats-tile-pages")).toContainText(/\d/);
+  // #2139: the tile counts pages *turned* in the window, not the length of the
+  // books finished in it, so the finished journal seeded in beforeAll no longer
+  // gives it a value — only real position writes do, and this spec deliberately
+  // makes none. They would join the Continue fan the landing specs assert on,
+  // and land on a book those specs read. Both a digit and the em-dash are
+  // legitimate here; the label is the contract this test pins, and the
+  // arithmetic lives in the db::stats unit tests.
+  const pages = page.getByTestId("stats-tile-pages");
+  await expect(pages).toContainText("Pages read");
+  await expect(pages).toContainText(/\d|—/);
   await expect(page.getByTestId("stats-tile-listening")).toContainText(
     /\d+\s*(m|h)/,
   );
+});
+
+test("the Pages read drill-in explains its coverage and states the cutover", async ({
+  page,
+}) => {
+  await gotoReady(page, "/stats");
+
+  await page.getByTestId("stats-tile-pages").click();
+  const drillIn = page.getByTestId("stats-drill-in");
+  await expect(drillIn).toBeVisible();
+  await expect(drillIn).toContainText("Pages read");
+
+  // AC6: the panel renders content rather than opening to nothing, whatever
+  // the window holds.
+  await expect(page.getByTestId("stats-drill-pages-note")).toBeVisible();
+  // AC9: page progress is differenced from stored positions and none exist
+  // before the ledger began, so the tile changes meaning at a date — which the
+  // UI states rather than leaving it as an unexplained discontinuity.
+  await expect(page.getByTestId("stats-drill-pages-cutover")).toContainText(
+    /Page tracking began \d{4}-\d{2}-\d{2}/,
+  );
+
+  await page.getByTestId("stats-drill-close").click();
+  await expect(drillIn).toHaveCount(0);
 });
 
 test("a tile's grip opens its drill-in and the close button dismisses it", async ({

@@ -74,6 +74,13 @@ struct StatsView: View {
                 headline(summary)
                 tiles(summary)
 
+                if let note = Self.pagesCutoverNote(summary) {
+                    Text(note)
+                        .font(.footnote)
+                        .foregroundStyle(palette.ink3Color)
+                        .screenPadding()
+                }
+
                 if !summary.heatmap.isEmpty {
                     section("Activity") {
                         HeatmapView(days: summary.heatmap, asOf: summary.asOfDay)
@@ -500,8 +507,8 @@ struct StatsView: View {
                 icon: "calendar"
             )
             StatTile(
-                label: "Pages",
-                value: summary.pagesRead.map { "\($0)" } ?? "—",
+                label: "Pages read",
+                value: Self.pagesValue(summary),
                 icon: "doc.text"
             )
             // Directly after Pages so the two share a row of the two-column
@@ -538,6 +545,33 @@ struct StatsView: View {
         return oneDecimal < 10
             ? String(format: "%.1f", oneDecimal)
             : String(format: "%.0f", rate.rounded())
+    }
+
+    /// The Pages read tile's value. Two empty states, not one: a window whose
+    /// only activity was listening turned exactly zero pages — audio has no
+    /// page analogue, so that is an answer — while anything else unmeasurable
+    /// is a genuine em-dash. Kept in step with the web tile's `pages_value`;
+    /// the server owns the `audioOnly` distinction so neither surface invents
+    /// its own.
+    static func pagesValue(_ summary: StatsSummary) -> String {
+        if let pages = summary.pagesRead { return "\(pages)" }
+        return summary.pagesDetail.audioOnly ? "0" : "\u{2014}"
+    }
+
+    /// The cutover caption, or `nil` when the window is fully covered. Page
+    /// progress is differenced from stored positions and none exist before the
+    /// ledger began, so a window reaching past that day is only partly
+    /// measurable and says so rather than reading as complete.
+    ///
+    /// Gated on the server's own overlap answer, not on the range: a Year
+    /// window in the calendar year after the epoch is fully covered and must
+    /// not carry the caveat, while a Week window in the days right after it is
+    /// not covered and must.
+    static func pagesCutoverNote(_ summary: StatsSummary) -> String? {
+        guard summary.pagesDetail.predatesLedger,
+            let since = summary.pagesDetail.sinceDay
+        else { return nil }
+        return "Page tracking began \(since); reading before then isn\u{2019}t counted."
     }
 
     private func finishedRail(_ books: [FinishedBook]) -> some View {
