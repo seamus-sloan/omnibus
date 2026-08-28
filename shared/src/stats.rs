@@ -129,8 +129,9 @@ pub struct GenreShare {
     pub books: i64,
 }
 
-/// A book completed within the window — a journal entry recorded 100% progress
-/// on it. `finished_at` is the most recent such entry's timestamp (unix secs).
+/// A book completed within the window — a 100% journal entry or an explicit
+/// read-status `finished`. `finished_at` is the most recent such moment
+/// (unix secs).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FinishedBook {
     pub book_uuid: String,
@@ -177,10 +178,13 @@ pub struct PeriodComparison {
 
 /// The full aggregate payload for one user over one [`StatsRange`].
 ///
-/// Book completion is sourced from `journal_entries.progress = 100` (the only
-/// progress fraction persisted today) rather than the session tables, which
-/// carry duration but no progress; a future first-class read/unread state
-/// would feed the same field instead.
+/// Book completion is sourced from either a 100% `journal_entries` row or an
+/// explicit `book_read_status` of `finished`, never from the session tables
+/// (which carry duration but no progress). A book finished both ways counts
+/// once, and every completion metric on this struct — `books_finished`,
+/// `finished_books`, `books_per_month`, `pages_read` and `previous` — shares
+/// that one definition, live books only. They must not drift apart: two of
+/// them render on the same screen.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct StatsSummary {
     pub range: StatsRange,

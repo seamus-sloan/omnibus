@@ -875,3 +875,136 @@ async fn finished_books_rail_is_capped_but_count_is_not() {
         format!("uuid-{}", FINISHED_BOOKS_LIMIT + 5)
     );
 }
+
+/// Drop a book row the way `merge::transaction::finalize_merge` used to,
+/// leaving its soft-referencing user-data rows behind. Migration `0079` heals
+/// the rows an old merge stranded and the merge path no longer strands new
+/// ones — but a completion can outlive its book by any route that drops a
+/// `books` row, and every metric must agree about that book either way.
+async fn drop_book_row(pool: &SqlitePool, uuid: &str) {
+    sqlx::query("DELETE FROM books WHERE uuid = ?")
+        .bind(uuid)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// A moment safely inside the current calendar month. Not `now - 60`: for the
+/// first minute of the 1st that lands in the *previous* month, while the
+/// trailing-12 series still ends on the current one.
+async fn this_month_secs(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar("SELECT CAST(strftime('%s','now','start of month','+1 day') AS INTEGER)")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn finished_metrics_agree_when_a_completion_outlives_its_book() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let user = seed_user(&pool, "alice").await;
+    let at = this_month_secs(&pool).await;
+    finish_read_status(&pool, user, "uuid-1", at).await;
+    finish_read_status(&pool, user, "uuid-2", at).await;
+    drop_book_row(&pool, "uuid-2").await;
+
+    // The headline count, the rail and the trailing-12 chart are three reads
+    // of one definition; before the shared liveness filter the chart reported
+    // 2 while the tile above it reported 1, for the same month.
+    let headline = finished_count(&pool, user, 0).await.unwrap();
+    let rail = finished_books(&pool, user, 0).await.unwrap();
+    let months = books_per_month(&pool, user).await.unwrap();
+    assert_eq!(headline, 1);
+    assert_eq!(rail.len(), 1);
+    assert_eq!(months.last().unwrap().books, 1);
+}
+
+#[tokio::test]
+async fn previous_period_excludes_a_completion_whose_book_is_gone() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let user = seed_user(&pool, "alice").await;
+    // Mid-previous-month, safely inside the Month range's previous window.
+    let prev: i64 = sqlx::query_scalar(
+        "SELECT CAST(strftime('%s','now','start of month','-1 month','+14 days') AS INTEGER)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    finish_read_status(&pool, user, "uuid-1", prev).await;
+    finish_read_status(&pool, user, "uuid-2", prev).await;
+    drop_book_row(&pool, "uuid-2").await;
+
+    // The delta's baseline must count the same population the current window
+    // does, or the drill-in invents a drop the reader never had.
+    let previous = previous_period(&pool, user, StatsRange::Month)
+        .await
+        .unwrap();
+    assert_eq!(previous.books_finished, 1);
+}
+
+#[tokio::test]
+async fn avg_stars_excludes_a_rating_whose_book_is_gone() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let user = seed_user(&pool, "alice").await;
+    let at = this_month_secs(&pool).await;
+    rate_book(&pool, user, "uuid-1", 10, at).await;
+    rate_book(&pool, user, "uuid-2", 2, at).await;
+    drop_book_row(&pool, "uuid-2").await;
+
+    // The 1-star sits on a book the UI cannot render a rating for, so it must
+    // not drag the mean the stats page shows.
+    assert_eq!(avg_stars(&pool, user, 0).await.unwrap(), Some(5.0));
+}
+
+#[tokio::test]
+async fn rating_monthly_excludes_a_rating_whose_book_is_gone() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let user = seed_user(&pool, "alice").await;
+    let at = this_month_secs(&pool).await;
+    rate_book(&pool, user, "uuid-1", 10, at).await;
+    rate_book(&pool, user, "uuid-2", 2, at).await;
+    drop_book_row(&pool, "uuid-2").await;
+
+    let months = rating_monthly(&pool, user).await.unwrap();
+    assert_eq!(months.len(), 12);
+    // Same filter as `avg_stars`, so the tile and its trend agree.
+    assert!(
+        (months.last().unwrap().value - 5.0).abs() < f64::EPSILON,
+        "expected the current month to mean 5.0, got {months:?}"
+    );
+}
+
+#[tokio::test]
+async fn previous_period_avg_stars_excludes_a_rating_whose_book_is_gone() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let user = seed_user(&pool, "alice").await;
+    let prev = prev_period_start(&pool, StatsRange::Month).await;
+    rate_book(&pool, user, "uuid-1", 10, prev).await;
+    rate_book(&pool, user, "uuid-2", 2, prev).await;
+    drop_book_row(&pool, "uuid-2").await;
+
+    // `avg_stars_bounded` carries its own copy of the filter; without this the
+    // baseline mean could disagree with the current window's for the same books.
+    let previous = previous_period(&pool, user, StatsRange::Month)
+        .await
+        .unwrap();
+    assert_eq!(previous.avg_stars, Some(5.0));
+}
+
+/// First second of the period preceding `range`'s current one.
+async fn prev_period_start(pool: &SqlitePool, range: StatsRange) -> i64 {
+    sqlx::query_scalar(match range {
+        StatsRange::Month => {
+            "SELECT CAST(strftime('%s','now','start of month','-1 month') AS INTEGER)"
+        }
+        _ => unreachable!("only Month is used here"),
+    })
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
