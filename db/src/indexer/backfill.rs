@@ -667,6 +667,96 @@ mod tests {
     use crate::pool::init_db;
     use crate::test_support::seed_minimal_books;
 
+    /// Migration `0084`'s reset, read from the migration itself rather than
+    /// retyped: the two must not be able to drift, and the migration runs
+    /// against an empty schema here so nothing else exercises its predicate.
+    const WORD_COUNT_RESET: &str = include_str!("../../migrations/0084_word_count_reset.sql");
+
+    /// Give `book_id` a `book_files` row in `format`, replacing whatever
+    /// `seed_minimal_books` gave it.
+    async fn set_only_file_format(pool: &SqlitePool, book_id: i64, format: &str) {
+        sqlx::query("DELETE FROM book_files WHERE book_id = ?")
+            .bind(book_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch)
+             VALUES (?, ?, 'f', 1, 1)",
+        )
+        .bind(book_id)
+        .bind(format)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn word_count_of(pool: &SqlitePool, book_id: i64) -> Option<i64> {
+        sqlx::query_scalar("SELECT word_count FROM books WHERE id = ?")
+            .bind(book_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn word_count_reset_nulls_only_rows_the_backfill_can_re_derive() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        seed_minimal_books(&pool, 3).await;
+        sqlx::query("UPDATE books SET word_count = 100")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // 1 keeps its EPUB file. 2 is ghosted — the file was removed, so the
+        // `books` row survives with no `book_files` and nothing to re-read. 3
+        // is a comic, which never had a word count derived from a spine.
+        sqlx::query("DELETE FROM book_files WHERE book_id = 2")
+            .execute(&pool)
+            .await
+            .unwrap();
+        set_only_file_format(&pool, 3, "CBZ").await;
+
+        sqlx::raw_sql(WORD_COUNT_RESET)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            word_count_of(&pool, 1).await,
+            None,
+            "re-derivable, so reset"
+        );
+        assert_eq!(
+            word_count_of(&pool, 2).await,
+            Some(100),
+            "a ghost has no EPUB to re-read; nulling would destroy the value"
+        );
+        assert_eq!(word_count_of(&pool, 3).await, Some(100), "not EPUB-backed");
+    }
+
+    #[tokio::test]
+    async fn word_count_reset_hands_exactly_its_rows_to_the_backfill() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        seed_minimal_books(&pool, 2).await;
+        sqlx::query("UPDATE books SET word_count = 100")
+            .execute(&pool)
+            .await
+            .unwrap();
+        set_only_file_format(&pool, 2, "CBZ").await;
+
+        sqlx::raw_sql(WORD_COUNT_RESET)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let candidates = fetch_word_count_candidates(&pool, "/lib").await.unwrap();
+
+        // The reset's guards mirror the backfill's joins, so every row it nulls
+        // comes straight back as work — a row it nulled but the backfill
+        // skipped would stay NULL forever.
+        let ids: Vec<i64> = candidates.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, vec![1]);
+    }
+
     /// Empty `updates` must not build any SQL at all — `chunks()` over an
     /// empty slice yields zero chunks, so this is really asserting the
     /// no-op holds rather than that some degenerate `CASE`/`IN ()` executes.
