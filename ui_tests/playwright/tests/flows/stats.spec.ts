@@ -178,6 +178,14 @@ test("a tile's grip opens its drill-in and the close button dismisses it", async
   // a trend chart — AC2.
   await expect(page.getByTestId("stats-drill-delta")).toBeVisible();
   await expect(page.getByTestId("stats-drill-trend")).toBeVisible();
+  // Avg rating also carries the distribution, or its empty state when nothing
+  // was rated in the window — other specs write ratings on the shared fixture,
+  // so which one shows isn't ours to pin here.
+  await expect(
+    page
+      .getByTestId("stats-drill-histogram")
+      .or(page.getByTestId("stats-drill-histogram-empty")),
+  ).toBeVisible();
 
   await page.getByTestId("stats-drill-close").click();
   await expect(drillIn).toHaveCount(0);
@@ -186,6 +194,55 @@ test("a tile's grip opens its drill-in and the close button dismisses it", async
   await expect(
     page.getByRole("heading", { name: "Your reading month" }),
   ).toBeVisible();
+});
+
+test("the Avg rating drill-in charts every half-star bucket on a star axis", async ({
+  page,
+}) => {
+  // Route-mocked so the buckets are pinned: the shared fixture's ratings are
+  // written by other specs, so asserting bar labels against live data would
+  // race them.
+  const histogram = Array.from({ length: 10 }, (_, i) => ({
+    half_stars: i + 1,
+    books: i === 6 ? 2 : i === 9 ? 3 : 0,
+  }));
+  await page.route("**/api/rpc/stats", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        range: "month",
+        reading_seconds: 600,
+        listening_seconds: 0,
+        avg_stars: 4.4,
+        sessions: 1,
+        active_days: 1,
+        longest_streak_days: 1,
+        current_streak_days: 1,
+        busiest_week_start: null,
+        busiest_week_seconds: 600,
+        books_finished: 1,
+        heatmap: [],
+        top_authors: [],
+        top_tags: [],
+        finished_books: [],
+        rating_histogram: histogram,
+      }),
+    }),
+  );
+
+  await gotoReady(page, "/stats");
+  await page.getByTestId("stats-tile-avg-rating").click();
+
+  // Ten columns — empty buckets keep their place, or the shape lies — labelled
+  // in stars rather than the stored 1..=10 half-star scale.
+  const chart = page.getByTestId("stats-drill-histogram");
+  await expect(chart).toBeVisible();
+  await expect
+    .poll(() => chart.locator(".st-drill-trend-label").allInnerTexts())
+    .toEqual(["0.5", "1", "1.5", "2", "2.5", "3", "3.5", "4", "4.5", "5"]);
+  // The tallest bucket carries its book count on hover.
+  await expect(chart.locator('[title="5 ★ · 3 books"]')).toBeVisible();
 });
 
 test("the Finished drill-in lists the books completed in the window", async ({

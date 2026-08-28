@@ -1,11 +1,14 @@
 //! Metric-tile drill-in: a bottom sheet on mobile, a centered modal on
 //! desktop, switched by a CSS media query so the rsx stays identical on
 //! every target (rule 07). Shows a vs-previous-period delta, the
-//! metric's trend chart, and — for Finished — the books completed in
-//! the window, all from the already-fetched `StatsSummary` (no new RPC).
+//! metric's trend chart, and — per metric — the half-star distribution
+//! (Avg rating) or the books completed in the window (Finished), all
+//! from the already-fetched `StatsSummary` (no new RPC).
 
 use dioxus::prelude::*;
-use omnibus_shared::{Contributor, EbookMetadata, FinishedBook, StatsRange, StatsSummary};
+use omnibus_shared::{
+    Contributor, EbookMetadata, FinishedBook, RatingBucket, StatsRange, StatsSummary,
+};
 
 use crate::components::{ConfirmModal, CoverTile, CoverTileKind};
 use crate::use_server_url;
@@ -114,20 +117,25 @@ fn stars_delta(current: Option<f64>, previous: Option<f64>) -> Option<Delta> {
     })
 }
 
-/// One rendered trend bar: a short label and a height 0..=100 relative to
-/// the series' tallest point. An all-zero series stays all zero.
+/// One rendered trend bar: a short axis label, the hover title, and a height
+/// 0..=100 relative to the series' tallest point. An all-zero series stays all
+/// zero.
 struct TrendBar {
     label: String,
+    /// Hover text. Defaults to the axis label; a caller with something more
+    /// useful to say (the histogram's book count) overwrites it.
+    title: String,
     height_pct: u32,
 }
 
-/// Normalize any of the summary's label/value trend series into bar heights.
+/// Normalize any of the summary's label/value series into bar heights.
 fn build_trend_bars(points: &[(String, f64)]) -> Vec<TrendBar> {
     let max = points.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max);
     points
         .iter()
         .map(|(label, value)| TrendBar {
             label: label.clone(),
+            title: label.clone(),
             height_pct: if max <= 0.0 {
                 0
             } else {
@@ -139,6 +147,40 @@ fn build_trend_bars(points: &[(String, f64)]) -> Vec<TrendBar> {
             },
         })
         .collect()
+}
+
+/// A rating bucket's axis label, in **stars** — "0.5", "1", "1.5" … "5".
+/// Ratings are stored as half-stars 1..=10; labelling the raw value would
+/// present the chart as a ten-point scale.
+fn star_label(bucket: &RatingBucket) -> String {
+    let stars = bucket.stars();
+    if bucket.half_stars % 2 == 0 {
+        format!("{stars:.0}")
+    } else {
+        format!("{stars:.1}")
+    }
+}
+
+/// The window's ratings as bars, one per half-star bucket, with the book count
+/// on hover. Empty when the window carries no ratings at all — the caller
+/// renders its empty state rather than ten flat bars.
+// Display-only heights: bucket counts sit far below f64's 2^52 exact-integer
+// range.
+#[allow(clippy::cast_precision_loss)]
+fn build_histogram_bars(buckets: &[RatingBucket]) -> Vec<TrendBar> {
+    let points: Vec<(String, f64)> = buckets
+        .iter()
+        .map(|b| (star_label(b), b.books as f64))
+        .collect();
+    let mut bars = build_trend_bars(&points);
+    for (bar, bucket) in bars.iter_mut().zip(buckets) {
+        let plural = if bucket.books == 1 { "" } else { "s" };
+        bar.title = format!(
+            "{} \u{2605} \u{00B7} {} book{plural}",
+            bar.label, bucket.books
+        );
+    }
+    bars
 }
 
 /// The metric's trend series as `(short label, value)` pairs, drawn from the
@@ -287,6 +329,9 @@ pub(super) fn DrillIn(
             div { class: "st-drill-body",
                 {render_delta(delta, vs)}
                 {render_trend(metric, &bars)}
+                if metric == Metric::AvgRating {
+                    {render_histogram(&summary.rating_histogram)}
+                }
                 if metric == Metric::Finished {
                     {render_finished_list(&summary.finished_books, summary.books_finished, &server_url)}
                 }
@@ -318,6 +363,29 @@ fn render_delta(delta: Option<Delta>, vs: &str) -> Element {
     }
 }
 
+/// The shared pure-CSS bar strip: one normalized column per point, with its
+/// axis label beneath. Both the metric trend and the rating histogram render
+/// through this — the histogram is the same widget with a different x-axis, so
+/// a second bar renderer would only be a second thing to keep in sync.
+fn render_bars(bars: &[TrendBar], testid: &str, aria_label: &str) -> Element {
+    rsx! {
+        div {
+            class: "st-drill-trend",
+            "data-testid": "{testid}",
+            role: "img",
+            aria_label: "{aria_label}",
+            for (i, bar) in bars.iter().enumerate() {
+                div { key: "{i}-{bar.label}", class: "st-drill-trend-col", title: "{bar.title}",
+                    div { class: "st-drill-trend-track",
+                        div { class: "st-drill-trend-bar", style: "height: {bar.height_pct}%;" }
+                    }
+                    div { class: "st-drill-trend-label mono", "{bar.label}" }
+                }
+            }
+        }
+    }
+}
+
 /// The metric's trend chart — pure-CSS bar columns — or a placeholder note
 /// for the Pages tile. The headline tile carries a real estimate,
 /// but a day/month-bucketed trend series over it isn't computed yet.
@@ -330,21 +398,27 @@ fn render_trend(metric: Metric, bars: &[TrendBar]) -> Element {
     if bars.is_empty() {
         return rsx! { div {} };
     }
-    rsx! {
-        div {
-            class: "st-drill-trend",
-            "data-testid": "stats-drill-trend",
-            role: "img",
-            aria_label: "{metric.title()} trend",
-            for (i, bar) in bars.iter().enumerate() {
-                div { key: "{i}-{bar.label}", class: "st-drill-trend-col", title: "{bar.label}",
-                    div { class: "st-drill-trend-track",
-                        div { class: "st-drill-trend-bar", style: "height: {bar.height_pct}%;" }
-                    }
-                    div { class: "st-drill-trend-label mono", "{bar.label}" }
-                }
+    render_bars(
+        bars,
+        "stats-drill-trend",
+        &format!("{} trend", metric.title()),
+    )
+}
+
+/// The Avg rating drill-in's distribution: how many books landed in each
+/// half-star bucket. The mean above it can't tell a reader who rates
+/// everything 4 from one who splits evenly between 2 and 5 — this can.
+fn render_histogram(buckets: &[RatingBucket]) -> Element {
+    if buckets.iter().all(|b| b.books == 0) {
+        return rsx! {
+            p { class: "st-drill-delta-empty", "data-testid": "stats-drill-histogram-empty",
+                "No ratings in this window yet."
             }
-        }
+        };
+    }
+    rsx! {
+        div { class: "label st-drill-section-label", "Books at each rating" }
+        {render_bars(&build_histogram_bars(buckets), "stats-drill-histogram", "Star rating distribution")}
     }
 }
 

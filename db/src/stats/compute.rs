@@ -1,16 +1,15 @@
 //! SQL-heavy aggregation body for [`super::user_stats`]: `compute` runs one
 //! query per [`StatsSummary`] field and assembles the result. Sibling modules
 //! hold the rollups that grew their own sub-topic — `genre` for the donut,
-//! `pages` for the page estimate — keeping each file under the house
-//! line-count cap.
+//! `pages` for the page estimate, `ratings` for the star metrics — keeping
+//! each file under the house line-count cap.
 
 use omnibus_shared::{
-    DayActivity, FinishedBook, MonthCount, PeriodComparison, RankedEntity, StatsRange,
-    StatsSummary, TrendPoint,
+    DayActivity, FinishedBook, MonthCount, PeriodComparison, RankedEntity, StatsRange, StatsSummary,
 };
 use sqlx::{Row, SqlitePool};
 
-use super::{genre, pages, sessionize, streak, StatsError};
+use super::{genre, pages, ratings, sessionize, streak, StatsError};
 
 /// How many rows the top-authors / top-tags rollups return.
 const TOP_N: i64 = 8;
@@ -68,17 +67,6 @@ fn live_finished_events() -> String {
     )
 }
 
-/// A rating on a book that still exists, scoped to one user — the same
-/// liveness rule [`live_finished_events`] applies to completions, for the
-/// star-rating metrics. Bind order is `user_id`.
-///
-/// A rating the book page cannot render must not move the mean.
-const LIVE_RATINGS: &str = "\
-    SELECT r.user_id AS user_id, r.half_stars AS half_stars, r.updated_at AS updated_at \
-    FROM user_ratings r \
-    JOIN books b ON b.uuid = r.book_uuid \
-    WHERE r.user_id = ?";
-
 /// Run every per-field query and assemble the [`StatsSummary`] for one user's
 /// window. This is the body [`super::user_stats_at`] caches.
 pub(super) async fn compute(
@@ -98,7 +86,8 @@ pub(super) async fn compute(
     )
     .await?;
     let sessions = session_count(pool, user_id, start).await?;
-    let avg_stars = avg_stars(pool, user_id, start).await?;
+    let avg_stars = ratings::avg_stars(pool, user_id, start).await?;
+    let rating_histogram = ratings::rating_histogram(pool, user_id, start).await?;
     let heatmap = heatmap(pool, user_id, start).await?;
     // One clock read feeds both the heatmap's right edge and the streak's
     // anchor, so the two can never land on different days.
@@ -115,7 +104,7 @@ pub(super) async fn compute(
     let books_per_month = books_per_month(pool, user_id).await?;
     let previous = previous_period(pool, user_id, range).await?;
     let listening_daily = listening_daily(pool, user_id, start).await?;
-    let rating_monthly = rating_monthly(pool, user_id).await?;
+    let rating_monthly = ratings::rating_monthly(pool, user_id).await?;
     let pages_read = pages::pages_read(pool, user_id, start).await?;
 
     Ok(StatsSummary {
@@ -142,6 +131,7 @@ pub(super) async fn compute(
         previous,
         listening_daily,
         rating_monthly,
+        rating_histogram,
         pages_read,
     })
 }
@@ -185,23 +175,6 @@ pub(super) async fn sum_seconds(
     let sql = format!(
         "SELECT COALESCE(SUM({col}), 0) FROM {table} WHERE user_id = ? AND started_at >= ?"
     );
-    Ok(sqlx::query_scalar(&sql)
-        .bind(user_id)
-        .bind(start)
-        .fetch_one(pool)
-        .await?)
-}
-
-/// Mean star rating over books the user rated within the window (keyed on
-/// `user_ratings.updated_at`), in stars — `half_stars` is 1..=10, so the
-/// SQL mean halves it. `None` when nothing was rated in the window.
-/// Live books only, per [`LIVE_RATINGS`].
-pub(super) async fn avg_stars(
-    pool: &SqlitePool,
-    user_id: i64,
-    start: i64,
-) -> Result<Option<f64>, StatsError> {
-    let sql = format!("SELECT AVG(half_stars) / 2.0 FROM ({LIVE_RATINGS}) WHERE updated_at >= ?");
     Ok(sqlx::query_scalar(&sql)
         .bind(user_id)
         .bind(start)
@@ -536,7 +509,7 @@ pub(super) async fn previous_period(
         "seconds_listened",
     )
     .await?;
-    let avg_stars = avg_stars_bounded(pool, user_id, start, end).await?;
+    let avg_stars = ratings::avg_stars_bounded(pool, user_id, start, end).await?;
     let books_finished = finished_count_bounded(pool, user_id, start, end).await?;
     Ok(PeriodComparison {
         books_finished,
@@ -558,25 +531,6 @@ async fn sum_seconds_bounded(
     let sql = format!(
         "SELECT COALESCE(SUM({col}), 0) FROM {table} \
          WHERE user_id = ? AND started_at >= ? AND started_at < ?"
-    );
-    Ok(sqlx::query_scalar(&sql)
-        .bind(user_id)
-        .bind(start)
-        .bind(end)
-        .fetch_one(pool)
-        .await?)
-}
-
-/// `avg_stars`, upper-bounded — `updated_at` in `[start, end)`.
-async fn avg_stars_bounded(
-    pool: &SqlitePool,
-    user_id: i64,
-    start: i64,
-    end: i64,
-) -> Result<Option<f64>, StatsError> {
-    let sql = format!(
-        "SELECT AVG(half_stars) / 2.0 FROM ({LIVE_RATINGS}) \
-         WHERE updated_at >= ? AND updated_at < ?"
     );
     Ok(sqlx::query_scalar(&sql)
         .bind(user_id)
@@ -632,44 +586,6 @@ pub(super) async fn listening_daily(
         .map(|r| DayActivity {
             day: r.get("day"),
             seconds: r.get("seconds"),
-        })
-        .collect())
-}
-
-/// Mean star rating per calendar month over the trailing 12 months (oldest
-/// first, ending at the current month) — the Avg rating tile's drill-in trend
-/// chart. Same trailing-window CTE shape as [`books_per_month`]; a month with
-/// no ratings comes back as `0.0` rather than being omitted.
-pub(super) async fn rating_monthly(
-    pool: &SqlitePool,
-    user_id: i64,
-) -> Result<Vec<TrendPoint>, StatsError> {
-    let sql = format!(
-        "WITH RECURSIVE months(month) AS (
-             SELECT strftime('%Y-%m', 'now', 'start of month', '-11 months')
-             UNION ALL
-             SELECT strftime('%Y-%m', month || '-01', '+1 month')
-             FROM months
-             WHERE month < strftime('%Y-%m', 'now')
-         )
-         SELECT months.month AS month, AVG(ur.half_stars) / 2.0 AS avg_stars
-         FROM months
-         LEFT JOIN ({LIVE_RATINGS}) ur
-                ON strftime('%Y-%m', ur.updated_at, 'unixepoch') = months.month
-         GROUP BY months.month
-         ORDER BY months.month"
-    );
-    let rows = sqlx::query(&sql).bind(user_id).fetch_all(pool).await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| {
-            let month: String = r.get("month");
-            let avg_stars: Option<f64> = r.get("avg_stars");
-            TrendPoint {
-                label: month,
-                value: avg_stars.unwrap_or(0.0),
-            }
         })
         .collect())
 }

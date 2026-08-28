@@ -1,13 +1,15 @@
 //! Reading-stats aggregation over the `reading_sessions` /
 //! `listening_sessions` tables plus `journal_entries` / `book_read_status`
-//! for completion; no new query-time schema. See the `book`, `compute`, and
-//! `pages` submodules for the per-scope aggregation bodies this module's
-//! cache wraps, and `sessionize` for how checkpoint rows become sittings.
+//! for completion; no new query-time schema. See the `book`, `compute`,
+//! `pages`, `ratings`, and `streak` submodules for the per-scope aggregation
+//! bodies this module's cache wraps, and `sessionize` for how checkpoint rows
+//! become sittings.
 
 mod book;
 mod compute;
 mod genre;
 mod pages;
+mod ratings;
 mod sessionize;
 mod streak;
 
@@ -31,13 +33,14 @@ use sqlx::SqlitePool;
 
 #[cfg(test)]
 use compute::{
-    avg_stars, books_active, books_per_month, finished_books, finished_count, listening_daily,
-    prev_window_bounds, prev_window_from, previous_period, rating_monthly, window_start,
-    FINISHED_BOOKS_LIMIT,
+    books_active, books_per_month, finished_books, finished_count, listening_daily,
+    prev_window_bounds, prev_window_from, previous_period, window_start, FINISHED_BOOKS_LIMIT,
 };
 use compute::{compute, FINISHED_EVENTS};
 #[cfg(test)]
 use genre::{genre_share, genre_tagged_books};
+#[cfg(test)]
+use ratings::{avg_stars, rating_monthly};
 
 /// Failure space of the aggregation layer. Every metric is a SQL query, so a
 /// wrapped `sqlx::Error` is the only failure — kept as an enum (rather than a
