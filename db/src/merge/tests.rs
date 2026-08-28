@@ -1424,3 +1424,100 @@ async fn migration_0079_keeps_each_readers_own_row_when_orphans_collide() {
         ]
     );
 }
+
+/// Seed one forward-progress day bucket (migration 0081) for a book.
+async fn seed_daily_ledger(pool: &sqlx::SqlitePool, user: i64, uuid: &str, day: &str, gained: i64) {
+    sqlx::query(
+        "INSERT INTO reading_progress_daily
+             (user_id, book_uuid, format, day, percent_gained, updated_at)
+         VALUES (?, ?, 'epub', ?, ?, 1)",
+    )
+    .bind(user)
+    .bind(uuid)
+    .bind(day)
+    .bind(gained)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn merge_sums_forward_progress_day_buckets_onto_the_target() {
+    // #2139: the day buckets are a counter, not a snapshot. Latest-wins — the
+    // rule every other colliding table here follows — would throw away a whole
+    // day of reading from one edition.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool).await;
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+
+    seed_daily_ledger(&pool, user, &target, "2026-08-01", 10).await;
+    seed_daily_ledger(&pool, user, &source, "2026-08-01", 15).await;
+    // A day only the source has must survive the retarget untouched.
+    seed_daily_ledger(&pool, user, &source, "2026-08-02", 7).await;
+
+    merge_books(&pool, &source, &target, Some(user))
+        .await
+        .unwrap();
+
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT day, percent_gained FROM reading_progress_daily
+          WHERE book_uuid = ? ORDER BY day",
+    )
+    .bind(&target)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("2026-08-01".to_string(), 25),
+            ("2026-08-02".to_string(), 7)
+        ]
+    );
+    // Nothing stranded on the deleted source uuid, where it would be invisible
+    // to every query that joins `books`.
+    let stranded: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM reading_progress_daily WHERE book_uuid = ?")
+            .bind(&source)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stranded, 0);
+}
+
+#[tokio::test]
+async fn merge_keeps_the_newer_forward_progress_mark() {
+    // The mark shadows a position, so latest-wins is right here — unlike the
+    // day buckets it sits beside.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool).await;
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+
+    for (uuid, percent, ts) in [(&target, 20, 1000), (&source, 55, 2000)] {
+        sqlx::query(
+            "INSERT INTO reading_progress_marks
+                 (user_id, book_uuid, format, percent, updated_at)
+             VALUES (?, ?, 'epub', ?, ?)",
+        )
+        .bind(user)
+        .bind(uuid)
+        .bind(percent)
+        .bind(ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    merge_books(&pool, &source, &target, Some(user))
+        .await
+        .unwrap();
+
+    let marks: Vec<(String, i64)> =
+        sqlx::query_as("SELECT book_uuid, percent FROM reading_progress_marks")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(marks, vec![(target.clone(), 55)]);
+}

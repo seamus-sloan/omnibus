@@ -52,7 +52,7 @@ CREATE TABLE reading_progress_marks (
     book_uuid TEXT    NOT NULL,
     format    TEXT    NOT NULL CHECK (format IN ('epub', 'audio')),
     percent   INTEGER NOT NULL CHECK (percent BETWEEN 0 AND 100),
-    marked_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     PRIMARY KEY (user_id, book_uuid, format)
 );
 
@@ -78,6 +78,14 @@ CREATE INDEX idx_reading_progress_daily_user_day
 -- resolves.
 CREATE INDEX idx_reading_progress_daily_book_uuid
     ON reading_progress_daily(book_uuid);
+
+-- Both tables carry `updated_at` and join `merge::transaction`'s
+-- `RETARGET_TABLES`: a per-reader table that soft-references `books.uuid` and
+-- is *not* on that list strands its rows on a merged-away uuid, where nothing
+-- joining `books` can see them and the reading they record silently disappears.
+-- The marks dedupe latest-wins like `reading_progress` does (a mark is a
+-- snapshot); the day buckets are **summed** instead, because they are a
+-- counter and discarding one side would lose a day's reading outright.
 
 -- The cutover date, in the `settings` KV that already holds server-wide
 -- internal values (`secret_key`). `INSERT OR IGNORE` so a re-run can never

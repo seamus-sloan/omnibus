@@ -57,11 +57,11 @@ pub(super) async fn observe_percent_tx(
     let percent = percent.clamp(0, 100);
 
     sqlx::query(
-        "INSERT INTO reading_progress_marks (user_id, book_uuid, format, percent, marked_at)
+        "INSERT INTO reading_progress_marks (user_id, book_uuid, format, percent, updated_at)
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(user_id, book_uuid, format) DO UPDATE SET
              percent = excluded.percent,
-             marked_at = excluded.marked_at",
+             updated_at = excluded.updated_at",
     )
     .bind(user_id)
     .bind(book_uuid)
