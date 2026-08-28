@@ -8,7 +8,7 @@
 // indexed book, so the library is seeded first and sessions ride a real
 // fixture uuid.
 
-import type { Page } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
@@ -728,4 +728,127 @@ test("the time-pattern card says so rather than drawing flat bars", async ({
   await expect(page.getByTestId("stats-when-empty")).toBeVisible();
   await expect(page.getByTestId("stats-when-hours")).toHaveCount(0);
   await expect(page.getByTestId("stats-when-unzoned")).toContainText("5h 12m");
+});
+
+/**
+ * Reset the shared user's annual goal so the goal tests start from the
+ * invitation state. The REST write invalidates that user's stats cache, so the
+ * page reads the cleared value immediately rather than after the TTL.
+ */
+async function clearReadingGoal(request: APIRequestContext) {
+  const resp = await request.put("/api/stats/goal", {
+    data: { target: null },
+  });
+  expect(resp.status(), "clearing the reading goal failed").toBe(200);
+}
+
+test("the annual goal band invites, saves, persists, and clears", async ({
+  page,
+  request,
+}) => {
+  await clearReadingGoal(request);
+  await gotoReady(page, "/stats");
+
+  // AC4: no goal is an invitation, never a zero-of-zero bar.
+  const band = page.getByTestId("stats-goal");
+  await expect(band).toBeVisible();
+  await expect(page.getByTestId("stats-goal-invite")).toBeVisible();
+  await expect(page.getByTestId("stats-goal-progress")).toHaveCount(0);
+
+  await page.getByTestId("stats-goal-edit").click();
+  await page.getByTestId("stats-goal-input").fill("24");
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/stats-goal",
+      expectedBody: { update: { target: 24 } },
+      expectedStatus: 200,
+    },
+    async () => page.getByTestId("stats-goal-save").click(),
+  );
+
+  // AC5: the saved target is on screen straight away, not after the 60s
+  // stats cache TTL.
+  await expect(page.getByTestId("stats-goal-figure")).toContainText(
+    /of 24 books/,
+  );
+  await expect(page.getByTestId("stats-goal-progress")).toHaveAttribute(
+    "aria-valuemax",
+    "24",
+  );
+
+  // AC1: it survives a fresh page load.
+  await gotoReady(page, "/stats");
+  await expect(page.getByTestId("stats-goal-figure")).toContainText(
+    /of 24 books/,
+  );
+
+  // AC3: the band is annual, so the period switcher must not move it.
+  const before = await band.textContent();
+  const menu = await openPeriodMenu(page);
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/stats",
+      expectedBody: { range: "week" },
+      expectedStatus: 200,
+    },
+    async () => menu.getByRole("button", { name: "Week" }).click(),
+  );
+  await expect(
+    page.getByRole("heading", { name: "Your reading week" }),
+  ).toBeVisible();
+  await expect.poll(() => band.textContent()).toBe(before);
+
+  // Clearing drops the row rather than storing a zero target, so the
+  // invitation comes back.
+  await page.getByTestId("stats-goal-edit").click();
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/stats-goal",
+      expectedBody: { update: {} },
+      expectedStatus: 200,
+    },
+    async () => page.getByTestId("stats-goal-clear").click(),
+  );
+  await expect(page.getByTestId("stats-goal-invite")).toBeVisible();
+  await expect(page.getByTestId("stats-goal-progress")).toHaveCount(0);
+});
+
+test("a failed goal save surfaces the error and leaves the goal unset", async ({
+  page,
+  request,
+}) => {
+  await clearReadingGoal(request);
+  await page.route("**/api/rpc/stats-goal", (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "goal write failed",
+    }),
+  );
+
+  await gotoReady(page, "/stats");
+  await page.getByTestId("stats-goal-edit").click();
+  await page.getByTestId("stats-goal-input").fill("12");
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/stats-goal",
+      expectedBody: { update: { target: 12 } },
+      expectedStatus: 500,
+    },
+    async () => page.getByTestId("stats-goal-save").click(),
+  );
+
+  await expect(page.getByTestId("stats-goal-error")).toBeVisible();
+  // The band stays in its pre-save state — no optimistic bar for a write the
+  // server rejected.
+  await expect(page.getByTestId("stats-goal-invite")).toBeVisible();
+  await expect(page.getByTestId("stats-goal-progress")).toHaveCount(0);
 });

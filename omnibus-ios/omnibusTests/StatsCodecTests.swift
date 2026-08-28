@@ -262,3 +262,50 @@ struct LibrarySizeTests {
         #expect(StatsView.audioValue(167 * 3600 + 2400) == ("7", "days"))
     }
 }
+
+@Suite("Annual reading goal")
+struct ReadingGoalCodecTests {
+    @Test("the goal decodes off the summary with its year and progress")
+    func decodesGoal() throws {
+        let extra = #","goal":{"kind":"books","target":24,"current":7,"year":2026}"#
+        let summary = try decodeSummary(summaryJSON(extra: extra))
+        let goal = try #require(summary.goal)
+        #expect(goal.kind == "books")
+        #expect(goal.target == 24)
+        #expect(goal.current == 7)
+        #expect(goal.year == 2026)
+    }
+
+    @Test("a server that predates the goal still decodes, with no goal set")
+    func decodesWithoutGoal() throws {
+        // The whole point of `#[serde(default)] Option<ReadingGoal>` on the
+        // Rust side: an older server costs one card, not the screen.
+        let summary = try decodeSummary(summaryJSON())
+        #expect(summary.goal == nil)
+    }
+
+    @Test("progress reports the honest ratio while the bar's fraction clamps")
+    func clampsTheBarNotTheCount() {
+        let over = ReadingGoal(kind: "books", target: 24, current: 30, year: 2026)
+        #expect(over.fraction == 1)
+        #expect(over.current == 30)
+        #expect(over.isMet)
+        #expect(over.remaining == 0)
+
+        let partway = ReadingGoal(kind: "books", target: 24, current: 12, year: 2026)
+        #expect(partway.fraction == 0.5)
+        #expect(!partway.isMet)
+        #expect(partway.remaining == 12)
+
+        // A zero target never reaches a client, but the ring must not divide
+        // by it if one ever does.
+        #expect(ReadingGoal(kind: "books", target: 0, current: 3, year: 2026).fraction == 0)
+    }
+
+    @Test("a cleared goal encodes an explicit null target, not an absent key")
+    func encodesAnExplicitNull() throws {
+        let body = try JSONEncoder().encode(ReadingGoalUpdate(target: nil))
+        let json = try #require(String(data: body, encoding: .utf8))
+        #expect(json.contains("\"target\":null"))
+    }
+}

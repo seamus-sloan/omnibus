@@ -4,7 +4,7 @@
 //! functions). Both variants share their signatures so the stats page stays
 //! platform-agnostic; the `#[cfg]` gates carry the split.
 
-use omnibus_shared::{LibrarySize, StatsRange, StatsSummary};
+use omnibus_shared::{LibrarySize, ReadingGoal, ReadingGoalUpdate, StatsRange, StatsSummary};
 
 #[cfg(not(feature = "mobile"))]
 use super::note_server_fn_err;
@@ -67,6 +67,39 @@ pub async fn fetch_library_size(server_url: &str) -> Result<LibrarySize, DataErr
 #[cfg(not(feature = "mobile"))]
 pub async fn fetch_library_size(_server_url: &str) -> Result<LibrarySize, DataError> {
     crate::rpc::rpc_library_size()
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// PUT `/api/stats/goal` — set, change, or clear the annual reading goal.
+///
+/// Rule 08 test 1: a goal is account configuration, so this is a direct call
+/// on both targets and never enters the offline outbox. Callers disable the
+/// control while offline and surface the failure when it fires anyway.
+#[cfg(feature = "mobile")]
+pub async fn save_reading_goal(
+    server_url: &str,
+    update: &ReadingGoalUpdate,
+) -> Result<Option<ReadingGoal>, DataError> {
+    let url = format!("{server_url}/api/stats/goal");
+    let response = with_bearer(http_client().put(&url))
+        .json(update)
+        .send()
+        .await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response.json::<Option<ReadingGoal>>().await?)
+}
+
+/// Web/SSR `save_reading_goal` — proxies to `rpc_set_reading_goal`.
+#[cfg(not(feature = "mobile"))]
+pub async fn save_reading_goal(
+    _server_url: &str,
+    update: &ReadingGoalUpdate,
+) -> Result<Option<ReadingGoal>, DataError> {
+    crate::rpc::rpc_set_reading_goal(update.clone())
         .await
         .map_err(note_server_fn_err)
 }

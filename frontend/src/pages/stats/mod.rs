@@ -4,13 +4,14 @@
 //! change. Mirrors the converged Stats design (`screens/stats-converged.jsx`).
 
 use dioxus::prelude::*;
-use omnibus_shared::{LibrarySize, StatsRange, StatsSummary, STATS_TTL_SECS};
+use omnibus_shared::{LibrarySize, ReadingGoal, StatsRange, StatsSummary, STATS_TTL_SECS};
 
 use crate::components::{PageError, PageLoading};
 use crate::{data, use_server_url, Route};
 
 mod donut;
 mod drill_in;
+mod goal;
 mod heatmap;
 mod library;
 mod monthly;
@@ -19,6 +20,7 @@ mod tiles;
 
 use donut::{FormatSplit, GenreDonut, LengthSplit};
 use drill_in::{DrillIn, Metric};
+use goal::GoalBand;
 use heatmap::HeatmapCard;
 use library::LibrarySizeCard;
 use monthly::MonthlyChart;
@@ -75,10 +77,14 @@ pub fn StatsPage() -> Element {
     // Which tile's drill-in is open, if any — seeded closed on every target
     // (rule 07): the sheet/modal only ever opens from a client click.
     let expanded: Signal<Option<Metric>> = use_signal(|| None);
+    // The current-year goal, owned by the page rather than read straight off
+    // the summary: a save writes the server's answer back here, so the band
+    // updates without waiting on a refetch.
+    let goal: Signal<Option<ReadingGoal>> = use_signal(|| None);
 
     use_period_fetch_effect(server_url.clone(), range, period, error);
-    use_all_time_fetch_effect(server_url.clone(), all_time, loading, error);
-    use_library_size_fetch_effect(server_url, library_size);
+    use_all_time_fetch_effect(server_url.clone(), all_time, loading, error, goal);
+    use_library_size_fetch_effect(server_url.clone(), library_size);
 
     if loading() {
         return rsx! { PageLoading {} };
@@ -89,9 +95,20 @@ pub fn StatsPage() -> Element {
 
     let empty = all_time.read().as_ref().is_none_or(StatsSummary::is_empty);
 
+    // The goal is annual, so it is anchored *outside* the period-scoped
+    // section and sourced from the all-time summary — the one fetch that never
+    // re-runs on a range change. It sits under the masthead rather than over
+    // it so the page still opens with its `h1`, and so the title's period
+    // dropdown keeps opening into the same space (a band above it pushes the
+    // menu down over the page's midpoint).
+    let goal_year = goal_year_from(all_time.read().as_ref());
+
     rsx! {
         div { class: "st-page",
             StatsHeader { range, menu_open }
+            if let Some(year) = goal_year {
+                GoalBand { goal, year, server_url: server_url.clone() }
+            }
             if empty {
                 StatsEmpty {}
             } else {
@@ -117,6 +134,17 @@ pub fn StatsPage() -> Element {
             StatsFreshnessNote {}
         }
     }
+}
+
+/// The calendar year the goal band labels itself with, taken from the
+/// server's `as_of_day` (`YYYY-MM-DD`) rather than a client clock — the band
+/// would otherwise disagree with the server across a New Year's Eve timezone
+/// gap, and a client-derived year in markup is a hydration hazard (rule 07).
+/// `None` until the summary lands, or if it carries no `as_of_day`.
+fn goal_year_from(summary: Option<&StatsSummary>) -> Option<String> {
+    // `get` rather than an index: a malformed non-ASCII value would panic on
+    // a char boundary, and a stats page must not die over a label.
+    Some(summary?.as_of_day.get(..4)?.to_string())
 }
 
 /// The footer note's text, deriving its number from [`STATS_TTL_SECS`]
@@ -186,6 +214,7 @@ fn use_all_time_fetch_effect(
     all_time: Signal<Option<StatsSummary>>,
     loading: Signal<bool>,
     error: Signal<Option<String>>,
+    goal: Signal<Option<ReadingGoal>>,
 ) {
     let generation = crate::use_cache_generation();
     use_effect(move || {
@@ -195,9 +224,13 @@ fn use_all_time_fetch_effect(
         let mut all_time = all_time;
         let mut loading = loading;
         let mut error = error;
+        let mut goal = goal;
         spawn(async move {
             match data::fetch_stats(&url, StatsRange::AllTime).await {
-                Ok(summary) => all_time.set(Some(summary)),
+                Ok(summary) => {
+                    goal.set(summary.goal.clone());
+                    all_time.set(Some(summary));
+                }
                 Err(e) => error.set(Some(e.to_string())),
             }
             loading.set(false);
@@ -411,6 +444,20 @@ mod tests {
         assert_eq!(period_word(StatsRange::Month), "month");
         assert_eq!(period_word(StatsRange::Year), "year");
         assert_eq!(period_word(StatsRange::AllTime), "lifetime");
+    }
+
+    #[test]
+    fn goal_year_from_takes_the_year_off_the_servers_as_of_day() {
+        let mut summary = StatsSummary {
+            as_of_day: "2026-08-28".to_string(),
+            ..StatsSummary::default()
+        };
+        assert_eq!(goal_year_from(Some(&summary)), Some("2026".to_string()));
+
+        // No summary yet, and a summary from a server too old to send the day.
+        assert_eq!(goal_year_from(None), None);
+        summary.as_of_day = String::new();
+        assert_eq!(goal_year_from(Some(&summary)), None);
     }
 
     #[test]

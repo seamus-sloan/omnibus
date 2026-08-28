@@ -11,6 +11,7 @@
 mod book;
 mod compute;
 mod genre;
+mod goals;
 mod library;
 mod pages;
 mod patterns;
@@ -22,6 +23,7 @@ mod streak;
 mod tests;
 
 pub use book::book_insights;
+pub use goals::{current_year, goal_for_year, set_goal, GoalError};
 pub use library::{invalidate as invalidate_library_size, library_size};
 /// Per-user aggregate cache TTL. A reload after a just-finished session
 /// reflects new data within this window; repeated calls inside it hit the
@@ -138,5 +140,16 @@ fn cache_put(user_id: i64, range: StatsRange, now: i64, summary: StatsSummary) {
 pub(crate) fn clear_cache() {
     if let Ok(mut guard) = cache().lock() {
         guard.clear();
+    }
+}
+
+/// Drop every cached summary for one user, across every range.
+///
+/// Called by a write whose result the next read must reflect immediately —
+/// [`goals::set_goal`] today. Scoped to the one user so another reader's warm
+/// cache isn't thrown away for a change that can't affect them.
+pub fn invalidate_user(user_id: i64) {
+    if let Ok(mut guard) = cache().lock() {
+        guard.retain(|(uid, _), _| *uid != user_id);
     }
 }

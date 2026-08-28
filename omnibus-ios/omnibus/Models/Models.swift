@@ -1417,6 +1417,10 @@ struct StatsSummary: Codable, Sendable {
     /// before the server started recording one. Disclosed rather than folded
     /// in: bucketing them as UTC would put a reader's evening at 4am.
     var unzonedSeconds: Int64 = 0
+    /// The reader's goal for the current calendar year, `nil` when none is
+    /// set. Unwindowed, like `currentStreakDays` — a goal is annual, so it
+    /// reads the same whichever range the picker is on.
+    var goal: ReadingGoal?
 
     enum CodingKeys: String, CodingKey {
         case range, sessions, heatmap
@@ -1443,6 +1447,7 @@ struct StatsSummary: Codable, Sendable {
         case hourOfDay = "hour_of_day"
         case dayOfWeek = "day_of_week"
         case unzonedSeconds = "unzoned_seconds"
+        case goal
     }
 
     init() {}
@@ -1486,6 +1491,7 @@ struct StatsSummary: Codable, Sendable {
         hourOfDay = try c.decodeIfPresent([HourBucket].self, forKey: .hourOfDay) ?? []
         dayOfWeek = try c.decodeIfPresent([WeekdayBucket].self, forKey: .dayOfWeek) ?? []
         unzonedSeconds = try c.decodeIfPresent(Int64.self, forKey: .unzonedSeconds) ?? 0
+        goal = try c.decodeIfPresent(ReadingGoal.self, forKey: .goal)
     }
 
     var totalSeconds: Int64 { readingSeconds + listeningSeconds }
@@ -1499,6 +1505,44 @@ struct StatsSummary: Codable, Sendable {
     /// populated weekday strip without a populated hour strip is not a state
     /// the server can produce.
     var hasTimePatterns: Bool { hourOfDay.contains { $0.seconds > 0 } }
+}
+
+/// The reader's target for one calendar year and their progress toward it.
+///
+/// `current` counts distinct books finished inside `year` under the same
+/// definition as the Books-finished tile, so the two never disagree; it may
+/// exceed `target`, which is the good case and is never clamped away.
+struct ReadingGoal: Codable, Hashable, Sendable {
+    var kind: String = "books"
+    var target: Int64 = 0
+    var current: Int64 = 0
+    var year: Int64 = 0
+
+    /// Progress as a 0...1 fraction for the ring, clamped. Read `current`
+    /// against `target` for the honest ratio.
+    var fraction: Double {
+        guard target > 0 else { return 0 }
+        return min(1, Double(current) / Double(target))
+    }
+
+    var isMet: Bool { current >= target }
+    var remaining: Int64 { max(0, target - current) }
+}
+
+/// Write payload for `PUT /api/stats/goal`. `year` and `kind` are omitted so
+/// the server names the calendar year; a `nil` `target` clears the goal.
+struct ReadingGoalUpdate: Codable, Sendable {
+    var target: Int64?
+
+    enum CodingKeys: String, CodingKey { case target }
+
+    /// Encoded explicitly: Swift's synthesized encoder drops a `nil`
+    /// `Optional` key entirely, and while the server treats an absent
+    /// `target` as a clear too, sending `null` states the intent on the wire.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(target, forKey: .target)
+    }
 }
 
 // MARK: - Settings & health

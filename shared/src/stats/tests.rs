@@ -323,3 +323,122 @@ fn time_pattern_fields_default_on_a_payload_from_an_older_server() {
     assert_eq!(s.unzoned_seconds, 0);
     assert!(!s.has_time_patterns());
 }
+
+#[test]
+fn goal_defaults_to_none_when_absent_from_the_wire() {
+    // Same older-payload contract as avg_stars/pages_read: a server that
+    // predates the goal must still decode into a whole summary.
+    let s: StatsSummary = serde_json::from_str(
+        r#"{"range":"month","reading_seconds":0,"listening_seconds":0,"sessions":0,
+            "active_days":0,"longest_streak_days":0,"busiest_week_start":null,
+            "busiest_week_seconds":0,"books_finished":0,"heatmap":[],
+            "top_authors":[],"top_tags":[],"finished_books":[]}"#,
+    )
+    .unwrap();
+    assert!(s.goal.is_none());
+}
+
+#[test]
+fn reading_goal_round_trips_through_the_wire() {
+    let goal = ReadingGoal {
+        kind: GOAL_KIND_BOOKS.to_string(),
+        target: 24,
+        current: 7,
+        year: 2026,
+    };
+    let wire = serde_json::to_string(&goal).unwrap();
+    assert_eq!(serde_json::from_str::<ReadingGoal>(&wire).unwrap(), goal);
+}
+
+#[test]
+fn reading_goal_percent_clamps_the_bar_while_the_ratio_stays_honest() {
+    let goal = |current, target| ReadingGoal {
+        kind: GOAL_KIND_BOOKS.to_string(),
+        target,
+        current,
+        year: 2026,
+    };
+    assert_eq!(goal(0, 24).percent(), 0);
+    assert_eq!(goal(12, 24).percent(), 50);
+    // Past the target: the bar caps at full, `current` does not.
+    let over = goal(30, 24);
+    assert_eq!(over.percent(), 100);
+    assert_eq!(over.current, 30);
+    assert!(over.is_met());
+    assert_eq!(over.remaining(), 0);
+    assert_eq!(goal(20, 24).remaining(), 4);
+    assert!(!goal(20, 24).is_met());
+}
+
+#[test]
+fn reading_goal_update_defaults_to_the_books_kind_and_the_servers_year() {
+    let update = ReadingGoalUpdate::books(24);
+    assert_eq!(update.kind_or_default(), GOAL_KIND_BOOKS);
+    assert_eq!(update.year, None, "the server owns the calendar year");
+    assert_eq!(update.target, Some(24));
+
+    let cleared = ReadingGoalUpdate::clear_books();
+    assert_eq!(cleared.target, None);
+    assert_eq!(cleared.kind_or_default(), GOAL_KIND_BOOKS);
+}
+
+#[test]
+fn reading_goal_update_validate_accepts_in_range_values_and_rejects_the_rest() {
+    assert!(ReadingGoalUpdate::books(1).validate().is_ok());
+    assert!(ReadingGoalUpdate::books(MAX_GOAL_TARGET).validate().is_ok());
+    assert!(ReadingGoalUpdate::clear_books().validate().is_ok());
+
+    assert!(ReadingGoalUpdate::books(0).validate().is_err());
+    assert!(ReadingGoalUpdate::books(MAX_GOAL_TARGET + 1)
+        .validate()
+        .is_err());
+    assert!(ReadingGoalUpdate {
+        kind: Some("pages".to_string()),
+        target: Some(500),
+        ..Default::default()
+    }
+    .validate()
+    .is_err());
+    assert!(ReadingGoalUpdate {
+        year: Some(MIN_GOAL_YEAR - 1),
+        target: Some(12),
+        ..Default::default()
+    }
+    .validate()
+    .is_err());
+    assert!(ReadingGoalUpdate {
+        year: Some(MAX_GOAL_YEAR + 1),
+        target: Some(12),
+        ..Default::default()
+    }
+    .validate()
+    .is_err());
+}
+
+/// A `target` that is present but absent-shaped on the wire (`null`) must
+/// read as a clear, not as a decode failure — the two clients send it.
+#[test]
+fn reading_goal_update_decodes_a_bare_target_and_an_explicit_null() {
+    let bare: ReadingGoalUpdate = serde_json::from_str(r#"{"target":24}"#).unwrap();
+    assert_eq!(bare, ReadingGoalUpdate::books(24));
+
+    let cleared: ReadingGoalUpdate = serde_json::from_str(r#"{"target":null}"#).unwrap();
+    assert_eq!(cleared, ReadingGoalUpdate::clear_books());
+
+    let empty: ReadingGoalUpdate = serde_json::from_str("{}").unwrap();
+    assert_eq!(empty, ReadingGoalUpdate::clear_books());
+}
+
+#[test]
+fn reading_goal_update_sends_only_the_fields_it_names() {
+    // The two clients' bodies are asserted verbatim by the E2E spec, so the
+    // wire shape is a contract: a set is `{"target":N}` and a clear is `{}`.
+    assert_eq!(
+        serde_json::to_string(&ReadingGoalUpdate::books(24)).unwrap(),
+        r#"{"target":24}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&ReadingGoalUpdate::clear_books()).unwrap(),
+        "{}"
+    );
+}
