@@ -29,7 +29,7 @@ struct WishlistSectionTests {
         #expect(WishlistSection.sourceLabel(.manual) == "an ISBN you entered")
     }
 
-    @Test("names a title search, which supplied no ISBN at all")
+    @Test("names a title search, where the reader supplied a title and not an ISBN")
     func labelsATitleSearch() {
         #expect(WishlistSection.sourceLabel(.search) == "a title search")
     }

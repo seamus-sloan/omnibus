@@ -1828,8 +1828,8 @@ struct AddPhysicalOnlyRequest: Codable, Sendable {
 ///
 /// The check-in flow has three front doors and they are not interchangeable:
 /// a barcode read by the camera is `scan`, an ISBN typed by hand is `manual`,
-/// and a title search is `search` — there the ISBN came from the provider, not
-/// from the reader at all (#2247).
+/// and a title search is `search` — there any ISBN came from the provider,
+/// because the reader supplied a title rather than a number.
 enum WishlistSource: String, Codable, Sendable {
     case scan, detail, manual, search
 }

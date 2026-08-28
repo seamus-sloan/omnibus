@@ -37,6 +37,21 @@ struct WishlistAddRequestCodecTests {
         #expect(object["source"] as? String == "scan")
     }
 
+    @Test("encodes every front door's wire value the server matches on")
+    func encodesEverySource() throws {
+        for (source, wire) in [
+            (WishlistSource.scan, "scan"),
+            (WishlistSource.detail, "detail"),
+            (WishlistSource.manual, "manual"),
+            (WishlistSource.search, "search"),
+        ] {
+            let object = try encodedObject(
+                WishlistAddRequest(bookUUID: nil, meta: meta(), source: source)
+            )
+            #expect(object["source"] as? String == wire)
+        }
+    }
+
     @Test("names an existing book with a snake_case book_uuid")
     func encodesBookUUIDKey() throws {
         let object = try encodedObject(
