@@ -486,7 +486,21 @@ release tag so TestFlight tracks the server release. Signing is seven
 CI-only repo secrets (distribution cert + password, an App Store
 provisioning profile for *each* of the two embedded bundles, App Store
 Connect API key + key-id + issuer-id) — enumerated in the
-workflow file's header comment. A daily companion workflow
+workflow file's header comment.
+
+A third job then **distributes** the build, because uploading it does not:
+`altool` delivers the binary and stops, an internal group can be set to
+distribute automatically but an external group cannot, and a build nobody adds
+to one is invisible to every tester on the public link while the run still
+reports success. `scripts/testflight_distribute.py` waits out processing,
+submits for Beta App Review when the build still needs it (the first build of a
+marketing version does), optionally sets "What to Test", and adds the build to
+each group named by the job's `BETA_GROUPS`. It runs on ubuntu — it is pure App
+Store Connect API — reuses the same team-scoped API key, and is idempotent, so a
+re-run attaches nothing twice. Because that script only ever executes during a
+release dispatch against Apple's live API, its suite
+(`scripts/tests/testflight-distribute.test.py`, HTTP stubbed, no credentials) is
+gated in CI by `script-tests.yml`. A daily companion workflow
 (`testflight-feedback.yml`) turns new TestFlight screenshot feedback into
 GitHub issues via `scripts/testflight_feedback_to_issues.py`.
 
