@@ -42,20 +42,34 @@ import jwt  # PyJWT[crypto]
 import requests
 
 ASC_BASE = "https://api.appstoreconnect.apple.com"
-DRY_RUN = os.environ.get("DRY_RUN") == "1"
-BUNDLE_ID = os.environ.get("BUNDLE_ID", "com.omnibus.mobile")
-BETA_GROUPS = [g.strip() for g in os.environ.get("BETA_GROUPS", "").split(",") if g.strip()]
-WHATS_NEW = (os.environ.get("WHATS_NEW") or "").strip()
-PROCESSING_TIMEOUT_SECS = int(os.environ.get("PROCESSING_TIMEOUT_SECS", "1800"))
-POLL_SECS = 30
-# Locale used when a build has no "What to Test" localization at all yet. Apple
-# seeds one per the app's configured locales, so this is only the cold-start case.
-DEFAULT_LOCALE = "en-US"
 
 
 def die(msg):
     print(f"error: {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def positive_int_env(name, default):
+    """Read an integer setting, naming the culprit rather than tracebacking.
+
+    A bare int() here raises at import, and an Actions log that opens on a
+    ValueError stack trace reads as a broken script rather than a typo'd input.
+    """
+    raw = (os.environ.get(name) or "").strip() or str(default)
+    if not raw.isdigit() or int(raw) <= 0:
+        die(f"{name} must be a positive whole number of seconds, got: {raw!r}")
+    return int(raw)
+
+
+DRY_RUN = os.environ.get("DRY_RUN") == "1"
+BUNDLE_ID = os.environ.get("BUNDLE_ID", "com.omnibus.mobile")
+BETA_GROUPS = [g.strip() for g in os.environ.get("BETA_GROUPS", "").split(",") if g.strip()]
+WHATS_NEW = (os.environ.get("WHATS_NEW") or "").strip()
+PROCESSING_TIMEOUT_SECS = positive_int_env("PROCESSING_TIMEOUT_SECS", 1800)
+POLL_SECS = 30
+# Locale used when a build has no "What to Test" localization at all yet. Apple
+# seeds one per the app's configured locales, so this is only the cold-start case.
+DEFAULT_LOCALE = "en-US"
 
 
 def private_key():

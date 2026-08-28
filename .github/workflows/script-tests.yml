@@ -1,0 +1,49 @@
+# Runs the TestFlight distribution script's test suite.
+#
+# That script only ever executes during a release dispatch, against Apple's live
+# API — so a regression in it is invisible until the one moment it matters, and
+# the failure mode it guards (a build that uploads but reaches no tester) looks
+# exactly like success. The suite stubs HTTP and needs no App Store Connect
+# credentials, so it can gate every change to the script here instead.
+#
+# Deliberately scoped to this one suite rather than all of scripts/tests/: the
+# sibling bash tests expect a Nix dev shell and a worktree layout that this
+# runner does not have.
+name: Script tests
+
+# Path lists are spelled out twice because GitHub Actions does not support YAML
+# anchors — keep the two in step.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/testflight_distribute.py"
+      - "scripts/tests/testflight-distribute.test.py"
+      - ".github/workflows/script-tests.yml"
+  pull_request:
+    paths:
+      - "scripts/testflight_distribute.py"
+      - "scripts/tests/testflight-distribute.test.py"
+      - ".github/workflows/script-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  testflight-distribute:
+    name: testflight_distribute.py
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Same two the distribute job installs — the suite imports the real
+      # script, which imports them at module scope.
+      - name: Install deps
+        run: python -m pip install --quiet "pyjwt[crypto]" requests
+
+      - name: Run suite
+        run: python scripts/tests/testflight-distribute.test.py

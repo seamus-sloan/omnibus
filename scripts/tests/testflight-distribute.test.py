@@ -144,11 +144,13 @@ def run(fake, **env):
     try:
         spec = importlib.util.spec_from_file_location("tf_distribute", SCRIPT)
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        mod.asc_raw = fake
-        mod.asc_jwt = lambda: "stub-token"
-        mod.POLL_SECS = 0  # the poll is the logic under test; the wait is not
         try:
+            # Inside the guard: bad settings are rejected at import, so this is
+            # where that exit surfaces.
+            spec.loader.exec_module(mod)
+            mod.asc_raw = fake
+            mod.asc_jwt = lambda: "stub-token"
+            mod.POLL_SECS = 0  # the poll is the logic under test; the wait is not
             mod.main()
             return 0, fake
         except SystemExit as e:
@@ -233,6 +235,13 @@ code, fake = run(FakeASC(["VALID"], listed_version="0.15.0"), MARKETING_VERSION=
 check("a X.Y release is found under its X.Y.0 listing", 0, code)
 code, fake = run(FakeASC(["VALID"], listed_version="0.14.3"), MARKETING_VERSION="0.14.3")
 check("a patch release is queried once", ["0.14.3"], fake.build_queries)
+
+# A typo'd setting must name itself, not open the Actions log on a traceback.
+code, fake = run(FakeASC(["VALID"]), PROCESSING_TIMEOUT_SECS="soon")
+check("a non-numeric timeout fails cleanly", 1, code)
+check("a non-numeric timeout writes nothing", 0, len(fake.writes))
+code, _ = run(FakeASC(["VALID"]), PROCESSING_TIMEOUT_SECS="60")
+check("a numeric timeout is accepted", 0, code)
 
 # Dry run resolves everything and writes nothing.
 code, fake = run(FakeASC(["VALID"]), DRY_RUN="1", WHATS_NEW="Fixed the reader.")

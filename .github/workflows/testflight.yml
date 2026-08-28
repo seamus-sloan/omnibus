@@ -119,18 +119,23 @@ jobs:
             [ -n "$tag" ] || { echo "::error::No v* git tag found and no marketing_version input given."; exit 1; }
             version="${tag#v}"
           fi
-          # Reject anything but digits and dots before writing to $GITHUB_OUTPUT: a
-          # dispatch input containing a newline would otherwise inject extra output
-          # assignments.
-          case "$version" in
-            '' | *[!0-9.]*) echo "::error::marketing version must be numeric/dot-separated, got: '$version'"; exit 1 ;;
-          esac
-          # CURRENT_PROJECT_VERSION must be a dotted integer sequence too. An input
-          # like "1.0-rc1" archives happily and is only rejected once App Store
-          # Connect processes the upload, minutes after the run goes green.
-          case "$INPUT_BUILD_NUMBER" in
-            '' | *[!0-9.]*) echo "::error::build_number must be numeric/dot-separated, got: '$INPUT_BUILD_NUMBER'"; exit 1 ;;
-          esac
+          # Both values must be a dotted sequence of non-empty integer segments.
+          # The character class is what stops a dispatch input containing a
+          # newline from injecting extra assignments into $GITHUB_OUTPUT; the
+          # three dot patterns reject the malformed placements it lets through
+          # (".1", "1.", "1..2"), which archive happily and are only rejected
+          # once App Store Connect processes the upload — minutes after the run
+          # has already gone green. The build number reaches the distribute job
+          # too, so a bad one now also breaks the build lookup.
+          require_dotted_integers() { # <label> <value>
+            case "$2" in
+              '' | *[!0-9.]* | .* | *. | *..*)
+                echo "::error::$1 must be a dotted sequence of integers, got: '$2'"
+                exit 1 ;;
+            esac
+          }
+          require_dotted_integers "marketing version" "$version"
+          require_dotted_integers "build_number" "$INPUT_BUILD_NUMBER"
           echo "Marketing version: $version (build $INPUT_BUILD_NUMBER)"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'build_number=%s\n' "$INPUT_BUILD_NUMBER" >> "$GITHUB_OUTPUT"
