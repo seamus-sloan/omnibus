@@ -64,6 +64,9 @@ impl Extreme {
 /// The longest or shortest book finished in the window, measured by the
 /// shared length ladder. Books the ladder can't measure are excluded rather
 /// than sorted as zero — an audiobook is not the shortest book of the year.
+/// `> 0` rather than `IS NOT NULL` is what enforces that: an image-only EPUB
+/// loads its spine and strips to zero words, so the ladder hands back a real
+/// `0` that would otherwise win "shortest" outright.
 /// Ties break on the *rendered* title — the `COALESCE`d alias rather than
 /// `b.title` — so an untitled book sorts where the reader sees it instead of
 /// ahead of everything on a NULL.
@@ -79,7 +82,7 @@ async fn extreme_book(
          JOIN books b ON b.uuid = fin.uuid
          JOIN ({}) p ON p.uuid = fin.uuid
          {AUTHOR_JOIN}
-         WHERE p.pages IS NOT NULL
+         WHERE p.pages > 0
          ORDER BY p.pages {}, title ASC
          LIMIT 1",
         pages::finished_in_window(),
@@ -112,6 +115,12 @@ fn drop_degenerate_shortest(
 /// The single busiest calendar day in the window, reading and listening
 /// together — a `MAX` over the same per-day rollup `compute::heatmap` builds,
 /// with the same UTC bucketing. Ties break to the earliest day.
+///
+/// A day under [`sessionize::MIN_SITTING_SECS`] is no day at all: the surfaces
+/// render this figure in whole minutes, so a window whose only activity was a
+/// 45-second glance would otherwise headline "Biggest day — 0 m". The same
+/// floor [`longest_sit`] uses, so the card's two time-shaped rows agree on
+/// what counts.
 async fn biggest_day(
     pool: &SqlitePool,
     user_id: i64,
@@ -120,7 +129,9 @@ async fn biggest_day(
     let sql = format!(
         "SELECT date(started_at, 'unixepoch') AS day, SUM(secs) AS seconds
          FROM ({SESSION_ROWS})
-         GROUP BY day ORDER BY seconds DESC, day ASC LIMIT 1"
+         GROUP BY day HAVING seconds >= {}
+         ORDER BY seconds DESC, day ASC LIMIT 1",
+        sessionize::MIN_SITTING_SECS
     );
     let row = sqlx::query(&sql)
         .bind(user_id)

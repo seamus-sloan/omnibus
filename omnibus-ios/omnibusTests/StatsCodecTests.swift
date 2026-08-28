@@ -197,7 +197,7 @@ struct StandoutRowTests {
     }
 
     @Test("only the superlatives the window supports become rows")
-    func omitsAbsentSuperlatives() {
+    func omitsAbsentSuperlatives() throws {
         var summary = StatsSummary()
         summary.superlatives.longestBook = book("Doorstopper", 900)
         summary.superlatives.fastestRead = book("Sprint", 3)
@@ -205,6 +205,9 @@ struct StandoutRowTests {
         let rows = StatsView.standoutRows(summary)
 
         #expect(rows.map(\.label) == ["Longest book", "Fastest read"])
+        // `#expect` records and continues, so a dropped row would leave the
+        // indexed reads below to trap the whole test process rather than fail.
+        try #require(rows.count == 2)
         #expect(rows[0].detail == "900 pages")
         #expect(rows[1].detail == "in 3 days")
     }

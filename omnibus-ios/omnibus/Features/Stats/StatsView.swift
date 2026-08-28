@@ -885,11 +885,14 @@ private struct StandoutList: View {
             }
             if showFastestReadNote {
                 // The floor is part of the claim, not an aside: without it a
-                // book read mostly on another device reads as a sprint.
+                // book read mostly on another device reads as a sprint. The
+                // lower-bound clause mirrors the web note — `shared`'s
+                // `fastest_read` doc requires every surface to state it.
                 Text(
                     "Fastest read counts days from your first tracked session, over books with "
                         + "at least \(Format.humanDuration(Superlatives.fastestReadMinSeconds)) "
-                        + "of recorded time."
+                        + "of recorded time — reading done before tracking, or on a device that "
+                        + "reports nothing, can only make a book look faster than it was."
                 )
                 .font(.ui(11))
                 .foregroundStyle(palette.ink3Color)

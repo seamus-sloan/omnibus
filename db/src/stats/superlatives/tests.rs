@@ -37,6 +37,28 @@ async fn seed_book(pool: &SqlitePool, lib_id: i64, uuid: &str, title: &str, page
     .unwrap();
 }
 
+/// Link an author to a book at `position`. Position 0 is the one the
+/// superlative queries name; anything else must be ignored.
+async fn seed_author(pool: &SqlitePool, book_uuid: &str, name: &str, position: i64) {
+    let author_id: i64 =
+        sqlx::query_scalar("INSERT INTO authors (name, sort) VALUES (?, ?) RETURNING id")
+            .bind(name)
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    sqlx::query(
+        "INSERT INTO books_authors_link (book, author, position)
+         SELECT b.id, ?, ? FROM books b WHERE b.uuid = ?",
+    )
+    .bind(author_id)
+    .bind(position)
+    .bind(book_uuid)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn finish(pool: &SqlitePool, user: i64, uuid: &str, finished_at: i64) {
     sqlx::query(
         "INSERT INTO book_read_status (user_id, book_uuid, status, finished_at)
@@ -171,6 +193,50 @@ async fn extreme_books_exclude_a_book_the_length_ladder_cannot_measure() {
 }
 
 #[tokio::test]
+async fn extreme_books_exclude_a_book_the_ladder_measures_as_zero_pages() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "u-book", "Measured", Some(300)).await;
+    // An image-only EPUB loads its whole spine and strips to zero words, so
+    // the ladder hands back a real 0 rather than NULL. `IS NOT NULL` lets it
+    // through and it wins "shortest" outright.
+    seed_book(&pool, lib, "u-images", "All Pictures", None).await;
+    sqlx::query("UPDATE books SET word_count = 0 WHERE uuid = 'u-images'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    finish(&pool, user, "u-book", D0).await;
+    finish(&pool, user, "u-images", D0).await;
+
+    let s = superlatives(&pool, user, 0).await.unwrap();
+
+    assert_eq!(s.longest_book.unwrap().title, "Measured");
+    assert!(s.shortest_book.is_none(), "{:?}", s.shortest_book);
+}
+
+#[tokio::test]
+async fn extreme_books_name_the_position_zero_author() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "u-book", "Co-written", Some(300)).await;
+    // Two creators: the join must take position 0 and must not fan the book
+    // out into two rows, which would change which book wins.
+    seed_author(&pool, "u-book", "Le Guin", 0).await;
+    seed_author(&pool, "u-book", "Second Hand", 1).await;
+    finish(&pool, user, "u-book", D0).await;
+
+    let longest = superlatives(&pool, user, 0)
+        .await
+        .unwrap()
+        .longest_book
+        .unwrap();
+
+    assert_eq!(longest.author.as_deref(), Some("Le Guin"));
+}
+
+#[tokio::test]
 async fn extreme_books_break_a_length_tie_on_title() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
@@ -264,6 +330,45 @@ async fn biggest_day_breaks_a_tie_on_the_earliest_day() {
     assert_eq!(day.day, "2023-11-14");
 }
 
+#[tokio::test]
+async fn biggest_day_ignores_a_day_under_the_sitting_floor() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "u-a", "Glanced At", Some(100)).await;
+    // The surfaces render this in whole minutes, so a 45-second window would
+    // otherwise headline "Biggest day — 0 m".
+    read_session(&pool, user, "u-a", D0, sessionize::MIN_SITTING_SECS - 15).await;
+
+    assert!(superlatives(&pool, user, 0)
+        .await
+        .unwrap()
+        .biggest_day
+        .is_none());
+}
+
+#[tokio::test]
+async fn biggest_day_ignores_sessions_before_the_window() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "u-a", "Book", Some(100)).await;
+    // The bigger day is out of window. It may not win — and the `start` bind
+    // reaches this query through SESSION_ROWS' four-bind order, so a
+    // mis-ordered bind would otherwise pass the whole suite.
+    read_session(&pool, user, "u-a", D0 - 10 * DAY, 7200).await;
+    read_session(&pool, user, "u-a", D0 + DAY, 3600).await;
+
+    let day = superlatives(&pool, user, D0)
+        .await
+        .unwrap()
+        .biggest_day
+        .unwrap();
+
+    assert_eq!(day.day, "2023-11-15");
+    assert_eq!(day.seconds, 3600);
+}
+
 // --- longest sit --------------------------------------------------------
 
 #[tokio::test]
@@ -303,6 +408,44 @@ async fn longest_sit_ignores_a_glance_under_the_sitting_floor() {
         .unwrap()
         .longest_sit
         .is_none());
+}
+
+#[tokio::test]
+async fn longest_sit_breaks_a_duration_tie_on_the_earliest_sitting() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "u-late", "Later", Some(100)).await;
+    seed_book(&pool, lib, "u-early", "Earlier", Some(100)).await;
+    read_session(&pool, user, "u-late", D0 + DAY, 3600).await;
+    read_session(&pool, user, "u-early", D0, 3600).await;
+
+    let sit = superlatives(&pool, user, 0)
+        .await
+        .unwrap()
+        .longest_sit
+        .unwrap();
+
+    assert_eq!(sit.title, "Earlier");
+}
+
+#[tokio::test]
+async fn longest_sit_ignores_a_sitting_that_began_before_the_window() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "u-a", "Book", Some(100)).await;
+    // The longer sitting is out of window; only the in-window one may win.
+    read_session(&pool, user, "u-a", D0 - 10 * DAY, 7200).await;
+    read_session(&pool, user, "u-a", D0 + DAY, 3600).await;
+
+    let sit = superlatives(&pool, user, D0)
+        .await
+        .unwrap()
+        .longest_sit
+        .unwrap();
+
+    assert_eq!(sit.value, 3600);
 }
 
 #[tokio::test]
@@ -370,6 +513,28 @@ async fn fastest_read_reports_a_same_day_read_as_one_day_not_zero() {
 
     // "Read in 0 days" is not a sentence about reading.
     assert_eq!(fastest.value, 1);
+}
+
+#[tokio::test]
+async fn fastest_read_counts_listening_toward_the_tracked_time_floor() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "u-audio", "Heard It", Some(300)).await;
+    // An audiobook clears the floor on listening alone — the unwindowed union
+    // has to count both halves, or the format the floor was written about is
+    // the one it silently excludes.
+    listen_session(&pool, user, "u-audio", D0, FASTEST_READ_MIN_SECS).await;
+    finish(&pool, user, "u-audio", D0 + 2 * DAY).await;
+
+    let fastest = superlatives(&pool, user, 0)
+        .await
+        .unwrap()
+        .fastest_read
+        .unwrap();
+
+    assert_eq!(fastest.title, "Heard It");
+    assert_eq!(fastest.value, 2);
 }
 
 #[tokio::test]

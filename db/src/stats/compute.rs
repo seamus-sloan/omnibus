@@ -275,18 +275,22 @@ pub(super) async fn heatmap(
         .collect())
 }
 
-/// The busiest ISO week: `(first active day, total seconds)`. Weeks bucket by
+/// The busiest ISO week: `(week's Monday, total seconds)`. Weeks bucket by
 /// Monday — `dnum - ((dnum + 3) % 7)`, since unix day 0 (1970-01-01) is a
 /// Thursday. Returns `(None, 0)` when the window has no sessions.
+///
+/// The day returned is the bucket's Monday, not the first day the reader was
+/// active in it: surfaces label this "Week of …", and a reader who only read
+/// midweek would otherwise have a Wednesday named as their week's start.
 pub(super) async fn busiest_week(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
 ) -> Result<(Option<String>, i64), StatsError> {
     let sql = format!(
-        "SELECT MIN(day) AS first_day, SUM(secs) AS seconds FROM (
-             SELECT date(started_at, 'unixepoch') AS day,
-                    (started_at / 86400) - (((started_at / 86400) + 3) % 7) AS week_start,
+        "SELECT date(week_start * 86400, 'unixepoch') AS start_day,
+                SUM(secs) AS seconds FROM (
+             SELECT (started_at / 86400) - (((started_at / 86400) + 3) % 7) AS week_start,
                     secs
              FROM ({SESSION_ROWS})
          ) GROUP BY week_start ORDER BY seconds DESC, week_start ASC LIMIT 1"
@@ -300,7 +304,7 @@ pub(super) async fn busiest_week(
         .await?;
 
     Ok(match row {
-        Some(r) => (r.get("first_day"), r.get("seconds")),
+        Some(r) => (r.get("start_day"), r.get("seconds")),
         None => (None, 0),
     })
 }

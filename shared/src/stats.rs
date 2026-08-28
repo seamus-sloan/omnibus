@@ -362,8 +362,13 @@ pub struct Superlatives {
 }
 
 impl Superlatives {
-    /// True when the window supports no superlative at all — the surfaces'
-    /// signal to omit the card rather than render a row of em-dashes.
+    /// True when none of the five server-computed figures is present.
+    ///
+    /// Deliberately **not** the card's render gate. Both surfaces also draw
+    /// rows off `StatsSummary` fields that live outside this struct — the
+    /// busiest week and the top-ranked author and subject — so a window with
+    /// only a busiest week is `is_empty()` yet still has a card to show. The
+    /// gate is the assembled row list; this is a predicate over the five.
     pub fn is_empty(&self) -> bool {
         self.longest_book.is_none()
             && self.shortest_book.is_none()
@@ -425,7 +430,9 @@ pub struct StatsSummary {
     /// stop clients disagreeing.
     #[serde(default)]
     pub current_streak_days: i64,
-    /// First active day (UTC `YYYY-MM-DD`) of the busiest ISO week, if any.
+    /// Monday (UTC `YYYY-MM-DD`) of the busiest ISO week, if any — the week's
+    /// own start, so a surface can label it "Week of …" whether or not the
+    /// reader happened to read on the Monday.
     pub busiest_week_start: Option<String>,
     pub busiest_week_seconds: i64,
     pub books_finished: i64,

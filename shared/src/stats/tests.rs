@@ -214,6 +214,66 @@ fn length_buckets_default_to_empty_when_absent_from_the_wire() {
 }
 
 #[test]
+fn book_superlative_round_trips_through_json() {
+    let b = BookSuperlative {
+        book_uuid: "0f2c-uuid".to_string(),
+        title: "Doorstopper".to_string(),
+        author: Some("Ursula K. Le Guin".to_string()),
+        value: 900,
+    };
+    let wire = serde_json::to_string(&b).unwrap();
+    assert_eq!(serde_json::from_str::<BookSuperlative>(&wire).unwrap(), b);
+}
+
+#[test]
+fn book_superlative_author_survives_a_null_on_the_wire() {
+    // The db left-joins the author, so a book with no position-0 creator
+    // still wins its category and arrives with an explicit null.
+    let b: BookSuperlative =
+        serde_json::from_str(r#"{"book_uuid":"u","title":"Untitled","author":null,"value":12}"#)
+            .unwrap();
+    assert_eq!(b.author, None);
+}
+
+#[test]
+fn superlatives_is_empty_only_when_every_figure_is_absent() {
+    let mut s = Superlatives::default();
+    assert!(s.is_empty());
+
+    s.biggest_day = Some(DayActivity {
+        day: "2023-11-15".to_string(),
+        seconds: 3600,
+    });
+    assert!(!s.is_empty());
+}
+
+#[test]
+fn superlatives_default_to_empty_when_absent_from_the_wire() {
+    // An app running ahead of its server must lose the card, not the tab.
+    let s: StatsSummary = serde_json::from_str(
+        r#"{"range":"month","reading_seconds":0,"listening_seconds":0,"sessions":0,
+            "active_days":0,"longest_streak_days":0,"busiest_week_start":null,
+            "busiest_week_seconds":0,"books_finished":0,"heatmap":[],
+            "top_authors":[],"top_tags":[],"finished_books":[]}"#,
+    )
+    .unwrap();
+    assert!(s.superlatives.is_empty());
+}
+
+#[test]
+fn one_absent_superlative_costs_only_its_own_field() {
+    // Each field carries its own `#[serde(default)]`, so a server that omits
+    // a single figure must not blank the four beside it.
+    let s: Superlatives = serde_json::from_str(
+        r#"{"longest_book":{"book_uuid":"u","title":"T","author":null,"value":900}}"#,
+    )
+    .unwrap();
+    assert_eq!(s.longest_book.map(|b| b.value), Some(900));
+    assert!(s.shortest_book.is_none());
+    assert!(s.fastest_read.is_none());
+}
+
+#[test]
 fn as_query_matches_the_serde_wire_name() {
     for range in StatsRange::ALL {
         let wire = serde_json::to_string(&range).unwrap();

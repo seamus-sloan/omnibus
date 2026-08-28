@@ -404,7 +404,11 @@ test("the superlatives card names each standout, and omits the ones it can't", a
     }),
   );
   await gotoReady(page, "/stats");
-  await expect(page.getByTestId("stats-period-section")).toBeVisible();
+  // Wait on a period-owned element, not the section: until the period fetch
+  // resolves, PeriodSummary renders a bare placeholder that is visible and
+  // carries no card — so asserting absence here would pass on the loading
+  // state and miss the regression this half of the test exists to catch.
+  await expect(page.getByTestId("stats-tile-finished")).toBeVisible();
   await expect(page.getByTestId("stats-superlatives")).toHaveCount(0);
 });
 
