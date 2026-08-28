@@ -46,12 +46,20 @@ goes in through the front door* in [start.md](../start.md).
    takes a single file, an audiobook takes several at once.
 3. Choose a file from the corpus, by dropping it on the drop zone or through
    the file chooser. Journal the filename **before** you upload it.
-4. The app extracts the file's metadata and shows a **review form** — Title,
-   Author, Series, Series index — under "Review the details, then add to your
-   library." Read it against what you know the book to be. Real library files
-   frequently carry garbled, swapped, or filename-derived metadata, and this
-   form is where a person would fix it before committing. Correct it when it is
-   wrong, and journal both what the app offered and what you changed.
+4. The app extracts the file's metadata and shows a **review form** under
+   "Review the details, then add to your library." Read it against what you know
+   the book to be. Real library files frequently carry garbled, swapped, or
+   filename-derived metadata, and this form is where a person would fix it
+   before committing. Correct it when it is wrong, and journal both what the app
+   offered and what you changed.
+
+   Three things to expect rather than report as bugs. The form may come back
+   **entirely empty** — audiobooks often carry no container tags at all, and
+   there is then nothing to review; fill in Title and Author yourself, since the
+   required-field guard will otherwise block the save. The **audiobook form has
+   no Series fields**, unlike the ebook one. And the form offers a single Author
+   field even when the file names several creators — check the detail page
+   afterwards to see whether the others survived, and journal the answer.
 5. Click **Add to library**.
 6. Wait for the book to appear in the library. Indexing is asynchronous — give
    it time and re-check rather than reporting it missing straight away.

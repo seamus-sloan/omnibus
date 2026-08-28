@@ -21,8 +21,9 @@ never change anyone's permissions, and never delete a user.
    include your actor id and a counter, so a stale copy elsewhere is obvious.
 3. Save, and confirm the new name appears in the app's own chrome — wherever
    your name is shown while you are signed in.
-4. Occasionally replace your picture with an image from the corpus instead, and
-   confirm it appears everywhere your avatar does.
+4. Occasionally replace your picture instead, and confirm it appears everywhere
+   your avatar does. The corpus is book files, but many author folders carry a
+   `cover.jpg` sidecar — use one of those.
 5. Navigate away, come back, and confirm both stuck.
 6. Reload the page and confirm again.
 
