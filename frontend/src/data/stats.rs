@@ -6,8 +6,8 @@
 //! carry the split.
 
 use omnibus_shared::{
-    LibraryComposition, LibrarySize, ReadingGoal, ReadingGoalUpdate, SessionLogPage,
-    StatsRange, StatsSummary,
+    LibraryComposition, LibrarySize, ReadingGoal, ReadingGoalUpdate, SessionLogPage, StatsRange,
+    StatsSummary,
 };
 
 #[cfg(not(feature = "mobile"))]

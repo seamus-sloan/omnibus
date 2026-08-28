@@ -9,9 +9,8 @@ use omnibus_db as db;
 #[cfg(feature = "server")]
 use omnibus_shared::SessionCursor;
 use omnibus_shared::{
-    BookInsights, LibraryComposition, LibrarySize, ReadingGoal, ReadingGoalUpdate,
-    SessionLogPage, StatsRange,
-    StatsSummary,
+    BookInsights, LibraryComposition, LibrarySize, ReadingGoal, ReadingGoalUpdate, SessionLogPage,
+    StatsRange, StatsSummary,
 };
 
 #[cfg(feature = "server")]
