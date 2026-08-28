@@ -8,7 +8,8 @@ use dioxus_router::Link;
 use omnibus_shared::EbookMetadata;
 
 use crate::components::{BookActionMeta, FormatSwitcher};
-use crate::pages::book_detail::body::{bd_identifier_key, bd_identifier_label};
+use crate::format::format_date_short_opt;
+use crate::pages::book_detail::identifiers::bd_identifier_rows;
 use crate::pages::book_detail::physical::{BdBookIdentity, BdPhysicalPanel, BdWishlistRailSlot};
 use crate::pages::book_detail::{BdMetaRow, PhysSignals};
 use crate::Route;
@@ -26,6 +27,11 @@ pub(super) fn MarqueeFilesStop(
     is_fileless: bool,
 ) -> Element {
     let uuid = b.unique_identifier.clone().unwrap_or_default();
+    // Both are stored as ISO/SQLite timestamps: a reader sees the calendar
+    // date, never the raw string or the clock time, and no row at all when
+    // the source names no real date.
+    let published_display = b.published.as_deref().and_then(format_date_short_opt);
+    let added_display = b.added_at.as_deref().and_then(format_date_short_opt);
     rsx! {
         div { class: "bdmq-k", "Every way you hold this book" }
         // One list, one row per way you hold the book — file formats first,
@@ -73,21 +79,13 @@ pub(super) fn MarqueeFilesStop(
                     BdMetaRow { k: "Author".to_string(), v: view.authors_line.clone() }
                 }
                 if let Some(p) = b.publisher.clone() { BdMetaRow { k: "Publisher".to_string(), v: p } }
-                if let Some(d) = b.published.clone() { BdMetaRow { k: "Published".to_string(), v: d } }
+                if let Some(d) = published_display.clone() { BdMetaRow { k: "Published".to_string(), v: d } }
                 if let Some(l) = b.language.clone() { BdMetaRow { k: "Language".to_string(), v: l } }
-                for ident in b.identifiers.iter() {
-                    BdMetaRow {
-                        key: "{bd_identifier_key(ident)}",
-                        k: bd_identifier_label(ident),
-                        v: ident.value.clone(),
-                    }
+                for row in bd_identifier_rows(&b.identifiers) {
+                    BdMetaRow { key: "{row.key}", k: row.label, v: row.value }
                 }
-                if let Some(added) = b.added_at.as_deref() {
-                    // RFC 3339 timestamp → its date part; the clock is noise here.
-                    BdMetaRow {
-                        k: "Added".to_string(),
-                        v: added.get(0..10).unwrap_or(added).to_string(),
-                    }
+                if let Some(added) = added_display.clone() {
+                    BdMetaRow { k: "Added".to_string(), v: added }
                 }
             }
         }

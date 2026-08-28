@@ -704,7 +704,7 @@ fn AccountRows() -> Element {
 #[component]
 fn AccountLinkRow(to: Route, label: String) -> Element {
     rsx! {
-        Link { to, class: "m-account-row",
+        Link { to: crate::routes::link_target(to), class: "m-account-row",
             span { "{label}" }
             span { class: "m-account-chevron", "aria-hidden": "true", "\u{203a}" }
         }

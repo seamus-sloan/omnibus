@@ -10470,7 +10470,15 @@ html {
 .bdmq-by { margin-top: 12px; font-size: 16px; color: var(--ink-1); }
 .bdmq-by .bd-author-link:hover { color: var(--accent); }
 
-.bdmq-chips { display: flex; gap: 8px 10px; margin-top: 16px; flex-wrap: wrap; align-items: center; }
+/* Genres and tags each get their own line: run together on one wrapping row,
+   the "+ genres" pill lands above the tag chips and the two sets read as one
+   list. */
+.bdmq-chips { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.bd-chip-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+/* Fixed width so the two rows' chips line up under each other. */
+.bd-chip-row-label { flex: 0 0 auto; min-width: 52px; color: var(--ink-3); }
+/* The row supplies the vertical rhythm, so the list inside it doesn't. */
+.bd-chip-row .bd-tag-list { margin-top: 0; }
 .bdmq-desc { margin-top: 18px; font-size: 15px; color: var(--ink-1); line-height: 1.6; max-width: 560px; }
 /* Long blurbs must not push the CTA row off the stop. */
 .bdmq-desc {

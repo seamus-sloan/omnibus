@@ -298,9 +298,9 @@ test("opens the listen page from the book detail Listen action", async ({
   await gotoReady(page, `/books/${uuid}`);
 
   await page.getByTestId("action-listen").click();
-  // Dioxus serializes the optional `?file_id=` route param as a bare trailing
-  // `?` when unset, so allow it (functionally `/listen/:uuid`).
-  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
+  // `routes::link_target` trims the bare trailing `?` dioxus-router writes
+  // for an unset `?file_id` (#2256), so the URL is exactly `/listen/:uuid`.
+  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
   await expect(
     page.getByRole("button", { name: "Play", exact: true }),
   ).toBeVisible();

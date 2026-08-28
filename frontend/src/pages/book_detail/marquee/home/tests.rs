@@ -200,3 +200,83 @@ fn short_chapter_title_keeps_a_terse_title_and_caps_a_verbose_one() {
         "The Vestibule of the Sixteenth\u{2026}"
     );
 }
+
+/// A series book with the given index, series name, and published date.
+fn series_book(index: Option<&str>, published: Option<&str>) -> EbookMetadata {
+    EbookMetadata {
+        series: Some("Prince of Sin".into()),
+        series_index: index.map(str::to_string),
+        published: published.map(str::to_string),
+        ..book()
+    }
+}
+
+#[test]
+fn home_kicker_never_reads_the_series_index_as_a_fraction_of_the_library() {
+    // The reported "PRINCE OF SIN · BOOK 2 OF 1": the index is a position in
+    // the series and the count is what the library holds, so a book the
+    // library holds one of still sits at position 2.
+    let kicker = home_kicker(
+        &series_book(Some("2"), Some("2024-03-05")),
+        &facts(true, false, false),
+        Some(1),
+        false,
+        None,
+    );
+    assert_eq!(
+        kicker.text,
+        "Prince of Sin \u{b7} Book 2 \u{b7} 1 in your library \u{b7} 2024"
+    );
+    assert_eq!(kicker.series_label.as_deref(), Some("Prince of Sin"));
+}
+
+#[test]
+fn home_kicker_matches_the_shelf_stops_wording_for_the_library_count() {
+    // The kicker and the Shelf stop's header must present the series the
+    // same way — see `MarqueeSeriesShelf`'s "· N in your library".
+    let kicker = home_kicker(
+        &series_book(Some("1"), None),
+        &facts(true, false, false),
+        Some(3),
+        false,
+        None,
+    );
+    assert!(kicker.tail.contains("3 in your library"), "{}", kicker.tail);
+}
+
+#[test]
+fn home_kicker_names_the_position_alone_before_the_series_fetch_resolves() {
+    let kicker = home_kicker(
+        &series_book(Some("2"), None),
+        &facts(true, false, false),
+        None,
+        false,
+        None,
+    );
+    assert_eq!(kicker.text, "Prince of Sin \u{b7} Book 2");
+}
+
+#[test]
+fn home_kicker_drops_an_implausible_published_year() {
+    // Calibre's "no publish date" placeholder must not surface as "· 0101".
+    let kicker = home_kicker(
+        &series_book(Some("2"), Some("0101-01-01T00:00:00+00:00")),
+        &facts(true, false, false),
+        Some(1),
+        false,
+        None,
+    );
+    assert!(!kicker.text.contains("0101"), "{}", kicker.text);
+}
+
+#[test]
+fn home_kicker_leads_a_standalone_with_its_category_and_year() {
+    let b = EbookMetadata {
+        genres: vec!["Horror".into()],
+        published: Some("2015-01-01T05:00:00+00:00".into()),
+        ..book()
+    };
+    let kicker = home_kicker(&b, &facts(true, false, false), None, false, None);
+    assert_eq!(kicker.text, "Horror \u{b7} standalone \u{b7} 2015");
+    assert!(kicker.series_label.is_none());
+}

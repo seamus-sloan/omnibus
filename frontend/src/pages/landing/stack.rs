@@ -369,7 +369,7 @@ fn FanCard(entry: StackEntry, index: usize, is_lead: bool, mut lead: Signal<usiz
         // suppresses the navigation for the cards behind the front one, whose
         // click means "come forward" — the same thing the arrow keys do.
         Link {
-            to: resume_route,
+            to: crate::routes::link_target(resume_route),
             onclick_only: !is_lead,
             onclick: move |_| lead.set(index),
             class: if is_lead { "lmq-fcard lead" } else { "lmq-fcard" },
@@ -448,7 +448,7 @@ pub(super) fn EdgeResume(entries: Vec<StackEntry>, lead: Signal<usize>) -> Eleme
                     class: "lmq-edge-go",
                     "data-testid": "resume-edge-go-{uuid}",
                     aria_label: "Resume {title}",
-                    onclick: move |_| { nav.push(resume_route.clone()); },
+                    onclick: move |_| { nav.push(crate::routes::link_target(resume_route.clone())); },
                     if is_audio { {play_glyph(11)} } else { {book_glyph(11)} }
                     if is_audio { "Play" } else { "Resume" }
                 }
