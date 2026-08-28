@@ -9,7 +9,7 @@ use omnibus_shared::EbookMetadata;
 
 use crate::components::{BookActionMeta, FormatSwitcher};
 use crate::format::format_date_short_opt;
-use crate::pages::book_detail::body::{bd_identifier_key, bd_identifier_label};
+use crate::pages::book_detail::body::bd_identifier_rows;
 use crate::pages::book_detail::physical::{BdBookIdentity, BdPhysicalPanel, BdWishlistRailSlot};
 use crate::pages::book_detail::{BdMetaRow, PhysSignals};
 use crate::Route;
@@ -81,12 +81,8 @@ pub(super) fn MarqueeFilesStop(
                 if let Some(p) = b.publisher.clone() { BdMetaRow { k: "Publisher".to_string(), v: p } }
                 if let Some(d) = published_display.clone() { BdMetaRow { k: "Published".to_string(), v: d } }
                 if let Some(l) = b.language.clone() { BdMetaRow { k: "Language".to_string(), v: l } }
-                for ident in b.identifiers.iter() {
-                    BdMetaRow {
-                        key: "{bd_identifier_key(ident)}",
-                        k: bd_identifier_label(ident),
-                        v: ident.value.clone(),
-                    }
+                for row in bd_identifier_rows(&b.identifiers) {
+                    BdMetaRow { key: "{row.key}", k: row.label, v: row.value }
                 }
                 if let Some(added) = added_display.clone() {
                     BdMetaRow { k: "Added".to_string(), v: added }

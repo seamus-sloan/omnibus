@@ -16,6 +16,7 @@ use crate::components::atrium::Cover;
 use crate::components::FetchSummaryButton;
 use crate::{data, Route};
 
+use super::body::bd_identifier_rows;
 use super::discovery::{
     cover_src, list_count_label, same_hand_author_label, same_hand_title, same_hand_year,
     suggestion_cover_book, SuggestionsSpinner,
@@ -384,12 +385,8 @@ fn info_sections(uuid: &str, b: &EbookMetadata, series: &Option<String>) -> Elem
                     if let Some(l) = b.language.clone() { BdMetaRow { k: "Language".to_string(), v: l } }
                     if let Some(a) = b.added_at.as_deref().and_then(crate::format::format_date_short_opt) { BdMetaRow { k: "Added".to_string(), v: a } }
                     if let Some(s) = series.clone() { BdMetaRow { k: "Series".to_string(), v: s } }
-                    for (i, ident) in b.identifiers.iter().enumerate() {
-                        BdMetaRow {
-                            key: "{i}",
-                            k: ident.scheme.clone().unwrap_or_else(|| "ID".into()),
-                            v: ident.value.clone(),
-                        }
+                    for row in bd_identifier_rows(&b.identifiers) {
+                        BdMetaRow { key: "{row.key}", k: row.label, v: row.value }
                     }
                 }
             }
