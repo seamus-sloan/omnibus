@@ -172,15 +172,48 @@ def _open_locked(path: Path):
 
 
 def next_seq(path: str | os.PathLike[str], actor: str) -> int:
-    """The next free `seq` for `actor`, one past their highest so far."""
+    """The next free `seq` for `actor`, one past their highest so far.
+
+    Scans the journal backwards and stops at the actor's most recent entry:
+    per-actor seqs are monotonic (minted under the append lock), so the last
+    entry an actor wrote carries their highest seq. An actor's own last write
+    is almost always near the tail, making the common append O(tail) rather
+    than O(file) — without a sidecar index, which would be a second copy of a
+    fact the journal already holds and could desync from it.
+    """
     p = Path(path)
     if not p.exists():
         return 1
-    highest = 0
-    for entry in iter_entries(p):
-        if entry.actor == actor and entry.seq is not None:
-            highest = max(highest, entry.seq)
-    return highest + 1
+    for raw in _lines_reversed(p):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("actor") == actor and isinstance(obj.get("seq"), int):
+            return obj["seq"] + 1
+    return 1
+
+
+def _lines_reversed(p: Path, block: int = 65536):
+    """Yield the file's lines last-first without reading it whole."""
+    with p.open("rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        pos = fh.tell()
+        tail = b""
+        while pos > 0:
+            step = min(block, pos)
+            pos -= step
+            fh.seek(pos)
+            chunk = fh.read(step) + tail
+            lines = chunk.split(b"\n")
+            tail = lines.pop(0)
+            for line in reversed(lines):
+                yield line.decode("utf-8", errors="replace")
+        if tail:
+            yield tail.decode("utf-8", errors="replace")
 
 
 def append(path: str | os.PathLike[str], record: dict[str, Any]) -> dict[str, Any]:

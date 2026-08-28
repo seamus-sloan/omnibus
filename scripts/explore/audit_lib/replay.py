@@ -161,8 +161,10 @@ def replay_one(exp: Expectation, state: ActorState) -> Step:
 def _progress_payload(uuid: str, position: dict[str, Any]) -> dict[str, Any] | None:
     """Build a `ProgressUpdate`; `None` when the axis has no recorded value.
 
-    The server validates that `epub` carries a cfi and `audio` carries an
-    offset, so a payload missing its own axis is a 400 rather than a replay.
+    `audio` needs an offset. `epub` needs a cfi *or* a percent —
+    `ProgressUpdate::validate` accepts either, deliberately: a Kobo has no CFI
+    to give, so percent-only is a first-class position, and agents journal
+    percents far more often than machine locations.
     """
     if position.get("axis") == "audio":
         if position.get("seconds") is None:
@@ -173,9 +175,12 @@ def _progress_payload(uuid: str, position: dict[str, Any]) -> dict[str, Any] | N
             "audio_position_seconds": float(position["seconds"]),
         }
     cfi = position.get("cfi")
-    if not cfi:
+    percent = position.get("percent")
+    if not cfi and percent is None:
         return None
-    payload = {"book_uuid": uuid, "format": "epub", "epub_cfi": cfi}
-    if position.get("percent") is not None:
-        payload["progress_percent"] = int(position["percent"])
+    payload: dict[str, Any] = {"book_uuid": uuid, "format": "epub"}
+    if cfi:
+        payload["epub_cfi"] = cfi
+    if percent is not None:
+        payload["progress_percent"] = int(percent)
     return payload

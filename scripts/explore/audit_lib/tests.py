@@ -628,9 +628,16 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(step.action, "refused")
         self.assertIn("ISBN-lookup", step.detail)
 
-    def test_an_epub_position_without_a_cfi_is_refused_rather_than_guessed(self) -> None:
+    def test_a_percent_only_epub_position_replays_as_a_valid_update(self) -> None:
+        # ProgressUpdate::validate accepts a cfi OR a percent for epub — a Kobo
+        # has no CFI to give — so percent-only is a first-class position and
+        # must replay rather than be refused.
+        payload = replay._progress_payload(BOOK, {"axis": "ebook", "percent": 11.0, "cfi": None})
+        self.assertEqual(payload, {"book_uuid": BOOK, "format": "epub", "progress_percent": 11})
+
+    def test_an_epub_position_with_neither_cfi_nor_percent_is_refused(self) -> None:
         exp = expectations.Expectation(
-            "agent-1", 15, "progress", "progress", BOOK, "x", {"axis": "ebook", "percent": 11.0, "cfi": None}
+            "agent-1", 15, "progress", "progress", BOOK, "x", {"axis": "ebook", "percent": None, "cfi": None}
         )
         step = replay.replay_one(exp, FakeState())
         self.assertEqual(step.action, "refused")
