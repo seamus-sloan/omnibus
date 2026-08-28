@@ -346,7 +346,7 @@ def _fold_entry(fold: _Fold, entry: Entry, cls: vocabulary.Classification) -> No
     def exp(what: str, target: str | None, expected: str, value: Any = None, **extra: Any) -> Expectation:
         return Expectation(actor, seq, family or "", what, target, expected, value, extra)
 
-    if family in ("rating", "read_status", "progress", "playback_rate", "book_add"):
+    if family in SCALAR_FAMILIES:
         uuid = _uuid(entry)
         if uuid is UNPARSED:
             fold.skip(entry, f"{entry.action}: no book uuid on the entry or in params")
