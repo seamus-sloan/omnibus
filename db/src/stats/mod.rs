@@ -9,6 +9,7 @@ mod compute;
 mod genre;
 mod pages;
 mod sessionize;
+mod streak;
 
 #[cfg(test)]
 mod tests;
@@ -30,9 +31,9 @@ use sqlx::SqlitePool;
 
 #[cfg(test)]
 use compute::{
-    avg_stars, books_active, books_per_month, finished_books, finished_count, listening_daily,
-    prev_window_bounds, prev_window_from, previous_period, rating_monthly, window_start,
-    FINISHED_BOOKS_LIMIT,
+    as_of, avg_stars, books_active, books_per_month, finished_books, finished_count,
+    listening_daily, prev_window_bounds, prev_window_from, previous_period, rating_monthly,
+    window_start, FINISHED_BOOKS_LIMIT,
 };
 use compute::{compute, FINISHED_EVENTS};
 #[cfg(test)]

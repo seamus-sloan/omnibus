@@ -204,6 +204,21 @@ pub struct StatsSummary {
     pub sessions: i64,
     pub active_days: i64,
     pub longest_streak_days: i64,
+    /// Consecutive active days still running as of [`Self::as_of_day`] — the
+    /// streak the reader is *on*, where `longest_streak_days` is the record.
+    /// A run ending yesterday still counts (the day isn't over yet); one
+    /// ending earlier reports zero.
+    ///
+    /// Server-computed so every client renders the same number rather than
+    /// each deriving its own from `heatmap`. **Not windowed**, unlike every
+    /// other figure here: a streak is a fact about right now, not about a
+    /// reporting period, so this reads the same on every `StatsRange`. Windowed
+    /// it would report 2 on the 2nd of the month for a reader 40 days deep —
+    /// and the web card (fed the all-time summary) and the iOS tile (fed the
+    /// period-scoped one) would disagree about the very field that exists to
+    /// stop clients disagreeing.
+    #[serde(default)]
+    pub current_streak_days: i64,
     /// First active day (UTC `YYYY-MM-DD`) of the busiest ISO week, if any.
     pub busiest_week_start: Option<String>,
     pub busiest_week_seconds: i64,

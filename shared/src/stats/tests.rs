@@ -148,6 +148,23 @@ fn trend_point_round_trips_through_json() {
 }
 
 #[test]
+fn current_streak_days_defaults_to_zero_when_absent_from_the_wire() {
+    // Same older-payload contract as avg_stars/pages_read — the current streak
+    // is a newer field, so a server that predates it must still parse. Zero is
+    // the honest default too: absent means unknown, and "no streak" is the one
+    // claim that can't overstate one.
+    let s: StatsSummary = serde_json::from_str(
+        r#"{"range":"month","reading_seconds":0,"listening_seconds":0,"sessions":0,
+            "active_days":0,"longest_streak_days":7,"busiest_week_start":null,
+            "busiest_week_seconds":0,"books_finished":0,"heatmap":[],
+            "top_authors":[],"top_tags":[],"finished_books":[]}"#,
+    )
+    .unwrap();
+    assert_eq!(s.current_streak_days, 0);
+    assert_eq!(s.longest_streak_days, 7, "the record still decodes");
+}
+
+#[test]
 fn as_query_matches_the_serde_wire_name() {
     for range in StatsRange::ALL {
         let wire = serde_json::to_string(&range).unwrap();

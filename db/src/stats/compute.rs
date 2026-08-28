@@ -10,7 +10,7 @@ use omnibus_shared::{
 };
 use sqlx::{Row, SqlitePool};
 
-use super::{genre, pages, sessionize, StatsError};
+use super::{genre, pages, sessionize, streak, StatsError};
 
 /// How many rows the top-authors / top-tags rollups return.
 const TOP_N: i64 = 8;
@@ -100,14 +100,16 @@ pub(super) async fn compute(
     let sessions = session_count(pool, user_id, start).await?;
     let avg_stars = avg_stars(pool, user_id, start).await?;
     let heatmap = heatmap(pool, user_id, start).await?;
-    let (active_days, longest_streak_days) = streak(pool, user_id, start).await?;
+    // One clock read feeds both the heatmap's right edge and the streak's
+    // anchor, so the two can never land on different days.
+    let (as_of_day, today) = as_of(pool).await?;
+    let streak = streak::streak(pool, user_id, start, today).await?;
     let (busiest_week_start, busiest_week_seconds) = busiest_week(pool, user_id, start).await?;
     let top_authors = top_authors(pool, user_id, start).await?;
     let top_tags = top_tags(pool, user_id, start).await?;
     let genre_share = genre::genre_share(pool, user_id, start).await?;
     let genre_tagged_books = genre::genre_tagged_books(pool, user_id, start).await?;
     let books_active = books_active(pool, user_id, start).await?;
-    let as_of_day = as_of_day(pool).await?;
     let finished_books = finished_books(pool, user_id, start).await?;
     let books_finished = finished_count(pool, user_id, start).await?;
     let books_per_month = books_per_month(pool, user_id).await?;
@@ -122,8 +124,9 @@ pub(super) async fn compute(
         listening_seconds,
         avg_stars,
         sessions,
-        active_days,
-        longest_streak_days,
+        active_days: streak.active_days,
+        longest_streak_days: streak.longest_days,
+        current_streak_days: streak.current_days,
         busiest_week_start,
         busiest_week_seconds,
         books_finished,
@@ -266,37 +269,6 @@ pub(super) async fn heatmap(
         .collect())
 }
 
-/// Active-day count and longest consecutive-day streak. Days are unix day
-/// numbers (`started_at / 86400`, UTC) so consecutiveness is an integer diff.
-pub(super) async fn streak(
-    pool: &SqlitePool,
-    user_id: i64,
-    start: i64,
-) -> Result<(i64, i64), StatsError> {
-    let days: Vec<i64> = sqlx::query_scalar(
-        "SELECT DISTINCT started_at / 86400 AS dnum FROM (
-             SELECT started_at FROM reading_sessions   WHERE user_id = ? AND started_at >= ?
-             UNION ALL
-             SELECT started_at FROM listening_sessions WHERE user_id = ? AND started_at >= ?
-         ) ORDER BY dnum",
-    )
-    .bind(user_id)
-    .bind(start)
-    .bind(user_id)
-    .bind(start)
-    .fetch_all(pool)
-    .await?;
-
-    let active_days = days.len() as i64;
-    let mut longest = if days.is_empty() { 0 } else { 1 };
-    let mut run = longest;
-    for pair in days.windows(2) {
-        run = if pair[1] - pair[0] == 1 { run + 1 } else { 1 };
-        longest = longest.max(run);
-    }
-    Ok((active_days, longest))
-}
-
 /// The busiest ISO week: `(first active day, total seconds)`. Weeks bucket by
 /// Monday — `dnum - ((dnum + 3) % 7)`, since unix day 0 (1970-01-01) is a
 /// Thursday. Returns `(None, 0)` when the window has no sessions.
@@ -397,12 +369,20 @@ pub(super) async fn books_active(
         .await?)
 }
 
-/// The server's current UTC day, stamped on the summary so the heatmap grid
-/// anchors to the server clock instead of the client's.
-pub(super) async fn as_of_day(pool: &SqlitePool) -> Result<String, StatsError> {
-    Ok(sqlx::query_scalar("SELECT date('now')")
-        .fetch_one(pool)
-        .await?)
+/// The server's current UTC day as both the `YYYY-MM-DD` string stamped on the
+/// summary — so the heatmap grid anchors to the server clock instead of the
+/// client's — and its unix day number, which anchors the current streak.
+///
+/// Both come out of **one** statement on purpose: SQLite holds `'now'` fixed
+/// for a single statement, so the two can't straddle midnight and describe
+/// different days.
+pub(super) async fn as_of(pool: &SqlitePool) -> Result<(String, i64), StatsError> {
+    let row = sqlx::query(
+        "SELECT date('now') AS day, CAST(strftime('%s', 'now') AS INTEGER) / 86400 AS dnum",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok((row.get("day"), row.get("dnum")))
 }
 
 /// Total completions in the window under the same definition as

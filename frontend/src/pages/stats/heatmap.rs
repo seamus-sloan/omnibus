@@ -1,8 +1,8 @@
 //! Reading-days heatmap card: a pure-CSS GitHub-style trailing-year calendar
 //! grid (in the all-time section, never re-queried by the switcher) with the
-//! longest-streak figure in its header. Day math runs on epoch-day numbers via
-//! the civil-date algorithms below — no date crate — over the DTO's UTC
-//! `YYYY-MM-DD` strings.
+//! server-computed current and longest streak figures in its header. Day math
+//! runs on epoch-day numbers via the civil-date algorithms below — no date
+//! crate — over the DTO's UTC `YYYY-MM-DD` strings.
 
 use std::collections::HashMap;
 
@@ -140,8 +140,8 @@ fn build_cells(anchor: i64, by_day: &HashMap<i64, i64>, max: i64) -> Vec<HeatCel
         .collect()
 }
 
-/// The all-time heatmap card: header with the longest-streak figure, the
-/// calendar grid, month labels, and the less/more legend.
+/// The all-time heatmap card: header with the current and longest streak
+/// figures, the calendar grid, month labels, and the less/more legend.
 #[component]
 pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
     // Anchor to the server's clock; fall back to the newest active day so a
@@ -167,21 +167,35 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
     let max = by_day.values().copied().max().unwrap_or(0);
     let cells = build_cells(anchor, &by_day, max);
     let months = trailing_month_labels(anchor);
-    let streak = summary.longest_streak_days;
+    let current = summary.current_streak_days;
+    let longest = summary.longest_streak_days;
 
     rsx! {
         div { class: "card st-heatmap-card", "data-testid": "stats-heatmap",
             div { class: "st-heatmap-head",
                 div {
                     div { class: "label", "Reading days \u{00B7} trailing year" }
-                    div { class: "st-heatmap-sub", "Longest run of consecutive days you read." }
-                }
-                div { class: "st-streak",
-                    div { class: "st-streak-value",
-                        "{streak} "
-                        span { class: "st-streak-unit", "days" }
+                    div { class: "st-heatmap-sub",
+                        "Days in a row you read \u{2014} the run you\u{2019}re on, and your record."
                     }
-                    div { class: "label", "Longest streak" }
+                }
+                // Current leads: it's the figure a reader opens the page for,
+                // where the record is the trophy standing beside it.
+                div { class: "st-streaks",
+                    div { class: "st-streak", "data-testid": "stats-current-streak",
+                        div { class: "st-streak-value",
+                            "{current} "
+                            span { class: "st-streak-unit", "days" }
+                        }
+                        div { class: "label", "Current streak" }
+                    }
+                    div { class: "st-streak st-streak-minor", "data-testid": "stats-longest-streak",
+                        div { class: "st-streak-value",
+                            "{longest} "
+                            span { class: "st-streak-unit", "days" }
+                        }
+                        div { class: "label", "Longest streak" }
+                    }
                 }
             }
             // Block-level scroll wrapper: iOS WebKit clips this far more reliably than a grid-as-scroller (#1076).
@@ -215,6 +229,52 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two streak figures land in their own slots, and neither takes the
+    /// other's. Asserting only that both labels appear can't tell them apart —
+    /// swapping the two bindings would leave such a test green while the card
+    /// reported a reader's record as the run they're on.
+    #[cfg(feature = "server")]
+    #[test]
+    fn heatmap_card_renders_current_and_longest_in_their_own_slots() {
+        let summary = StatsSummary {
+            as_of_day: "2026-07-12".to_string(),
+            current_streak_days: 3,
+            longest_streak_days: 9,
+            ..Default::default()
+        };
+        let html = crate::test_support::render(rsx! { HeatmapCard { summary } });
+
+        let at = |testid: &str| {
+            html.find(&format!(r#""{testid}""#))
+                .unwrap_or_else(|| panic!("{testid} missing from:\n{html}"))
+        };
+        let (current_at, longest_at) = (at("stats-current-streak"), at("stats-longest-streak"));
+        assert!(
+            current_at < longest_at,
+            "the live run leads, the record follows"
+        );
+
+        // Bounded at the record's slot, so a swapped binding shows up as the
+        // record's 9 appearing where the live run's 3 belongs.
+        let current = &html[current_at..longest_at];
+        assert!(current.contains('3'), "current slot: {current}");
+        assert!(
+            current.contains("Current streak"),
+            "current slot: {current}"
+        );
+        assert!(
+            !current.contains('9'),
+            "the record leaked into the current slot: {current}"
+        );
+
+        let longest = &html[longest_at..];
+        assert!(longest.contains('9'), "longest slot: {longest}");
+        assert!(
+            longest.contains("Longest streak"),
+            "longest slot: {longest}"
+        );
+    }
 
     #[test]
     fn day_number_round_trips_through_day_string() {
