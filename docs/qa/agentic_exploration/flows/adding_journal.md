@@ -7,16 +7,24 @@
 | **Surfaces** | web, iOS |
 | **Actions** | `journal.create`, `journal.update`, `journal.delete` |
 
-A journal entry is a private piece of writing about a book. It is per-user
-content, it is rendered from markdown by the server, and it can carry images —
-three different things that can each break independently.
+A journal entry is a piece of writing about a book, rendered from markdown by
+the server, optionally carrying images — three things that can each break
+independently.
+
+**It is not private.** The app presents the journal as a shared, attributed
+per-book surface ("THE JOURNAL · 1 ENTRY FROM 1 READER", with a "· you" marker
+on your own byline). Seeing another reader's entry is therefore expected, not a
+leak. What *would* be a finding is an entry attributed to the wrong person, or
+your own entry appearing without the "you" marker.
 
 ## Steps
 
 1. From a book's detail page, find where entries about the book are written.
 2. Write something a person would write about a book — a paragraph, not a test
-   string. Include a **distinctive phrase** you can search for later, and
-   journal that phrase.
+   string. Include a **distinctive phrase** and journal it, so the audit can
+   match the entry later. Do **not** expect to find it via search: the command
+   palette's full-text section is marked "Coming soon" and journal text is not
+   indexed, so a search returning nothing is not a finding.
 3. Use at least one piece of formatting: bold, italic, a quote, or a list. Vary
    which one across runs.
 4. Occasionally embed an image from the corpus.
@@ -46,8 +54,9 @@ distinctive phrase, so the audit can tell a deliberate delete from a loss.
 - Text is truncated, reordered, or has characters mangled.
 - An image uploads but does not display, or displays on another entry.
 - The entry attaches to the wrong book.
-- Someone else's journal entry is visible to you. **High severity** — journals
-  are private per user.
+- An entry is attributed to the wrong reader, or your own entry renders without
+  the "you" marker. (Merely *seeing* another reader's entry is expected — the
+  journal is a shared surface.)
 - An edit silently discards the previous content.
 
 ## Sharp edges

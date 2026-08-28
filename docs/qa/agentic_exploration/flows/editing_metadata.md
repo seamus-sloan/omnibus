@@ -23,7 +23,11 @@ content.
 3. Change one or two fields. Good candidates: title suffix, subtitle, series
    name or number, publisher, tags, genres, description. Append rather than
    replace where you can — `Foo (ed. agent-3)` beats overwriting `Foo`.
-4. Occasionally replace the cover image instead, using a file from the corpus.
+4. Occasionally replace the cover image instead. Use **that book's own**
+   `cover.jpg` sidecar from the corpus — another book's cover would make the
+   shared library worse, which this flow tells you not to do. Note that the
+   cover is written **immediately** on picking it, before you press Save, and
+   the editor's Discard link cannot undo it.
 5. Save. Watch for a confirmation and for the edited-field count to match what
    you actually changed.
 6. Return to the detail page and confirm the new values are shown.

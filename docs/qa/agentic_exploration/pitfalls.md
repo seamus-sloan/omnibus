@@ -48,6 +48,26 @@ rather than pressing on with unreliable evidence.
   is a harness fault of the first order — journal it `high` and stop, exactly as
   start.md says. Do not log back in and continue.
 
+## Things that look broken in the DOM and are not
+
+Each of these was nearly filed as a defect by an agent that checked first.
+
+- **`3 wk ago` beside LONGEST SIT is a sparkline axis label**, not part of the
+  stat. Flattened `innerText` reads "LONGEST SIT / 9m / Aug 28 / 3 wk ago",
+  which looks like today's date being called three weeks old. It lives in
+  `.rx-spark-axis`.
+- **The mini-player's speed and sleep panels are always in the DOM**, at
+  `opacity: 0; pointer-events: none`. They appear in `document.body.innerText`
+  on any book page and read as two expanded panels drawn over the page. Check
+  computed style before believing a panel is open.
+- **The persistent mini-player lives outside `<main>`.** Audio playing with "no
+  visible transport" usually means you only looked inside `main`.
+- **The journal composer is a CodeMirror contenteditable.** `locator.fill()`
+  silently strips every newline, collapsing a multi-paragraph entry to one line
+  — which looks exactly like the app truncating your text. Use
+  `keyboard.type`. `ControlOrMeta+End` also does not move the caret to the end
+  there, so an "append" can land mid-document.
+
 ## Deliberate app behaviour
 
 Each of these is intended, and each has been mistaken for a defect before:

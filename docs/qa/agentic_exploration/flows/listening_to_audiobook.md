@@ -7,13 +7,19 @@
 | **Surfaces** | web, iOS |
 | **Actions** | `book.open`, `player.play`, `player.seek`, `player.rate`, `player.close` |
 
-Listen to roughly a tenth of an audiobook. Playback position, like reading
+Listen to roughly a tenth of an audiobook **by position** — a tenth of a ten-hour
+book is an hour of playback you should skip through, not an hour of real time
+you sit and wait. Playback position, like reading
 position, is written constantly and missed immediately when lost.
 
 ## Preconditions
 
 A book with an audiobook format. Multi-file audiobooks are more interesting
-than single-file ones — prefer them when you can tell.
+than single-file ones, but **the library gives you no way to tell before you
+open the player** — the FORMATS column shows only `M4B`, and the file count
+appears nowhere until you are inside. Open one, see what you got, and say which
+in the journal. A single-file M4B can still expose many chapter markers, so
+chapter seams are testable even when file seams are not.
 
 ## Steps
 
@@ -26,8 +32,11 @@ than single-file ones — prefer them when you can tell.
    watch what happens at the seam.
 5. Occasionally set a sleep timer and watch it count down; you need not wait
    for it to fire.
-6. Leave the player through the app's own way out, then check the book's detail
-   page reflects where you got to.
+6. Leave the player and check the book's detail page reflects where you got to.
+   There is no single "exit" control: the book title links back to the detail
+   page, and once you are elsewhere the persistent mini-player offers "Stop and
+   close player". Leaving via the title does **not** stop playback — the
+   mini-player keeps going, which is intended.
 
 ## Journal
 

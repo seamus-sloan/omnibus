@@ -19,8 +19,10 @@ fail.
 
 1. Start checking in a book.
 2. Identify a book you do **not** already have. Either enter an ISBN or search
-   by title and author. Prefer a real, well-known book — the lookup has a better
-   chance and a wrong answer is easier to spot.
+   by title. **There is no author field** — the search takes a title only, and
+   adding the author to it measurably degrades the results, so do not. Prefer a
+   real, well-known book: the lookup has a better chance and a wrong answer is
+   easier to spot.
 3. Read what comes back. Does the result match what you asked for? Journal the
    candidates you were shown.
 4. Pick the right one, or say none of them match if none do.
