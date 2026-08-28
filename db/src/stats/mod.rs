@@ -6,6 +6,7 @@
 
 mod book;
 mod compute;
+mod genre;
 mod pages;
 mod sessionize;
 
@@ -29,11 +30,13 @@ use sqlx::SqlitePool;
 
 #[cfg(test)]
 use compute::{
-    avg_stars, books_active, books_per_month, finished_books, finished_count, genre_share,
-    listening_daily, prev_window_bounds, prev_window_from, previous_period, rating_monthly,
-    window_start, FINISHED_BOOKS_LIMIT,
+    avg_stars, books_active, books_per_month, finished_books, finished_count, listening_daily,
+    prev_window_bounds, prev_window_from, previous_period, rating_monthly, window_start,
+    FINISHED_BOOKS_LIMIT,
 };
 use compute::{compute, FINISHED_EVENTS};
+#[cfg(test)]
+use genre::{genre_share, genre_tagged_books};
 
 /// Failure space of the aggregation layer. Every metric is a SQL query, so a
 /// wrapped `sqlx::Error` is the only failure — kept as an enum (rather than a

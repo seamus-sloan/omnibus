@@ -8999,6 +8999,9 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-donut-name { flex: 1; font-size: 13px; color: var(--ink-1); }
 .st-donut-pct { font-size: 11px; color: var(--ink-2); }
 .st-donut-empty { margin: 14px 0 0; font-size: 13px; color: var(--ink-3); }
+/* Reading the ring can't describe — deliberately outside `.st-donut-body`, so
+   it never reads as a slice or as part of the hole's count. */
+.st-donut-untagged { margin: 12px 0 0; font-size: 11px; color: var(--ink-3); }
 
 .st-format-card { display: flex; flex-direction: column; justify-content: center; gap: 14px; }
 .st-format-row-head {

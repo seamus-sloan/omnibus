@@ -109,14 +109,21 @@ fn stat_cell(k: &str, v: &str, s: &str) -> Element {
     }
 }
 
+/// Smallest percent that yields a usable pace estimate. Below it the
+/// extrapolation multiplies elapsed time by more than nineteen, which is a
+/// guess wearing the same clothes as a measurement. The note is dropped
+/// instead: a missing estimate reads as "not yet", a wrong one reads as fact.
+const MIN_PACE_PERCENT: i64 = 5;
+
 /// "≈ Xh Ym to go at your pace" from total time and the newest percent.
+/// `None` below [`MIN_PACE_PERCENT`], where the extrapolation isn't meaningful.
 fn time_left_note(i: &BookInsights, progress: &MarqueeProgress) -> Option<String> {
     let pct = progress.newest_percent()?.clamp(0, 100);
-    if pct == 0 {
-        return None;
-    }
     if pct >= 100 {
         return Some("finished \u{2014} the record is complete".to_string());
+    }
+    if pct < MIN_PACE_PERCENT {
+        return None;
     }
     let left = i.seconds_total * (100 - pct) / pct;
     Some(format!(
@@ -287,6 +294,55 @@ mod tests {
     #[test]
     fn avg_sit_does_not_divide_by_zero_without_sittings() {
         assert_eq!(avg_sit_secs(&insights(40, 0, 0, 0)), 0);
+    }
+
+    /// A `MarqueeProgress` carrying one reading position at `pct`.
+    fn progress_at(pct: i64) -> MarqueeProgress {
+        MarqueeProgress {
+            reading: Some(omnibus_shared::ProgressRecord {
+                book_uuid: "uuid-1".into(),
+                format: omnibus_shared::ProgressFormat::Epub,
+                epub_cfi: None,
+                audio_position_seconds: None,
+                progress_percent: Some(pct),
+                kobo_location: None,
+                book_file_id: None,
+                updated_at: 0,
+                client_updated_at: 0,
+            }),
+            listening: None,
+        }
+    }
+
+    #[test]
+    fn time_left_note_is_withheld_below_the_pace_threshold() {
+        // One hour in at 1% would extrapolate to "99h to go" — a number with
+        // no basis, printed with the same confidence as a real estimate.
+        let i = insights(3_600, 1, 3_600, 3_600);
+        // 0 included: the explicit zero guard is gone, so the threshold is
+        // the only thing between the caller and a divide by zero.
+        for pct in [0, 1, 2, MIN_PACE_PERCENT - 1] {
+            assert_eq!(time_left_note(&i, &progress_at(pct)), None, "pct {pct}");
+        }
+    }
+
+    #[test]
+    fn time_left_note_estimates_from_the_threshold_upward() {
+        // 1h at 50% → 1h to go.
+        let i = insights(3_600, 1, 3_600, 3_600);
+        let note = time_left_note(&i, &progress_at(50)).unwrap();
+        assert!(note.contains("1h"), "unexpected note: {note}");
+        assert!(note.contains("50% in"), "unexpected note: {note}");
+        assert!(time_left_note(&i, &progress_at(MIN_PACE_PERCENT)).is_some());
+    }
+
+    #[test]
+    fn time_left_note_reports_completion_at_full_progress() {
+        let i = insights(3_600, 1, 3_600, 3_600);
+        assert_eq!(
+            time_left_note(&i, &progress_at(100)).as_deref(),
+            Some("finished \u{2014} the record is complete")
+        );
     }
 
     #[test]

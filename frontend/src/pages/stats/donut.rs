@@ -72,10 +72,16 @@ fn donut_gradient(percents: &[i64]) -> String {
 
 /// "What you read" — the genre-share donut with center book count and a
 /// `label · %` legend. Empty window → a friendly note instead of a ring.
+///
+/// The center reports `genre_tagged_books` — the population the slices are
+/// drawn from — rather than `books_active`, which counts books the ring does
+/// not describe. The difference is disclosed under the legend instead, where
+/// it can't be read as a slice.
 #[component]
 pub(super) fn GenreDonut(summary: StatsSummary) -> Element {
     let folded = fold_shares(&summary.genre_share);
-    let books_active = summary.books_active;
+    let tagged = summary.genre_tagged_books;
+    let untagged = (summary.books_active - tagged).max(0);
     if folded.is_empty() {
         return rsx! {
             div { class: "card st-donut-card", "data-testid": "stats-genre-donut",
@@ -89,7 +95,7 @@ pub(super) fn GenreDonut(summary: StatsSummary) -> Element {
     // Content-derived key: when a period switch lands a different mix, the
     // body remounts and replays the content-swap animation while the card
     // stays put. Same data → same key → no motion.
-    let content_key = format!("{books_active}|{gradient}|{folded:?}");
+    let content_key = format!("{tagged}|{untagged}|{gradient}|{folded:?}");
     rsx! {
         div { class: "card st-donut-card", "data-testid": "stats-genre-donut",
             div { class: "label", "What you read" }
@@ -97,8 +103,8 @@ pub(super) fn GenreDonut(summary: StatsSummary) -> Element {
                 div { class: "st-donut", style: "background: {gradient};", role: "img",
                     aria_label: "Genre share by book count",
                     div { class: "st-donut-hole",
-                        div { class: "st-donut-count", "{books_active}" }
-                        div { class: "st-donut-count-label mono", "books" }
+                        div { class: "st-donut-count", "{tagged}" }
+                        div { class: "st-donut-count-label mono", "tagged" }
                     }
                 }
                 ul { class: "st-donut-legend",
@@ -118,8 +124,19 @@ pub(super) fn GenreDonut(summary: StatsSummary) -> Element {
                     }
                 }
             }
+            if untagged > 0 {
+                p { class: "st-donut-untagged mono", "data-testid": "stats-donut-untagged",
+                    {untagged_note(untagged)}
+                }
+            }
         }
     }
+}
+
+/// The disclosure line for active books the ring can't describe.
+fn untagged_note(untagged: i64) -> String {
+    let noun = if untagged == 1 { "book" } else { "books" };
+    format!("+{untagged} {noun} without a genre")
 }
 
 /// "How you consumed them" — reading vs listening share of active seconds.
@@ -196,6 +213,24 @@ mod tests {
         assert_eq!(percentages(&[3, 1]), vec![75, 25]);
         assert_eq!(percentages(&[]), Vec::<i64>::new());
         assert_eq!(percentages(&[0, 0]), vec![0, 0]);
+    }
+
+    #[test]
+    fn untagged_note_singularizes_one_book() {
+        assert_eq!(untagged_note(1), "+1 book without a genre");
+        assert_eq!(untagged_note(4), "+4 books without a genre");
+    }
+
+    #[test]
+    fn fold_shares_other_covers_the_whole_tail_the_server_sent() {
+        // The server no longer truncates to a top-8, so "Other" is the real
+        // remainder rather than ranks five through eight.
+        let shares: Vec<GenreShare> = (1..=12).map(|i| share(&format!("g{i}"), 1)).collect();
+        let folded = fold_shares(&shares);
+        assert_eq!(folded.len(), 5);
+        assert_eq!(folded[4], ("Other".to_string(), 8));
+        let pct = percentages(&folded.iter().map(|(_, c)| *c).collect::<Vec<_>>());
+        assert_eq!(pct.iter().sum::<i64>(), 100);
     }
 
     #[test]

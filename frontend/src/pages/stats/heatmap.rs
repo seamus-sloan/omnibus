@@ -111,13 +111,22 @@ struct HeatCell {
     future: bool,
 }
 
-/// Build the cell list: 52 week columns of 7 rows (Monday-first), ending in
-/// the week containing `anchor`. Unix day 0 is a Thursday, so Monday-aligning
-/// subtracts `(n + 3) % 7` — the same convention as `db::stats`' busiest-week
-/// bucketing.
-fn build_cells(anchor: i64, by_day: &HashMap<i64, i64>, max: i64) -> Vec<HeatCell> {
+/// Epoch day of the grid's first cell: the Monday of `anchor`'s week, 51 weeks
+/// back. Unix day 0 is a Thursday, so Monday-aligning subtracts `(n + 3) % 7`
+/// — the same convention as `db::stats`' busiest-week bucketing.
+///
+/// Shared with the caller's `by_day` filter so the intensity scale is
+/// normalized over exactly the days the grid draws — a day outside it must not
+/// set the `max` every rendered cell is bucketed against.
+fn grid_start(anchor: i64) -> i64 {
     let monday = anchor - (anchor + 3).rem_euclid(7);
-    let start = monday - (WEEKS - 1) * 7;
+    monday - (WEEKS - 1) * 7
+}
+
+/// Build the cell list: 52 week columns of 7 rows (Monday-first), ending in
+/// the week containing `anchor`.
+fn build_cells(anchor: i64, by_day: &HashMap<i64, i64>, max: i64) -> Vec<HeatCell> {
+    let start = grid_start(anchor);
     (start..start + WEEKS * 7)
         .map(|n| {
             let secs = by_day.get(&n).copied().unwrap_or(0);
@@ -148,7 +157,7 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
         return rsx! { div { class: "card st-card-placeholder", aria_hidden: "true" } };
     };
 
-    let window_start = anchor - WEEKS * 7 + 1;
+    let window_start = grid_start(anchor);
     let by_day: HashMap<i64, i64> = summary
         .heatmap
         .iter()
@@ -243,6 +252,48 @@ mod tests {
         let cells = build_cells(wed, &HashMap::new(), 0);
         assert_eq!(cells.iter().filter(|c| c.future).count(), 4);
         assert_eq!(cells.last().unwrap().day, "2026-07-12");
+    }
+
+    #[test]
+    fn grid_start_is_the_monday_of_the_anchor_week_fifty_one_weeks_back() {
+        // 2026-07-06 is a Monday, 2026-07-12 the Sunday that closes its week:
+        // both weeks start on the same Monday, so both grids start together.
+        let monday = day_number("2026-07-06").unwrap();
+        let sunday = day_number("2026-07-12").unwrap();
+        assert_eq!(grid_start(monday), grid_start(sunday));
+        assert_eq!(day_string(grid_start(sunday)), "2025-07-14");
+        // Every rendered cell sits at or after it.
+        let cells = build_cells(sunday, &HashMap::new(), 0);
+        assert_eq!(cells.first().unwrap().day, day_string(grid_start(sunday)));
+    }
+
+    #[test]
+    fn intensity_ignores_a_heavy_day_that_falls_before_the_first_cell() {
+        // A *Monday* anchor, deliberately: `grid_start` and the old fixed
+        // `anchor - 363` coincide on a Sunday, so only a non-Sunday anchor can
+        // tell the two windows apart. Here they differ by six days.
+        let anchor = day_number("2026-07-06").unwrap();
+        let start = grid_start(anchor);
+        assert_eq!(anchor - 363, start - 6, "the two windows must differ here");
+
+        // One modest day inside the grid, one huge day in the six-day gap the
+        // grid never draws.
+        let by_day = HashMap::from([(start, 100_i64), (start - 3, 10_000_i64)]);
+        let drawn: HashMap<i64, i64> = by_day
+            .iter()
+            .filter(|(n, _)| **n >= start)
+            .map(|(n, v)| (*n, *v))
+            .collect();
+        let max = drawn.values().copied().max().unwrap_or(0);
+
+        // Normalized over the drawn days, the visible day is the peak. Against
+        // the off-grid day it would bucket to 1 — the whole year flattened
+        // against a cell the reader cannot see.
+        let cells = build_cells(anchor, &drawn, max);
+        let first = cells.first().unwrap();
+        assert_eq!(first.day, day_string(start));
+        assert_eq!(first.level, 4);
+        assert_eq!(intensity(100, 10_000), 1, "the bug this guards against");
     }
 
     #[test]

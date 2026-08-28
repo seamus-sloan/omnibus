@@ -1,16 +1,16 @@
 //! SQL-heavy aggregation body for [`super::user_stats`]: `compute` runs one
-//! query per [`StatsSummary`] field and assembles the result. Split out of
-//! `stats/mod.rs` (the cache/error/re-export scaffolding) purely to keep
-//! each file under the house line-count cap — no behavior differs from the
-//! single-file version.
+//! query per [`StatsSummary`] field and assembles the result. Sibling modules
+//! hold the rollups that grew their own sub-topic — `genre` for the donut,
+//! `pages` for the page estimate — keeping each file under the house
+//! line-count cap.
 
 use omnibus_shared::{
-    DayActivity, FinishedBook, GenreShare, MonthCount, PeriodComparison, RankedEntity, StatsRange,
+    DayActivity, FinishedBook, MonthCount, PeriodComparison, RankedEntity, StatsRange,
     StatsSummary, TrendPoint,
 };
 use sqlx::{Row, SqlitePool};
 
-use super::{pages, sessionize, StatsError};
+use super::{genre, pages, sessionize, StatsError};
 
 /// How many rows the top-authors / top-tags rollups return.
 const TOP_N: i64 = 8;
@@ -23,7 +23,7 @@ pub(super) const FINISHED_BOOKS_LIMIT: i64 = 100;
 /// The book-scoped session union reused by the top-N rollups: one
 /// `(book_uuid, secs)` row per reading and listening session in the window.
 /// Bind order is `user_id, start, user_id, start`.
-const SESSION_BOOK_SECS: &str = "\
+pub(super) const SESSION_BOOK_SECS: &str = "\
     SELECT book_uuid, seconds_read AS secs FROM reading_sessions \
         WHERE user_id = ? AND started_at >= ? \
     UNION ALL \
@@ -104,7 +104,8 @@ pub(super) async fn compute(
     let (busiest_week_start, busiest_week_seconds) = busiest_week(pool, user_id, start).await?;
     let top_authors = top_authors(pool, user_id, start).await?;
     let top_tags = top_tags(pool, user_id, start).await?;
-    let genre_share = genre_share(pool, user_id, start).await?;
+    let genre_share = genre::genre_share(pool, user_id, start).await?;
+    let genre_tagged_books = genre::genre_tagged_books(pool, user_id, start).await?;
     let books_active = books_active(pool, user_id, start).await?;
     let as_of_day = as_of_day(pool).await?;
     let finished_books = finished_books(pool, user_id, start).await?;
@@ -132,6 +133,7 @@ pub(super) async fn compute(
         top_authors,
         top_tags,
         genre_share,
+        genre_tagged_books,
         finished_books,
         books_per_month,
         previous,
@@ -379,61 +381,7 @@ async fn ranked(
         .collect())
 }
 
-/// Genre share by distinct book count: for each genre, how many distinct
-/// books carrying it had session activity in the window. Count-based (not
-/// seconds) so a multi-genre book counts once per genre but never twice per
-/// genre.
-///
-/// Reads the user-assigned genres, which live only in the
-/// `metadata_overrides` JSON blob (the table itself predates them, from
-/// `0007`; `0066_genres.sql` adds the vocabulary table this joins for the
-/// canonical spelling). This deliberately does *not* fall back to a book's
-/// tags: the donut is labelled "What you read", and a `<dc:subject>` list is
-/// whatever the publisher's OPF happened to carry, not a genre. A library
-/// with no genres assigned yet renders an empty donut, which is the honest
-/// answer.
-pub(super) async fn genre_share(
-    pool: &SqlitePool,
-    user_id: i64,
-    start: i64,
-) -> Result<Vec<GenreShare>, StatsError> {
-    // Collapse the per-session union to distinct active books *before* the
-    // genre join, so the intermediate is bounded by book count, not session
-    // count — keeps the join small on a 10k-event library.
-    //
-    // Joining `genres` rather than grouping `je.value` folds case variants
-    // into the one canonical row, exactly as `get_genre_cloud` does — a
-    // donut that split "sci-fi" from "Sci-Fi" would double-count a slice.
-    let sql = format!(
-        "SELECT g.name AS name, COUNT(DISTINCT b.uuid) AS books
-             FROM (SELECT DISTINCT book_uuid FROM ({SESSION_BOOK_SECS})) x
-             JOIN books b ON b.uuid = x.book_uuid
-             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-             JOIN json_each(mo.overrides, '$.genres') je
-             JOIN genres g ON g.name = je.value COLLATE NOCASE
-            WHERE json_type(mo.overrides, '$.genres') IS NOT NULL
-         GROUP BY g.id ORDER BY books DESC, g.name ASC LIMIT ?"
-    );
-    let rows = sqlx::query(&sql)
-        .bind(user_id)
-        .bind(start)
-        .bind(user_id)
-        .bind(start)
-        .bind(TOP_N)
-        .fetch_all(pool)
-        .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| GenreShare {
-            name: r.get("name"),
-            books: r.get("books"),
-        })
-        .collect())
-}
-
-/// Distinct books with any session activity in the window — the genre
-/// donut's center count.
+/// Distinct books with any session activity in the window.
 pub(super) async fn books_active(
     pool: &SqlitePool,
     user_id: i64,

@@ -1037,6 +1037,53 @@ async fn previous_period_aggregates_only_within_the_baseline_bounds() {
     assert_eq!(prev.listening_seconds, 500);
 }
 
+#[tokio::test]
+async fn genre_tagged_books_counts_each_active_tagged_book_once() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 3).await;
+    let user = seed_user(&pool, "alice").await;
+    // Three genres on one book, one on another, none on the third.
+    set_genres(&pool, "uuid-1", &["Fantasy", "Horror", "Gothic"], user).await;
+    set_genres(&pool, "uuid-2", &["Fantasy"], user).await;
+    for uuid in ["uuid-1", "uuid-2", "uuid-3"] {
+        reading_session(&pool, user, uuid, T0, 600).await;
+    }
+
+    // Two books carry a genre between them, even though they contribute four
+    // slice entries — the donut's center must not read as the slice total.
+    assert_eq!(genre_tagged_books(&pool, user, 0).await.unwrap(), 2);
+    // …and the third active book is the untagged remainder the card discloses.
+    assert_eq!(books_active(&pool, user, 0).await.unwrap(), 3);
+}
+
+#[tokio::test]
+async fn genre_tagged_books_is_zero_when_no_active_book_has_a_genre() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    reading_session(&pool, user, "uuid-1", T0, 600).await;
+
+    assert_eq!(genre_tagged_books(&pool, user, 0).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn genre_share_returns_every_genre_so_the_donut_can_size_its_tail() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    // Twelve genres on one book — more than the old `LIMIT 8`, which left the
+    // donut folding "Other" over a truncated tail while its percentages still
+    // summed to 100%.
+    let names: Vec<String> = (1..=12).map(|i| format!("Genre {i:02}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    set_genres(&pool, "uuid-1", &refs, user).await;
+    reading_session(&pool, user, "uuid-1", T0, 600).await;
+
+    let shares = genre_share(&pool, user, 0).await.unwrap();
+    assert_eq!(shares.len(), 12);
+    assert!(shares.iter().all(|s| s.books == 1));
+}
+
 #[test]
 fn prev_window_from_takes_the_elapsed_offset_into_the_previous_period() {
     // Fixed dates, so the clamp and the degenerate cases are exercised on every
