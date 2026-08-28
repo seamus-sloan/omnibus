@@ -65,6 +65,25 @@ struct StatsSummaryCodecTests {
         let summary = try decodeSummary(summaryJSON())
         #expect(summary.ratingHistogram.isEmpty)
     }
+
+    @Test("length buckets decode with their server-owned labels intact")
+    func decodesLengthBuckets() throws {
+        // The labels are the server's, not the client's — nothing here
+        // re-derives a page range, so they have to survive the wire verbatim.
+        let extra =
+            #","length_buckets":[{"label":"Under 300","books":3},{"label":"Unknown","books":1}]"#
+        let summary = try decodeSummary(summaryJSON(extra: extra))
+        #expect(summary.lengthBuckets.count == 2)
+        #expect(summary.lengthBuckets.first?.label == "Under 300")
+        #expect(summary.lengthBuckets.first?.books == 3)
+        #expect(summary.lengthBuckets.last?.label == "Unknown")
+    }
+
+    @Test("a server that predates the length distribution still decodes")
+    func decodesWithoutLengthBuckets() throws {
+        let summary = try decodeSummary(summaryJSON())
+        #expect(summary.lengthBuckets.isEmpty)
+    }
 }
 
 @Suite("Rating bucket labelling")

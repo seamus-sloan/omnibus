@@ -8805,6 +8805,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-tiles .st-tile:nth-child(4) { animation-delay: 0.12s; }
 .st-compose > *:nth-child(1) { animation-delay: 0.16s; }
 .st-compose > *:nth-child(2) { animation-delay: 0.2s; }
+.st-compose > *:nth-child(3) { animation-delay: 0.24s; }
 .st-alltime > *:nth-child(2) { animation-delay: 0.06s; }
 
 /* ── Content swap (iOS contentTransition(.numericText()) analogue) ── */
@@ -9017,6 +9018,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-format-pct { font-size: 12px; color: var(--ink-2); }
 .st-format-track { height: 8px; border-radius: 999px; background: var(--bg-2); overflow: hidden; }
 .st-format-fill { height: 100%; border-radius: 999px; }
+
+/* The length distribution takes the full row under the donut/format pair:
+   four labelled bars want the width, and side-by-side they wrapped. */
+.st-length-card { grid-column: 1 / -1; }
+.st-length-rows { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
 
 /* ── Reading-days heatmap card ────────────────────────────────────── */
 .st-heatmap-head {

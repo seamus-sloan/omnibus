@@ -191,6 +191,29 @@ fn rating_histogram_defaults_to_empty_when_absent_from_the_wire() {
 }
 
 #[test]
+fn length_bucket_round_trips_through_json() {
+    let b = LengthBucket {
+        label: "300\u{2013}499".to_string(),
+        books: 2,
+    };
+    let wire = serde_json::to_string(&b).unwrap();
+    assert_eq!(serde_json::from_str::<LengthBucket>(&wire).unwrap(), b);
+}
+
+#[test]
+fn length_buckets_default_to_empty_when_absent_from_the_wire() {
+    // Same older-payload contract as avg_stars/pages_read.
+    let s: StatsSummary = serde_json::from_str(
+        r#"{"range":"month","reading_seconds":0,"listening_seconds":0,"sessions":0,
+            "active_days":0,"longest_streak_days":0,"busiest_week_start":null,
+            "busiest_week_seconds":0,"books_finished":0,"heatmap":[],
+            "top_authors":[],"top_tags":[],"finished_books":[]}"#,
+    )
+    .unwrap();
+    assert!(s.length_buckets.is_empty());
+}
+
+#[test]
 fn as_query_matches_the_serde_wire_name() {
     for range in StatsRange::ALL {
         let wire = serde_json::to_string(&range).unwrap();

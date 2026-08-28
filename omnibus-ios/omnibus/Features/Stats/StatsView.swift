@@ -116,6 +116,38 @@ struct StatsView: View {
                     }
                 }
 
+                // Same rule as the rating chart: nothing finished in the window
+                // is an absent chart, not a row of flat bars. The Unknown
+                // bucket is rendered whenever it has books in it — an
+                // audiobook has no page count, and hiding that would report
+                // the distribution over fewer books than were finished.
+                if summary.lengthBuckets.contains(where: { $0.books > 0 }) {
+                    section("How long they were") {
+                        Chart(summary.lengthBuckets) { bucket in
+                            BarMark(
+                                x: .value("Books", bucket.books),
+                                y: .value("Length", bucket.label)
+                            )
+                            .foregroundStyle(palette.accentColor)
+                            .cornerRadius(3)
+                        }
+                        // Horizontal: the labels are page ranges, which don't
+                        // fit under a column but read fine beside a bar.
+                        .chartXAxis {
+                            AxisMarks { _ in
+                                AxisGridLine().foregroundStyle(palette.line2.color)
+                                AxisValueLabel().font(.monoUI(9))
+                            }
+                        }
+                        .chartYAxis {
+                            AxisMarks(position: .leading) { _ in
+                                AxisValueLabel().font(.monoUI(9))
+                            }
+                        }
+                        .frame(height: 132)
+                    }
+                }
+
                 if !summary.topAuthors.isEmpty {
                     section("Top authors") {
                         RankedList(entries: summary.topAuthors) { entry in

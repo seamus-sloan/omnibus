@@ -190,6 +190,21 @@ impl RatingBucket {
     }
 }
 
+/// One bar of the book-length distribution: a page-range label and how many
+/// books finished in the window fall into it.
+///
+/// The server owns both the boundaries and their labels (`db::stats::pages`),
+/// so a client never re-derives a range and disagrees about where 499 pages
+/// belongs. One bucket is the **unknown** bucket — a book no rung of the
+/// length ladder can measure — and it must be rendered, not dropped: an
+/// audiobook has no page analogue, and silently omitting it reports a
+/// distribution over fewer books than the window contains.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LengthBucket {
+    pub label: String,
+    pub books: i64,
+}
+
 /// Scalar aggregates for the **same elapsed slice** of the preceding period —
 /// feeds each metric tile's drill-in delta. The current window is
 /// period-to-date, so this is month-to-date against the same days last month
@@ -208,9 +223,9 @@ pub struct PeriodComparison {
 /// explicit `book_read_status` of `finished`, never from the session tables
 /// (which carry duration but no progress). A book finished both ways counts
 /// once, and every completion metric on this struct — `books_finished`,
-/// `finished_books`, `books_per_month`, `pages_read` and `previous` — shares
-/// that one definition, live books only. They must not drift apart: two of
-/// them render on the same screen.
+/// `finished_books`, `books_per_month`, `pages_read`, `length_buckets` and
+/// `previous` — shares that one definition, live books only. They must not
+/// drift apart: several of them render on the same screen.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct StatsSummary {
     pub range: StatsRange,
@@ -292,13 +307,24 @@ pub struct StatsSummary {
     /// bucket counts sum to the set the mean is taken over.
     #[serde(default)]
     pub rating_histogram: Vec<RatingBucket>,
-    /// Estimated pages read in the window — the Pages tile. Summed from each
-    /// finished book's persisted `word_count` estimate (`books.word_count`,
-    /// set at index time) and converted to pages (see `db::stats` for the
-    /// sourcing model); `None` when no finished book in the window has a
-    /// stored estimate, driving the tile's em-dash empty state.
+    /// Pages read in the window — the Pages tile. Each book finished in the
+    /// window contributes its length as resolved by the one ladder in
+    /// `db::stats::pages`: a print-edition page count from the metadata
+    /// overrides, else a comic's exact image-page count, else the EPUB word
+    /// estimate. Exact for some books and an estimate for others, which is why
+    /// the tile labels itself as an estimate.
+    ///
+    /// `None` when no finished book in the window resolves a length on any
+    /// rung — an unmeasured book contributes nothing rather than zero — which
+    /// drives the tile's em-dash empty state.
     #[serde(default)]
     pub pages_read: Option<i64>,
+    /// Books finished in the window bucketed by length, plus the unknown
+    /// bucket. Every bucket is present, zeros included; an all-zero set means
+    /// nothing was finished, which the surfaces render as an empty state
+    /// rather than flat bars.
+    #[serde(default)]
+    pub length_buckets: Vec<LengthBucket>,
 }
 
 impl StatsSummary {

@@ -335,6 +335,58 @@ test("the heatmap and genre donut render from seeded activity", async ({
   const split = page.getByTestId("stats-format-split");
   await expect(split).toContainText("Read");
   await expect(split).toContainText("Listened");
+
+  // Length split: the card is present either way. Which bars it draws depends
+  // on what the shared fixture user has finished this month, so this asserts
+  // only that the surface renders one of its two states.
+  await expect(page.getByTestId("stats-length-split")).toBeVisible();
+});
+
+test("the length distribution buckets finished books and never hides the unknown ones", async ({
+  page,
+}) => {
+  // Route-mocked: the bars depend on what the shared fixture user has finished
+  // in the window, which other specs move.
+  await page.route("**/api/rpc/stats", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        range: "month",
+        reading_seconds: 600,
+        listening_seconds: 0,
+        sessions: 1,
+        active_days: 1,
+        longest_streak_days: 1,
+        current_streak_days: 1,
+        busiest_week_start: null,
+        busiest_week_seconds: 600,
+        books_finished: 6,
+        heatmap: [],
+        top_authors: [],
+        top_tags: [],
+        finished_books: [],
+        length_buckets: [
+          { label: "Under 300", books: 3 },
+          { label: "300–499", books: 2 },
+          { label: "500+", books: 0 },
+          { label: "Unknown", books: 1 },
+        ],
+      }),
+    }),
+  );
+
+  await gotoReady(page, "/stats");
+
+  const card = page.getByTestId("stats-length-split");
+  await expect(card).toBeVisible();
+  // Every bucket the server sent is rendered, including the empty one and —
+  // the point of the bucket — the unmeasurable one.
+  for (const label of ["Under 300", "300–499", "500+", "Unknown"]) {
+    await expect(card).toContainText(label);
+  }
+  // Counts, not shares: "3 books" needs no denominator to be read.
+  await expect(card.getByTestId("stats-length-row").first()).toContainText("3");
 });
 
 test("the books-per-month chart renders twelve bars with the current month highlighted", async ({
