@@ -318,7 +318,9 @@ test("a speed change moves neither the transport clock nor the chapter durations
   await expect(drawer).toBeVisible();
   const chaptersBefore = (await drawer.innerText()).trim();
   expect(chaptersBefore).toMatch(/\d+:\d\d/);
-  await page.getByRole("button", { name: /^chapters/i }).click();
+  // The drawer's own Close, not the toolbar toggle: the drawer is painted
+  // over the toolbar it was opened from.
+  await drawer.getByRole("button", { name: /^Close/ }).click();
   await expect(drawer).toHaveCount(0);
 
   await page.getByRole("button", { name: "Playback speed" }).click();
