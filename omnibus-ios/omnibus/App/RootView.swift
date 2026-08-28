@@ -28,7 +28,16 @@ struct RootView: View {
             }
         }
         .animation(Motion.glide, value: app.phase)
-        .onOpenURL { router.receive($0) }
+        .onOpenURL { url in
+            // The DEBUG-only offline switch shares the `omnibus://` scheme but
+            // is not a destination, so it is consumed before the router — which
+            // would otherwise drop it as an unparseable book link and leave an
+            // agent with a toggle that silently did nothing.
+            #if DEBUG
+            if DebugOffline.handle(url) { return }
+            #endif
+            router.receive(url)
+        }
         // The router owns the delivery itself; this only tells it when the app
         // is somewhere a book can be opened. Deliberately not a `.task(id:)`
         // over the router's own state — SwiftUI cancels a view task whenever

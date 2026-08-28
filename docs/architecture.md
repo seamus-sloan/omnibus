@@ -375,7 +375,10 @@ Offline/            — Cache (read-through policies), OfflineStore (SQLite
                       pager, and the audio player: every relocate writes the
                       replica and the outbox unconditionally, this throttle
                       decides only whether it is *also* worth a network round
-                      trip right now)
+                      trip right now), DebugOffline (**the whole file is inside
+                      `#if DEBUG`**: a simulated airplane mode the
+                      agentic-exploration iOS lane flips from outside the app,
+                      so the outbox can be exercised end to end — see below)
 Reader/             — SwiftUI reader chrome, the host-drawn selection layer,
                       the passage menu, the typography sheet and the quote-card
                       composer, and ReadStatusAuto (the readers' automatic
@@ -579,10 +582,23 @@ these contracts — assert the encoded keys a handler requires, and that every
 enum variant the server can answer with maps to its own case rather than the
 catch-all. Worth adding wherever a mismatch would fail quietly.
 
+**Simulated offline.** `Offline/DebugOffline.swift` is a DEBUG-only switch that
+fails the whole `/api/*` client — and `AuthService.probe`, so nothing quietly
+reconnects — with the same `APIError.offline` a real outage produces. It is
+flipped by the `--uitest-offline` / `--uitest-online` launch arguments or an
+`omnibus://debug/offline?on=…` URL, persisted so a relaunch keeps it, and read
+back out of the app's own preferences plist by
+[`scripts/explore/ios.sh`](../scripts/explore/ios.sh). It does **not** cover the
+background download session. `scripts/ios-release-guard.sh` (`just
+ios-release-guard`) asserts it and the other `--uitest-*` hooks are absent from
+a Release build; the lane's contract is
+[`docs/qa/agentic_exploration/ios_lane.md`](qa/agentic_exploration/ios_lane.md).
+
 **Offline writes** follow [rule 08](../.claude/rules/08-offline-writes.md): the
 `OpKind` outbox in `Offline/SyncEngine.swift` carries per-user content state
 only, never configuration and never commands. `OutboxScope` in `Offline/Cache.swift`
-declares each kind's blast radius. `omnibusTests/OfflineSyncTests.swift` covers it,
+declares each kind's blast radius. `omnibusTests/OfflineSyncTests.swift` and
+`omnibusTests/DebugOfflineTests.swift` cover them,
 and `omnibusTests/ReaderSelectionTests.swift` pins the selection payload the glue
 posts plus the passage-menu placement rules. CI runs the suite via
 `ios-tests.yml` ([rule 01](../.claude/rules/01-dev-environment.md)); to run it

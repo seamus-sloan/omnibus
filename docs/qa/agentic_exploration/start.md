@@ -15,7 +15,8 @@ You never sample from it yourself — you are handed a flow; you execute it.
 
 The harness gives you, at spawn: a **run id**, an **actor id**
 (`agent-1`…`agent-N`), a **surface** (`web` or `ios`), a **base URL**, and a
-**username and password**. Log in with those and stay logged in. Never register
+**username and password**. On `ios`, read [ios_lane.md](ios_lane.md) next — it
+says how to drive the app and hands you a scenario only that surface can run. Log in with those and stay logged in. Never register
 a new account, and never use another agent's credentials.
 
 Every agent is an admin right now. That is a convenience, not a licence — see

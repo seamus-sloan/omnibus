@@ -83,6 +83,13 @@ enum AuthService {
     /// Probe a server URL before saving it, so the Connect screen can tell
     /// "wrong address" from "wrong password".
     static func probe(serverURL: String) async -> Result<String?, APIError> {
+        #if DEBUG
+        // This is the one request that deliberately bypasses `APIClient` — it
+        // is what `Connectivity` probes an unreachable server back to life
+        // with. Letting it through while the simulated-offline switch is on
+        // would flip the app online again ten seconds after every toggle.
+        if DebugOffline.isForced { return .failure(.offline) }
+        #endif
         guard let url = URL(string: serverURL + "/api/_health") else {
             return .failure(.notConfigured)
         }

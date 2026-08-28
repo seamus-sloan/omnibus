@@ -63,6 +63,10 @@ final class AppState {
             ServerURLStore.save(Self.uiTestShellServer)
             TokenStore.save("uitest")
         }
+        // Third hermetic hook: the simulated-offline switch, so a launch can
+        // pin the starting state instead of inheriting whatever the previous
+        // session left in the container. Before every read of the flag.
+        DebugOffline.applyLaunchArguments()
         #endif
         serverURL = ServerURLStore.load()
         theme = UserDefaults.standard.string(forKey: Self.themeKey)
@@ -109,6 +113,12 @@ final class AppState {
         }
         #endif
         await DownloadManager.shared.hydrate()
+        #if DEBUG
+        // After `Connectivity` exists and before anything is asked of the
+        // server: a relaunch in simulated airplane mode has to come up
+        // *showing* offline, not discover it on the first failed request.
+        DebugOffline.restore()
+        #endif
         await Connectivity.shared.refreshPendingCount()
 
         NotificationCenter.default.addObserver(
