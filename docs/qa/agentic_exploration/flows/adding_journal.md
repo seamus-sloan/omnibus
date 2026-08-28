@@ -58,20 +58,25 @@ button too, and finding the button is itself worth doing sometimes.
 | `- item`, `1. item` | Bullet and numbered lists. |
 | `- [ ] task` | A checkbox. It is meant to be **read-only** — clicking it in a saved entry must do nothing. |
 | `[text](https://example.com)` | A link. |
-| `\|\|spoiler\|\|` | Hidden until revealed. The hint sits under the composer. |
 | a single newline | A visible line break, **not** a collapsed space. A blank line starts a new paragraph. Both must survive saving exactly as you typed them. |
 
-**On iOS, only the first four rows apply.** The iOS card renders the entry
-inline-only, so bold, italic, code, strikethrough and links come out formatted
-while headings, quotes, lists, checkboxes and spoilers stay on screen as the
-literal characters you typed. That is current behaviour on that surface, not a
-defect — do not report it. Everything below is a **web** criterion.
+Spoilers are the one syntax kept out of the table. Their markers are a pair of
+pipe characters, and a pipe inside a table cell has to be written escaped — so
+the raw text you are reading here would not be the text you should type. Wrap
+the hidden words in two pipes either side, as the hint under the composer
+shows.
+
+**iOS renders inline syntax only.** Bold, italic, inline code, strikethrough,
+links and line breaks come out formatted there; headings, quotes, lists,
+checkboxes and spoilers stay on screen as the literal characters you typed.
+That is current behaviour on that surface, not a defect — do not report it.
+Everything below is a **web** criterion.
 
 Two worth deliberately trying on web, because each has been wrong before:
 
 - **Spoilers are a button, not a blur.** Tab to it and press Enter — it should
-  reveal that way, not only on a mouse click. An unpaired trailing `||` is meant
-  to stay on screen as two literal pipes.
+  reveal that way, not only on a mouse click. A trailing pair with no closing
+  pair is meant to stay on screen as two literal pipes.
 - **Line breaks are load-bearing.** Type a three-line stanza with single
   newlines and confirm it saves as three lines. Collapsing them into one
   paragraph is a real defect, not a markdown nicety.

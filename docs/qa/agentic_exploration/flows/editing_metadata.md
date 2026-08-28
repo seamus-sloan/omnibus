@@ -22,10 +22,9 @@ content.
 2. Read the current values before changing anything, and journal them.
 3. Change one or two fields. Good candidates: subtitle, series name or number,
    publisher, tags, genres, description. Make it a **plausible** value — a real
-   publisher, a genre the book could actually be — and append rather than
-   replace where a field already has content: adding `Modern Library` to an
-   empty publisher, or a `maritime` tag beside the existing ones, beats
-   overwriting what is there.
+   publisher, a genre the book could actually be. Fill a field that is empty;
+   where one already has content, add to it rather than replacing it — a
+   `maritime` tag beside the existing tags, not instead of them.
 
    Do **not** sign your edit. A title reading `Foo (ed. agent-3)` is
    library-wide and permanent — every reader sees it, on a book nobody owns —
