@@ -24,9 +24,14 @@ struct WishlistSectionTests {
         #expect(WishlistSection.sourceLabel(.detail) == "this page")
     }
 
-    @Test("names a hand-made entry")
+    @Test("names a typed ISBN rather than calling it a scan")
     func labelsManualEntry() {
-        #expect(WishlistSection.sourceLabel(.manual) == "manual entry")
+        #expect(WishlistSection.sourceLabel(.manual) == "an ISBN you entered")
+    }
+
+    @Test("names a title search, which supplied no ISBN at all")
+    func labelsATitleSearch() {
+        #expect(WishlistSection.sourceLabel(.search) == "a title search")
     }
 
     @Test("states what is tracked, when, and from where")

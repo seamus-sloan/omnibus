@@ -17,6 +17,9 @@ struct CheckInView: View {
 
     @State private var manualISBN = ""
     @State private var stage: CheckInStage = .scan
+    /// Which door reached the book the flow is holding. Set by whichever
+    /// control started the lookup, read by every screen downstream of it.
+    @State private var foundVia: FoundVia = .barcodeScan
     @State private var isResolving = false
     @State private var isWriting = false
     @State private var error: String?
@@ -108,7 +111,7 @@ struct CheckInView: View {
                     BarcodeScannerView { code in
                         guard !isResolving else { return }
                         Haptics.success()
-                        Task { await resolve(code) }
+                        Task { await resolve(code, via: .barcodeScan) }
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 300)
@@ -177,9 +180,9 @@ struct CheckInView: View {
                 .keyboardType(.numbersAndPunctuation)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
-                .onSubmit { Task { await resolve(manualISBN) } }
+                .onSubmit { Task { await resolve(manualISBN, via: .isbnEntry) } }
             Button {
-                Task { await resolve(manualISBN) }
+                Task { await resolve(manualISBN, via: .isbnEntry) }
             } label: {
                 if isResolving {
                     ProgressView()
@@ -376,8 +379,9 @@ struct CheckInView: View {
         }
     }
 
-    /// What the scan itself resolved to, shown once above the candidates so the
-    /// reader can compare them against it.
+    /// What the lookup itself resolved to, shown once above the candidates so
+    /// the reader can compare them against it. Its eyebrow names the door used
+    /// rather than asserting a scan.
     private func scannedCard(_ scanned: ExternalBookMeta) -> some View {
         HStack(alignment: .top, spacing: Spacing.md) {
             if let cover = scanned.coverURL, CheckInFlow.isExternalURL(cover) {
@@ -387,7 +391,7 @@ struct CheckInView: View {
                     .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text("You scanned")
+                Text(CheckInFlow.foundLine(foundVia))
                     .font(.ui(12, weight: .medium))
                     .foregroundStyle(palette.ink3Color)
                 Text(scanned.title)
@@ -613,12 +617,13 @@ struct CheckInView: View {
 
     // MARK: - Actions
 
-    private func resolve(_ raw: String) async {
+    private func resolve(_ raw: String, via: FoundVia) async {
         let isbn = raw.filter { $0.isNumber || $0 == "X" || $0 == "x" }
         guard isbn.count >= 10 else {
             error = "That doesn't look like an ISBN."
             return
         }
+        foundVia = via
         isResolving = true
         error = nil
         defer { isResolving = false }
@@ -642,6 +647,7 @@ struct CheckInView: View {
     private func restart() {
         withAnimation(Motion.settle) {
             stage = .scan
+            foundVia = .barcodeScan
             manualISBN = ""
             note = ""
             error = nil
@@ -681,6 +687,7 @@ struct CheckInView: View {
     /// which could miss on a book the search itself just surfaced.
     private func resolvePick(_ meta: ExternalBookMeta) async {
         guard !isResolving else { return }
+        foundVia = .titleSearch
         isResolving = true
         error = nil
         defer { isResolving = false }
@@ -750,7 +757,7 @@ struct CheckInView: View {
         do {
             let ref: BookRef = try await APIClient.shared.post(
                 "/api/scan/wishlist",
-                body: WishlistAddRequest(bookUUID: nil, meta: meta, source: .scan)
+                body: CheckInFlow.wishlistRequest(meta: meta, foundVia: foundVia)
             )
             Haptics.success()
             // The wishlist is a real shelf whose membership derives from these
