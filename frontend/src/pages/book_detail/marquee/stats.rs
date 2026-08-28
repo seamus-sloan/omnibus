@@ -110,9 +110,8 @@ fn stat_cell(k: &str, v: &str, s: &str) -> Element {
 }
 
 /// Smallest percent that yields a usable pace estimate. Below it the
-/// extrapolation multiplies elapsed time by more than nineteen, so a browse
-/// through the opening pages would confidently promise a figure it has no
-/// basis for — one hour at 1% renders "≈ 99h to go". The note is dropped
+/// extrapolation multiplies elapsed time by more than nineteen, which is a
+/// guess wearing the same clothes as a measurement. The note is dropped
 /// instead: a missing estimate reads as "not yet", a wrong one reads as fact.
 const MIN_PACE_PERCENT: i64 = 5;
 
@@ -320,7 +319,9 @@ mod tests {
         // One hour in at 1% would extrapolate to "99h to go" — a number with
         // no basis, printed with the same confidence as a real estimate.
         let i = insights(3_600, 1, 3_600, 3_600);
-        for pct in [1, 2, MIN_PACE_PERCENT - 1] {
+        // 0 included: the explicit zero guard is gone, so the threshold is
+        // the only thing between the caller and a divide by zero.
+        for pct in [0, 1, 2, MIN_PACE_PERCENT - 1] {
             assert_eq!(time_left_note(&i, &progress_at(pct)), None, "pct {pct}");
         }
     }

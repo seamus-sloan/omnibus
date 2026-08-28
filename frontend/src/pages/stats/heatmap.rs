@@ -116,10 +116,8 @@ struct HeatCell {
 /// — the same convention as `db::stats`' busiest-week bucketing.
 ///
 /// Shared with the caller's `by_day` filter so the intensity scale is
-/// normalized over exactly the days the grid draws. A fixed `anchor - 363`
-/// kept up to six days falling before the first Monday, and `max` comes from
-/// those values — so one heavy day just off the left edge flattened every
-/// visible cell against a peak the reader could not see.
+/// normalized over exactly the days the grid draws — a day outside it must not
+/// set the `max` every rendered cell is bucketed against.
 fn grid_start(anchor: i64) -> i64 {
     let monday = anchor - (anchor + 3).rem_euclid(7);
     monday - (WEEKS - 1) * 7
@@ -267,6 +265,35 @@ mod tests {
         // Every rendered cell sits at or after it.
         let cells = build_cells(sunday, &HashMap::new(), 0);
         assert_eq!(cells.first().unwrap().day, day_string(grid_start(sunday)));
+    }
+
+    #[test]
+    fn intensity_ignores_a_heavy_day_that_falls_before_the_first_cell() {
+        // A *Monday* anchor, deliberately: `grid_start` and the old fixed
+        // `anchor - 363` coincide on a Sunday, so only a non-Sunday anchor can
+        // tell the two windows apart. Here they differ by six days.
+        let anchor = day_number("2026-07-06").unwrap();
+        let start = grid_start(anchor);
+        assert_eq!(anchor - 363, start - 6, "the two windows must differ here");
+
+        // One modest day inside the grid, one huge day in the six-day gap the
+        // grid never draws.
+        let by_day = HashMap::from([(start, 100_i64), (start - 3, 10_000_i64)]);
+        let drawn: HashMap<i64, i64> = by_day
+            .iter()
+            .filter(|(n, _)| **n >= start)
+            .map(|(n, v)| (*n, *v))
+            .collect();
+        let max = drawn.values().copied().max().unwrap_or(0);
+
+        // Normalized over the drawn days, the visible day is the peak. Against
+        // the off-grid day it would bucket to 1 — the whole year flattened
+        // against a cell the reader cannot see.
+        let cells = build_cells(anchor, &drawn, max);
+        let first = cells.first().unwrap();
+        assert_eq!(first.day, day_string(start));
+        assert_eq!(first.level, 4);
+        assert_eq!(intensity(100, 10_000), 1, "the bug this guards against");
     }
 
     #[test]

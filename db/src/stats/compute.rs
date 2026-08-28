@@ -1,16 +1,16 @@
 //! SQL-heavy aggregation body for [`super::user_stats`]: `compute` runs one
-//! query per [`StatsSummary`] field and assembles the result. Split out of
-//! `stats/mod.rs` (the cache/error/re-export scaffolding) purely to keep
-//! each file under the house line-count cap — no behavior differs from the
-//! single-file version.
+//! query per [`StatsSummary`] field and assembles the result. Sibling modules
+//! hold the rollups that grew their own sub-topic — `genre` for the donut,
+//! `pages` for the page estimate — keeping each file under the house
+//! line-count cap.
 
 use omnibus_shared::{
-    DayActivity, FinishedBook, GenreShare, MonthCount, PeriodComparison, RankedEntity, StatsRange,
+    DayActivity, FinishedBook, MonthCount, PeriodComparison, RankedEntity, StatsRange,
     StatsSummary, TrendPoint,
 };
 use sqlx::{Row, SqlitePool};
 
-use super::{pages, sessionize, StatsError};
+use super::{genre, pages, sessionize, StatsError};
 
 /// How many rows the top-authors / top-tags rollups return.
 const TOP_N: i64 = 8;
@@ -23,7 +23,7 @@ pub(super) const FINISHED_BOOKS_LIMIT: i64 = 100;
 /// The book-scoped session union reused by the top-N rollups: one
 /// `(book_uuid, secs)` row per reading and listening session in the window.
 /// Bind order is `user_id, start, user_id, start`.
-const SESSION_BOOK_SECS: &str = "\
+pub(super) const SESSION_BOOK_SECS: &str = "\
     SELECT book_uuid, seconds_read AS secs FROM reading_sessions \
         WHERE user_id = ? AND started_at >= ? \
     UNION ALL \
@@ -57,13 +57,9 @@ pub(super) const FINISHED_EVENTS: &str = "\
 /// the liveness filter **every** completion metric shares. Same
 /// `(book_uuid, finished_at)` shape, same two binds.
 ///
-/// A function rather than four hand-written `JOIN books` clauses because the
-/// metrics disagreed when it was four: the headline count, the rail and the
-/// pages estimate joined `books` while the trailing-12 chart and the
-/// vs-previous delta did not, so a single completion on a merged-away book
-/// made the Finished tile and the chart directly above it report different
-/// numbers for the same month. Deriving the filter from one place means a
-/// metric that opts out has to do so visibly.
+/// Derived once rather than spelled out per query: several of these metrics
+/// render on the same screen, so a metric that opts out of the filter has to
+/// do so visibly.
 fn live_finished_events() -> String {
     format!(
         "SELECT f.book_uuid AS book_uuid, f.finished_at AS finished_at \
@@ -76,9 +72,7 @@ fn live_finished_events() -> String {
 /// liveness rule [`live_finished_events`] applies to completions, for the
 /// star-rating metrics. Bind order is `user_id`.
 ///
-/// Without it the average rating is computed over rows the UI cannot show:
-/// a rating stranded on a merged-away book renders nowhere on the book page
-/// and still moves the mean on the stats page.
+/// A rating the book page cannot render must not move the mean.
 const LIVE_RATINGS: &str = "\
     SELECT r.user_id AS user_id, r.half_stars AS half_stars, r.updated_at AS updated_at \
     FROM user_ratings r \
@@ -110,8 +104,8 @@ pub(super) async fn compute(
     let (busiest_week_start, busiest_week_seconds) = busiest_week(pool, user_id, start).await?;
     let top_authors = top_authors(pool, user_id, start).await?;
     let top_tags = top_tags(pool, user_id, start).await?;
-    let genre_share = genre_share(pool, user_id, start).await?;
-    let genre_tagged_books = genre_tagged_books(pool, user_id, start).await?;
+    let genre_share = genre::genre_share(pool, user_id, start).await?;
+    let genre_tagged_books = genre::genre_tagged_books(pool, user_id, start).await?;
     let books_active = books_active(pool, user_id, start).await?;
     let as_of_day = as_of_day(pool).await?;
     let finished_books = finished_books(pool, user_id, start).await?;
@@ -387,97 +381,6 @@ async fn ranked(
         .collect())
 }
 
-/// Genre share by distinct book count: for each genre, how many distinct
-/// books carrying it had session activity in the window. Count-based (not
-/// seconds) so a multi-genre book counts once per genre but never twice per
-/// genre.
-///
-/// Returns **every** genre, not a top-N. The donut renders four slices and
-/// folds the rest into "Other", and it can only size that fold honestly if it
-/// is given the whole tail — a `LIMIT 8` here made "Other" mean "ranks five
-/// through eight" while the percentages still summed to 100%, so a library
-/// with a dozen genres understated it with no indication anything was
-/// dropped. Genres are a user-curated vocabulary (`0066_genres.sql`), so the
-/// row count is bounded by what a reader has actually assigned.
-///
-/// Reads the user-assigned genres, which live only in the
-/// `metadata_overrides` JSON blob (the table itself predates them, from
-/// `0007`; `0066_genres.sql` adds the vocabulary table this joins for the
-/// canonical spelling). This deliberately does *not* fall back to a book's
-/// tags: the donut is labelled "What you read", and a `<dc:subject>` list is
-/// whatever the publisher's OPF happened to carry, not a genre. A library
-/// with no genres assigned yet renders an empty donut, which is the honest
-/// answer.
-pub(super) async fn genre_share(
-    pool: &SqlitePool,
-    user_id: i64,
-    start: i64,
-) -> Result<Vec<GenreShare>, StatsError> {
-    // Collapse the per-session union to distinct active books *before* the
-    // genre join, so the intermediate is bounded by book count, not session
-    // count — keeps the join small on a 10k-event library.
-    //
-    // Joining `genres` rather than grouping `je.value` folds case variants
-    // into the one canonical row, exactly as `get_genre_cloud` does — a
-    // donut that split "sci-fi" from "Sci-Fi" would double-count a slice.
-    let sql = format!(
-        "SELECT g.name AS name, COUNT(DISTINCT b.uuid) AS books
-             FROM (SELECT DISTINCT book_uuid FROM ({SESSION_BOOK_SECS})) x
-             JOIN books b ON b.uuid = x.book_uuid
-             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-             JOIN json_each(mo.overrides, '$.genres') je
-             JOIN genres g ON g.name = je.value COLLATE NOCASE
-            WHERE json_type(mo.overrides, '$.genres') IS NOT NULL
-         GROUP BY g.id ORDER BY books DESC, g.name ASC"
-    );
-    let rows = sqlx::query(&sql)
-        .bind(user_id)
-        .bind(start)
-        .bind(user_id)
-        .bind(start)
-        .fetch_all(pool)
-        .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| GenreShare {
-            name: r.get("name"),
-            books: r.get("books"),
-        })
-        .collect())
-}
-
-/// Distinct books with a genre *and* session activity in the window — the
-/// population the donut's slices are drawn from, and so the number its center
-/// reports.
-///
-/// Not [`books_active`]: a book with no genre contributes to that count but to
-/// no slice, so using it made the ring claim a total it did not describe — "12
-/// books" around a ring covering four. Counted distinctly, so a book carrying
-/// three genres still counts once here even though it appears in three slices.
-pub(super) async fn genre_tagged_books(
-    pool: &SqlitePool,
-    user_id: i64,
-    start: i64,
-) -> Result<i64, StatsError> {
-    let sql = format!(
-        "SELECT COUNT(DISTINCT b.uuid)
-             FROM (SELECT DISTINCT book_uuid FROM ({SESSION_BOOK_SECS})) x
-             JOIN books b ON b.uuid = x.book_uuid
-             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-             JOIN json_each(mo.overrides, '$.genres') je
-             JOIN genres g ON g.name = je.value COLLATE NOCASE
-            WHERE json_type(mo.overrides, '$.genres') IS NOT NULL"
-    );
-    Ok(sqlx::query_scalar(&sql)
-        .bind(user_id)
-        .bind(start)
-        .bind(user_id)
-        .bind(start)
-        .fetch_one(pool)
-        .await?)
-}
-
 /// Distinct books with any session activity in the window.
 pub(super) async fn books_active(
     pool: &SqlitePool,
@@ -584,17 +487,10 @@ pub(super) async fn finished_books(
 /// of the preceding period. `None` for [`StatsRange::AllTime`] — there is no
 /// window before "all of it".
 ///
-/// The current window runs from its period start to *now*, so on the 3rd of the
-/// month it covers three days. Measuring it against the whole of the previous
-/// month compared three days against thirty-one and rendered a red ▼ on the
-/// drill-in for every reader in the first week of every month; the Year range
-/// did the same thing to the whole of January. Taking the same offset into the
-/// previous period instead makes the two sides commensurable — month-to-date
-/// against the same days last month.
-///
-/// `end` is clamped to the current period's start so a long month cannot run
-/// the baseline off the end of a shorter one: 30 days elapsed in March maps
-/// onto a February that only has 28, and the baseline is that whole February.
+/// The current window is period-to-date, so the baseline has to be the same
+/// offset into the previous period for the two to be commensurable. `end` is
+/// clamped to the current period's start, since the elapsed offset can exceed
+/// a shorter previous period (30 days into March against a 28-day February).
 pub(super) async fn prev_window_bounds(
     pool: &SqlitePool,
     range: StatsRange,
@@ -618,13 +514,27 @@ pub(super) async fn prev_window_bounds(
     ))
     .fetch_one(pool)
     .await?;
-    let prev_start: i64 = row.get("prev_start");
-    let cur_start: i64 = row.get("cur_start");
-    let now: i64 = row.get("now_secs");
+    Ok(Some(prev_window_from(
+        row.get("prev_start"),
+        row.get("cur_start"),
+        row.get("now_secs"),
+    )))
+}
 
+/// The bounds arithmetic of [`prev_window_bounds`], split from its clock so it
+/// can be tested on fixed dates — reading SQLite's `now` makes the clamp
+/// reachable on only a handful of days a year.
+///
+/// Yields `[prev_start, prev_start + elapsed)`, clamped to `cur_start` so the
+/// baseline never runs past the period it belongs to. `elapsed` is zero for the
+/// first second of a period, which yields an empty baseline — correct, since
+/// the current window is equally empty then.
+pub(super) fn prev_window_from(prev_start: i64, cur_start: i64, now: i64) -> (i64, i64) {
     let elapsed = now.saturating_sub(cur_start).max(0);
-    let end = prev_start.saturating_add(elapsed).min(cur_start);
-    Ok(Some((prev_start, end)))
+    (
+        prev_start,
+        prev_start.saturating_add(elapsed).min(cur_start),
+    )
 }
 
 /// The window immediately preceding `range`'s current one — feeds the drill-in's

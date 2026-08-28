@@ -23,42 +23,65 @@ SELECT mu.uuid AS orphan_uuid, b.uuid AS live_uuid
  WHERE mu.uuid <> b.uuid
    AND NOT EXISTS (SELECT 1 FROM books o WHERE o.uuid = mu.uuid);
 
--- `book_read_status` and `user_ratings` are UNIQUE (user_id, book_uuid), so a
--- reader who rated (or finished) both sides of a merge has two rows that the
--- retarget would collide on. Resolve latest-wins, ties to the surviving book —
--- the same rule `dedupe_latest_wins` applies at merge time.
+-- `book_read_status` and `user_ratings` are UNIQUE (user_id, book_uuid), so
+-- every row that will land on the same surviving book for the same reader has
+-- to be resolved down to one before the retarget runs.
 --
--- Two passes, in this order: drop the orphan rows the live row already beats,
--- then drop the live rows whose orphan counterpart outlived that first pass.
-DELETE FROM book_read_status
- WHERE book_uuid IN (SELECT orphan_uuid FROM merge_orphan_map)
-   AND EXISTS (SELECT 1 FROM book_read_status live
-                 JOIN merge_orphan_map m ON m.live_uuid = live.book_uuid
-                WHERE m.orphan_uuid = book_read_status.book_uuid
-                  AND live.user_id = book_read_status.user_id
-                  AND live.updated_at >= book_read_status.updated_at);
+-- Note the plural: a chain of merges (A into B, then B into C) leaves *several*
+-- orphan uuids pointing at one live book, so this is not merely orphan-vs-live.
+-- A reader who rated two books that were later merged into the same third one
+-- has two orphan rows plus possibly a live one, and repointing them all would
+-- violate the UNIQUE constraint and abort the upgrade. Resolving pairwise is
+-- what the runtime `dedupe_latest_wins` can afford to do — it only ever moves
+-- one source onto one target — and is not enough here.
+--
+-- So: resolve each candidate row to the uuid it will end up on, then delete
+-- every row that has a strictly better sibling in that final group. Latest
+-- `updated_at` wins; ties go to the row already on the surviving book, then to
+-- the lowest id, so the outcome is deterministic and exactly one row survives
+-- per (user, surviving book).
+CREATE TEMP TABLE merge_orphan_resolved AS
+SELECT 'book_read_status' AS src, r.id AS id, r.user_id AS user_id,
+       r.updated_at AS updated_at,
+       COALESCE(m.live_uuid, r.book_uuid) AS target_uuid,
+       (m.live_uuid IS NULL) AS on_live
+  FROM book_read_status r
+  LEFT JOIN merge_orphan_map m ON m.orphan_uuid = r.book_uuid
+ WHERE r.book_uuid IN (SELECT orphan_uuid FROM merge_orphan_map)
+    OR r.book_uuid IN (SELECT live_uuid FROM merge_orphan_map)
+UNION ALL
+SELECT 'user_ratings', r.id, r.user_id, r.updated_at,
+       COALESCE(m.live_uuid, r.book_uuid), (m.live_uuid IS NULL)
+  FROM user_ratings r
+  LEFT JOIN merge_orphan_map m ON m.orphan_uuid = r.book_uuid
+ WHERE r.book_uuid IN (SELECT orphan_uuid FROM merge_orphan_map)
+    OR r.book_uuid IN (SELECT live_uuid FROM merge_orphan_map);
 
 DELETE FROM book_read_status
- WHERE book_uuid IN (SELECT live_uuid FROM merge_orphan_map)
-   AND EXISTS (SELECT 1 FROM book_read_status orph
-                 JOIN merge_orphan_map m ON m.orphan_uuid = orph.book_uuid
-                WHERE m.live_uuid = book_read_status.book_uuid
-                  AND orph.user_id = book_read_status.user_id);
+ WHERE id IN (
+   SELECT x.id FROM merge_orphan_resolved x
+    WHERE x.src = 'book_read_status'
+      AND EXISTS (SELECT 1 FROM merge_orphan_resolved o
+                   WHERE o.src = x.src AND o.user_id = x.user_id
+                     AND o.target_uuid = x.target_uuid AND o.id <> x.id
+                     AND (o.updated_at > x.updated_at
+                       OR (o.updated_at = x.updated_at AND o.on_live > x.on_live)
+                       OR (o.updated_at = x.updated_at AND o.on_live = x.on_live
+                           AND o.id < x.id))));
 
 DELETE FROM user_ratings
- WHERE book_uuid IN (SELECT orphan_uuid FROM merge_orphan_map)
-   AND EXISTS (SELECT 1 FROM user_ratings live
-                 JOIN merge_orphan_map m ON m.live_uuid = live.book_uuid
-                WHERE m.orphan_uuid = user_ratings.book_uuid
-                  AND live.user_id = user_ratings.user_id
-                  AND live.updated_at >= user_ratings.updated_at);
+ WHERE id IN (
+   SELECT x.id FROM merge_orphan_resolved x
+    WHERE x.src = 'user_ratings'
+      AND EXISTS (SELECT 1 FROM merge_orphan_resolved o
+                   WHERE o.src = x.src AND o.user_id = x.user_id
+                     AND o.target_uuid = x.target_uuid AND o.id <> x.id
+                     AND (o.updated_at > x.updated_at
+                       OR (o.updated_at = x.updated_at AND o.on_live > x.on_live)
+                       OR (o.updated_at = x.updated_at AND o.on_live = x.on_live
+                           AND o.id < x.id))));
 
-DELETE FROM user_ratings
- WHERE book_uuid IN (SELECT live_uuid FROM merge_orphan_map)
-   AND EXISTS (SELECT 1 FROM user_ratings orph
-                 JOIN merge_orphan_map m ON m.orphan_uuid = orph.book_uuid
-                WHERE m.live_uuid = user_ratings.book_uuid
-                  AND orph.user_id = user_ratings.user_id);
+DROP TABLE merge_orphan_resolved;
 
 -- `journal_entries` has no per-book uniqueness (a reader keeps many entries on
 -- one book), so every stranded row moves without a collision pass.

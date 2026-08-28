@@ -73,11 +73,10 @@ fn donut_gradient(percents: &[i64]) -> String {
 /// "What you read" — the genre-share donut with center book count and a
 /// `label · %` legend. Empty window → a friendly note instead of a ring.
 ///
-/// The center reports `genre_tagged_books`, the population the slices are
-/// drawn from, rather than `books_active`: a book with no genre reaches the
-/// latter but no slice, so using it put "12 books" around a ring that
-/// described four. Untagged reading is disclosed under the legend instead,
-/// where it can't be read as part of the ring.
+/// The center reports `genre_tagged_books` — the population the slices are
+/// drawn from — rather than `books_active`, which counts books the ring does
+/// not describe. The difference is disclosed under the legend instead, where
+/// it can't be read as a slice.
 #[component]
 pub(super) fn GenreDonut(summary: StatsSummary) -> Element {
     let folded = fold_shares(&summary.genre_share);
