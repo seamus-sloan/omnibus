@@ -309,7 +309,7 @@ fn um_now_reading_row(point: ResumePoint) -> Element {
         "Continue reading"
     };
     let uuid = point.record.book_uuid.clone();
-    let to = crate::routes::resume_route(&point);
+    let to = crate::routes::link_target(crate::routes::resume_route(&point));
     let detail = Route::BookDetail { uuid };
     let action_label = format!("{action} {title}");
 
@@ -361,7 +361,7 @@ fn UmAccountRows(open: Signal<bool>, is_admin: bool) -> Element {
     rsx! {
         div { class: "um-rows",
             Link {
-                to: Route::Settings { section: None },
+                to: crate::routes::link_target(Route::Settings { section: None }),
                 class: "um-row",
                 onclick: move |_| open.set(false),
                 span { class: "um-row-icon", "⚙" }
