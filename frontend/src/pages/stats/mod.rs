@@ -23,6 +23,24 @@ use library::LibrarySizeCard;
 use monthly::MonthlyChart;
 use tiles::HeadlineTiles;
 
+/// Group a non-negative integer's digits in threes with `,` separators.
+/// Negative inputs (never produced by `db::stats`) fall back to a plain
+/// `to_string` rather than mangling the sign.
+fn group_thousands(n: i64) -> String {
+    if n < 0 {
+        return n.to_string();
+    }
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// The italicized period word in the page title.
 fn period_word(range: StatsRange) -> &'static str {
     match range {
@@ -398,5 +416,15 @@ mod tests {
             freshness_note_text(),
             format!("Stats are accurate to the last ~{STATS_TTL_SECS} seconds.")
         );
+    }
+
+    #[test]
+    fn group_thousands_handles_short_and_negative_inputs() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(9), "9");
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(1000), "1,000");
+        assert_eq!(group_thousands(1_234_567), "1,234,567");
+        assert_eq!(group_thousands(-42), "-42");
     }
 }

@@ -448,7 +448,10 @@ struct StatsView: View {
     /// "812". Nobody needs the last four digits of a word count.
     static func compactCount(_ n: Int64) -> String {
         let v = Double(n)
-        for (limit, div, suffix) in [(1e9, 1e9, "B"), (1e6, 1e6, "M"), (1e4, 1e3, "K")] {
+        // Each tier opens at 999.5 of the one below rather than at a clean
+        // power of ten: 999_999 rounds to 1000 at "K", so it has to render as
+        // "1.0M". Mirrors `compact` in frontend/src/pages/stats/library.rs.
+        for (limit, div, suffix) in [(999.5e6, 1e9, "B"), (999.5e3, 1e6, "M"), (1e4, 1e3, "K")] {
             if v >= limit {
                 let scaled = v / div
                 return String(format: scaled < 100 ? "%.1f\(suffix)" : "%.0f\(suffix)", scaled)
@@ -462,8 +465,12 @@ struct StatsView: View {
     /// say; 2,256 hours is the same fact nobody can picture.
     static func audioValue(_ seconds: Int64) -> (String, String) {
         let hours = Double(seconds) / 3600
-        if hours < 168 {
-            return (String(format: "%.0f", hours), hours < 2 ? "hour" : "hours")
+        // Round first, then pick the unit off the rounded figure: branching on
+        // the raw hours renders 1h40m as "2 hour", and promotes to days only
+        // after the hours reading has already rounded to 168.
+        let wholeHours = Int64(hours.rounded())
+        if wholeHours < 168 {
+            return ("\(wholeHours)", wholeHours == 1 ? "hour" : "hours")
         }
         return (String(format: "%.0f", hours / 24), "days")
     }

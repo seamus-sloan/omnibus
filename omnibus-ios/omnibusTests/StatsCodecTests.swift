@@ -150,8 +150,14 @@ struct LibrarySizeTests {
         #expect(figures.count == 1)
         #expect(figures[0].value == "412M")
         #expect(figures[0].unit == "words")
-        #expect(figures[0].coverage.contains("1,204"))
-        #expect(figures[0].coverage.contains("1,510"))
+        // Built with the same formatter the label uses: the grouping separator
+        // is locale-dependent, and pinning a comma would fail on a simulator
+        // set to anything but a US locale. What this still catches — and is
+        // here for — is the numerator and denominator being swapped.
+        let grouped = { (n: Int64) in
+            NumberFormatter.localizedString(from: NSNumber(value: n), number: .decimal)
+        }
+        #expect(figures[0].coverage == "across \(grouped(1204)) of \(grouped(1510)) books")
     }
 
     @Test("counts compact and audio picks the unit that fits it")
@@ -159,8 +165,17 @@ struct LibrarySizeTests {
         #expect(StatsView.compactCount(812) == "812")
         #expect(StatsView.compactCount(94_200) == "94.2K")
         #expect(StatsView.compactCount(412_000_000) == "412M")
+        // Promoted rather than rounded to "1000K" / "1000M" in the tier below.
+        #expect(StatsView.compactCount(999_999) == "1.0M")
+        #expect(StatsView.compactCount(999_999_999) == "1.0B")
+        #expect(StatsView.compactCount(999_499) == "999K")
         #expect(StatsView.audioValue(3600) == ("1", "hour"))
         #expect(StatsView.audioValue(12 * 3600) == ("12", "hours"))
         #expect(StatsView.audioValue(94 * 24 * 3600) == ("94", "days"))
+        // The unit follows the rounded figure, not the fraction behind it:
+        // 1h40m is "2 hours", never "2 hour".
+        #expect(StatsView.audioValue(6000) == ("2", "hours"))
+        #expect(StatsView.audioValue(3500) == ("1", "hour"))
+        #expect(StatsView.audioValue(167 * 3600 + 2400) == ("7", "days"))
     }
 }

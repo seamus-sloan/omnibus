@@ -207,18 +207,11 @@ pub struct LengthBucket {
 
 /// A library-scale total and the coverage behind it.
 ///
-/// The pair travels together on purpose. Every input to these totals is
-/// nullable-or-zero in a way that means *not measured yet* — `books.word_count`
-/// is NULL for an audio-only book or one indexed before migration `0049`, and
-/// `book_file_parts.duration_seconds` defaults to 0 until the indexer probes
-/// it — and a bare `SUM` reads that as zero, turning a partly-backfilled
-/// library into a confidently-wrong smaller number. Publishing `books`
-/// alongside `total` makes the gap visible instead: "412M words across 1,204
-/// of 1,510 books" is a fact; "412M words" on its own is a guess wearing a
-/// number.
-///
-/// `books == 0` means nothing has been measured at all, which the surfaces
-/// render as an empty state rather than a zero.
+/// `total` and `books` travel as a pair: every input is nullable-or-zero when
+/// unmeasured, so a total published without its denominator reports a
+/// partly-backfilled library as a confidently smaller one. `books == 0` means
+/// nothing has been measured at all, which the surfaces render as an empty
+/// state rather than a zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct MeasuredTotal {
     pub total: i64,

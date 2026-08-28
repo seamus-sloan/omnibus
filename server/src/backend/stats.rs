@@ -1,11 +1,8 @@
-//! Reading-stats REST handlers for the mobile client — `GET /api/stats` and
-//! `GET /api/library-size`.
-//!
-//! The first serves the same `db::stats` aggregate as the web
-//! `/api/rpc/stats` server function, windowed by an optional `?range=` query
-//! param (snake_case `StatsRange`, defaulting to the current month). The
-//! second is the library-scale total behind it, unwindowed and the same for
-//! every reader.
+//! Reading-stats REST handlers for the mobile client. `GET /api/stats` serves
+//! the same `db::stats` aggregate as the web `/api/rpc/stats` server function,
+//! windowed by an optional `?range=` param (snake_case `StatsRange`, default
+//! month). `GET /api/library-size` is the library-scale total behind it,
+//! unwindowed and the same for every reader.
 
 use axum::{
     extract::{Query, State},

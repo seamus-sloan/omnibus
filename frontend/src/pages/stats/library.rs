@@ -1,14 +1,13 @@
-//! Library-size card: how big the collection is in words, pages, and hours of
-//! audio. Lives in the all-time section — it describes the library, not the
-//! reader, and never moves with the period switcher.
-//!
-//! Every figure renders with the coverage behind it. That is the whole point
-//! of the card: each input has a state meaning *not measured yet*, so a bare
-//! total would report a partly-backfilled library as a smaller one with total
-//! confidence.
+//! Library-size card for the stats page's all-time section: how big the
+//! collection is in words, pages, and hours of audio. Describes the library
+//! rather than the reader, so it never moves with the period switcher. Every
+//! figure renders the coverage behind it — a bare total would report a
+//! partly-backfilled library as a smaller one with total confidence.
 
 use dioxus::prelude::*;
 use omnibus_shared::{LibrarySize, MeasuredTotal};
+
+use super::group_thousands;
 
 /// One rendered figure: the total, its unit, and the coverage line beneath.
 struct Figure {
@@ -24,7 +23,9 @@ fn compact(n: i64) -> String {
     // Totals sit far below f64's 2^52 exact-integer range.
     #[allow(clippy::cast_precision_loss)]
     let v = n as f64;
-    for (limit, div, suffix) in [(1e9, 1e9, "B"), (1e6, 1e6, "M"), (1e4, 1e3, "K")] {
+    // Each tier opens at 999.5 of the one below rather than at a clean power
+    // of ten: 999_999 rounds to 1000 at "K", so it has to render as "1.0M".
+    for (limit, div, suffix) in [(999.5e6, 1e9, "B"), (999.5e3, 1e6, "M"), (1e4, 1e3, "K")] {
         if v >= limit {
             let scaled = v / div;
             let digits = usize::from(scaled < 100.0);
@@ -40,14 +41,18 @@ fn audio_value(seconds: i64) -> (String, &'static str) {
     // Well inside f64's exact-integer range; display only.
     #[allow(clippy::cast_precision_loss)]
     let hours = seconds as f64 / 3600.0;
-    if hours < 168.0 {
+    // Round first, then pick the unit off the rounded figure: branching on the
+    // raw hours renders 1h40m as "2 hour", and promotes to days only after the
+    // hours reading has already rounded to 168.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let whole_hours = hours.round() as i64;
+    if whole_hours < 168 {
         return (
-            format!("{hours:.0}"),
-            if hours < 2.0 { "hour" } else { "hours" },
+            whole_hours.to_string(),
+            if whole_hours == 1 { "hour" } else { "hours" },
         );
     }
-    let days = hours / 24.0;
-    (format!("{days:.0}"), "days")
+    (format!("{:.0}", hours / 24.0), "days")
 }
 
 /// "across 1,204 of 1,510 books" — the denominator, always. A figure without
@@ -58,22 +63,6 @@ fn coverage(measured: &MeasuredTotal, library_books: i64) -> String {
         group_thousands(measured.books),
         group_thousands(library_books)
     )
-}
-
-/// Group a non-negative integer's digits in threes with `,` separators.
-fn group_thousands(n: i64) -> String {
-    if n < 0 {
-        return n.to_string();
-    }
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 /// The three figures the library supports, skipping any nothing has been

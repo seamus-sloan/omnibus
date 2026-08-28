@@ -8,6 +8,7 @@
 use dioxus::prelude::*;
 
 use super::drill_in::Metric;
+use super::group_thousands;
 
 /// Value + unit for a duration tile: minutes under an hour, one-decimal
 /// hours under ten, whole hours beyond ("42" m · "3.5" h · "142" h).
@@ -44,24 +45,6 @@ fn pages_value(pages: Option<i64>) -> String {
         Some(n) => group_thousands(n),
         None => "\u{2014}".to_string(),
     }
-}
-
-/// Group a non-negative integer's digits in threes with `,` separators.
-/// Negative inputs (never produced by `db::stats::pages`) fall back to a
-/// plain `to_string` rather than mangling the sign.
-fn group_thousands(n: i64) -> String {
-    if n < 0 {
-        return n.to_string();
-    }
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 /// The four-tile headline row. Finished carries the accent tint; Pages is a
@@ -220,14 +203,5 @@ mod tests {
         assert_eq!(pages_value(Some(9214)), "9,214");
         assert_eq!(pages_value(Some(1_234_567)), "1,234,567");
         assert_eq!(pages_value(None), "\u{2014}");
-    }
-
-    #[test]
-    fn group_thousands_handles_short_and_negative_inputs() {
-        assert_eq!(group_thousands(0), "0");
-        assert_eq!(group_thousands(9), "9");
-        assert_eq!(group_thousands(999), "999");
-        assert_eq!(group_thousands(1000), "1,000");
-        assert_eq!(group_thousands(-42), "-42");
     }
 }

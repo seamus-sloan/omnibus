@@ -435,7 +435,16 @@ test("the library-size card states each total with its coverage", async ({
   // It sits in the all-time section, so it must not move with the switcher.
   const before = await card.textContent();
   const menu = await openPeriodMenu(page);
-  await menu.getByRole("button", { name: "Week" }).click();
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/stats",
+      expectedBody: { range: "week" },
+      expectedStatus: 200,
+    },
+    async () => menu.getByRole("button", { name: "Week" }).click(),
+  );
   await expect(
     page.getByRole("heading", { name: "Your reading week" }),
   ).toBeVisible();

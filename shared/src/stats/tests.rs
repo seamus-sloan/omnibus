@@ -226,3 +226,71 @@ fn range_labels_render_all_time_as_lifetime() {
     let labels: Vec<&str> = StatsRange::ALL.iter().map(|r| r.label()).collect();
     assert_eq!(labels, ["Week", "Month", "Year", "Lifetime"]);
 }
+
+#[test]
+fn measured_total_is_empty_only_without_a_book_behind_it() {
+    // `books`, not `total`, is the emptiness test: a library whose only
+    // measured audiobook is twenty minutes long has a real figure to show.
+    let measured_but_short = MeasuredTotal { total: 0, books: 1 };
+    let total_without_a_denominator = MeasuredTotal {
+        total: 412,
+        books: 0,
+    };
+
+    assert!(MeasuredTotal::default().is_empty());
+    assert!(!measured_but_short.is_empty());
+    assert!(total_without_a_denominator.is_empty());
+}
+
+#[test]
+fn library_size_is_empty_only_when_nothing_at_all_is_measured() {
+    let words_only = LibrarySize {
+        books: 3,
+        words: MeasuredTotal {
+            total: 275,
+            books: 1,
+        },
+        ..Default::default()
+    };
+
+    assert!(LibrarySize::default().is_empty());
+    assert!(!words_only.is_empty());
+}
+
+#[test]
+fn library_size_measurements_default_when_absent_from_the_wire() {
+    // Same older-server contract the iOS decoder relies on: a server that
+    // predates these fields still yields a decodable, empty LibrarySize.
+    let size: LibrarySize = serde_json::from_str(r#"{"books":1510}"#).unwrap();
+    assert_eq!(size.books, 1510);
+    assert!(size.words.is_empty());
+    assert!(size.pages.is_empty());
+    assert!(size.listening_seconds.is_empty());
+    assert!(size.is_empty());
+}
+
+#[test]
+fn library_size_round_trips_its_totals_with_their_coverage() {
+    let size = LibrarySize {
+        books: 1510,
+        words: MeasuredTotal {
+            total: 412_000_000,
+            books: 1204,
+        },
+        pages: MeasuredTotal {
+            total: 1_600_000,
+            books: 1204,
+        },
+        listening_seconds: MeasuredTotal {
+            total: 8_121_600,
+            books: 96,
+        },
+    };
+
+    let wire = serde_json::to_string(&size).unwrap();
+
+    // The denominator has to survive the wire — a total that arrived without
+    // one is the confidently-wrong number this type exists to prevent.
+    assert!(wire.contains(r#""listening_seconds":{"total":8121600,"books":96}"#));
+    assert_eq!(serde_json::from_str::<LibrarySize>(&wire).unwrap(), size);
+}

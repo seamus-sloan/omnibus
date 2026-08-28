@@ -20,12 +20,35 @@ fn compact_scales_into_k_m_and_b_and_leaves_small_counts_alone() {
 }
 
 #[test]
+fn compact_promotes_a_value_that_rounds_up_into_the_next_unit() {
+    // The tier below would round these to "1000K" / "1000M", which reads as a
+    // bug rather than a number.
+    assert_eq!(compact(999_999), "1.0M");
+    assert_eq!(compact(999_999_999), "1.0B");
+    // Just under the promotion point still belongs to the lower tier.
+    assert_eq!(compact(999_499), "999K");
+    assert_eq!(compact(999_499_999), "999M");
+}
+
+#[test]
 fn audio_value_switches_from_hours_to_days_past_a_week() {
     assert_eq!(audio_value(3600), ("1".into(), "hour"));
     assert_eq!(audio_value(12 * 3600), ("12".into(), "hours"));
     // 94 days is the sentence this card exists to let a reader say; 2,256
     // hours is the same fact nobody can picture.
     assert_eq!(audio_value(94 * 24 * 3600), ("94".into(), "days"));
+}
+
+#[test]
+fn audio_value_pluralizes_off_the_rounded_hours_not_the_raw_ones() {
+    // 1h40m rounds to 2, so the unit has to follow the figure the reader sees
+    // rather than the fraction behind it.
+    assert_eq!(audio_value(6000), ("2".into(), "hours"));
+    // Still one hour once rounded — the singular is correct here.
+    assert_eq!(audio_value(3500), ("1".into(), "hour"));
+    // The days promotion follows the rounded hours too, so nothing renders
+    // "168 hours" on its way past a week.
+    assert_eq!(audio_value(167 * 3600 + 2400), ("7".into(), "days"));
 }
 
 #[test]
