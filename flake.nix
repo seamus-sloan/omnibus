@@ -129,6 +129,14 @@
         # an extra bootstrap step — they're ~10 MB each and harmless.
         slimPackages = [
           pkgs-unstable.git
+          # The agentic-exploration scripts (scripts/explore/) shell out to all
+          # three: curl for the instance's HTTP API, python3 for JSON handling,
+          # and lsof for driver.sh's port ownership. macOS supplies them
+          # system-wide, which is why their absence here went unnoticed — a
+          # clean Linux host or CI runner has no such luck.
+          pkgs.curl
+          pkgs.python3
+          pkgs.lsof
           pkgs.sqlite
           pkgs.pkg-config
           pkgs.openssl
