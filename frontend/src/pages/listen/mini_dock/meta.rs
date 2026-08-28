@@ -72,11 +72,7 @@ pub(super) fn time_left_text(elapsed: f64, duration: f64) -> Option<String> {
 /// `elapsed / total` clock, and the time left. The single-row bar has no
 /// separate time track, so the clock lives here. Every figure is book time,
 /// the one clock the whole player reads in (#2246).
-pub(super) fn dock_sub_text(
-    chapter_sub: Option<String>,
-    elapsed: f64,
-    duration: f64,
-) -> String {
+pub(super) fn dock_sub_text(chapter_sub: Option<String>, elapsed: f64, duration: f64) -> String {
     let time = format!("{} / {}", format_hms(elapsed), format_hms(duration));
     let mut sub = match chapter_sub {
         Some(chapter) => format!("{chapter} \u{00b7} {time}"),
