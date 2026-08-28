@@ -18,6 +18,21 @@ enum CheckInStage: Equatable {
     case success(CheckInSuccess)
 }
 
+/// Which of the check-in flow's three front doors reached the book on screen.
+///
+/// They are not interchangeable to a reader, so nothing downstream may assume
+/// a scan: a title search's ISBN came from the *provider*, and a typed one was
+/// entered rather than read off a cover (#2247). Carried into the copy above
+/// the resolved book and into the provenance a wishlist entry records.
+enum FoundVia: Equatable, Sendable {
+    /// An ISBN read off a barcode by the camera.
+    case barcodeScan
+    /// An ISBN typed into the lookup field.
+    case isbnEntry
+    /// A provider candidate picked out of a title search.
+    case titleSearch
+}
+
 /// Everything the terminal success screen needs to render.
 struct CheckInSuccess: Equatable {
     enum Tone: Equatable {
@@ -81,6 +96,34 @@ enum CheckInFlow {
             bookUUID: ref.bookUUID,
             cover: externalCover(meta)
         )
+    }
+
+    /// The eyebrow over the resolved book, naming the door the reader used.
+    /// It sat at a hardcoded "You scanned", which a typed ISBN and a title
+    /// search both made false.
+    static func foundLine(_ via: FoundVia) -> String {
+        switch via {
+        case .barcodeScan: "You scanned"
+        case .isbnEntry: "You entered"
+        case .titleSearch: "You picked"
+        }
+    }
+
+    /// The provenance a wishlist entry added down this path records. Only the
+    /// camera is a scan; a typed ISBN is manual, and a title search is neither.
+    static func wishlistSource(_ via: FoundVia) -> WishlistSource {
+        switch via {
+        case .barcodeScan: .scan
+        case .isbnEntry: .manual
+        case .titleSearch: .search
+        }
+    }
+
+    /// The wishlist request for an online-resolved book, stamped with the door
+    /// the reader actually came through. Mirrors the web flow's
+    /// `wishlist_request_for`.
+    static func wishlistRequest(meta: ExternalBookMeta, foundVia: FoundVia) -> WishlistAddRequest {
+        WishlistAddRequest(bookUUID: nil, meta: meta, source: wishlistSource(foundVia))
     }
 
     /// The edition note belongs on exactly one screen — the in-library
