@@ -62,15 +62,22 @@ should soft-reference `book_uuid TEXT` (no FK, no cascade), like
 `metadata_overrides` — not a cascading `book_id` FK that wipes user data
 on reindex.
 
-**A soft-referencing table must also be added to `RETARGET_TABLES` in
-`db/src/merge/transaction.rs`** — that list is the other half of the
-contract. Merge deletes the source `books` row, so a table missing from it
-strands the reader's rows on a uuid no book carries: invisible to every
-query that joins `books`, still counted by every query that doesn't, which
-is how the Finished tile and the trailing-12 chart came to disagree
-(migration `0079` heals the rows, the list stops new ones). If the table
-carries a `UNIQUE` key the retarget would collide on, add it to
-`DEDUPE_TABLES` beside it and the shared latest-wins helper resolves it.
+**A new table holding per-reader state keyed on `book_uuid` must also be
+added to `RETARGET_TABLES` in `db/src/merge/transaction.rs`** — that list is
+the other half of the contract. Merge deletes the source `books` row, so a
+table missing from it strands the reader's rows on a uuid no book carries:
+invisible to every query that joins `books`, still counted by every query
+that doesn't. Migration `0079` heals the rows already stranded that way; the
+list is what stops new ones. If the table carries a `UNIQUE` key the retarget
+would collide on, add it to `DEDUPE_TABLES` beside it and the shared
+latest-wins helper resolves it.
+
+The list is deliberately **not** every table with a `book_uuid` column.
+Library-wide tables (`shelf_books`, `physical_copies`, `wishlist_entries`,
+`cross_format_links`, the suggestion caches) are out of scope here and are
+handled — or deliberately not — by their own owners; adding one to
+`RETARGET_TABLES` without understanding its merge semantics is a change in
+its own right, not a box to tick.
 
 ## Testing
 

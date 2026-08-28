@@ -1318,3 +1318,109 @@ async fn migration_0079_is_a_no_op_on_a_database_that_never_merged() {
             .unwrap();
     assert_eq!(ratings, vec![("uuid-live".to_string(), 7)]);
 }
+
+#[tokio::test]
+async fn migration_0079_resolves_two_orphans_landing_on_the_same_book() {
+    let pool = pool_before_merge_orphan_heal().await;
+    seed_merge_orphan_state(&pool).await;
+    // A chain of merges (A into B, then B into C) leaves several orphan uuids
+    // pointing at one live book, so a reader can hold rows on two of them.
+    // Repointing both without resolving them first violates
+    // UNIQUE (user_id, book_uuid) and aborts the upgrade at startup.
+    sqlx::raw_sql(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path)
+              VALUES ('uuid-gone-2', 1, 'EPUB', '/books');
+         INSERT INTO book_read_status (user_id, book_uuid, status, updated_at, finished_at)
+              VALUES (1, 'uuid-gone', 'finished', 1000, 1000),
+                     (1, 'uuid-gone-2', 'reading', 2000, NULL);
+         INSERT INTO user_ratings (user_id, book_uuid, half_stars, updated_at)
+              VALUES (1, 'uuid-gone', 4, 1000),
+                     (1, 'uuid-gone-2', 9, 2000);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    apply_merge_orphan_migration(&pool).await;
+
+    // One row each, on the survivor, carrying the newer orphan's values.
+    let ratings: Vec<(String, i64)> =
+        sqlx::query_as("SELECT book_uuid, half_stars FROM user_ratings")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(ratings, vec![("uuid-live".to_string(), 9)]);
+
+    let status: Vec<(String, String)> =
+        sqlx::query_as("SELECT book_uuid, status FROM book_read_status")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        status,
+        vec![("uuid-live".to_string(), "reading".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn migration_0079_resolves_two_orphans_against_a_live_row_too() {
+    let pool = pool_before_merge_orphan_heal().await;
+    seed_merge_orphan_state(&pool).await;
+    // Three-way: two orphans plus a row already on the survivor. The newest
+    // wins across the whole group, not just pairwise.
+    sqlx::raw_sql(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path)
+              VALUES ('uuid-gone-2', 1, 'EPUB', '/books');
+         INSERT INTO user_ratings (user_id, book_uuid, half_stars, updated_at)
+              VALUES (1, 'uuid-gone', 2, 1000),
+                     (1, 'uuid-gone-2', 6, 3000),
+                     (1, 'uuid-live', 4, 2000);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    apply_merge_orphan_migration(&pool).await;
+
+    let ratings: Vec<(String, i64)> =
+        sqlx::query_as("SELECT book_uuid, half_stars FROM user_ratings")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(ratings, vec![("uuid-live".to_string(), 6)]);
+}
+
+#[tokio::test]
+async fn migration_0079_keeps_each_readers_own_row_when_orphans_collide() {
+    let pool = pool_before_merge_orphan_heal().await;
+    seed_merge_orphan_state(&pool).await;
+    // The dedupe groups by (user, surviving book) — one reader's rows must
+    // never delete another's.
+    sqlx::raw_sql(
+        "INSERT INTO users (id, username, password_hash, is_admin) VALUES (2, 'v', 'x', 0);
+         INSERT INTO merged_uuids (uuid, book_id, format, library_path)
+              VALUES ('uuid-gone-2', 1, 'EPUB', '/books');
+         INSERT INTO user_ratings (user_id, book_uuid, half_stars, updated_at)
+              VALUES (1, 'uuid-gone', 4, 1000),
+                     (1, 'uuid-gone-2', 9, 2000),
+                     (2, 'uuid-gone', 3, 1500);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    apply_merge_orphan_migration(&pool).await;
+
+    let ratings: Vec<(i64, String, i64)> =
+        sqlx::query_as("SELECT user_id, book_uuid, half_stars FROM user_ratings ORDER BY user_id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        ratings,
+        vec![
+            (1, "uuid-live".to_string(), 9),
+            (2, "uuid-live".to_string(), 3),
+        ]
+    );
+}

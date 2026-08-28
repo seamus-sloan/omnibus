@@ -892,8 +892,11 @@ async fn drop_book_row(pool: &SqlitePool, uuid: &str) {
         .unwrap();
 }
 
-async fn now_secs_db(pool: &SqlitePool) -> i64 {
-    sqlx::query_scalar("SELECT CAST(strftime('%s','now') AS INTEGER)")
+/// A moment safely inside the current calendar month. Not `now - 60`: for the
+/// first minute of the 1st that lands in the *previous* month, while the
+/// trailing-12 series still ends on the current one.
+async fn this_month_secs(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar("SELECT CAST(strftime('%s','now','start of month','+1 day') AS INTEGER)")
         .fetch_one(pool)
         .await
         .unwrap()
@@ -904,9 +907,9 @@ async fn finished_metrics_agree_when_a_completion_outlives_its_book() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 2).await;
     let user = seed_user(&pool, "alice").await;
-    let now = now_secs_db(&pool).await;
-    finish_read_status(&pool, user, "uuid-1", now - 60).await;
-    finish_read_status(&pool, user, "uuid-2", now - 60).await;
+    let at = this_month_secs(&pool).await;
+    finish_read_status(&pool, user, "uuid-1", at).await;
+    finish_read_status(&pool, user, "uuid-2", at).await;
     drop_book_row(&pool, "uuid-2").await;
 
     // The headline count, the rail and the trailing-12 chart are three reads
@@ -946,9 +949,9 @@ async fn avg_stars_excludes_a_rating_whose_book_is_gone() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 2).await;
     let user = seed_user(&pool, "alice").await;
-    let now = now_secs_db(&pool).await;
-    rate_book(&pool, user, "uuid-1", 10, now - 60).await;
-    rate_book(&pool, user, "uuid-2", 2, now - 60).await;
+    let at = this_month_secs(&pool).await;
+    rate_book(&pool, user, "uuid-1", 10, at).await;
+    rate_book(&pool, user, "uuid-2", 2, at).await;
     drop_book_row(&pool, "uuid-2").await;
 
     // The 1-star sits on a book the UI cannot render a rating for, so it must
@@ -961,9 +964,9 @@ async fn rating_monthly_excludes_a_rating_whose_book_is_gone() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 2).await;
     let user = seed_user(&pool, "alice").await;
-    let now = now_secs_db(&pool).await;
-    rate_book(&pool, user, "uuid-1", 10, now - 60).await;
-    rate_book(&pool, user, "uuid-2", 2, now - 60).await;
+    let at = this_month_secs(&pool).await;
+    rate_book(&pool, user, "uuid-1", 10, at).await;
+    rate_book(&pool, user, "uuid-2", 2, at).await;
     drop_book_row(&pool, "uuid-2").await;
 
     let months = rating_monthly(&pool, user).await.unwrap();
@@ -1059,4 +1062,22 @@ fn prev_window_from_takes_the_elapsed_offset_into_the_previous_period() {
 
     // A clock that reads behind the period start cannot invert the window.
     assert_eq!(prev_window_from(feb1, mar1, mar1 - 5), (feb1, feb1));
+}
+
+#[tokio::test]
+async fn previous_period_avg_stars_excludes_a_rating_whose_book_is_gone() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let user = seed_user(&pool, "alice").await;
+    let prev = prev_period_start(&pool, StatsRange::Month).await;
+    rate_book(&pool, user, "uuid-1", 10, prev).await;
+    rate_book(&pool, user, "uuid-2", 2, prev).await;
+    drop_book_row(&pool, "uuid-2").await;
+
+    // `avg_stars_bounded` carries its own copy of the filter; without this the
+    // baseline mean could disagree with the current window's for the same books.
+    let previous = previous_period(&pool, user, StatsRange::Month)
+        .await
+        .unwrap();
+    assert_eq!(previous.avg_stars, Some(5.0));
 }

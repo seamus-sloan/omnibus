@@ -57,13 +57,9 @@ pub(super) const FINISHED_EVENTS: &str = "\
 /// the liveness filter **every** completion metric shares. Same
 /// `(book_uuid, finished_at)` shape, same two binds.
 ///
-/// A function rather than four hand-written `JOIN books` clauses because the
-/// metrics disagreed when it was four: the headline count, the rail and the
-/// pages estimate joined `books` while the trailing-12 chart and the
-/// vs-previous delta did not, so a single completion on a merged-away book
-/// made the Finished tile and the chart directly above it report different
-/// numbers for the same month. Deriving the filter from one place means a
-/// metric that opts out has to do so visibly.
+/// Derived once rather than spelled out per query: several of these metrics
+/// render on the same screen, so a metric that opts out of the filter has to
+/// do so visibly.
 fn live_finished_events() -> String {
     format!(
         "SELECT f.book_uuid AS book_uuid, f.finished_at AS finished_at \
@@ -76,9 +72,7 @@ fn live_finished_events() -> String {
 /// liveness rule [`live_finished_events`] applies to completions, for the
 /// star-rating metrics. Bind order is `user_id`.
 ///
-/// Without it the average rating is computed over rows the UI cannot show:
-/// a rating stranded on a merged-away book renders nowhere on the book page
-/// and still moves the mean on the stats page.
+/// A rating the book page cannot render must not move the mean.
 const LIVE_RATINGS: &str = "\
     SELECT r.user_id AS user_id, r.half_stars AS half_stars, r.updated_at AS updated_at \
     FROM user_ratings r \
