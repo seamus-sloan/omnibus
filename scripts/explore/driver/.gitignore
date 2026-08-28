@@ -1,0 +1,5 @@
+# Installed on first `driver.sh up`. Never commit either: node_modules is
+# reproducible from package.json, and browsers/ is ~600 MB of Chromium that
+# must stay OUT of the flake's PLAYWRIGHT_BROWSERS_PATH.
+node_modules/
+browsers/

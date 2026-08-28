@@ -1,0 +1,8 @@
+{
+  "name": "omnibus-explore-driver",
+  "private": true,
+  "description": "Browser driver for the agentic-exploration swarm. Deliberately separate from ui_tests/playwright: playwright-repl bundles its own Playwright, whose Chromium build differs from the flake's, and the two must never share a browser directory.",
+  "dependencies": {
+    "playwright-repl": "0.27.3"
+  }
+}

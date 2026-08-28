@@ -31,6 +31,21 @@ A pane that keeps failing is a note about the harness, not a finding about the
 app. Say so in the journal, and if it becomes unworkable, stop and report that
 rather than pressing on with unreliable evidence.
 
+## Your driver, not the app
+
+- **A command that returns `"Done"` did not fail.** The driver only prints a
+  value for *expression-shaped* commands. `page.evaluate(async () => { … return
+  x })` yields `"Done"`; the same thing written without braces —
+  `page.evaluate(() => fetch(…).then(r => r.status))` — yields the value.
+  Getting `"Done"` means rewrite the command, not that the app is broken.
+- **A file input cannot be clicked.** Clicking one opens a native dialog nothing
+  can see. Upload with
+  `page.getByTestId("add-books-file-input").setInputFiles("/abs/path.epub")`
+  and then read the review form's fields.
+- **You have your own browser.** If you ever see another actor's session, that
+  is a harness fault of the first order — journal it `high` and stop, exactly as
+  start.md says. Do not log back in and continue.
+
 ## Deliberate app behaviour
 
 Each of these is intended, and each has been mistaken for a defect before:
