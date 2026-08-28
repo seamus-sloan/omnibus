@@ -10,6 +10,9 @@ struct StatsView: View {
 
     @State private var range: StatsRange = .month
     @State private var summary: StatsSummary?
+    /// Fetched separately from `summary`: library-scoped rather than
+    /// per-user, so it must not re-fetch when the range picker moves.
+    @State private var librarySize: LibrarySize?
     @State private var isLoading = true
     @State private var error: String?
 
@@ -32,7 +35,10 @@ struct StatsView: View {
             .refreshTask { await load(force: true) }
             .withDestinations()
         }
-        .task { await load() }
+        .task {
+            await load()
+            await loadLibrarySize()
+        }
         .onChange(of: range) { _, _ in Task { await load() } }
     }
 
@@ -166,6 +172,15 @@ struct StatsView: View {
 
                 if !summary.finishedBooks.isEmpty {
                     finishedRail(summary.finishedBooks)
+                }
+
+                // Absent until it lands, and absent when the library has been
+                // measured for nothing — three zeroes would read as a claim
+                // about the collection rather than about the backfill.
+                if let librarySize, !librarySize.isEmpty {
+                    section("Your library, in reading terms") {
+                        LibrarySizeSection(size: librarySize)
+                    }
                 }
             }
             .padding(.bottom, 40)
@@ -382,6 +397,86 @@ struct StatsView: View {
         .screenPadding()
     }
 
+    /// Best-effort by design: this card is context beside the reader's own
+    /// numbers, so a library-size fetch that fails must not take the tab's
+    /// error state with it. The cached read lands first and the live one
+    /// replaces it, same as `load`.
+    private func loadLibrarySize() async {
+        do {
+            for try await read in UserDataService.librarySize() {
+                librarySize = read.value
+            }
+        } catch {
+            // Nothing to say: the section simply doesn't appear.
+        }
+    }
+
+    /// The library figures worth rendering, skipping anything nothing has
+    /// been measured for — a "0 words" row describes a library that doesn't
+    /// exist. Mirrors the web card's `build_figures`.
+    static func libraryFigures(_ size: LibrarySize) -> [LibraryFigure] {
+        var figures: [LibraryFigure] = []
+        if !size.words.isEmpty {
+            figures.append(
+                LibraryFigure(
+                    value: compactCount(size.words.total),
+                    unit: "words",
+                    coverage: coverageLabel(size.words, of: size.books)
+                ))
+        }
+        if !size.pages.isEmpty {
+            figures.append(
+                LibraryFigure(
+                    value: compactCount(size.pages.total),
+                    unit: "est. pages",
+                    coverage: coverageLabel(size.pages, of: size.books)
+                ))
+        }
+        if !size.listeningSeconds.isEmpty {
+            let (value, unit) = audioValue(size.listeningSeconds.total)
+            figures.append(
+                LibraryFigure(
+                    value: value,
+                    unit: unit,
+                    coverage: coverageLabel(size.listeningSeconds, of: size.books)
+                ))
+        }
+        return figures
+    }
+
+    /// A large count in the form a reader can hold — "412M", "1.6M", "94.2K",
+    /// "812". Nobody needs the last four digits of a word count.
+    static func compactCount(_ n: Int64) -> String {
+        let v = Double(n)
+        for (limit, div, suffix) in [(1e9, 1e9, "B"), (1e6, 1e6, "M"), (1e4, 1e3, "K")] {
+            if v >= limit {
+                let scaled = v / div
+                return String(format: scaled < 100 ? "%.1f\(suffix)" : "%.0f\(suffix)", scaled)
+            }
+        }
+        return "\(n)"
+    }
+
+    /// Audio length in the unit that fits it: hours below a week, days beyond.
+    /// "94 days of audio" is the sentence this section exists to let a reader
+    /// say; 2,256 hours is the same fact nobody can picture.
+    static func audioValue(_ seconds: Int64) -> (String, String) {
+        let hours = Double(seconds) / 3600
+        if hours < 168 {
+            return (String(format: "%.0f", hours), hours < 2 ? "hour" : "hours")
+        }
+        return (String(format: "%.0f", hours / 24), "days")
+    }
+
+    /// "across 1,204 of 1,510 books" — the denominator, always. A figure
+    /// without it is a guess wearing a number.
+    static func coverageLabel(_ measured: MeasuredTotal, of libraryBooks: Int64) -> String {
+        let grouped = { (n: Int64) -> String in
+            NumberFormatter.localizedString(from: NSNumber(value: n), number: .decimal)
+        }
+        return "across \(grouped(measured.books)) of \(grouped(libraryBooks)) books"
+    }
+
     private func load(force: Bool = false) async {
         if force { await OfflineStore.shared.cacheDelete(CacheKey.stats(range)) }
         do {
@@ -396,6 +491,43 @@ struct StatsView: View {
             }
         }
         isLoading = false
+    }
+}
+
+/// One library-scale figure: the total, its unit, and the coverage behind it.
+struct LibraryFigure: Identifiable, Hashable {
+    let value: String
+    let unit: String
+    let coverage: String
+
+    var id: String { unit }
+}
+
+private struct LibrarySizeSection: View {
+    let size: LibrarySize
+
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            ForEach(StatsView.libraryFigures(size)) { figure in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(figure.value)
+                            .font(.display(28))
+                            .foregroundStyle(palette.ink0Color)
+                        Text(figure.unit)
+                            .font(.ui(13))
+                            .foregroundStyle(palette.ink2Color)
+                    }
+                    Text(figure.coverage)
+                        .font(.monoUI(11))
+                        .foregroundStyle(palette.ink3Color)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

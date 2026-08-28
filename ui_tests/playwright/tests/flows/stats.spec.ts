@@ -404,6 +404,62 @@ test("the books-per-month chart renders twelve bars with the current month highl
   await expect(bars.last()).toHaveClass(/st-mo-current/);
 });
 
+test("the library-size card states each total with its coverage", async ({
+  page,
+}) => {
+  // Route-mocked: the real totals depend on how far the word-count backfill
+  // has run against the shared fixture library, which no spec can pin.
+  await page.route("**/api/rpc/library-size", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        books: 1510,
+        words: { total: 412_000_000, books: 1204 },
+        pages: { total: 1_600_000, books: 1204 },
+        // Nothing probed yet — the figure is absent, never a zero.
+        listening_seconds: { total: 0, books: 0 },
+      }),
+    }),
+  );
+  await gotoReady(page, "/stats");
+
+  const card = page.getByTestId("stats-library-size");
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("412M");
+  await expect(card).toContainText("1.6M");
+  // Never a bare total: the denominator is what makes the number a fact.
+  await expect(card).toContainText("across 1,204 of 1,510 books");
+  await expect(card.getByTestId("stats-library-figure")).toHaveCount(2);
+
+  // It sits in the all-time section, so it must not move with the switcher.
+  const before = await card.textContent();
+  const menu = await openPeriodMenu(page);
+  await menu.getByRole("button", { name: "Week" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Your reading week" }),
+  ).toBeVisible();
+  await expect.poll(() => card.textContent()).toBe(before);
+});
+
+test("a library measured for nothing renders no size card at all", async ({
+  page,
+}) => {
+  await page.route("**/api/rpc/library-size", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ books: 40 }),
+    }),
+  );
+  await gotoReady(page, "/stats");
+
+  // Three zeroes would read as a claim about the collection rather than about
+  // the backfill.
+  await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
+  await expect(page.getByTestId("stats-library-size")).toHaveCount(0);
+});
+
 test("the all-time section does not change with the switcher", async ({
   page,
 }) => {

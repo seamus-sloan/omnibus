@@ -109,3 +109,58 @@ struct RatingBucketTests {
         #expect(kept == ["1", "2", "3", "4", "5"])
     }
 }
+
+@Suite("Library size")
+struct LibrarySizeTests {
+    private func decodeSize(_ json: String) throws -> LibrarySize {
+        try JSONDecoder().decode(LibrarySize.self, from: Data(json.utf8))
+    }
+
+    @Test("each total decodes with the coverage behind it")
+    func decodesTotalsAndCoverage() throws {
+        let json = """
+            {"books":1510,"words":{"total":412000000,"books":1204},
+             "pages":{"total":1600000,"books":1204},
+             "listening_seconds":{"total":8121600,"books":88}}
+            """
+        let size = try decodeSize(json)
+        #expect(size.books == 1510)
+        #expect(size.words.total == 412_000_000)
+        #expect(size.words.books == 1204)
+        #expect(size.listeningSeconds.books == 88)
+        #expect(!size.isEmpty)
+    }
+
+    @Test("a server that predates the totals still decodes to an empty size")
+    func decodesWithoutTotals() throws {
+        let size = try decodeSize(#"{"books":40}"#)
+        #expect(size.books == 40)
+        // Measured for nothing is an absent section, never three zeroes.
+        #expect(size.isEmpty)
+    }
+
+    @Test("only measured figures become rows")
+    func figuresSkipUnmeasured() {
+        var size = LibrarySize()
+        size.books = 1510
+        size.words = MeasuredTotal(total: 412_000_000, books: 1204)
+
+        let figures = StatsView.libraryFigures(size)
+
+        #expect(figures.count == 1)
+        #expect(figures[0].value == "412M")
+        #expect(figures[0].unit == "words")
+        #expect(figures[0].coverage.contains("1,204"))
+        #expect(figures[0].coverage.contains("1,510"))
+    }
+
+    @Test("counts compact and audio picks the unit that fits it")
+    func formatsLargeFigures() {
+        #expect(StatsView.compactCount(812) == "812")
+        #expect(StatsView.compactCount(94_200) == "94.2K")
+        #expect(StatsView.compactCount(412_000_000) == "412M")
+        #expect(StatsView.audioValue(3600) == ("1", "hour"))
+        #expect(StatsView.audioValue(12 * 3600) == ("12", "hours"))
+        #expect(StatsView.audioValue(94 * 24 * 3600) == ("94", "days"))
+    }
+}

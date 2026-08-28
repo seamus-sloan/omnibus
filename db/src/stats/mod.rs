@@ -2,12 +2,14 @@
 //! `listening_sessions` tables plus `journal_entries` / `book_read_status`
 //! for completion; no new query-time schema. See the `book`, `compute`,
 //! `pages`, `ratings`, and `streak` submodules for the per-scope aggregation
-//! bodies this module's cache wraps, and `sessionize` for how checkpoint rows
-//! become sittings.
+//! bodies this module's cache wraps, `sessionize` for how checkpoint rows
+//! become sittings, and `library` for the one aggregate here that describes
+//! the collection rather than a reader.
 
 mod book;
 mod compute;
 mod genre;
+mod library;
 mod pages;
 mod ratings;
 mod sessionize;
@@ -17,6 +19,7 @@ mod streak;
 mod tests;
 
 pub use book::book_insights;
+pub use library::{invalidate as invalidate_library_size, library_size};
 /// Per-user aggregate cache TTL. A reload after a just-finished session
 /// reflects new data within this window; repeated calls inside it hit the
 /// cache instead of re-running the SQL. Re-exported from `omnibus_shared` so
@@ -80,7 +83,7 @@ fn cache() -> &'static Cache {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn now_secs() -> i64 {
+pub(super) fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

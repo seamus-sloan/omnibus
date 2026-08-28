@@ -36,6 +36,9 @@ enum CacheKey {
     static func ratingsOthers(_ uuid: String) -> String { "ratings_others:\(uuid)" }
     static func readStatus(_ uuid: String) -> String { "read_status:\(uuid)" }
     static func stats(_ range: StatsRange) -> String { "stats:\(range.rawValue)" }
+    /// `GET /api/library-size`. Unkeyed: the answer is library-wide, so there
+    /// is nothing to scope it by.
+    static let librarySize = "library_size"
     /// Scoped by file as well as book when a specific `book_files` row is
     /// requested: each file lays out its own timeline, so a manifest cached
     /// for one narration must never answer for another. The no-file key is

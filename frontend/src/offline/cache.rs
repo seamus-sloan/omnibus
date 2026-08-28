@@ -117,6 +117,11 @@ pub mod keys {
     pub fn stats(range: &str) -> String {
         format!("stats:{range}")
     }
+    /// `GET /api/library-size`. Unkeyed: the answer is library-wide, so
+    /// there is nothing to scope it by.
+    pub fn library_size() -> String {
+        "library_size".into()
+    }
     /// `GET /api/ebooks/{uuid}/suggestions`.
     pub fn suggestions(uuid: &str) -> String {
         format!("suggestions:{uuid}")

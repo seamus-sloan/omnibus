@@ -205,6 +205,74 @@ pub struct LengthBucket {
     pub books: i64,
 }
 
+/// A library-scale total and the coverage behind it.
+///
+/// The pair travels together on purpose. Every input to these totals is
+/// nullable-or-zero in a way that means *not measured yet* — `books.word_count`
+/// is NULL for an audio-only book or one indexed before migration `0049`, and
+/// `book_file_parts.duration_seconds` defaults to 0 until the indexer probes
+/// it — and a bare `SUM` reads that as zero, turning a partly-backfilled
+/// library into a confidently-wrong smaller number. Publishing `books`
+/// alongside `total` makes the gap visible instead: "412M words across 1,204
+/// of 1,510 books" is a fact; "412M words" on its own is a guess wearing a
+/// number.
+///
+/// `books == 0` means nothing has been measured at all, which the surfaces
+/// render as an empty state rather than a zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct MeasuredTotal {
+    pub total: i64,
+    /// Books that contributed to `total`. Always `<= LibrarySize::books`.
+    pub books: i64,
+}
+
+impl MeasuredTotal {
+    /// True when nothing in the library has been measured for this figure.
+    pub fn is_empty(&self) -> bool {
+        self.books == 0
+    }
+}
+
+/// How big the library is in the units a reader thinks in — words, pages, and
+/// hours of audio.
+///
+/// **Library-scoped, not user-scoped**, and deliberately not a field on
+/// [`StatsSummary`]: it is the same answer for every reader and only moves on
+/// a reindex, so hanging it off a per-user payload would recompute and re-send
+/// it on every period switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LibrarySize {
+    /// Live books — those with at least one surviving `book_files` row. The
+    /// denominator every coverage figure below is read against.
+    ///
+    /// Ghosted books (a `books` row whose files are gone) are excluded from
+    /// this *and* from every numerator: their bytes aren't on disk, so
+    /// counting them would report a library larger than the one that exists
+    /// and drag every coverage fraction down for rows nothing can measure.
+    pub books: i64,
+    /// Total words across books with a stored `word_count`.
+    #[serde(default)]
+    pub words: MeasuredTotal,
+    /// Total pages, resolved per book through the one length ladder in
+    /// `db::stats::pages` — a print-edition count, else a comic's exact
+    /// image-page count, else the EPUB word estimate.
+    #[serde(default)]
+    pub pages: MeasuredTotal,
+    /// Total seconds of audio, summed over the parts of the one file the
+    /// server would actually serve for each book. A book with any unprobed
+    /// part is unmeasured rather than partly counted.
+    #[serde(default)]
+    pub listening_seconds: MeasuredTotal,
+}
+
+impl LibrarySize {
+    /// True when no figure here has been measured for a single book — the
+    /// surfaces' signal to render an empty state rather than three zeroes.
+    pub fn is_empty(&self) -> bool {
+        self.words.is_empty() && self.pages.is_empty() && self.listening_seconds.is_empty()
+    }
+}
+
 /// Scalar aggregates for the **same elapsed slice** of the preceding period —
 /// feeds each metric tile's drill-in delta. The current window is
 /// period-to-date, so this is month-to-date against the same days last month

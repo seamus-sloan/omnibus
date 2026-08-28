@@ -1268,6 +1268,55 @@ struct LengthBucket: Codable, Hashable, Sendable, Identifiable {
     var id: String { label }
 }
 
+/// A library-scale total and the coverage behind it.
+///
+/// The pair travels together on purpose: every input is nullable-or-zero in a
+/// way that means *not measured yet*, and a bare total would report a
+/// partly-backfilled library as a smaller one with total confidence.
+struct MeasuredTotal: Codable, Hashable, Sendable {
+    var total: Int64 = 0
+    /// Books that contributed. `0` means nothing has been measured for this
+    /// figure, which the Stats tab renders as an absent row, not a zero.
+    var books: Int64 = 0
+
+    var isEmpty: Bool { books == 0 }
+}
+
+/// How big the library is in words, pages, and hours of audio.
+///
+/// Library-scoped, not user-scoped, and fetched separately from
+/// `StatsSummary` — it is the same answer for every reader and only moves on a
+/// reindex, so carrying it on the per-user payload would re-send it on every
+/// range change.
+struct LibrarySize: Codable, Sendable {
+    /// Live books — the denominator every coverage figure is read against.
+    var books: Int64 = 0
+    var words = MeasuredTotal()
+    var pages = MeasuredTotal()
+    var listeningSeconds = MeasuredTotal()
+
+    enum CodingKeys: String, CodingKey {
+        case books, words, pages
+        case listeningSeconds = "listening_seconds"
+    }
+
+    init() {}
+
+    /// Field-by-field for the same reason `StatsSummary` is: the Rust fields
+    /// are `#[serde(default)]`, and an app ahead of its server must lose a
+    /// figure rather than the whole screen.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        books = try c.decodeIfPresent(Int64.self, forKey: .books) ?? 0
+        words = try c.decodeIfPresent(MeasuredTotal.self, forKey: .words) ?? MeasuredTotal()
+        pages = try c.decodeIfPresent(MeasuredTotal.self, forKey: .pages) ?? MeasuredTotal()
+        listeningSeconds =
+            try c.decodeIfPresent(MeasuredTotal.self, forKey: .listeningSeconds) ?? MeasuredTotal()
+    }
+
+    var isEmpty: Bool { words.isEmpty && pages.isEmpty && listeningSeconds.isEmpty }
+}
+
 struct StatsSummary: Codable, Sendable {
     var range: StatsRange = .month
     var readingSeconds: Int64 = 0
