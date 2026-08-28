@@ -551,8 +551,10 @@ pub struct StatsSummary {
     #[serde(default)]
     pub unzoned_seconds: i64,
     /// The window's single most-X figures. Scoped to `range` like the rest of
-    /// this struct; `Superlatives::is_empty` is the surfaces' signal to omit
-    /// the card entirely.
+    /// this struct. [`Superlatives::is_empty`] is a predicate over these five,
+    /// **not** the card's render gate — the surfaces draw rows off fields
+    /// outside this struct too, so gating on it would drop a card that still
+    /// has something to show. See that method's docs.
     #[serde(default)]
     pub superlatives: Superlatives,
     /// The caller's goal for the **current calendar year**, `None` when none

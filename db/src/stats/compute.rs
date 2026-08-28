@@ -282,6 +282,13 @@ pub(super) async fn heatmap(
 /// The day returned is the bucket's Monday, not the first day the reader was
 /// active in it: surfaces label this "Week of …", and a reader who only read
 /// midweek would otherwise have a Wednesday named as their week's start.
+///
+/// A consequence worth knowing: because the bucket key comes from the
+/// calendar rather than from a row, **the Monday can precede the window**.
+/// `Week` is a rolling seven days and `Month` starts on the 1st, so either can
+/// straddle two buckets and crown the partial leading one — whose seconds
+/// then cover only the in-window days, like every other figure here. Clamping
+/// the date into the window would just reintroduce the midweek mislabel.
 pub(super) async fn busiest_week(
     pool: &SqlitePool,
     user_id: i64,
