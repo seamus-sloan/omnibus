@@ -4,11 +4,14 @@
 //! change. Mirrors the converged Stats design (`screens/stats-converged.jsx`).
 
 use dioxus::prelude::*;
-use omnibus_shared::{LibrarySize, ReadingGoal, StatsRange, StatsSummary, STATS_TTL_SECS};
+use omnibus_shared::{
+    LibraryComposition, LibrarySize, ReadingGoal, StatsRange, StatsSummary, STATS_TTL_SECS,
+};
 
 use crate::components::{PageError, PageLoading, SessionLogList};
 use crate::{data, use_server_url, Route};
 
+mod composition;
 mod donut;
 mod drill_in;
 mod goal;
@@ -19,6 +22,7 @@ mod patterns;
 mod superlatives;
 mod tiles;
 
+use composition::LibraryCompositionCard;
 use donut::{FormatSplit, GenreDonut, LengthSplit};
 use drill_in::{DrillIn, Metric};
 use goal::GoalBand;
@@ -71,6 +75,9 @@ pub fn StatsPage() -> Element {
     // it into the summary would recompute and re-send it on every switcher
     // change. `None` until it lands, and the card renders nothing then.
     let library_size: Signal<Option<LibrarySize>> = use_signal(|| None);
+    // Same reasoning, same shape: what the library is *made of* is a
+    // library-wide answer that only moves on a reindex.
+    let library_composition: Signal<Option<LibraryComposition>> = use_signal(|| None);
     let loading = use_signal(|| true);
     let error: Signal<Option<String>> = use_signal(|| None);
     // Seeded closed on every target (rule 07): the title dropdown only ever
@@ -87,6 +94,7 @@ pub fn StatsPage() -> Element {
     use_period_fetch_effect(server_url.clone(), range, period, error);
     use_all_time_fetch_effect(server_url.clone(), all_time, loading, error, goal);
     use_library_size_fetch_effect(server_url.clone(), library_size);
+    use_library_composition_fetch_effect(server_url.clone(), library_composition);
 
     if loading() {
         return rsx! { PageLoading {} };
@@ -128,6 +136,7 @@ pub fn StatsPage() -> Element {
                 section { class: "st-alltime", "data-testid": "stats-alltime-section",
                     AllTimeSummary { all_time }
                     LibrarySizeCard { size: library_size() }
+                    LibraryCompositionCard { composition: library_composition() }
                 }
                 // The log sits under the aggregates it details, and outside
                 // the period switcher's reach: it is its own paged read, not
@@ -258,6 +267,29 @@ fn use_library_size_fetch_effect(server_url: String, library_size: Signal<Option
         spawn(async move {
             if let Ok(size) = data::fetch_library_size(&url).await {
                 library_size.set(Some(size));
+            }
+        });
+    });
+}
+
+/// One-shot fetch of the library composition. Never keyed on the switcher —
+/// what the collection is made of is not a reporting period's figure — and
+/// silent on failure for the same reason its size sibling is: this card is
+/// context beside the reader's own numbers, and a failed fetch must not blank
+/// the page they came for.
+fn use_library_composition_fetch_effect(
+    server_url: String,
+    library_composition: Signal<Option<LibraryComposition>>,
+) {
+    let generation = crate::use_cache_generation();
+    use_effect(move || {
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
+        let url = server_url.clone();
+        let mut library_composition = library_composition;
+        spawn(async move {
+            if let Ok(composition) = data::fetch_library_composition(&url).await {
+                library_composition.set(Some(composition));
             }
         });
     });
@@ -415,8 +447,9 @@ fn PeriodSummary(
 
 /// The all-time module stack: the reading-days heatmap card (with the
 /// longest-streak figure in its header), then the books-per-month trend
-/// chart. The library-size card sits alongside these in the same section but
-/// rides its own fetch, so it is mounted by the page rather than here.
+/// chart. The library-size and library-composition cards sit alongside these
+/// in the same section but ride their own fetches, so the page mounts them
+/// rather than this component.
 #[component]
 fn AllTimeSummary(all_time: Signal<Option<StatsSummary>>) -> Element {
     let guard = all_time.read();
