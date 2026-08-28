@@ -410,6 +410,17 @@ pub struct PagesReadDetail {
     /// tile's drill-in trend.
     #[serde(default)]
     pub daily: Vec<TrendPoint>,
+    /// Whether this window opens before [`Self::since_day`], so part of it is
+    /// unmeasurable no matter what the reader did.
+    ///
+    /// Computed server-side against the window's real start rather than
+    /// inferred from the [`StatsRange`], because the range is not the fact: a
+    /// Year window in the calendar year *after* the epoch is fully covered, and
+    /// a Week window in the days right after it is not. Only the server knows
+    /// where a period starts — that calendar math lives in SQLite — so it is
+    /// the only side that can answer this without guessing.
+    #[serde(default)]
+    pub window_predates_ledger: bool,
 }
 
 impl PagesReadDetail {
@@ -420,9 +431,10 @@ impl PagesReadDetail {
     }
 
     /// True when the window starts before the ledger did, so part of it is
-    /// unmeasurable no matter what the reader did.
-    pub fn predates_ledger(&self, range: StatsRange) -> bool {
-        self.since_day.is_some() && matches!(range, StatsRange::Year | StatsRange::AllTime)
+    /// unmeasurable no matter what the reader did — and there is an epoch to
+    /// name in the disclosure.
+    pub fn predates_ledger(&self) -> bool {
+        self.since_day.is_some() && self.window_predates_ledger
     }
 }
 
@@ -449,13 +461,9 @@ pub struct PeriodComparison {
 /// explicit `book_read_status` of `finished`, never from the session tables
 /// (which carry duration but no progress). A book finished both ways counts
 /// once, and every completion metric on this struct — `books_finished`,
-/// `finished_books`, `books_per_month`, `pages_read`, `pages_per_hour`,
-/// `length_buckets` and `previous` — shares that one definition, live books
-/// only. They must not
-/// drift apart: several of them render on the same screen.
-/// `finished_books`, `books_per_month`, `length_buckets` and `previous` —
-/// shares that one definition, live books only. They must not drift apart:
-/// several of them render on the same screen.
+/// `finished_books`, `books_per_month`, `pages_per_hour`, `length_buckets`
+/// and `previous` — shares that one definition, live books only. They must
+/// not drift apart: several of them render on the same screen.
 ///
 /// `pages_read` is pointedly **not** one of them. It measures ground covered,
 /// not books completed, and sources from the forward-progress ledger instead.

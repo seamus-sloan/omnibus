@@ -284,8 +284,16 @@ fn measured_line_singularizes_a_one_book_window() {
 
 #[test]
 fn unmeasured_line_names_the_books_the_total_leaves_out() {
-    assert!(unmeasured_line(1).starts_with("1 more book has"));
-    assert!(unmeasured_line(3).starts_with("3 more books have"));
+    assert!(unmeasured_line(1, true).starts_with("1 more book has"));
+    assert!(unmeasured_line(3, true).starts_with("3 more books have"));
+    // Nothing was measured, so the line above it reported no page progress at
+    // all — "more" would have no antecedent, and the singular needs "it".
+    assert_eq!(
+        unmeasured_line(1, false),
+        "1 book has no known length yet, so nothing it contributed is counted."
+    );
+    assert!(unmeasured_line(3, false).starts_with("3 books have"));
+    assert!(unmeasured_line(3, false).ends_with("nothing they contributed is counted."));
 }
 
 #[test]
@@ -300,15 +308,20 @@ fn cutover_line_warns_only_when_the_window_reaches_past_the_epoch() {
 }
 
 #[test]
-fn predates_ledger_flags_the_ranges_that_can_reach_past_the_epoch() {
-    let detail = PagesReadDetail {
+fn predates_ledger_follows_the_servers_overlap_answer_not_the_range() {
+    assert!(PagesReadDetail {
+        since_day: Some("2026-08-01".to_string()),
+        window_predates_ledger: true,
+        ..Default::default()
+    }
+    .predates_ledger());
+    // A window that opens after the epoch gets the date as context and no
+    // caveat, whichever range produced it.
+    assert!(!PagesReadDetail {
         since_day: Some("2026-08-01".to_string()),
         ..Default::default()
-    };
-    assert!(detail.predates_ledger(StatsRange::AllTime));
-    assert!(detail.predates_ledger(StatsRange::Year));
-    assert!(!detail.predates_ledger(StatsRange::Month));
-    assert!(!detail.predates_ledger(StatsRange::Week));
+    }
+    .predates_ledger());
     // No epoch recorded, nothing to warn about.
-    assert!(!PagesReadDetail::default().predates_ledger(StatsRange::AllTime));
+    assert!(!PagesReadDetail::default().predates_ledger());
 }

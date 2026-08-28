@@ -30,7 +30,9 @@
 -- (iOS) nulls the stored percent, which is then re-derived off the request path
 -- by `spawn_epub_percent_derivation`. Reading the live row as "the previous
 -- position" would therefore see NULL half the time and lose the gain. The mark
--- moves only when a percent is actually observed, from either path.
+-- moves only when a percent is actually observed, by whichever of the three
+-- writers of that column gets there: the upsert, the request-path derivation,
+-- and the Kobo sync's location attach, which fills a NULL percent too.
 --
 -- `reading_progress_daily` accrues `max(0, observed - mark)` into the UTC day
 -- of the observation. Percent, not pages: the length ladder in

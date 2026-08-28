@@ -529,17 +529,30 @@ fn pages_read_detail_audio_only_requires_no_reading_at_all() {
 }
 
 #[test]
-fn pages_read_detail_predates_ledger_only_for_ranges_that_reach_back() {
-    let detail = PagesReadDetail {
+fn pages_read_detail_predates_ledger_needs_both_an_epoch_and_an_overlap() {
+    let overlapping = PagesReadDetail {
         since_day: Some("2026-08-01".to_string()),
+        window_predates_ledger: true,
         ..Default::default()
     };
-    assert!(detail.predates_ledger(StatsRange::AllTime));
-    assert!(detail.predates_ledger(StatsRange::Year));
-    assert!(!detail.predates_ledger(StatsRange::Month));
-    assert!(!detail.predates_ledger(StatsRange::Week));
-    // Nothing recorded, nothing to disclose.
-    assert!(!PagesReadDetail::default().predates_ledger(StatsRange::AllTime));
+    assert!(overlapping.predates_ledger());
+
+    // The server says this window opens after the epoch, so the date is
+    // context rather than a caveat — whatever range it came from. A Year
+    // window in the calendar year after the epoch lands here.
+    assert!(!PagesReadDetail {
+        since_day: Some("2026-08-01".to_string()),
+        ..Default::default()
+    }
+    .predates_ledger());
+
+    // Nothing recorded, nothing to disclose — even if the flag says otherwise.
+    assert!(!PagesReadDetail {
+        window_predates_ledger: true,
+        ..Default::default()
+    }
+    .predates_ledger());
+    assert!(!PagesReadDetail::default().predates_ledger());
 }
 
 #[test]
@@ -569,6 +582,7 @@ fn pages_read_detail_round_trips_over_the_wire() {
             label: "2026-08-01".to_string(),
             value: 41.0,
         }],
+        window_predates_ledger: true,
     };
     let json = serde_json::to_string(&detail).unwrap();
     assert_eq!(
@@ -578,4 +592,5 @@ fn pages_read_detail_round_trips_over_the_wire() {
     // Snake-case on the wire, as every other field on the summary is.
     assert!(json.contains("\"since_day\""), "{json}");
     assert!(json.contains("\"unmeasured_books\""), "{json}");
+    assert!(json.contains("\"window_predates_ledger\""), "{json}");
 }

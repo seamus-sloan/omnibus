@@ -236,9 +236,17 @@ fn hourly_rate(pages: Option<i64>, secs: Option<i64>) -> Option<f64> {
 /// measured nothing — the delta treats "no baseline" as new, and a missing
 /// baseline and an empty one are the same thing to it.
 ///
-/// `end` is **inclusive of its day**: the ledger is day-grained, and the
-/// current window it is compared against always includes a partial today, so
-/// truncating the baseline's boundary day would bias every comparison downward.
+/// The slice is half-open like every other bounded aggregate, but resolved a
+/// **day** at a time: the last day counted is the one `end - 1s` falls in. That
+/// keeps a partial boundary day in (the current window it is compared against
+/// always includes a partial today, so dropping it would bias every comparison
+/// downward) while keeping a boundary that lands exactly on midnight out.
+///
+/// The distinction is not academic. `compute::prev_window_from` clamps `end` to
+/// the current period's start once the elapsed slice fills the previous period,
+/// which happens on the last days of most months — and `date(end)` then names
+/// day one of the *current* window, so an inclusive comparison would count that
+/// day into its own baseline and report a 0% delta against it.
 pub(super) async fn pages_read_bounded(
     pool: &SqlitePool,
     user_id: i64,
@@ -250,7 +258,7 @@ pub(super) async fn pages_read_bounded(
                     CAST(ROUND(SUM(CAST(w.percent_gained AS REAL) * w.pages) / 100.0) AS INTEGER),
                     0)
          FROM ({}) w
-         WHERE w.pages IS NOT NULL AND w.day <= date(?, 'unixepoch')",
+         WHERE w.pages IS NOT NULL AND w.day <= date(? - 1, 'unixepoch')",
         ledger_in_window()
     );
     Ok(sqlx::query_scalar(&sql)
@@ -270,13 +278,32 @@ pub(super) async fn pages_detail(
     start: i64,
 ) -> Result<PagesReadDetail, StatsError> {
     let (measured_books, unmeasured_books) = pages_book_counts(pool, user_id, start).await?;
+    let since_day = ledger_epoch(pool).await?;
+    // Resolved here rather than from the `StatsRange`, because the range does
+    // not answer it: a Year window in the calendar year after the epoch is
+    // fully covered, and a Week window in the days just after it is not. Both
+    // sides are UTC `YYYY-MM-DD`, so a lexicographic compare is a date compare.
+    let window_predates_ledger = match since_day.as_deref() {
+        Some(epoch) => start_day(pool, start).await?.as_str() < epoch,
+        None => false,
+    };
     Ok(PagesReadDetail {
-        since_day: ledger_epoch(pool).await?,
+        since_day,
         measured_books,
         unmeasured_books,
         audio_books: audio_books(pool, user_id, start).await?,
         daily: pages_daily(pool, user_id, start).await?,
+        window_predates_ledger,
     })
+}
+
+/// The UTC day a window's `start` unix second falls in, as `YYYY-MM-DD`.
+/// Resolved in SQLite so it uses the same calendar the ledger buckets on.
+async fn start_day(pool: &SqlitePool, start: i64) -> Result<String, StatsError> {
+    Ok(sqlx::query_scalar("SELECT date(?, 'unixepoch')")
+        .bind(start)
+        .fetch_one(pool)
+        .await?)
 }
 
 /// Pages per UTC day within the window, active days only, ascending.

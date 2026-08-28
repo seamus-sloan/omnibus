@@ -1381,6 +1381,11 @@ struct PagesReadDetail: Codable, Sendable {
     var measuredBooks: Int64 = 0
     var unmeasuredBooks: Int64 = 0
     var audioBooks: Int64 = 0
+    /// Whether this window opens before `sinceDay`, so part of it is
+    /// unmeasurable. Server-computed against the window's real start — the
+    /// range alone does not answer it, and only the server knows where a
+    /// period begins.
+    var windowPredatesLedger = false
 
     // The wire type also carries a per-day `daily` series for the web tile's
     // drill-in chart. This screen has no drill-in, so it is left undecoded
@@ -1391,6 +1396,7 @@ struct PagesReadDetail: Codable, Sendable {
         case measuredBooks = "measured_books"
         case unmeasuredBooks = "unmeasured_books"
         case audioBooks = "audio_books"
+        case windowPredatesLedger = "window_predates_ledger"
     }
 
     init() {}
@@ -1403,11 +1409,17 @@ struct PagesReadDetail: Codable, Sendable {
         measuredBooks = try c.decodeIfPresent(Int64.self, forKey: .measuredBooks) ?? 0
         unmeasuredBooks = try c.decodeIfPresent(Int64.self, forKey: .unmeasuredBooks) ?? 0
         audioBooks = try c.decodeIfPresent(Int64.self, forKey: .audioBooks) ?? 0
+        windowPredatesLedger =
+            try c.decodeIfPresent(Bool.self, forKey: .windowPredatesLedger) ?? false
     }
 
     /// True when the window holds listening and no reading at all — the one
     /// empty state whose honest headline is `0`, not an em-dash.
     var audioOnly: Bool { audioBooks > 0 && measuredBooks == 0 && unmeasuredBooks == 0 }
+
+    /// True when the window starts before the ledger did, so part of it is
+    /// unmeasurable — and there is an epoch to name in the disclosure.
+    var predatesLedger: Bool { sinceDay != nil && windowPredatesLedger }
 }
 
 /// One superlative that names a book: which book won, and the figure it won

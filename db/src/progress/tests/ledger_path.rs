@@ -1,8 +1,10 @@
 //! The forward-progress ledger seen from the *write path* — the wiring
-//! `db::progress::ledger`'s own tests take as given. Two surfaces feed it and
+//! `db::progress::ledger`'s own tests take as given. Three surfaces feed it and
 //! they carry different payloads: a client that sends a percent (web reader,
 //! comic readers, Kobo) is ledgered by the upsert, and a client that sends only
-//! a CFI (the iOS reader) is ledgered by the derived-percent attach.
+//! a CFI (the iOS reader) is ledgered by whichever derived attach reaches the
+//! row first — `attach_derived_percent` off the request path, or the Kobo
+//! sync's `attach_derived_kobo_location`.
 
 use crate::init_db;
 
@@ -166,4 +168,72 @@ async fn attach_derived_percent_ledgers_nothing_when_the_attach_is_a_no_op() {
             .await
             .unwrap();
     assert_eq!(mark, Some(10));
+}
+
+#[tokio::test]
+async fn attach_derived_kobo_location_ledgers_the_percent_it_fills() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Ledger").await;
+
+    // A CFI-only write ledgers nothing, so the row sits with a NULL percent and
+    // the mark unset.
+    upsert_progress(&pool, user, &epub_update(&uuid, "epubcfi(/6/2)", None, T0))
+        .await
+        .unwrap();
+    assert_eq!(days(&pool, user).await, vec![]);
+
+    // The Kobo attach is the writer that fills it here — the request-path
+    // derivation would find nothing left to do — so it has to be the one that
+    // ledgers, or the gain is lost for good.
+    let baselined = attach_derived_kobo_location(&pool, user, &uuid, "{}", Some(20), T0)
+        .await
+        .unwrap();
+
+    assert!(baselined);
+    // First observation baselines, exactly as it does on every other path.
+    assert_eq!(days(&pool, user).await, vec![]);
+
+    upsert_progress(
+        &pool,
+        user,
+        &epub_update(&uuid, "epubcfi(/6/8)", Some(45), T0 + 60),
+    )
+    .await
+    .unwrap();
+
+    // 45 - 20: the Kobo-attached percent is the mark the next write differences
+    // against, which is the whole point of ledgering it.
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 25)]);
+}
+
+#[tokio::test]
+async fn attach_derived_kobo_location_does_not_move_the_mark_back_to_a_percent_it_did_not_set() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Ledger").await;
+
+    upsert_progress(
+        &pool,
+        user,
+        &epub_update(&uuid, "epubcfi(/6/8)", Some(60), T0),
+    )
+    .await
+    .unwrap();
+
+    // The row already has a percent, so `COALESCE` keeps 60 and the offered 10
+    // is discarded. Ledgering the *offered* value would drag the mark down to
+    // 10 and let the next write re-accrue ground already counted.
+    attach_derived_kobo_location(&pool, user, &uuid, "{}", Some(10), T0)
+        .await
+        .unwrap();
+    upsert_progress(
+        &pool,
+        user,
+        &epub_update(&uuid, "epubcfi(/6/12)", Some(70), T0 + 60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 10)]);
 }

@@ -1425,7 +1425,7 @@ async fn migration_0079_keeps_each_readers_own_row_when_orphans_collide() {
     );
 }
 
-/// Seed one forward-progress day bucket (migration 0081) for a book.
+/// Seed one forward-progress day bucket (migration 0083) for a book.
 async fn seed_daily_ledger(pool: &sqlx::SqlitePool, user: i64, uuid: &str, day: &str, gained: i64) {
     sqlx::query(
         "INSERT INTO reading_progress_daily

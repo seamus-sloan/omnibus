@@ -344,7 +344,7 @@ pub(super) fn DrillIn(
                 }
                 if metric == Metric::Pages {
                     {render_pages_rate(summary.pages_per_hour)}
-                    {render_pages_note(&summary.pages_detail, summary.pages_read, range)}
+                    {render_pages_note(&summary.pages_detail, summary.pages_read)}
                 }
                 if metric == Metric::Finished {
                     {render_finished_list(&summary.finished_books, summary.books_finished, &server_url)}
@@ -534,11 +534,7 @@ fn render_finished_row(book: &FinishedBook, server_url: &str) -> Element {
 /// for several different situations. Silence about the cutover in particular
 /// would leave a Lifetime total that quietly excludes years of reading looking
 /// like a Lifetime total.
-fn render_pages_note(
-    detail: &PagesReadDetail,
-    pages_read: Option<i64>,
-    range: StatsRange,
-) -> Element {
+fn render_pages_note(detail: &PagesReadDetail, pages_read: Option<i64>) -> Element {
     rsx! {
         div { class: "st-drill-pages-note", "data-testid": "stats-drill-pages-note",
             if detail.audio_only() {
@@ -553,13 +549,13 @@ fn render_pages_note(
                 p { class: "st-drill-delta-empty", {measured_line(detail)} }
             }
             if detail.unmeasured_books > 0 {
-                p { class: "st-drill-delta-empty", {unmeasured_line(detail.unmeasured_books)} }
+                p { class: "st-drill-delta-empty", {unmeasured_line(detail.unmeasured_books, detail.measured_books > 0)} }
             }
             if let Some(since) = &detail.since_day {
                 p {
                     class: "st-drill-delta-empty",
                     "data-testid": "stats-drill-pages-cutover",
-                    {cutover_line(since, detail.predates_ledger(range))}
+                    {cutover_line(since, detail.predates_ledger())}
                 }
             }
         }
@@ -575,10 +571,17 @@ fn measured_line(detail: &PagesReadDetail) -> String {
 
 /// The books whose length nothing on the ladder resolves. Named rather than
 /// absorbed: they were read, and the total does not include them.
-fn unmeasured_line(n: i64) -> String {
-    let (plural, verb) = if n == 1 { ("", "has") } else { ("s", "have") };
+fn unmeasured_line(n: i64, any_measured: bool) -> String {
+    let (plural, verb, pronoun) = if n == 1 {
+        ("", "has", "it")
+    } else {
+        ("s", "have", "they")
+    };
+    // "more" only reads as English when a count came before it. When nothing
+    // was measured, the line above says so and this one is the whole story.
+    let more = if any_measured { "more " } else { "" };
     format!(
-        "{n} more book{plural} {verb} no known length yet, so nothing they contributed is counted."
+        "{n} {more}book{plural} {verb} no known length yet, so nothing {pronoun} contributed is counted."
     )
 }
 

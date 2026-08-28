@@ -364,6 +364,30 @@ async fn pages_read_bounded_covers_its_slice_inclusive_of_the_boundary_day() {
     assert_eq!(pages, 20);
 }
 
+/// Midnight UTC on 2023-11-15 — `compute::prev_window_from` clamps a baseline's
+/// `end` to the current period's start, which is always a day boundary.
+const T0_NEXT_MIDNIGHT: i64 = 1_700_006_400;
+
+#[tokio::test]
+async fn pages_read_bounded_excludes_a_boundary_landing_exactly_on_midnight() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-a", None, Some(100)).await;
+    read_percent(&pool, user, "uuid-a", "2023-11-14", 20).await;
+    read_percent(&pool, user, "uuid-a", "2023-11-15", 40).await;
+
+    // `end` at midnight means zero elapsed seconds on the day it names, so that
+    // day belongs to the *next* window. Counting it would let the clamped
+    // baseline swallow day one of the window it is the baseline for, and report
+    // a 0% delta against a day comparing with itself.
+    let pages = pages_read_bounded(&pool, user, T0, T0_NEXT_MIDNIGHT)
+        .await
+        .unwrap();
+
+    assert_eq!(pages, 20);
+}
+
 #[tokio::test]
 async fn pages_read_bounded_is_zero_rather_than_none_for_an_empty_baseline() {
     let pool = init_db("sqlite::memory:").await.unwrap();
@@ -459,6 +483,34 @@ async fn pages_detail_carries_the_ledger_epoch_so_the_cutover_can_be_stated() {
     // without saying so.
     let since = detail.since_day.expect("migration 0083 records the epoch");
     assert_eq!(since.len(), 10, "expected YYYY-MM-DD, got {since}");
+}
+
+#[tokio::test]
+async fn pages_detail_flags_a_window_that_opens_before_the_ledger_did() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    // The epoch is stamped `date('now')` by the migration, so a window opening
+    // at the unix epoch certainly predates it and one opening now does not.
+    // The range never enters into it — only where the window actually starts.
+    assert!(
+        pages_detail(&pool, user, 0)
+            .await
+            .unwrap()
+            .window_predates_ledger
+    );
+
+    // CAST: `strftime` returns TEXT, which will not decode as an `i64`.
+    let now: i64 = sqlx::query_scalar("SELECT CAST(strftime('%s','now') AS INTEGER)")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !pages_detail(&pool, user, now)
+            .await
+            .unwrap()
+            .window_predates_ledger
+    );
 }
 
 #[tokio::test]

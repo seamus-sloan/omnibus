@@ -388,7 +388,7 @@ struct PagesReadDetailCodecTests {
     @Test("the pages detail decodes every key the server sends")
     func decodesPagesDetail() throws {
         let json = summaryJSON(
-            extra: #","pages_detail":{"since_day":"2026-08-01","measured_books":3,"unmeasured_books":1,"audio_books":2,"daily":[{"label":"2026-08-01","value":41.0}]}"#
+            extra: #","pages_detail":{"since_day":"2026-08-01","measured_books":3,"unmeasured_books":1,"audio_books":2,"window_predates_ledger":true,"daily":[{"label":"2026-08-01","value":41.0}]}"#
         )
         let summary = try decodeSummary(json)
         #expect(summary.pagesDetail.sinceDay == "2026-08-01")
@@ -397,6 +397,7 @@ struct PagesReadDetailCodecTests {
         #expect(summary.pagesDetail.measuredBooks == 3)
         #expect(summary.pagesDetail.unmeasuredBooks == 1)
         #expect(summary.pagesDetail.audioBooks == 2)
+        #expect(summary.pagesDetail.windowPredatesLedger)
     }
 
     @Test("a server that predates the pages detail still decodes")
@@ -448,20 +449,26 @@ struct PagesReadTileTests {
         #expect(StatsView.pagesValue(StatsSummary()) == "\u{2014}")
     }
 
-    @Test("only the ranges that reach past the epoch carry the cutover note")
-    func cutoverNoteFollowsTheRange() throws {
+    @Test("the cutover note follows the server's overlap answer, not the range")
+    func cutoverNoteFollowsTheOverlap() throws {
         var summary = StatsSummary()
         summary.pagesDetail.sinceDay = "2026-08-01"
+        summary.pagesDetail.windowPredatesLedger = true
         summary.range = .allTime
         #expect(StatsView.pagesCutoverNote(summary)?.contains("2026-08-01") == true)
-        summary.range = .year
-        #expect(StatsView.pagesCutoverNote(summary) != nil)
-        summary.range = .month
-        #expect(StatsView.pagesCutoverNote(summary) == nil)
+        // A Week window in the days right after the epoch does reach past it,
+        // and the old range gate silently dropped the caveat there.
         summary.range = .week
+        #expect(StatsView.pagesCutoverNote(summary) != nil)
+
+        // A Year window in the calendar year after the epoch is fully covered,
+        // and the old range gate claimed otherwise forever.
+        summary.pagesDetail.windowPredatesLedger = false
+        summary.range = .year
         #expect(StatsView.pagesCutoverNote(summary) == nil)
+
         // No epoch recorded, nothing to disclose.
-        summary.range = .allTime
+        summary.pagesDetail.windowPredatesLedger = true
         summary.pagesDetail.sinceDay = nil
         #expect(StatsView.pagesCutoverNote(summary) == nil)
     }

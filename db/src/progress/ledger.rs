@@ -1,6 +1,8 @@
 //! Forward-progress ledger (migration `0083`): turns the mutable position row
 //! into an append-only record of how much of a book was covered on each day.
-//! `db::stats::pages` reads it; the position write path is the only writer.
+//! `db::stats::pages` reads it; the position write path is the only writer —
+//! every site that sets `reading_progress.progress_percent` must observe here
+//! too, or the ground that write covered is lost for good.
 
 use omnibus_shared::ProgressFormat;
 use sqlx::{Sqlite, SqlitePool, Transaction};

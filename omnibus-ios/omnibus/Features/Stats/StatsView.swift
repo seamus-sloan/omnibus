@@ -534,17 +534,19 @@ struct StatsView: View {
     }
 
     /// The cutover caption, or `nil` when the window is fully covered. Page
-    /// progress is differenced from stored positions, and none exist before the
-    /// ledger began, so a Year or Lifetime window reaching past that day is
-    /// only partly measurable and says so rather than reading as complete.
+    /// progress is differenced from stored positions and none exist before the
+    /// ledger began, so a window reaching past that day is only partly
+    /// measurable and says so rather than reading as complete.
+    ///
+    /// Gated on the server's own overlap answer, not on the range: a Year
+    /// window in the calendar year after the epoch is fully covered and must
+    /// not carry the caveat, while a Week window in the days right after it is
+    /// not covered and must.
     static func pagesCutoverNote(_ summary: StatsSummary) -> String? {
-        guard let since = summary.pagesDetail.sinceDay else { return nil }
-        switch summary.range {
-        case .year, .allTime:
-            return "Page tracking began \(since); reading before then isn\u{2019}t counted."
-        case .week, .month:
-            return nil
-        }
+        guard summary.pagesDetail.predatesLedger,
+            let since = summary.pagesDetail.sinceDay
+        else { return nil }
+        return "Page tracking began \(since); reading before then isn\u{2019}t counted."
     }
 
     private func finishedRail(_ books: [FinishedBook]) -> some View {
