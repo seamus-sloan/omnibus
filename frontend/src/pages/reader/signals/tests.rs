@@ -250,3 +250,47 @@ fn resolve_chapter_position_allows_a_matched_title_to_move_backward() {
     let (chapter, _) = resolve_chapter_position(&toc, &relocate_with_title("Chapter One"), 3);
     assert_eq!(chapter, 2);
 }
+
+// Regression for issue #2249 (AC1): the counter is 1-based against a
+// 1-based total, so a spine item the glue could not place in the TOC
+// reads `Ch 1 of N` rather than a `Ch 0 of N` that can never reach its
+// own total.
+#[test]
+fn resolve_chapter_position_floors_the_first_chapter_at_one() {
+    let toc = vec![toc_entry("Cover"), toc_entry("Chapter One")];
+    let (chapter, total) = resolve_chapter_position(&toc, &relocate_with_title(""), 0);
+    assert_eq!((chapter, total), (1, 2));
+}
+
+#[test]
+fn resolve_chapter_position_floors_an_unmatched_glue_index_at_one_without_a_toc() {
+    let incoming = RelocateData {
+        chapter: 0,
+        total_chapters: 318,
+        ..Default::default()
+    };
+    assert_eq!(resolve_chapter_position(&[], &incoming, 0), (1, 318));
+}
+
+// A book whose TOC has not resolved at all carries no total, so the
+// readout stays empty rather than claiming a chapter that isn't known.
+#[test]
+fn resolve_chapter_position_leaves_an_unknown_total_at_zero() {
+    assert_eq!(
+        resolve_chapter_position(&[], &RelocateData::default(), 0),
+        (0, 0)
+    );
+}
+
+// The last chapter reads `Ch N of N` — the floor never clamps a real
+// position, so the counter reaches its own total (#2249 AC1).
+#[test]
+fn resolve_chapter_position_reaches_the_total_on_the_last_chapter() {
+    let toc = vec![
+        toc_entry("Cover"),
+        toc_entry("Chapter One"),
+        toc_entry("Chapter Two"),
+    ];
+    let (chapter, total) = resolve_chapter_position(&toc, &relocate_with_title("Chapter Two"), 2);
+    assert_eq!((chapter, total), (3, 3));
+}

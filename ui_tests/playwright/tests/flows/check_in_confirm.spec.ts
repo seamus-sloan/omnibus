@@ -99,7 +99,8 @@ test.describe("check-in confirm and close-match", () => {
     await reachConfirm(page, uuid);
 
     await expect(page.getByTestId("check-in-book")).toContainText(TARGET.title);
-    await expect(page.getByText(`Scanned ISBN ${ISBN}`)).toBeVisible();
+    // Typed at the lookup field, so the line must not call it a scan (#2247).
+    await expect(page.getByText(`Entered ISBN ${ISBN}`)).toBeVisible();
 
     await page
       .getByTestId("check-in-note")
@@ -198,7 +199,7 @@ test.describe("check-in confirm and close-match", () => {
       page.getByRole("heading", { level: 1, name: "Is this the book?" }),
     ).toBeVisible();
     await expect(
-      page.getByText(`Scanned ISBN ${scanned.isbn13}`),
+      page.getByText(`Entered ISBN ${scanned.isbn13}`),
     ).toBeVisible();
     await expect(
       page.getByText("Library edition ISBN 9780000000000"),
@@ -208,7 +209,7 @@ test.describe("check-in confirm and close-match", () => {
 
     await expect(page.getByTestId("check-in-confirm")).toBeVisible();
     await expect(
-      page.getByText(`Scanned ISBN ${scanned.isbn13}`),
+      page.getByText(`Entered ISBN ${scanned.isbn13}`),
     ).toBeVisible();
   });
 

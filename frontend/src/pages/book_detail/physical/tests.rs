@@ -34,7 +34,8 @@ fn checked_in_label_prefixes_the_relative_phrase() {
 fn source_label_covers_every_variant() {
     assert_eq!(source_label(WishlistSource::Scan), "a scan");
     assert_eq!(source_label(WishlistSource::Detail), "this page");
-    assert_eq!(source_label(WishlistSource::Manual), "manual entry");
+    assert_eq!(source_label(WishlistSource::Manual), "an ISBN you entered");
+    assert_eq!(source_label(WishlistSource::Search), "a title search");
 }
 
 #[test]

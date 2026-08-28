@@ -32,7 +32,7 @@ use bookmarks_sheet::{use_mobile_bookmarks, BookmarksSheet, MobileBookmarks};
 use effects::{use_marquee_title_refresh, use_retarget_playback};
 use sheets::{snap_rate, ChaptersSheet, SleepSheet, SpeedSheet};
 use state::{sleep_pill_label, use_mobile_playback, SleepState};
-use view::{chapter_index_for_elapsed, format_hms, format_ms, PlayerView};
+use view::{chapter_index_for_elapsed, format_hm, format_hms, format_ms, PlayerView};
 
 pub use host::MobileAudioHost;
 pub(crate) use mini::mobile_dock_is_active;
@@ -432,7 +432,9 @@ fn render_player(p: PlayerProps) -> Element {
     let sheet_props = SheetProps {
         uuid: uuid.clone(),
         chapters,
-        total_label: view.total_label.clone(),
+        // Re-derived at the current rate rather than reused from the view:
+        // the sheet header sits above rate-adjusted row durations (#2246).
+        total_label: format_hm(remaining_at_rate(view.total_duration, rate)),
         elapsed,
         rate,
         sleep,
@@ -663,6 +665,7 @@ fn render_chapters_sheet(p: &SheetProps) -> Element {
                 chapters: p.chapters.as_ref().clone(),
                 current_index: p.chapter_index,
                 elapsed: p.elapsed,
+                rate: p.rate,
                 total_label: p.total_label.clone(),
             },
             on_seek: EventHandler::new(move |secs: f64| {

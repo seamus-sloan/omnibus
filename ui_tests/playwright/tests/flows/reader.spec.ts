@@ -89,6 +89,13 @@ test("renders the reader layout", async ({ page, request }) => {
   // SSR markup and are robust to that.
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
 
+  // The chapter counter is 1-based against a 1-based total (issue #2249):
+  // it must never open on `Ch 0 of N`, a readout that can never reach its
+  // own total.
+  await expect(page.getByTestId("reader-chapter-counter")).toHaveText(
+    /^Ch\u00a0[1-9]\d* of \d+$/,
+  );
+
   // Top chrome: back, contents, search, Aa, highlights, bookmark.
   await expect(page.getByTestId("reader-back")).toBeVisible();
   await expect(page.getByTestId("reader-toc")).toBeVisible();
@@ -107,6 +114,37 @@ test("renders the reader layout", async ({ page, request }) => {
   await expect(page.getByTestId("reader-font-increase")).toBeVisible();
   await expect(page.getByTestId("reader-spread-single")).toBeVisible();
   await expect(page.getByTestId("reader-spread-double")).toBeVisible();
+});
+
+// Regression for issue #2252: the Aa panel drops a full-surface `rd-scrim`
+// that used to intercept the Aa button, so the control that opened the panel
+// could not close it. All three dismissals are asserted together — the fix
+// lifts the top bar over the scrim, which must not cost the other two.
+test("the Aa button closes the display panel it opened", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/read/${uuid}`);
+  const aa = page.getByTestId("reader-aa");
+  const panel = page.getByTestId("reader-aa-panel");
+
+  await aa.click();
+  await expect(panel).toBeVisible();
+  await aa.click();
+  await expect(panel).toHaveCount(0);
+
+  // Escape still dismisses.
+  await aa.click();
+  await expect(panel).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveCount(0);
+
+  // …and so does a click on the scrim.
+  await aa.click();
+  await expect(panel).toBeVisible();
+  await page.locator(".rd-scrim").click();
+  await expect(panel).toHaveCount(0);
 });
 
 test("the back button leaves the reader for the book detail page", async ({

@@ -328,12 +328,12 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
             }
 
             // All three readouts share one rate-adjusted wall-clock basis
-            // (elapsed + remaining = total at the current speed) — a 1x
-            // elapsed or total beside a rate-adjusted remaining disagrees
-            // with its own row off 1x (#2108, matching the iOS player).
-            // Scaled after the scrub preview so a drag previews the
-            // rate-adjusted times too (matches the mobile player).
-            div { class: "lp-scrub-times",
+            // (elapsed + remaining = total at the current speed), the same
+            // one the chapter list's durations use (#2246) — a 1x label
+            // beside a rate-adjusted one disagrees with it off 1x (#2108,
+            // matching the iOS player). Scaled after the scrub preview so a
+            // drag previews the rate-adjusted times too.
+            div { class: "lp-scrub-times", "data-testid": "listen-scrub-times",
                 span { "{format_hms(helpers::remaining_at_rate(effective, rate))}" }
                 span { class: "lp-scrub-remaining",
                     "\u{00b7} {format_hms(helpers::remaining_at_rate(eff_remaining, rate))} remaining"

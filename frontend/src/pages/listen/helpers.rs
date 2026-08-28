@@ -329,14 +329,24 @@ pub(super) fn format_hms(seconds: f64) -> String {
 }
 
 /// Wall-clock seconds a listener at `rate` experiences for a real (1x)
-/// book-time span — remaining, elapsed, or a whole duration; falls back to
-/// `seconds` unscaled when `rate` is non-finite or non-positive. Shared by
-/// the web and mobile players and the landing resume hero so every readout
-/// on a row shares one basis: a 1x elapsed or total label beside a
-/// rate-adjusted remaining label disagrees with its own row the moment the
-/// speed leaves 1x (#2108). Positions that *name a place* in the book —
-/// bookmark timestamps, chapter start times, chapter-list lengths — stay 1x
-/// book-time; only elapsed/remaining/total rows scale.
+/// book-time span — remaining, elapsed, a chapter length, or a whole
+/// duration; falls back to `seconds` unscaled when `rate` is non-finite or
+/// non-positive.
+///
+/// **Every displayed span in the player goes through this.** A 2x listener
+/// is told the half-hour a one-hour book actually costs them, and no clock
+/// on screen reads 1x time while the rate is not 1x: the transport row and
+/// its drag bubble, the chapter lists' durations, both mini docks, the
+/// mobile player, the landing resume card, and the sleep timer's
+/// end-of-chapter countdown. A 1x label beside a rate-adjusted one
+/// disagrees with it the moment the speed leaves 1x — first as a mixed
+/// scrubber row (#2108), then as a transport total that described a
+/// different book than the chapter list under it (#2246).
+///
+/// The deliberate cost, accepted by the maintainer on #2246: a mid-book
+/// 1x→2x switch halves the elapsed readout, so it jumps backwards. Positions
+/// that *name a place* — bookmark stamps, chapter start times — are seek
+/// coordinates rather than clocks and stay 1x.
 pub(crate) fn remaining_at_rate(seconds: f64, rate: f64) -> f64 {
     if !rate.is_finite() || rate <= 0.0 {
         return seconds;

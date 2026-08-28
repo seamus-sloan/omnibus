@@ -173,23 +173,29 @@ far — the catalog is as much under test as the app.
 
 ## 8. Report back
 
-Until #2203 lands there is no report generator, so summarise by hand from the
-journal — not from agent prose, which is unverified:
+The report is generated, not written by hand — agent prose is unverified, and
+the journal plus the server log are the only records that are not.
 
 ```bash
-python3 - .claude/runtime/explore/$RUN/journal.jsonl <<'PY'
-import json,sys,collections
-rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-print(len(rows),"entries",collections.Counter(r.get("outcome") for r in rows))
-for r in rows:
-    if r.get("action","").startswith("anomaly"):
-        p=r.get("params") or {}
-        print(f"  seq={r.get('seq')} [{p.get('severity')}] {r.get('note','')[:100]}")
-PY
+python3 scripts/explore/report.py $RUN          # -> <journal dir>/$RUN/report.md
+python3 scripts/explore/report.py $RUN --out -  # to stdout
 ```
 
-Then verify anything high-severity yourself before repeating it to the user.
-The first run produced one retracted finding and one root-caused CSP bug; the
+It reads the run's `journal.jsonl`, the `audit.json` beside it if #2202 has
+written one, and the instance's JSON log sink over ssh, and emits one markdown
+document: a verdict paragraph, a severity-ranked anomaly list where every row
+cites the journal line to replay from, the server-log findings joined to the
+agent action that caused each one, the audit's unconfirmed writes, and a
+collapsed timeline. Sections with nothing in them are omitted, so a clean run is
+a short document — but an input it could not read is always named in the verdict
+rather than passing as clean.
+
+Two flags matter when the instance is unreachable: `--no-server-log` skips the
+fetch, and `--server-log <file>` reads a log you already have. `--window`
+widens the correlation search either side of a log line (default 90s).
+
+Then verify anything high-severity yourself before repeating it to the user. The
+first run produced one retracted finding and one root-caused CSP bug; the
 difference was checking.
 
 State plainly what was excluded, what was left on the instance, and the snapshot

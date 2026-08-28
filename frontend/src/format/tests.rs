@@ -51,6 +51,20 @@ fn plural_matches_count() {
 }
 
 #[test]
+fn plural_noun_is_singular_only_at_exactly_one() {
+    assert_eq!(plural_noun(0, "day"), "days");
+    assert_eq!(plural_noun(1, "day"), "day");
+    assert_eq!(plural_noun(2, "day"), "days");
+}
+
+#[test]
+fn count_label_pairs_the_count_with_a_matching_noun() {
+    assert_eq!(count_label(1, "session"), "1 session");
+    assert_eq!(count_label(4, "session"), "4 sessions");
+    assert_eq!(count_label(0, "session"), "0 sessions");
+}
+
+#[test]
 fn format_date_short_renders_a_full_iso_timestamp_with_offset() {
     assert_eq!(
         format_date_short("2016-05-02T21:00:00+00:00"),

@@ -41,17 +41,70 @@ pub(super) fn ListenDrawerShell(
 
 /// Scrim + `lp-panel` shell around an overlay panel's body (sleep timer,
 /// playback speed). `extra_class` appends the panel's own modifier class
-/// (`lp-sleep-panel` / `lp-speed-panel`); `testid` is optional since only the
-/// sleep panel carries one today.
+/// (`lp-sleep-panel` / `lp-speed-panel`); `label` names the dialog for
+/// assistive tech.
+///
+/// The panel takes focus once painted so Escape dismisses it without a prior
+/// click — it has no close button of its own, and before this the only way
+/// out was an unhinted click on empty space (#2242).
 #[component]
 pub(super) fn ListenPanelShell(
     extra_class: String,
-    #[props(default)] testid: Option<String>,
+    label: String,
+    testid: String,
     on_close: EventHandler<()>,
     children: Element,
 ) -> Element {
     rsx! {
         div { class: "lp-scrim", onclick: move |_| on_close.call(()) }
-        div { class: "lp-panel {extra_class}", "data-testid": testid, {children} }
+        div {
+            class: "lp-panel {extra_class}",
+            "data-testid": "{testid}",
+            role: "dialog",
+            "aria-label": "{label}",
+            tabindex: "-1",
+            onkeydown: move |evt: KeyboardEvent| {
+                if evt.key() == Key::Escape {
+                    evt.prevent_default();
+                    on_close.call(());
+                }
+            },
+            onmounted: move |evt: MountedEvent| crate::focus_after_paint::focus_after_paint(&evt),
+            {children}
+        }
+    }
+}
+
+// Render-smoke coverage of the overlay panel's dismissal chrome — a separate
+// module because SSR (`dioxus::ssr`) needs the `server` feature, and the
+// harness runs inside a real `VirtualDom` because `EventHandler::new` needs a
+// live runtime.
+#[cfg(all(test, feature = "server"))]
+mod render_tests {
+    use super::*;
+    use crate::test_support::render_in_vdom;
+
+    fn panel() -> Element {
+        rsx! {
+            ListenPanelShell {
+                extra_class: "lp-speed-panel",
+                label: "Playback speed",
+                testid: "speed-panel",
+                on_close: EventHandler::new(|()| {}),
+                div { "body" }
+            }
+        }
+    }
+
+    // Regression for issue #2242 (AC1): the panel carries no close button, so
+    // it has to be focusable and labelled for Escape to reach its keydown
+    // handler without a prior click.
+    #[test]
+    fn panel_shell_renders_a_focusable_labelled_dialog() {
+        let html = render_in_vdom(panel);
+        assert!(html.contains(r#"role="dialog""#), "{html}");
+        assert!(html.contains(r#"aria-label="Playback speed""#), "{html}");
+        assert!(html.contains(r#"tabindex="-1""#), "{html}");
+        assert!(html.contains(r#"data-testid="speed-panel""#), "{html}");
     }
 }

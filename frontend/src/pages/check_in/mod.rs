@@ -248,6 +248,65 @@ pub(crate) fn friendly_error(raw: &str) -> String {
     }
 }
 
+/// How the reader reached the book the flow is now holding.
+///
+/// The three front doors are not interchangeable in the copy: after a title
+/// search the ISBN on screen came from the *provider*, so describing it as
+/// one the reader entered or scanned is simply false (#2247). Carried through
+/// to the match screens and to the provenance a wishlist entry records.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) enum FoundVia {
+    /// An ISBN typed at the keypad or the lookup screen's field.
+    IsbnEntry,
+    /// An ISBN read off a barcode by the camera.
+    BarcodeScan,
+    /// A provider candidate picked out of a title search.
+    TitleSearch,
+}
+
+impl FoundVia {
+    /// Which door a lookup started from, read off the screen the reader
+    /// submitted. Only the scanner produces a barcode read; the keypad and
+    /// the lookup field are both typing.
+    pub(crate) fn from_stage(stage: &Stage) -> Self {
+        match stage {
+            Stage::Scan => FoundVia::BarcodeScan,
+            _ => FoundVia::IsbnEntry,
+        }
+    }
+
+    /// The line naming the ISBN the flow is working with.
+    pub(crate) fn isbn_line(self, isbn: &str) -> String {
+        match self {
+            FoundVia::IsbnEntry => format!("Entered ISBN {isbn}"),
+            FoundVia::BarcodeScan => format!("Scanned ISBN {isbn}"),
+            FoundVia::TitleSearch => format!("ISBN {isbn}, from the edition you picked"),
+        }
+    }
+
+    /// How the close-match screen explains that no library book carries this
+    /// ISBN. `many` is `books.len() > 1`.
+    pub(crate) fn no_library_match(self, many: bool) -> &'static str {
+        match (self, many) {
+            (FoundVia::IsbnEntry, true) => "The ISBN you entered isn't on any book in your library, but the title and author match these.",
+            (FoundVia::IsbnEntry, false) => "The ISBN you entered isn't on any book in your library, but the title and author match this one.",
+            (FoundVia::BarcodeScan, true) => "The ISBN you scanned isn't on any book in your library, but the title and author match these.",
+            (FoundVia::BarcodeScan, false) => "The ISBN you scanned isn't on any book in your library, but the title and author match this one.",
+            (FoundVia::TitleSearch, true) => "That edition's ISBN isn't on any book in your library, but the title and author match these.",
+            (FoundVia::TitleSearch, false) => "That edition's ISBN isn't on any book in your library, but the title and author match this one.",
+        }
+    }
+
+    /// The provenance a wishlist entry added down this path records.
+    pub(crate) fn wishlist_source(self) -> WishlistSource {
+        match self {
+            FoundVia::IsbnEntry => WishlistSource::Manual,
+            FoundVia::BarcodeScan => WishlistSource::Scan,
+            FoundVia::TitleSearch => WishlistSource::Search,
+        }
+    }
+}
+
 /// The flow's shared signals, `Copy` so every async handler can capture them.
 /// `isbn` lives here rather than in the entry screen so a failed lookup leaves
 /// the typed value in place to correct.
@@ -258,6 +317,9 @@ pub(crate) struct FlowState {
     pub(crate) note: Signal<String>,
     pub(crate) busy: Signal<bool>,
     pub(crate) error: Signal<Option<String>>,
+    /// Set by whichever door the current lookup came through, and read by
+    /// every screen downstream of it.
+    pub(crate) found_via: Signal<FoundVia>,
 }
 
 /// [`CheckInStage`]'s per-outcome callbacks, bundled into one prop so the
@@ -288,6 +350,7 @@ pub fn CheckInPage() -> Element {
         note: use_signal(String::new),
         busy: use_signal(|| false),
         error: use_signal(|| None),
+        found_via: use_signal(|| FoundVia::from_stage(&front_door())),
     };
 
     let on_resolve = make_on_resolve(server_url.clone(), state, nav, overlay_open);
@@ -344,11 +407,13 @@ fn CheckInStage(state: FlowState, handlers: CheckInHandlers) -> Element {
             mut note,
             mut busy,
             mut error,
+            mut found_via,
         } = state;
         error.set(None);
         note.set(String::new());
         isbn.set(String::new());
         busy.set(false);
+        found_via.set(FoundVia::from_stage(&front_door()));
         stage.set(front_door());
     });
 
@@ -473,6 +538,7 @@ fn close_match_stage(books: Vec<ScanBook>, scanned: ExternalBookMeta, state: Flo
         CloseMatchScreen {
             books,
             scanned,
+            found_via: (state.found_via)(),
             on_yes: EventHandler::new(move |book: ScanBook| {
                 stage.set(Stage::Confirm { book, isbn: isbn.clone() });
             }),
@@ -575,12 +641,14 @@ fn make_on_resolve(
         mut stage,
         mut busy,
         mut error,
+        mut found_via,
         ..
     } = state;
     move |raw: String| {
         // Captured before the stage moves to `Resolving`, so the async error
         // path below still knows which screen the reader came from.
         let fallback = manual_fallback(&stage());
+        found_via.set(FoundVia::from_stage(&stage()));
         let isbn = clean_isbn(&raw);
         if let Some(msg) = isbn_rejection(&isbn) {
             error.set(Some(msg));
@@ -631,11 +699,13 @@ fn make_on_pick(
         mut stage,
         mut busy,
         mut error,
+        mut found_via,
         ..
     } = state;
     move |meta: ExternalBookMeta| {
         let server_url = server_url.clone();
         let isbn = meta.isbn13.clone();
+        found_via.set(FoundVia::TitleSearch);
         error.set(None);
         busy.set(true);
         spawn(async move {
@@ -773,11 +843,15 @@ pub(crate) fn some_if_filled(s: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// The wishlist request for an online-resolved book on the 3c chooser.
-pub(crate) fn wishlist_request_for(online: &ExternalBookMeta) -> WishlistAddRequest {
+/// The wishlist request for an online-resolved book on the 3c chooser,
+/// stamped with the door the reader actually came through.
+pub(crate) fn wishlist_request_for(
+    online: &ExternalBookMeta,
+    found_via: FoundVia,
+) -> WishlistAddRequest {
     WishlistAddRequest {
         book_uuid: None,
         meta: Some(online.clone()),
-        source: WishlistSource::Scan,
+        source: found_via.wishlist_source(),
     }
 }

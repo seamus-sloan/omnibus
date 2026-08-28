@@ -34,6 +34,13 @@ const MULTIPART_MP3_BOOK = AUDIOBOOK_BOOKS.find(
 const LOCAL_SEED_BOOK = AUDIOBOOK_BOOKS.find(
   (b) => b.format === "MP3" && b.source === "public_domain",
 )!;
+// The one-clock spec needs chapters whose real lengths are minutes, not the
+// ~2.09s of a generated fixture: halving two seconds is invisible at the
+// second granularity `format_hms` renders, so a generated book would let a
+// 1x chapter list pass as a rate-adjusted one. The public-domain M4B is the
+// only long book no other spec persists a rate on — `LOCAL_SEED_BOOK` looks
+// like the better fit but the seed test leaves 1.80x saved on it.
+const CHAPTERED_BOOK = M4B_BOOK;
 
 /**
  * Wait until the listen page's manifest fetch has resolved and
@@ -284,6 +291,94 @@ test("surfaces playback speed persistence failures without reverting playback", 
   await expect(page.getByRole("alert")).toContainText(
     "Could not save playback speed",
   );
+});
+
+/** Seconds behind an `H:MM:SS` / `M:SS` label. */
+function hmsToSeconds(label: string): number {
+  const parts = label.split(":").map(Number);
+  return parts.reduce((acc, part) => acc * 60 + part, 0);
+}
+
+/** The transport's total (the third and last figure in the scrub-time row). */
+async function transportTotalSeconds(
+  page: import("@playwright/test").Page,
+): Promise<number> {
+  const text = (await page.getByTestId("listen-scrub-times").innerText())
+    .replace(/\s+/g, " ")
+    .trim();
+  const stamps = text.match(/\d+(?::\d\d)+/g) ?? [];
+  expect(stamps.length, `scrub row should carry three stamps: ${text}`).toBe(3);
+  return hmsToSeconds(stamps[2]!);
+}
+
+/** Every duration the chapters drawer lists, in seconds. */
+async function chapterDurationSeconds(
+  page: import("@playwright/test").Page,
+): Promise<number[]> {
+  const drawer = page.getByTestId("chapters-drawer");
+  await page.getByRole("button", { name: /^chapters/i }).click();
+  await expect(drawer).toBeVisible();
+  const text = (await drawer.innerText()).replace(/\s+/g, " ");
+  const stamps = text.match(/\d+(?::\d\d)+/g) ?? [];
+  expect(
+    stamps.length,
+    `drawer should list durations: ${text}`,
+  ).toBeGreaterThan(0);
+  // The drawer is painted over the toolbar it was opened from, so it closes
+  // by its own button rather than the toggle.
+  await drawer.getByRole("button", { name: /^Close/ }).click();
+  await expect(drawer).toHaveCount(0);
+  return stamps.map(hmsToSeconds);
+}
+
+// Regression for issue #2246. The transport divided its own figures by the
+// playback rate while the chapter list stayed in book time, so off 1x the two
+// described different books on one screen — a 7:05:08 total beside chapters
+// summing to 10:38:00. Both are rate-adjusted listening time now, so a 2x
+// listener sees the half-hour a one-hour book actually costs them.
+test("a speed change rescales the transport total and the chapter durations together", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, CHAPTERED_BOOK.title);
+  // The rate write is stubbed out: this asserts what the player *displays*,
+  // and a real write would set a speed every other test on this fixture sees.
+  await page.route(PLAYBACK_RATE_SET_URL, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({}),
+    }),
+  );
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+  await expect(page.getByTestId("listen-rate")).toHaveText("1.00×");
+
+  const totalAt1x = await transportTotalSeconds(page);
+  expect(totalAt1x).toBeGreaterThan(0);
+  const chaptersAt1x = await chapterDurationSeconds(page);
+
+  await page.getByRole("button", { name: "Playback speed" }).click();
+  await page.getByRole("button", { name: "2.0×", exact: true }).click();
+  await expect(page.getByTestId("listen-rate")).toHaveText("2.00×");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("speed-panel")).toHaveCount(0);
+
+  // Both readouts halve, so they still describe the same book — and the
+  // listener sees the time the book will actually take them. A second of
+  // slack per figure absorbs the truncation in `format_hms`.
+  const totalAt2x = await transportTotalSeconds(page);
+  expect(totalAt2x).toBeLessThan(totalAt1x);
+  expect(Math.abs(totalAt2x - totalAt1x / 2)).toBeLessThanOrEqual(1);
+
+  const chaptersAt2x = await chapterDurationSeconds(page);
+  expect(chaptersAt2x.length).toBe(chaptersAt1x.length);
+  chaptersAt2x.forEach((secs, i) => {
+    // Every figure must actually have moved — a chapter list left at 1x is
+    // exactly what this test exists to catch.
+    expect(secs, `chapter ${i} should rescale`).toBeLessThan(chaptersAt1x[i]!);
+    expect(Math.abs(secs - chaptersAt1x[i]! / 2)).toBeLessThanOrEqual(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -538,6 +633,81 @@ test("opens sleep panel and shows preset duration rail", async ({
   await expect(
     panel.getByRole("button", { name: "End of chapter" }),
   ).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// 8a. Overlay panel dismissal (speed + sleep)
+// ---------------------------------------------------------------------------
+
+// Regression for issue #2242. Neither panel has a close button, so before
+// this the only way out was an unhinted click on empty space — Escape did
+// nothing — and both were laid out on top of the transport they belong to,
+// covering play/pause and their own trigger.
+test("escape dismisses the speed and sleep panels", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  const speed = page.getByTestId("speed-panel");
+  await page.getByRole("button", { name: "Playback speed" }).click();
+  await expect(speed).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(speed).toHaveCount(0);
+
+  const sleep = page.getByTestId("sleep-panel");
+  await page.getByRole("button", { name: /^sleep/i }).click();
+  await expect(sleep).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sleep).toHaveCount(0);
+});
+
+test("neither overlay panel covers play/pause or its own trigger", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  // `elementFromPoint` at a control's centre is the honest test: a panel that
+  // merely *looks* clear still swallows the click if it is painted on top.
+  const covers = (panelTestId: string, control: string) =>
+    page.evaluate(
+      ([panelSel, controlSel]) => {
+        const panel = document.querySelector(`[data-testid="${panelSel}"]`);
+        const control = document.querySelector(controlSel);
+        if (!panel || !control) return "missing";
+        const box = control.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          box.left + box.width / 2,
+          box.top + box.height / 2,
+        );
+        return hit && panel.contains(hit) ? "covered" : "clear";
+      },
+      [panelTestId, control] as const,
+    );
+
+  await page.getByRole("button", { name: "Playback speed" }).click();
+  await expect(page.getByTestId("speed-panel")).toBeVisible();
+  expect(await covers("speed-panel", '[data-testid="listen-toggle"]')).toBe(
+    "clear",
+  );
+  expect(await covers("speed-panel", '[data-testid="listen-rate"]')).toBe(
+    "clear",
+  );
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: /^sleep/i }).click();
+  await expect(page.getByTestId("sleep-panel")).toBeVisible();
+  expect(await covers("sleep-panel", '[data-testid="listen-toggle"]')).toBe(
+    "clear",
+  );
+  expect(await covers("sleep-panel", '[data-testid="listen-sleep"]')).toBe(
+    "clear",
+  );
 });
 
 // ---------------------------------------------------------------------------

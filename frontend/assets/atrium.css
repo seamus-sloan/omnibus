@@ -3537,8 +3537,13 @@ a.idx-letter-on:focus-visible {
 }
 
 /* Speed panel */
+/* Anchored over the cover column, never over the transport. Bottom-right put
+   the panel on top of play/pause, the +/-30s seeks and its own trigger, so the
+   control that opened it could not close it (#2242). The width tracks the
+   stage's left grid column — (100vw - 2*56px padding - 80px gap) / 2 — so it
+   can never cross the gap into the controls at any viewport width. */
 .lp-speed-panel {
-  right: 56px; bottom: 104px; width: 468px; padding: 28px;
+  left: 56px; bottom: 104px; width: min(468px, calc(50vw - 96px)); padding: 28px;
 }
 .lp-speed-value {
   font-family: var(--mono); font-size: 40px;
@@ -3613,8 +3618,9 @@ a.idx-letter-on:focus-visible {
 }
 
 /* Sleep panel */
+/* Same cover-column anchor as `.lp-speed-panel` above, same reason. */
 .lp-sleep-panel {
-  right: 56px; bottom: 104px; width: 430px; padding: 28px;
+  left: 56px; bottom: 104px; width: min(430px, calc(50vw - 96px)); padding: 28px;
 }
 .lp-sleep-status { text-align: right; }
 .lp-sleep-status-value {
@@ -3978,8 +3984,12 @@ a.idx-letter-on:focus-visible {
   }
   .lp-cover-ring { width: min(280px, 60%); }
   .lp-title { font-size: clamp(28px, 8vw, 48px); }
-  .lp-speed-panel { width: calc(100vw - 48px); right: 24px; bottom: 80px; }
-  .lp-sleep-panel { width: calc(100vw - 48px); right: 24px; bottom: 80px; }
+  /* The stage is one column here, cover above controls, so a bottom-anchored
+     panel lands straight on the transport. Anchor to the top instead — over
+     the cover, clear of play/pause and both triggers (#2242). */
+  .lp-speed-panel, .lp-sleep-panel {
+    left: 24px; right: 24px; width: auto; top: 72px; bottom: auto;
+  }
   .lp-drawer { width: 100%; }
 
   /* Shed the secondary controls (chapter jumps, ±30 seeks, volume, speed
@@ -6124,6 +6134,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-scrim { position: absolute; inset: 0; z-index: 8;
   background: color-mix(in oklch, var(--bg-0) 55%, transparent);
   backdrop-filter: blur(1.5px); }
+/* While the Aa panel is open its trigger has to stay clickable, so the top
+   bar (normally z-index 6, under the scrim) is lifted over the scrim — but
+   left under the panel itself at 16. The panel hangs below the bar, so this
+   changes nothing visually. */
+.rd-top.rd-top-over-scrim { z-index: 9; }
 .rd-scrim-clear { background: transparent; backdrop-filter: none; z-index: 18; }
 
 /* ── Selection popover (highlights) ────────────────────────────── */

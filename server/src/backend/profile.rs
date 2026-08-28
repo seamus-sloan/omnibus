@@ -5,12 +5,12 @@
 //! a journal byline or a ratings row renders any user's avatar.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
-use omnibus_db::{self as db};
+use omnibus_db::{self as db, auth::AvatarVariant};
 use serde::Deserialize;
 
 use super::conditional::{content_etag, MEDIA_CACHE_CONTROL, MEDIA_VARY};
@@ -68,19 +68,38 @@ pub(super) async fn delete_avatar(user: AuthUser, State(state): State<AppState>)
     }
 }
 
+/// Query for [`get_user_avatar`]: `?size=full` asks for the original upload.
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct AvatarQuery {
+    #[serde(default)]
+    size: Option<String>,
+}
+
 /// Serve a user's avatar bytes. Byte-derived `ETag` with `If-None-Match`
 /// revalidation: the URL is stable per user and the bytes are replaced in
 /// place, so a validator is what tells a client its cached copy went stale.
 /// `MEDIA_VARY` rides both the 200 and the 304 — the route authenticates by
 /// cookie, bearer, *or* `?token=`, so a shared cache must not hand one user's
 /// response to a differently-authenticated request on the same URL.
+///
+/// Serves the stored thumbnail by default; `?size=full` serves the original
+/// upload. Every avatar drawn today is a circle of at most 80px, and this
+/// route runs on every page that renders the nav, so the default has to be
+/// the small one (#2245). The validator is derived from whichever bytes are
+/// actually served, so the two renderings can't be confused for each other by
+/// a cache — the query string keeps them on separate URLs regardless.
 pub(super) async fn get_user_avatar(
     _user: MediaAuthUser,
     State(state): State<AppState>,
     Path(user_id): Path<i64>,
+    Query(query): Query<AvatarQuery>,
     headers: HeaderMap,
 ) -> Response {
-    match db::auth::get_user_avatar(&state.pool, user_id).await {
+    let variant = match query.size.as_deref() {
+        Some("full") => AvatarVariant::Full,
+        _ => AvatarVariant::Thumb,
+    };
+    match db::auth::get_user_avatar_variant(&state.pool, user_id, variant).await {
         Ok(Some(avatar)) => {
             let etag = content_etag(&avatar.bytes);
             if if_none_match_hits(&headers, &etag) {

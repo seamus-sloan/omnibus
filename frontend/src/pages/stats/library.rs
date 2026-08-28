@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{LibrarySize, MeasuredTotal};
 
 use super::group_thousands;
+use crate::format::plural_noun;
 
 /// One rendered figure: the total, its unit, and the coverage line beneath.
 struct Figure {
@@ -59,9 +60,10 @@ fn audio_value(seconds: i64) -> (String, &'static str) {
 /// it is a guess wearing a number.
 fn coverage(measured: &MeasuredTotal, library_books: i64) -> String {
     format!(
-        "across {} of {} books",
+        "across {} of {} {}",
         group_thousands(measured.books),
-        group_thousands(library_books)
+        group_thousands(library_books),
+        plural_noun(library_books, "book")
     )
 }
 

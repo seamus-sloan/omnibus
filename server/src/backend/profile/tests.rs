@@ -402,3 +402,81 @@ async fn avatar_writes_are_scoped_to_the_caller() {
         .unwrap()
         .is_none());
 }
+
+/// AC1/AC2 of #2245: the endpoint every nav render hits serves the
+/// downscaled WebP, not the multi-hundred-KB original — while the original
+/// stays reachable for a surface that wants it larger.
+#[tokio::test]
+async fn get_user_avatar_serves_the_thumbnail_by_default_and_the_original_on_request() {
+    let (app, _state, pool) = fixture().await;
+    let user = create_user(&pool, "alice").await;
+    let token = bearer_token(&pool, user.id).await;
+    let original = omnibus_db::test_support::solid_color_png(20, 120, 200, 1200, 1800);
+
+    let resp = app
+        .clone()
+        .oneshot(post_avatar_request(&token, "image/png", &original))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let uri = format!("/api/users/{}/avatar", user.id);
+    let resp = app
+        .clone()
+        .oneshot(get_with_bearer(&uri, &token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()[header::CONTENT_TYPE], "image/webp");
+    let thumb_etag = resp.headers()[header::ETAG].to_str().unwrap().to_string();
+    let thumb = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    assert!(
+        thumb.len() < original.len(),
+        "nav fetch was {} bytes for a {} byte upload",
+        thumb.len(),
+        original.len()
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(get_with_bearer(&format!("{uri}?size=full"), &token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()[header::CONTENT_TYPE], "image/png");
+    // Each rendering's validator is derived from the bytes actually served,
+    // so a client holding one can never be told the other is unchanged.
+    assert_ne!(resp.headers()[header::ETAG].to_str().unwrap(), thumb_etag);
+    let full = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(full.as_ref(), original.as_slice());
+}
+
+/// The thumbnail's validator revalidates like the original's — a matching
+/// `If-None-Match` on the default (thumbnail) URL answers 304.
+#[tokio::test]
+async fn get_user_avatar_answers_304_for_a_matching_thumbnail_validator() {
+    let (app, _state, pool) = fixture().await;
+    let user = create_user(&pool, "alice").await;
+    let token = bearer_token(&pool, user.id).await;
+    let original = omnibus_db::test_support::solid_color_png(20, 120, 200, 400, 400);
+    app.clone()
+        .oneshot(post_avatar_request(&token, "image/png", &original))
+        .await
+        .unwrap();
+
+    let uri = format!("/api/users/{}/avatar", user.id);
+    let first = app
+        .clone()
+        .oneshot(get_with_bearer(&uri, &token))
+        .await
+        .unwrap();
+    let etag = first.headers()[header::ETAG].to_str().unwrap().to_string();
+
+    let second = app
+        .clone()
+        .oneshot(get_with_bearer_and_if_none_match(&uri, &token, &etag))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(second.headers()[header::VARY], "Cookie, Authorization");
+}

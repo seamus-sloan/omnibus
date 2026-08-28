@@ -100,6 +100,14 @@ pub enum Task {
     /// clears stale structure and this task re-extracts it. Keyed on
     /// `library_path`; does not consume the scan semaphore.
     BackfillEpubStructure { library_path: String },
+    /// Re-extract covers for EPUB books the indexer left without one. Posted
+    /// by the [`Task::Scan`] handler on success, *before*
+    /// [`Task::BackfillThumbs`] so a cover this fills is thumbnailed in the
+    /// same pass. Keyed on `library_path`; does not consume the scan
+    /// semaphore. Exists because the reindex diff skips unchanged files, so
+    /// a scanner fix would otherwise never reach a book already in the
+    /// library (#2240).
+    BackfillCovers { library_path: String },
     /// Pre-generate WebP thumbnails (all three sizes) for every covered book
     /// under `library_path`. Posted by the [`Task::Scan`] handler on
     /// success, alongside [`Task::BackfillWordCounts`] /
@@ -199,6 +207,7 @@ impl Task {
             Task::BackfillWordCounts { library_path } => Some(library_path.clone()),
             Task::BackfillPageCounts { library_path } => Some(library_path.clone()),
             Task::BackfillEpubStructure { library_path } => Some(library_path.clone()),
+            Task::BackfillCovers { library_path } => Some(library_path.clone()),
             Task::BackfillThumbs { library_path } => Some(library_path.clone()),
             Task::RebuildFtsIndex => Some("rebuild-fts".into()),
             Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
@@ -228,6 +237,7 @@ impl Task {
             Task::BackfillWordCounts { .. } => false,
             Task::BackfillPageCounts { .. } => false,
             Task::BackfillEpubStructure { .. } => false,
+            Task::BackfillCovers { .. } => false,
             Task::BackfillThumbs { .. } => false,
             Task::RebuildFtsIndex => false,
             Task::ResolveSuggestions { .. } => false,
@@ -273,6 +283,7 @@ impl Task {
             Task::BackfillWordCounts { .. } => "backfill_word_counts",
             Task::BackfillPageCounts { .. } => "backfill_page_counts",
             Task::BackfillEpubStructure { .. } => "backfill_epub_structure",
+            Task::BackfillCovers { .. } => "backfill_covers",
             Task::BackfillThumbs { .. } => "backfill_thumbs",
             Task::RebuildFtsIndex => "rebuild_fts_index",
             Task::ResolveSuggestions { .. } => "resolve_suggestions",
@@ -305,6 +316,8 @@ impl Task {
             Task::BackfillPageCounts { .. } => TaskKind::Scan,
             // Same reuse again — a scan-follow-up with no dedicated widget.
             Task::BackfillEpubStructure { .. } => TaskKind::Scan,
+            // Same reuse: a scan-follow-up with no dedicated widget of its own.
+            Task::BackfillCovers { .. } => TaskKind::Scan,
             // Reuse the per-book GenerateThumbs kind rather than Scan: unlike
             // its sibling backfills, this one has an existing, sensible
             // "Generating thumbnail" / "Thumbnail generation" label already

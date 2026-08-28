@@ -7,11 +7,20 @@ name: TestFlight
 # v* tag, which run-name can't know yet.
 run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.marketing_version) || 'latest tag' }}"
 
-# Manually-triggered iOS build + TestFlight upload for the native SwiftUI app
-# (omnibus-ios/ Xcode project, bundle com.omnibus.mobile). The Apple side must
-# already exist: the app record, the distribution cert, the App Store Connect
-# API key, and — because the app embeds a widget extension — **two** App IDs
-# with **two** App Store provisioning profiles, one per embedded bundle.
+# Manually-triggered iOS build, TestFlight upload, and external-tester
+# distribution for the native SwiftUI app (omnibus-ios/ Xcode project, bundle
+# com.omnibus.mobile). The Apple side must already exist: the app record, the
+# distribution cert, the App Store Connect API key, and — because the app embeds
+# a widget extension — **two** App IDs with **two** App Store provisioning
+# profiles, one per embedded bundle.
+#
+# Uploading is not distributing, which is why there is a third job. `altool`
+# delivers the binary and stops; an internal group can be set to auto-distribute
+# but an external one cannot, so a build nobody explicitly adds to the group is
+# invisible to every tester on the public link while this workflow still reports
+# success. The `distribute` job closes that gap — see
+# scripts/testflight_distribute.py for the logic and env contract, and the
+# BETA_GROUPS value in that job for the group names it targets.
 #
 # The build is a real .xcodeproj archived **signed** by `xcodebuild archive`,
 # re-signed for distribution at `xcodebuild -exportArchive` (manual signing,
@@ -58,6 +67,15 @@ on:
         description: "CFBundleShortVersionString (user-visible version). Defaults to the latest v* release tag, so it tracks the server release."
         required: false
         type: string
+      whats_new:
+        description: "What to Test note shown to TestFlight testers. Leave blank to keep whatever App Store Connect already has."
+        required: false
+        type: string
+      distribute_externally:
+        description: "Add the build to the external tester groups (and submit for Beta App Review if needed)."
+        required: false
+        default: true
+        type: boolean
 
 concurrency:
   group: testflight-${{ github.ref }}
@@ -67,14 +85,17 @@ permissions:
   contents: read
 
 jobs:
-  # Resolve the user-visible marketing version. Prefer the dispatch input;
-  # otherwise the latest v* git tag (the same tags release.yml mints), so
-  # TestFlight tracks the server release.
+  # Resolve the version pair every later job stamps or looks the build up by.
+  # The marketing version prefers the dispatch input, otherwise the latest v* git
+  # tag (the same tags release.yml mints), so TestFlight tracks the server
+  # release. Both are validated here rather than in the ios job so a malformed
+  # input costs seconds instead of a 20-minute macOS archive.
   version:
     name: resolve marketing version
     runs-on: ubuntu-latest
     outputs:
       marketing_version: ${{ steps.resolve.outputs.version }}
+      build_number: ${{ steps.resolve.outputs.build_number }}
     steps:
       # fetch-depth: 0 pulls full history + tags so `git describe` can find the
       # latest release tag (checkout fetches neither by default).
@@ -85,6 +106,10 @@ jobs:
         id: resolve
         env:
           INPUT_VERSION: ${{ github.event.inputs.marketing_version }}
+          # Defaulting to run_number is only monotonic if nobody has ever
+          # dispatched a higher literal — once someone does, every later default
+          # is rejected by App Store Connect for going backwards.
+          INPUT_BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}
         run: |
           set -euo pipefail
           if [ -n "$INPUT_VERSION" ]; then
@@ -94,14 +119,26 @@ jobs:
             [ -n "$tag" ] || { echo "::error::No v* git tag found and no marketing_version input given."; exit 1; }
             version="${tag#v}"
           fi
-          # Reject anything but digits and dots before writing to $GITHUB_OUTPUT: a
-          # dispatch input containing a newline would otherwise inject extra output
-          # assignments.
-          case "$version" in
-            '' | *[!0-9.]*) echo "::error::marketing version must be numeric/dot-separated, got: '$version'"; exit 1 ;;
-          esac
-          echo "Marketing version: $version"
+          # Both values must be a dotted sequence of non-empty integer segments.
+          # The character class is what stops a dispatch input containing a
+          # newline from injecting extra assignments into $GITHUB_OUTPUT; the
+          # three dot patterns reject the malformed placements it lets through
+          # (".1", "1.", "1..2"), which archive happily and are only rejected
+          # once App Store Connect processes the upload — minutes after the run
+          # has already gone green. The build number reaches the distribute job
+          # too, so a bad one now also breaks the build lookup.
+          require_dotted_integers() { # <label> <value>
+            case "$2" in
+              '' | *[!0-9.]* | .* | *. | *..*)
+                echo "::error::$1 must be a dotted sequence of integers, got: '$2'"
+                exit 1 ;;
+            esac
+          }
+          require_dotted_integers "marketing version" "$version"
+          require_dotted_integers "build_number" "$INPUT_BUILD_NUMBER"
+          echo "Marketing version: $version (build $INPUT_BUILD_NUMBER)"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'build_number=%s\n' "$INPUT_BUILD_NUMBER" >> "$GITHUB_OUTPUT"
 
   # ---- ios: native SwiftUI app (com.omnibus.mobile) ---------------------------
   ios:
@@ -118,11 +155,9 @@ jobs:
       # injected per-job and isn't governed by `permissions:`.
       actions: write
     env:
-      # Validated in the Archive step. Defaulting to run_number is only
-      # monotonic if nobody has ever dispatched a higher literal — once
-      # someone does, every later default is rejected by App Store Connect
-      # for going backwards.
-      BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}
+      # Both resolved and validated by the version job, so the archive and the
+      # distribute job look the build up by the same pair.
+      BUILD_NUMBER: ${{ needs.version.outputs.build_number }}
       MARKETING_VERSION: ${{ needs.version.outputs.marketing_version }}
       # The team the omnibus-ios project + the distribution cert belong to.
       DEVELOPMENT_TEAM: "D33VSDXHA6"
@@ -180,14 +215,6 @@ jobs:
       - name: Archive
         run: |
           set -euo pipefail
-          # CURRENT_PROJECT_VERSION must be a dotted integer sequence. An input
-          # like "1.0-rc1" builds happily and is only rejected once App Store
-          # Connect processes the upload, minutes after the run goes green.
-          case "$BUILD_NUMBER" in
-            '' | *[!0-9.]*)
-              echo "::error::build_number must be numeric/dot-separated, got: '$BUILD_NUMBER'"
-              exit 1 ;;
-          esac
           xcodebuild \
             -project omnibus-ios/omnibus.xcodeproj \
             -scheme omnibus \
@@ -337,3 +364,45 @@ jobs:
             security delete-keychain "$SIGNING_KEYCHAIN" || true
           fi
           rm -f "$HOME/.appstoreconnect/private_keys"/*.p8 2>/dev/null || true
+
+  # ---- distribute: hand the processed build to the external testers ----------
+  # Uploading is not distributing. `altool` delivers the binary and nothing more;
+  # an internal group can be set to auto-distribute, but an **external** group
+  # cannot, so a build nobody adds to one stays invisible to every tester on the
+  # public link while this workflow reports success. That is what this job fixes.
+  #
+  # Pure App Store Connect API, so it runs on ubuntu rather than paying for macOS
+  # minutes, and it waits out processing itself — the build resource does not
+  # exist for a minute or two after the upload returns.
+  distribute:
+    name: distribute (external testers)
+    needs: [version, ios]
+    if: ${{ inputs.distribute_externally }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: python -m pip install --quiet "pyjwt[crypto]" requests
+
+      - name: Add build to TestFlight groups
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          BUNDLE_ID: com.omnibus.mobile
+          MARKETING_VERSION: ${{ needs.version.outputs.marketing_version }}
+          BUILD_NUMBER: ${{ needs.version.outputs.build_number }}
+          # Exact App Store Connect group names, comma-separated — so renaming a
+          # group over there has to be mirrored here. A name matching nothing
+          # fails the job, deliberately: distributing to no one and exiting 0 is
+          # the failure this whole job exists to prevent.
+          BETA_GROUPS: "First 20 Testers"
+          WHATS_NEW: ${{ inputs.whats_new }}
+        run: python scripts/testflight_distribute.py

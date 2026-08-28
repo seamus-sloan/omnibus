@@ -15,6 +15,7 @@ pub(super) fn Sidebar(
     book: EbookMetadata,
     saving: Signal<bool>,
     on_revert: EventHandler<()>,
+    on_cover_applied: EventHandler<EbookMetadata>,
 ) -> Element {
     let uuid = book.unique_identifier.clone().unwrap_or_default();
     let identifiers = book.identifiers.clone();
@@ -36,7 +37,10 @@ pub(super) fn Sidebar(
             CoverEditor {
                 book: book.clone(),
                 uuid,
-                on_change: move |updated| live_book.set(updated),
+                on_change: move |updated: EbookMetadata| {
+                    live_book.set(updated.clone());
+                    on_cover_applied.call(updated);
+                },
             }
 
             // Identifiers (read-only for v1)

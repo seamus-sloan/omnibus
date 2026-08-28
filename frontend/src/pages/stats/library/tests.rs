@@ -59,6 +59,13 @@ fn coverage_always_states_the_denominator() {
     );
 }
 
+// Issue #2250: the denominator's noun pluralizes on the denominator, so a
+// one-book library doesn't read "across 1 of 1 books".
+#[test]
+fn coverage_pluralizes_the_denominator_noun() {
+    assert_eq!(coverage(&measured(1, 1), 1), "across 1 of 1 book");
+}
+
 #[test]
 fn build_figures_skips_anything_the_library_has_not_measured() {
     // Words backfilled, no comics or print counts beyond them, no audiobooks
