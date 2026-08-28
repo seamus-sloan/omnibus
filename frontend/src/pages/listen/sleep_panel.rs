@@ -31,6 +31,7 @@ pub(super) fn SleepPanel(state: SleepPanelState, on_close: EventHandler<()>) -> 
     rsx! {
         ListenPanelShell {
             extra_class: "lp-sleep-panel",
+            label: "Sleep timer",
             testid: "sleep-panel",
             on_close,
             SleepPanelBody { state }

@@ -248,9 +248,18 @@ fn reader_tool_row(state: &ReaderChromeState, handlers: &ReaderChromeHandlers) -
 /// Top navigation bar: back button, title + chapter display, Aa + bookmark tools.
 #[component]
 fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> Element {
+    // The Aa panel's scrim covers the whole surface, the Aa button included,
+    // so the control that opened the panel could not close it (#2252). Lift
+    // the bar over the scrim while that panel is open; the panel itself
+    // clears the bar, so nothing else moves.
+    let top_class = if state.show_aa {
+        "rd-top rd-top-over-scrim"
+    } else {
+        "rd-top"
+    };
     rsx! {
         div {
-            class: "rd-top",
+            class: "{top_class}",
             button {
                 class: "rd-tool",
                 r#type: "button",
@@ -348,5 +357,64 @@ pub(super) fn ReaderPageTurnButtons(
                 path { d: "M9.5 5l7 7-7 7" }
             }
         }
+    }
+}
+
+// Render-smoke coverage of the top bar's scrim-lift class — a separate
+// module because SSR (`dioxus::ssr`) needs the `server` feature, and the
+// harnesses run inside a real `VirtualDom` because `EventHandler::new`
+// needs a live runtime.
+#[cfg(all(test, feature = "server"))]
+mod render_tests {
+    use super::*;
+    use crate::test_support::render_in_vdom;
+
+    fn chrome(show_aa: bool) -> Element {
+        let noop = || EventHandler::new(|_: MouseEvent| {});
+        rsx! {
+            ReaderTopChrome {
+                state: ReaderChromeState {
+                    book_title: "Alpha".into(),
+                    chapter_title: String::new(),
+                    title_sub: String::new(),
+                    show_aa,
+                    toc_active: false,
+                    search_active: false,
+                    highlights_active: false,
+                    bookmarks_active: false,
+                    annotations_active: false,
+                    highlight_count: 0,
+                },
+                handlers: ReaderChromeHandlers {
+                    on_back: noop(),
+                    on_toggle_aa: noop(),
+                    on_toggle_toc: noop(),
+                    on_toggle_search: noop(),
+                    on_toggle_highlights: noop(),
+                    on_toggle_bookmarks: noop(),
+                    on_toggle_annotations: noop(),
+                },
+            }
+        }
+    }
+
+    fn aa_open() -> Element {
+        chrome(true)
+    }
+
+    fn aa_shut() -> Element {
+        chrome(false)
+    }
+
+    // Regression for issue #2252: the Aa panel's scrim covers the whole
+    // reader surface, so without this lift the button that opened the panel
+    // sits under the scrim and cannot close it again.
+    #[test]
+    fn top_bar_is_lifted_over_the_scrim_only_while_the_aa_panel_is_open() {
+        let open = render_in_vdom(aa_open);
+        assert!(open.contains("rd-top rd-top-over-scrim"), "{open}");
+
+        let shut = render_in_vdom(aa_shut);
+        assert!(!shut.contains("rd-top-over-scrim"), "{shut}");
     }
 }

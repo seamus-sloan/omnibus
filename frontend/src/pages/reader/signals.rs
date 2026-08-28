@@ -113,24 +113,38 @@ pub(crate) fn format_progress_labels(loc: &RelocateData) -> (String, String) {
 /// order rather than the glue's `chapter`/`total_chapters` pair verbatim,
 /// carrying the previous chapter forward instead of regressing to 0 when
 /// the incoming title doesn't match any TOC entry.
+///
+/// The returned chapter is **1-based against a 1-based total** — the reader
+/// opens on `Ch 1 of N` and ends on `Ch N of N`. The glue reports 0 for a
+/// spine item with no TOC entry (front matter) and the first relocate has no
+/// previous chapter to carry forward, so both would otherwise render
+/// `Ch 0 of N` — a counter that can never reach its own total (#2249).
+/// A total of 0 means "no TOC at all" and stays `(0, 0)` so the readout
+/// renders empty rather than inventing a chapter.
 #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 pub(crate) fn resolve_chapter_position(
     toc: &[TocEntry],
     incoming: &RelocateData,
     previous_chapter: u32,
 ) -> (u32, u32) {
-    if toc.is_empty() {
-        return (incoming.chapter, incoming.total_chapters);
-    }
-    let total = toc.len() as u32;
-    let chapter = if incoming.chapter_title.is_empty() {
-        previous_chapter
+    let (chapter, total) = if toc.is_empty() {
+        (incoming.chapter, incoming.total_chapters)
     } else {
-        toc.iter()
-            .position(|entry| entry.label == incoming.chapter_title)
-            .map_or(previous_chapter, |idx| idx as u32 + 1)
+        let total = toc.len() as u32;
+        let chapter = if incoming.chapter_title.is_empty() {
+            previous_chapter
+        } else {
+            toc.iter()
+                .position(|entry| entry.label == incoming.chapter_title)
+                .map_or(previous_chapter, |idx| idx as u32 + 1)
+        };
+        (chapter, total)
     };
-    (chapter, total)
+    if total > 0 {
+        (chapter.max(1), total)
+    } else {
+        (chapter, total)
+    }
 }
 
 /// Format the phone minimal-chrome footer: just the page number (or the

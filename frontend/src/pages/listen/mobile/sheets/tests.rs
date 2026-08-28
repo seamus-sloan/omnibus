@@ -94,6 +94,7 @@ mod render {
                 ],
                 current_index: 0,
                 elapsed: 100.0,
+                rate: 1.0,
                 total_label: "15m".to_string(),
             };
             rsx! {
@@ -104,6 +105,37 @@ mod render {
         assert!(html.contains("Intro"));
         assert!(html.contains("Part One"));
         assert!(html.contains("2 \u{00b7} 15m"));
+    }
+
+    // Regression for issue #2246: an upcoming row's duration is rate-adjusted
+    // listening time, the same clock the transport reads, rather than a 1x
+    // length that disagrees with the total above it.
+    #[test]
+    fn chapters_sheet_rescales_row_durations_with_the_playback_rate() {
+        fn list_at(rate: f64) -> ChaptersListView {
+            ChaptersListView {
+                chapters: vec![
+                    chapter(1, "Intro", 0.0, 300.0),
+                    chapter(2, "Part One", 300.0, 600.0),
+                ],
+                current_index: 0,
+                elapsed: 0.0,
+                rate,
+                total_label: "15m".to_string(),
+            }
+        }
+        fn at_1x() -> Element {
+            rsx! {
+                ChaptersSheet { list: list_at(1.0), on_seek: move |_| {}, on_close: move |_| {} }
+            }
+        }
+        fn at_2x() -> Element {
+            rsx! {
+                ChaptersSheet { list: list_at(2.0), on_seek: move |_| {}, on_close: move |_| {} }
+            }
+        }
+        assert!(render_in_vdom(at_1x).contains("10:00"));
+        assert!(render_in_vdom(at_2x).contains("5:00"));
     }
 
     // Simulates the "chapter advanced" event: `super::view::chapter_index_for_elapsed`
@@ -122,6 +154,7 @@ mod render {
                 ],
                 current_index,
                 elapsed: 0.0,
+                rate: 1.0,
                 total_label: "15m".to_string(),
             }
         }

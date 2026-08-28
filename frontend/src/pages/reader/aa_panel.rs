@@ -19,6 +19,7 @@ pub(crate) fn ReaderAaPanel(on_close: EventHandler<MouseEvent>) -> Element {
         ReaderScrim { onclick: on_close }
         div {
             class: "rd-aa-panel",
+            "data-testid": "reader-aa-panel",
             onclick: move |evt: MouseEvent| evt.stop_propagation(),
 
             div { class: "rd-grabber" }

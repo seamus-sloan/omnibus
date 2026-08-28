@@ -97,7 +97,7 @@ pub fn format_ms(seconds: f64) -> String {
 }
 
 /// Coarse `Nh Mm` / `Mm` label for a whole-book total.
-fn format_hm(seconds: f64) -> String {
+pub(super) fn format_hm(seconds: f64) -> String {
     let s_total = bounded_secs(seconds);
     let h = s_total / 3600;
     let m = (s_total % 3600) / 60;
