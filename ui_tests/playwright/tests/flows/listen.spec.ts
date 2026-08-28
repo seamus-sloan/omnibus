@@ -541,6 +541,81 @@ test("opens sleep panel and shows preset duration rail", async ({
 });
 
 // ---------------------------------------------------------------------------
+// 8a. Overlay panel dismissal (speed + sleep)
+// ---------------------------------------------------------------------------
+
+// Regression for issue #2242. Neither panel has a close button, so before
+// this the only way out was an unhinted click on empty space — Escape did
+// nothing — and both were laid out on top of the transport they belong to,
+// covering play/pause and their own trigger.
+test("escape dismisses the speed and sleep panels", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  const speed = page.getByTestId("speed-panel");
+  await page.getByRole("button", { name: "Playback speed" }).click();
+  await expect(speed).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(speed).toHaveCount(0);
+
+  const sleep = page.getByTestId("sleep-panel");
+  await page.getByRole("button", { name: /^sleep/i }).click();
+  await expect(sleep).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sleep).toHaveCount(0);
+});
+
+test("neither overlay panel covers play/pause or its own trigger", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  // `elementFromPoint` at a control's centre is the honest test: a panel that
+  // merely *looks* clear still swallows the click if it is painted on top.
+  const covers = (panelTestId: string, control: string) =>
+    page.evaluate(
+      ([panelSel, controlSel]) => {
+        const panel = document.querySelector(`[data-testid="${panelSel}"]`);
+        const control = document.querySelector(controlSel);
+        if (!panel || !control) return "missing";
+        const box = control.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          box.left + box.width / 2,
+          box.top + box.height / 2,
+        );
+        return hit && panel.contains(hit) ? "covered" : "clear";
+      },
+      [panelTestId, control] as const,
+    );
+
+  await page.getByRole("button", { name: "Playback speed" }).click();
+  await expect(page.getByTestId("speed-panel")).toBeVisible();
+  expect(await covers("speed-panel", '[data-testid="listen-toggle"]')).toBe(
+    "clear",
+  );
+  expect(await covers("speed-panel", '[data-testid="listen-rate"]')).toBe(
+    "clear",
+  );
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: /^sleep/i }).click();
+  await expect(page.getByTestId("sleep-panel")).toBeVisible();
+  expect(await covers("sleep-panel", '[data-testid="listen-toggle"]')).toBe(
+    "clear",
+  );
+  expect(await covers("sleep-panel", '[data-testid="listen-sleep"]')).toBe(
+    "clear",
+  );
+});
+
+// ---------------------------------------------------------------------------
 // 9. Bookmarks drawer
 // ---------------------------------------------------------------------------
 
