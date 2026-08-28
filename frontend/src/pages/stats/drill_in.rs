@@ -2,13 +2,14 @@
 //! desktop, switched by a CSS media query so the rsx stays identical on
 //! every target (rule 07). Shows a vs-previous-period delta, the
 //! metric's trend chart, and — per metric — the half-star distribution
-//! (Avg rating), the estimated reading speed (Pages), or the books completed
-//! in the window (Finished), all from the already-fetched `StatsSummary` (no
-//! new RPC).
+//! (Avg rating), the books completed in the window (Finished), or the reading
+//! speed plus the coverage-and-cutover note (Pages read), all from the
+//! already-fetched `StatsSummary` (no new RPC).
 
 use dioxus::prelude::*;
 use omnibus_shared::{
-    Contributor, EbookMetadata, FinishedBook, RatingBucket, StatsRange, StatsSummary,
+    Contributor, EbookMetadata, FinishedBook, PagesReadDetail, RatingBucket, StatsRange,
+    StatsSummary,
 };
 
 use crate::components::{ConfirmModal, CoverTile, CoverTileKind};
@@ -30,7 +31,7 @@ impl Metric {
             Metric::Finished => "Finished",
             Metric::AvgRating => "Avg rating",
             Metric::Listening => "Listening",
-            Metric::Pages => "Est. pages",
+            Metric::Pages => "Pages read",
         }
     }
 }
@@ -206,7 +207,12 @@ fn trend_points(metric: Metric, summary: &StatsSummary) -> Vec<(String, f64)> {
             .iter()
             .map(|d| (short_day(&d.day), d.seconds as f64 / 60.0))
             .collect(),
-        Metric::Pages => Vec::new(),
+        Metric::Pages => summary
+            .pages_detail
+            .daily
+            .iter()
+            .map(|p| (short_day(&p.label), p.value))
+            .collect(),
     }
 }
 
@@ -256,7 +262,10 @@ fn delta_for(metric: Metric, summary: &StatsSummary, range: StatsRange) -> Optio
             summary.listening_seconds as f64,
             summary.previous.listening_seconds as f64,
         ),
-        Metric::Pages => None,
+        Metric::Pages => percent_delta(
+            summary.pages_read.unwrap_or(0) as f64,
+            summary.previous.pages_read as f64,
+        ),
     }
 }
 
@@ -335,6 +344,7 @@ pub(super) fn DrillIn(
                 }
                 if metric == Metric::Pages {
                     {render_pages_rate(summary.pages_per_hour)}
+                    {render_pages_note(&summary.pages_detail, summary.pages_read, range)}
                 }
                 if metric == Metric::Finished {
                     {render_finished_list(&summary.finished_books, summary.books_finished, &server_url)}
@@ -394,15 +404,10 @@ fn render_bars(bars: &[TrendBar], testid: &str, aria_label: &str) -> Element {
     }
 }
 
-/// The metric's trend chart — pure-CSS bar columns — or a placeholder note
-/// for the Pages tile. The headline tile carries a real estimate,
-/// but a day/month-bucketed trend series over it isn't computed yet.
+/// The metric's trend chart — pure-CSS bar columns. An empty series renders
+/// nothing rather than an empty frame; the Pages note below it is what explains
+/// why a window has no bars.
 fn render_trend(metric: Metric, bars: &[TrendBar]) -> Element {
-    if metric == Metric::Pages {
-        return rsx! {
-            p { class: "st-drill-delta-empty", "Page trend tracking isn\u{2019}t available yet." }
-        };
-    }
     if bars.is_empty() {
         return rsx! { div {} };
     }
@@ -519,6 +524,72 @@ fn render_finished_row(book: &FinishedBook, server_url: &str) -> Element {
             }
             div { class: "st-drill-finished-rating mono", "{rating_label}" }
         }
+    }
+}
+
+/// The Pages read drill-in's prose: what the window covered, what it could not
+/// measure, and the date before which it cannot measure anything.
+///
+/// Every line here exists because the headline number is one figure standing in
+/// for several different situations. Silence about the cutover in particular
+/// would leave a Lifetime total that quietly excludes years of reading looking
+/// like a Lifetime total.
+fn render_pages_note(
+    detail: &PagesReadDetail,
+    pages_read: Option<i64>,
+    range: StatsRange,
+) -> Element {
+    rsx! {
+        div { class: "st-drill-pages-note", "data-testid": "stats-drill-pages-note",
+            if detail.audio_only() {
+                p { class: "st-drill-delta-empty",
+                    "Only audiobooks this period \u{2014} listening turns no pages."
+                }
+            } else if pages_read.is_none() {
+                p { class: "st-drill-delta-empty",
+                    "No page progress recorded in this period yet."
+                }
+            } else {
+                p { class: "st-drill-delta-empty", {measured_line(detail)} }
+            }
+            if detail.unmeasured_books > 0 {
+                p { class: "st-drill-delta-empty", {unmeasured_line(detail.unmeasured_books)} }
+            }
+            if let Some(since) = &detail.since_day {
+                p {
+                    class: "st-drill-delta-empty",
+                    "data-testid": "stats-drill-pages-cutover",
+                    {cutover_line(since, detail.predates_ledger(range))}
+                }
+            }
+        }
+    }
+}
+
+/// "Across N books this period." — the population behind the headline.
+fn measured_line(detail: &PagesReadDetail) -> String {
+    let n = detail.measured_books;
+    let plural = if n == 1 { "" } else { "s" };
+    format!("Across {n} book{plural} this period.")
+}
+
+/// The books whose length nothing on the ladder resolves. Named rather than
+/// absorbed: they were read, and the total does not include them.
+fn unmeasured_line(n: i64) -> String {
+    let (plural, verb) = if n == 1 { ("", "has") } else { ("s", "have") };
+    format!(
+        "{n} more book{plural} {verb} no known length yet, so nothing they contributed is counted."
+    )
+}
+
+/// The cutover sentence. Page progress is differenced from stored positions,
+/// and no such trail exists before the ledger began, so reading before that day
+/// is unrecoverable rather than merely missing.
+fn cutover_line(since: &str, overlaps: bool) -> String {
+    if overlaps {
+        format!("Page tracking began {since}; reading before then can\u{2019}t be counted, so this period is only partly covered.")
+    } else {
+        format!("Page tracking began {since}.")
     }
 }
 

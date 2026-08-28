@@ -13,7 +13,7 @@ use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use crate::{resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec};
 
-use super::{format_str, parse_format, ProgressError};
+use super::{format_str, ledger, parse_format, ProgressError};
 
 /// Attach a server-derived KoboSpan location (and percent, when the row
 /// has none) to an existing epub row WITHOUT advancing any freshness
@@ -81,7 +81,25 @@ pub async fn attach_derived_percent(
     .bind(expected_client_updated_at)
     .execute(pool)
     .await?;
-    Ok(result.rows_affected() > 0)
+    let attached = result.rows_affected() > 0;
+    if attached {
+        // For a CFI-only client (the iOS reader) this attach — not the upsert —
+        // is where the position first becomes a percent, so it is the only
+        // place the forward-progress ledger can see it. Stamped with the
+        // position's own event time, since the derivation runs off the request
+        // path and its completion moment says nothing about when the reading
+        // happened.
+        ledger::observe_percent(
+            pool,
+            user_id,
+            &book_uuid,
+            ProgressFormat::Epub,
+            percent,
+            expected_client_updated_at,
+        )
+        .await?;
+    }
+    Ok(attached)
 }
 
 /// Derive the whole-book visible-text percent for a stored epub CFI from

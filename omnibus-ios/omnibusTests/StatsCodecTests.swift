@@ -382,3 +382,87 @@ struct ReadingGoalCodecTests {
         #expect(json.contains("\"target\":null"))
     }
 }
+
+@Suite("Pages read detail")
+struct PagesReadDetailCodecTests {
+    @Test("the pages detail decodes every key the server sends")
+    func decodesPagesDetail() throws {
+        let json = summaryJSON(
+            extra: #","pages_detail":{"since_day":"2026-08-01","measured_books":3,"unmeasured_books":1,"audio_books":2,"daily":[{"label":"2026-08-01","value":41.0}]}"#
+        )
+        let summary = try decodeSummary(json)
+        #expect(summary.pagesDetail.sinceDay == "2026-08-01")
+        // Distinct values on purpose: equal ones would let two swapped
+        // CodingKeys through.
+        #expect(summary.pagesDetail.measuredBooks == 3)
+        #expect(summary.pagesDetail.unmeasuredBooks == 1)
+        #expect(summary.pagesDetail.audioBooks == 2)
+    }
+
+    @Test("a server that predates the pages detail still decodes")
+    func decodesWithoutPagesDetail() throws {
+        let summary = try decodeSummary(summaryJSON())
+        #expect(summary.pagesDetail.measuredBooks == 0)
+        #expect(summary.pagesRead == 12, "the headline still decodes")
+    }
+
+    @Test("audio-only is a window of listening and no reading at all")
+    func audioOnlyRequiresNoReading() throws {
+        var detail = PagesReadDetail()
+        detail.audioBooks = 2
+        #expect(detail.audioOnly)
+        // Any reading in the window — measurable or not — means the em-dash is
+        // the honest answer, because something happened that pages describe.
+        detail.unmeasuredBooks = 1
+        #expect(!detail.audioOnly)
+        detail.unmeasuredBooks = 0
+        detail.measuredBooks = 1
+        #expect(!detail.audioOnly)
+        #expect(!PagesReadDetail().audioOnly, "an empty window is not audio-only")
+    }
+}
+
+@Suite("Pages read tile")
+struct PagesReadTileTests {
+    @Test("a measured total renders as itself")
+    func rendersTheTotal() throws {
+        var summary = StatsSummary()
+        summary.pagesRead = 214
+        #expect(StatsView.pagesValue(summary) == "214")
+    }
+
+    @Test("an audio-only window reads as zero, not as unknown")
+    func audioOnlyReadsAsZero() throws {
+        var summary = StatsSummary()
+        summary.pagesDetail.audioBooks = 1
+        // Listening turns no pages, which the tile can state; the em-dash would
+        // claim the server has no idea what happened.
+        #expect(StatsView.pagesValue(summary) == "0")
+    }
+
+    @Test("an unmeasurable window keeps the em-dash")
+    func unmeasurableKeepsTheDash() throws {
+        var summary = StatsSummary()
+        summary.pagesDetail.unmeasuredBooks = 1
+        #expect(StatsView.pagesValue(summary) == "\u{2014}")
+        #expect(StatsView.pagesValue(StatsSummary()) == "\u{2014}")
+    }
+
+    @Test("only the ranges that reach past the epoch carry the cutover note")
+    func cutoverNoteFollowsTheRange() throws {
+        var summary = StatsSummary()
+        summary.pagesDetail.sinceDay = "2026-08-01"
+        summary.range = .allTime
+        #expect(StatsView.pagesCutoverNote(summary)?.contains("2026-08-01") == true)
+        summary.range = .year
+        #expect(StatsView.pagesCutoverNote(summary) != nil)
+        summary.range = .month
+        #expect(StatsView.pagesCutoverNote(summary) == nil)
+        summary.range = .week
+        #expect(StatsView.pagesCutoverNote(summary) == nil)
+        // No epoch recorded, nothing to disclose.
+        summary.range = .allTime
+        summary.pagesDetail.sinceDay = nil
+        #expect(StatsView.pagesCutoverNote(summary) == nil)
+    }
+}

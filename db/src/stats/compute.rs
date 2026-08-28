@@ -132,6 +132,7 @@ pub(super) async fn compute(
     // it (the analogue of `current_streak_days`).
     let goal = goals::current_goal(pool, user_id).await?;
     let superlatives = superlatives::superlatives(pool, user_id, start).await?;
+    let pages_detail = pages::pages_detail(pool, user_id, start).await?;
 
     Ok(StatsSummary {
         range,
@@ -166,6 +167,7 @@ pub(super) async fn compute(
         unzoned_seconds: time_patterns.unzoned_seconds,
         goal,
         superlatives,
+        pages_detail,
     })
 }
 
@@ -555,10 +557,12 @@ pub(super) async fn previous_period(
     .await?;
     let avg_stars = ratings::avg_stars_bounded(pool, user_id, start, end).await?;
     let books_finished = finished_count_bounded(pool, user_id, start, end).await?;
+    let pages_read = pages::pages_read_bounded(pool, user_id, start, end).await?;
     Ok(PeriodComparison {
         books_finished,
         avg_stars,
         listening_seconds,
+        pages_read,
     })
 }
 

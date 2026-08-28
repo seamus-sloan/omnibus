@@ -1,12 +1,27 @@
-//! Book-length aggregation for the stats page: the Est. pages tile's total,
-//! the reading rate behind it, and the length-distribution chart beside it.
-//! All three resolve a book's length through the one ladder in
-//! [`book_pages_source`] — every input is persisted at index time, so no EPUB
-//! or archive is opened at query time. They differ only in what they do with a
-//! book the ladder resolves to zero pages: the rate drops it, because it alone
-//! divides by the hours behind it.
+//! Page aggregation for the stats page: the Pages read tile (its total, its
+//! per-day series and its coverage disclosure), the reading rate beside it, and
+//! the length-distribution chart. All of them resolve a book's length through
+//! the one ladder in [`book_pages_source`] — every input is persisted at index
+//! time, so no EPUB or archive is opened at query time.
+//!
+//! They are scoped to **three different questions**, and conflating any two of
+//! them is the bug this module has already had once:
+//!
+//! * [`pages_read`] is ground *covered* in the window, so it windows on the
+//!   forward-progress ledger (migration `0083`). Summing the length of the
+//!   books finished in the window — what it used to do — reported an em-dash to
+//!   a reader who finished nothing and attributed a whole book to whichever
+//!   window its status flip landed in, which is the Finished tile weighted by
+//!   length, not pages read.
+//! * [`length_buckets`] is about books *finished*, so it windows on completion
+//!   events. That is its subject, not an oversight.
+//! * [`pages_per_hour`] is a reading *speed*, so it pairs the books finished in
+//!   the window with those books' lifetime reading seconds — both sides have to
+//!   describe the same books, which is why it can't be `pages_read` over
+//!   `reading_seconds`. It is the one aggregate that divides, so it alone drops
+//!   a book the ladder resolves to zero pages.
 
-use omnibus_shared::LengthBucket;
+use omnibus_shared::{LengthBucket, PagesReadDetail, TrendPoint};
 use sqlx::{Row, SqlitePool};
 
 use super::{StatsError, FINISHED_EVENTS};
@@ -88,10 +103,40 @@ pub(super) fn finished_in_window() -> String {
     )
 }
 
-/// Estimated pages read in the window: the resolved length of every distinct
-/// book finished within it, summed. `None` when no finished book in the window
-/// resolves a length at all — none finished, or every finished one is
-/// audio-only / not-yet-backfilled.
+/// The window's ledger rows joined to their book's resolved length: one
+/// `(day, percent_gained, pages)` row per `(book, day)` the reader moved
+/// forward in. `pages` is NULL for a book no rung measures, and the callers
+/// each decide what to do with those rather than the join dropping them
+/// silently — the total excludes them, the coverage counts them.
+///
+/// Bind order is `user_id, start`. `start` is a unix second and the ledger
+/// buckets by UTC day, so it is compared as the day it falls in; every
+/// [`omnibus_shared::StatsRange`] begins on a day boundary, so nothing is
+/// gained or lost by that.
+fn ledger_in_window() -> String {
+    format!(
+        "SELECT d.day AS day,
+                d.book_uuid AS uuid,
+                d.percent_gained AS percent_gained,
+                p.pages AS pages
+         FROM reading_progress_daily d
+         JOIN ({}) p ON p.uuid = d.book_uuid
+         WHERE d.user_id = ? AND d.day >= date(?, 'unixepoch')",
+        book_pages_source()
+    )
+}
+
+/// Pages read in the window: for every book, the fraction of it covered inside
+/// the window times its resolved length, summed.
+///
+/// `None` when no book read in the window resolves a length at all — nothing
+/// read, or everything read is not-yet-backfilled. That is the em-dash, and it
+/// is **not** the same as an audio-only window; [`pages_detail`] is what tells
+/// the two apart.
+///
+/// Rounding happens once, on the total, rather than per book: a reader who
+/// turned a few pages in each of six books should not lose a page to rounding
+/// six times over.
 pub(super) async fn pages_read(
     pool: &SqlitePool,
     user_id: i64,
@@ -100,15 +145,12 @@ pub(super) async fn pages_read(
     // `SUM` over zero rows is SQL NULL, which maps straight to the tile's
     // em-dash `None` — an unmeasured book must not read as a zero-page one.
     let sql = format!(
-        "SELECT SUM(p.pages)
-         FROM ({}) fin
-         JOIN ({}) p ON p.uuid = fin.uuid
-         WHERE p.pages IS NOT NULL",
-        finished_in_window(),
-        book_pages_source()
+        "SELECT CAST(ROUND(SUM(CAST(w.percent_gained AS REAL) * w.pages) / 100.0) AS INTEGER)
+         FROM ({}) w
+         WHERE w.pages IS NOT NULL",
+        ledger_in_window()
     );
     Ok(sqlx::query_scalar(&sql)
-        .bind(user_id)
         .bind(user_id)
         .bind(start)
         .fetch_one(pool)
@@ -187,6 +229,136 @@ fn hourly_rate(pages: Option<i64>, secs: Option<i64>) -> Option<f64> {
     #[allow(clippy::cast_precision_loss)]
     let rate = pages as f64 / (secs as f64 / 3600.0);
     Some(rate)
+}
+
+/// [`pages_read`] over an explicit `[start, end]` slice, for the drill-in's
+/// vs-previous-period delta. Zero rather than `None` when the baseline window
+/// measured nothing — the delta treats "no baseline" as new, and a missing
+/// baseline and an empty one are the same thing to it.
+///
+/// `end` is **inclusive of its day**: the ledger is day-grained, and the
+/// current window it is compared against always includes a partial today, so
+/// truncating the baseline's boundary day would bias every comparison downward.
+pub(super) async fn pages_read_bounded(
+    pool: &SqlitePool,
+    user_id: i64,
+    start: i64,
+    end: i64,
+) -> Result<i64, StatsError> {
+    let sql = format!(
+        "SELECT COALESCE(
+                    CAST(ROUND(SUM(CAST(w.percent_gained AS REAL) * w.pages) / 100.0) AS INTEGER),
+                    0)
+         FROM ({}) w
+         WHERE w.pages IS NOT NULL AND w.day <= date(?, 'unixepoch')",
+        ledger_in_window()
+    );
+    Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .bind(start)
+        .bind(end)
+        .fetch_one(pool)
+        .await?)
+}
+
+/// Everything the Pages tile needs beyond its headline: the per-day series
+/// behind it, which books it could and could not measure, and the day the
+/// ledger started.
+pub(super) async fn pages_detail(
+    pool: &SqlitePool,
+    user_id: i64,
+    start: i64,
+) -> Result<PagesReadDetail, StatsError> {
+    let (measured_books, unmeasured_books) = pages_book_counts(pool, user_id, start).await?;
+    Ok(PagesReadDetail {
+        since_day: ledger_epoch(pool).await?,
+        measured_books,
+        unmeasured_books,
+        audio_books: audio_books(pool, user_id, start).await?,
+        daily: pages_daily(pool, user_id, start).await?,
+    })
+}
+
+/// Pages per UTC day within the window, active days only, ascending.
+async fn pages_daily(
+    pool: &SqlitePool,
+    user_id: i64,
+    start: i64,
+) -> Result<Vec<TrendPoint>, StatsError> {
+    let sql = format!(
+        "SELECT w.day AS day,
+                CAST(ROUND(SUM(CAST(w.percent_gained AS REAL) * w.pages) / 100.0) AS INTEGER)
+                    AS pages
+         FROM ({}) w
+         WHERE w.pages IS NOT NULL
+         GROUP BY w.day
+         ORDER BY w.day",
+        ledger_in_window()
+    );
+    let rows = sqlx::query(&sql)
+        .bind(user_id)
+        .bind(start)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| TrendPoint {
+            label: r.get("day"),
+            // Day totals sit far below f64's exact-integer range.
+            #[allow(clippy::cast_precision_loss)]
+            value: r.get::<i64, _>("pages") as f64,
+        })
+        .collect())
+}
+
+/// `(measured, unmeasured)` distinct books read in the window — the second is
+/// real reading the total cannot include, and a tile that never says so
+/// understates itself without admitting it.
+async fn pages_book_counts(
+    pool: &SqlitePool,
+    user_id: i64,
+    start: i64,
+) -> Result<(i64, i64), StatsError> {
+    let sql = format!(
+        "SELECT COUNT(DISTINCT CASE WHEN w.pages IS NOT NULL THEN w.uuid END) AS measured,
+                COUNT(DISTINCT CASE WHEN w.pages IS NULL     THEN w.uuid END) AS unmeasured
+         FROM ({}) w",
+        ledger_in_window()
+    );
+    let row = sqlx::query(&sql)
+        .bind(user_id)
+        .bind(start)
+        .fetch_one(pool)
+        .await?;
+    Ok((row.get("measured"), row.get("unmeasured")))
+}
+
+/// Distinct live books listened to in the window. Audiobooks contribute no
+/// pages — there is no page analogue — but a window of nothing but listening
+/// must not read as a window of nothing.
+async fn audio_books(pool: &SqlitePool, user_id: i64, start: i64) -> Result<i64, StatsError> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT ls.book_uuid)
+         FROM listening_sessions ls
+         JOIN books b ON b.uuid = ls.book_uuid
+         WHERE ls.user_id = ? AND ls.started_at >= ?",
+    )
+    .bind(user_id)
+    .bind(start)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// The day the forward-progress ledger began recording, straight from the
+/// `settings` row migration `0083` wrote. Read here rather than through
+/// `db::progress` so the stats layer keeps its own error type.
+async fn ledger_epoch(pool: &SqlitePool) -> Result<Option<String>, StatsError> {
+    Ok(
+        sqlx::query_scalar("SELECT value FROM settings WHERE key = 'pages_ledger_epoch'")
+            .fetch_optional(pool)
+            .await?,
+    )
 }
 
 /// How the books finished in the window are distributed across

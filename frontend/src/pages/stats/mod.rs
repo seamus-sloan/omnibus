@@ -395,6 +395,7 @@ fn PeriodSummary(
             books_finished: summary.books_finished,
             avg_stars: summary.avg_stars,
             pages_read: summary.pages_read,
+            pages_audio_only: summary.pages_detail.audio_only(),
             listening_seconds: summary.listening_seconds,
             expanded,
         }
