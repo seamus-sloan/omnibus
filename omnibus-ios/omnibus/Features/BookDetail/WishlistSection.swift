@@ -140,7 +140,8 @@ struct WishlistSection: View {
         switch source {
         case .scan: "a scan"
         case .detail: "this page"
-        case .manual: "manual entry"
+        case .manual: "an ISBN you entered"
+        case .search: "a title search"
         }
     }
 
