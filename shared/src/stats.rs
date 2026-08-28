@@ -390,7 +390,9 @@ pub struct StatsSummary {
     /// contributes pages contributes the hours behind them, so a book begun
     /// before the window reports a plausible rate instead of its whole length
     /// against one window's hours. Narrower than `pages_read`'s population by
-    /// exactly the books nobody has recorded reading time on.
+    /// the books nobody has recorded reading time on, and by those whose
+    /// length resolves to zero pages: a total carries a zero harmlessly, but a
+    /// rate would spend that book's hours against none of its pages.
     ///
     /// Reading time only — listening is excluded, since narration speed is
     /// the narrator's, not the reader's. A book read partly in audio

@@ -2,7 +2,9 @@
 //! the reading rate behind it, and the length-distribution chart beside it.
 //! All three resolve a book's length through the one ladder in
 //! [`book_pages_source`] — every input is persisted at index time, so no EPUB
-//! or archive is opened at query time.
+//! or archive is opened at query time. They differ only in what they do with a
+//! book the ladder resolves to zero pages: the rate drops it, because it alone
+//! divides by the hours behind it.
 
 use omnibus_shared::LengthBucket;
 use sqlx::{Row, SqlitePool};
@@ -139,13 +141,15 @@ const BOOK_READING_SECS: &str = "\
 /// listening time is excluded from the denominator by design — which is why
 /// the surfaces label this an estimate.
 ///
-/// A **zero**-page book is dropped as unmeasured, not summed as [`pages_read`]
-/// harmlessly does: `estimate_word_count` yields `Some(0)` for an EPUB whose
-/// spine loads but strips to no words (image-only or fixed-layout), so a real
-/// book can reach here with `pages = 0`. In a total that costs nothing; against
-/// a denominator it donates its hours while contributing no pages, dragging the
-/// rate down — and if it is the only qualifying book, prints a "0 pages an
-/// hour" that is exactly the claim the empty state exists to avoid making.
+/// A book resolving to **zero** pages is dropped, where [`pages_read`] sums it
+/// harmlessly. Two ways to get one: `estimate_word_count` yields `Some(0)` for
+/// an EPUB whose spine loads but strips to no words (image-only or
+/// fixed-layout), and the ladder's own rounding sends anything under half a
+/// page there too. Either way it donates its hours while contributing no
+/// pages, dragging the rate down — and as the only qualifying book it would
+/// print a "0 pages an hour" that is exactly the claim the empty state exists
+/// to avoid. `pages_read` and [`length_buckets`] keep their existing treatment
+/// of a stored zero; only a figure with a denominator is hurt by one.
 pub(super) async fn pages_per_hour(
     pool: &SqlitePool,
     user_id: i64,

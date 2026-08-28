@@ -1348,9 +1348,9 @@ struct StatsSummary: Codable, Sendable {
     var pagesRead: Int64?
     /// Estimated pages an hour over the window — the rate `pagesRead` is
     /// missing. Weighted by seconds across the books finished in the window
-    /// that have both a resolvable length and recorded reading time;
+    /// that resolve a non-zero length and carry recorded reading time;
     /// listening time is excluded, so a partly-heard book reads fast here.
-    /// `nil` when no finished book has both.
+    /// `nil` when no finished book qualifies.
     var pagesPerHour: Double?
     /// Books finished in the window by length, plus the unknown bucket. Every
     /// bucket arrives; an all-zero set means nothing was finished.
