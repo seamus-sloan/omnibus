@@ -9,6 +9,7 @@ mod compute;
 mod genre;
 mod pages;
 mod sessionize;
+mod streak;
 
 #[cfg(test)]
 mod tests;

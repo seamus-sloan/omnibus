@@ -240,6 +240,28 @@ async fn streak_counts_longest_consecutive_run() {
     let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
     assert_eq!(s.active_days, 5);
     assert_eq!(s.longest_streak_days, 3);
+    // T0 is years in the past, so the record stands but no run is live.
+    assert_eq!(s.current_streak_days, 0);
+}
+
+#[tokio::test]
+async fn current_streak_runs_up_to_the_servers_today() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    // Anchored on the real clock rather than T0: the streak's "today" comes
+    // from the server, so only a run reaching it is live. Seeded at midday so
+    // the session can't slide into an adjacent day near a boundary.
+    let today_noon = now_secs() / DAY * DAY + DAY / 2;
+    for back in [2, 1, 0] {
+        reading_session(&pool, user, "uuid-1", today_noon - back * DAY, 600).await;
+    }
+
+    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+
+    assert_eq!(s.current_streak_days, 3);
+    assert_eq!(s.longest_streak_days, 3);
 }
 
 #[tokio::test]

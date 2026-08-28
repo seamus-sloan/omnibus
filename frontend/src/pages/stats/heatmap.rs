@@ -1,6 +1,7 @@
 //! Reading-days heatmap card: a pure-CSS GitHub-style trailing-year calendar
 //! grid (in the all-time section, never re-queried by the switcher) with the
-//! longest-streak figure in its header. Day math runs on epoch-day numbers via
+//! current and longest streak figures in its header. Both are server-computed
+//! so no client derives its own. Day math runs on epoch-day numbers via
 //! the civil-date algorithms below — no date crate — over the DTO's UTC
 //! `YYYY-MM-DD` strings.
 
@@ -140,8 +141,8 @@ fn build_cells(anchor: i64, by_day: &HashMap<i64, i64>, max: i64) -> Vec<HeatCel
         .collect()
 }
 
-/// The all-time heatmap card: header with the longest-streak figure, the
-/// calendar grid, month labels, and the less/more legend.
+/// The all-time heatmap card: header with the current and longest streak
+/// figures, the calendar grid, month labels, and the less/more legend.
 #[component]
 pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
     // Anchor to the server's clock; fall back to the newest active day so a
@@ -167,21 +168,35 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
     let max = by_day.values().copied().max().unwrap_or(0);
     let cells = build_cells(anchor, &by_day, max);
     let months = trailing_month_labels(anchor);
-    let streak = summary.longest_streak_days;
+    let current = summary.current_streak_days;
+    let longest = summary.longest_streak_days;
 
     rsx! {
         div { class: "card st-heatmap-card", "data-testid": "stats-heatmap",
             div { class: "st-heatmap-head",
                 div {
                     div { class: "label", "Reading days \u{00B7} trailing year" }
-                    div { class: "st-heatmap-sub", "Longest run of consecutive days you read." }
-                }
-                div { class: "st-streak",
-                    div { class: "st-streak-value",
-                        "{streak} "
-                        span { class: "st-streak-unit", "days" }
+                    div { class: "st-heatmap-sub",
+                        "Days in a row you read \u{2014} the run you\u{2019}re on, and your record."
                     }
-                    div { class: "label", "Longest streak" }
+                }
+                // Current leads: it's the figure a reader opens the page for,
+                // where the record is the trophy standing beside it.
+                div { class: "st-streaks",
+                    div { class: "st-streak", "data-testid": "stats-current-streak",
+                        div { class: "st-streak-value",
+                            "{current} "
+                            span { class: "st-streak-unit", "days" }
+                        }
+                        div { class: "label", "Current streak" }
+                    }
+                    div { class: "st-streak st-streak-minor", "data-testid": "stats-longest-streak",
+                        div { class: "st-streak-value",
+                            "{longest} "
+                            span { class: "st-streak-unit", "days" }
+                        }
+                        div { class: "label", "Longest streak" }
+                    }
                 }
             }
             // Block-level scroll wrapper: iOS WebKit clips this far more reliably than a grid-as-scroller (#1076).

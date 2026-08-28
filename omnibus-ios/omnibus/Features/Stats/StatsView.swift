@@ -223,10 +223,19 @@ struct StatsView: View {
                 value: "\(summary.booksFinished)",
                 icon: "checkmark.circle"
             )
+            // Current before longest: the run you're on is what opens the tab,
+            // and the record then reads as context beside it rather than as
+            // the headline. The flame follows the live run; the record keeps
+            // the trophy.
+            StatTile(
+                label: "Current streak",
+                value: summary.currentStreakDays > 0 ? "\(summary.currentStreakDays)d" : "—",
+                icon: "flame"
+            )
             StatTile(
                 label: "Longest streak",
                 value: summary.longestStreakDays > 0 ? "\(summary.longestStreakDays)d" : "—",
-                icon: "flame"
+                icon: "trophy"
             )
             StatTile(
                 label: "Days active",

@@ -204,6 +204,17 @@ pub struct StatsSummary {
     pub sessions: i64,
     pub active_days: i64,
     pub longest_streak_days: i64,
+    /// Consecutive active days still running as of [`Self::as_of_day`] — the
+    /// streak the reader is *on*, where `longest_streak_days` is the record.
+    /// A run ending yesterday still counts (the day isn't over yet); one
+    /// ending earlier reports zero.
+    ///
+    /// Server-computed so every client renders the same number rather than
+    /// each deriving its own from `heatmap`. Windowed like every other figure
+    /// here, so a `Week` range caps it at 7 — the unbounded current streak is
+    /// the one on the `AllTime` summary.
+    #[serde(default)]
+    pub current_streak_days: i64,
     /// First active day (UTC `YYYY-MM-DD`) of the busiest ISO week, if any.
     pub busiest_week_start: Option<String>,
     pub busiest_week_seconds: i64,

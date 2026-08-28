@@ -1240,6 +1240,10 @@ struct StatsSummary: Codable, Sendable {
     var sessions: Int64 = 0
     var activeDays: Int64 = 0
     var longestStreakDays: Int64 = 0
+    /// The run of consecutive active days still going as of `asOfDay`, where
+    /// `longestStreakDays` is the record. Server-computed rather than derived
+    /// from `heatmap` here, so this tab and any widget can't disagree.
+    var currentStreakDays: Int64 = 0
     var busiestWeekStart: String?
     var busiestWeekSeconds: Int64 = 0
     var booksFinished: Int64 = 0
@@ -1260,6 +1264,7 @@ struct StatsSummary: Codable, Sendable {
         case avgStars = "avg_stars"
         case activeDays = "active_days"
         case longestStreakDays = "longest_streak_days"
+        case currentStreakDays = "current_streak_days"
         case busiestWeekStart = "busiest_week_start"
         case busiestWeekSeconds = "busiest_week_seconds"
         case booksFinished = "books_finished"

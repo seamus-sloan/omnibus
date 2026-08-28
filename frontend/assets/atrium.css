@@ -9024,6 +9024,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   margin-bottom: 18px;
 }
 .st-heatmap-sub { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
+.st-streaks { display: flex; align-items: flex-end; gap: 26px; }
 .st-streak { text-align: right; }
 .st-streak-value {
   font-family: var(--serif); font-weight: 600;
@@ -9033,6 +9034,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .st-streak-unit { font-size: 17px; color: var(--ink-3); }
 .st-streak .label { margin-top: 4px; }
+/* The record stands beside the live run, deliberately quieter: two equally
+   loud numbers side by side make the reader work out which one is theirs. */
+.st-streak-minor .st-streak-value { font-size: 26px; color: var(--ink-2); }
+.st-streak-minor .st-streak-unit { font-size: 12px; }
 .st-heatmap {
   display: grid;
   grid-auto-flow: column;
@@ -9137,8 +9142,14 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   }
   .st-heatmap { grid-auto-columns: 8px; }
   .st-hm-months { display: none; }
+  .st-streaks { gap: 16px; }
   .st-streak-value { font-size: 28px; }
   .st-streak-unit { font-size: 13px; }
+  /* Restated at this breakpoint because `.st-streak-minor .st-streak-value`
+     outranks the bare class above on specificity — without it the record
+     would come out *larger* than the live run on a phone. */
+  .st-streak-minor .st-streak-value { font-size: 19px; }
+  .st-streak-minor .st-streak-unit { font-size: 10px; }
 
   .st-monthly-bars { height: 96px; gap: 4px; }
 }

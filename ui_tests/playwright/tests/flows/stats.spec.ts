@@ -243,12 +243,21 @@ test("the heatmap and genre donut render from seeded activity", async ({
 }) => {
   await gotoReady(page, "/stats");
 
-  // Heatmap: trailing-year grid with the streak figure in the card header and
-  // at least one active cell — keyed off the cell tooltip ("… on YYYY-MM-DD",
-  // which only active cells carry) rather than the intensity CSS classes.
+  // Heatmap: trailing-year grid with both streak figures in the card header
+  // and at least one active cell — keyed off the cell tooltip ("… on
+  // YYYY-MM-DD", which only active cells carry) rather than the intensity CSS
+  // classes.
   const heatmap = page.getByTestId("stats-heatmap");
   await expect(heatmap).toBeVisible();
-  await expect(heatmap).toContainText("Longest streak");
+  // Both figures are asserted by label, not by value: the shared fixture's
+  // sessions are seeded at fixed timestamps, so whether a run is live depends
+  // on when the suite runs.
+  await expect(page.getByTestId("stats-current-streak")).toContainText(
+    "Current streak",
+  );
+  await expect(page.getByTestId("stats-longest-streak")).toContainText(
+    "Longest streak",
+  );
   expect(await heatmap.locator('[title*=" on "]').count()).toBeGreaterThan(0);
 
   // Donut: the seeded genre appears in the legend with a percentage; the

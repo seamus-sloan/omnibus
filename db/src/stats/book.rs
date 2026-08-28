@@ -121,7 +121,7 @@ pub async fn book_insights(
         longest_seconds,
         longest_started_at,
         daily,
-        as_of_day: super::compute::as_of_day(pool).await?,
+        as_of_day: super::compute::as_of(pool).await?.0,
     }))
 }
 
