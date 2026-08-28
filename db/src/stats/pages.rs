@@ -79,7 +79,7 @@ pub(super) fn book_pages_source() -> String {
 /// `compute::finished_count` (a 100% journal entry or an explicit read-status
 /// `finished`, on a book that still exists). A book finished twice counts once.
 /// Bind order is `user_id, user_id, start`.
-fn finished_in_window() -> String {
+pub(super) fn finished_in_window() -> String {
     format!(
         "SELECT DISTINCT f.book_uuid AS uuid
          FROM ({FINISHED_EVENTS}) f

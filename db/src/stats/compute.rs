@@ -2,15 +2,16 @@
 //! query per [`StatsSummary`] field and assembles the result. Sibling modules
 //! hold the rollups that grew their own sub-topic — `genre` for the donut,
 //! `pages` for the page estimate, `patterns` for the time-of-day and
-//! day-of-week strips, `ratings` for the star metrics — keeping each file
-//! under the house line-count cap.
+//! day-of-week strips, `ratings` for the star metrics, `superlatives` for
+//! the window's most-X figures — keeping each file under the house
+//! line-count cap.
 
 use omnibus_shared::{
     DayActivity, FinishedBook, MonthCount, PeriodComparison, RankedEntity, StatsRange, StatsSummary,
 };
 use sqlx::{Row, SqlitePool};
 
-use super::{genre, goals, pages, patterns, ratings, sessionize, streak, StatsError};
+use super::{genre, goals, pages, patterns, ratings, sessionize, streak, superlatives, StatsError};
 
 /// How many rows the top-authors / top-tags rollups return.
 const TOP_N: i64 = 8;
@@ -30,15 +31,31 @@ pub(super) const SESSION_BOOK_SECS: &str = "\
     SELECT book_uuid, seconds_listened AS secs FROM listening_sessions \
         WHERE user_id = ? AND started_at >= ?";
 
-/// The time-scoped session union, reused by the busiest-week rollup and the
-/// sitting count: one `(book_uuid, started_at, ended_at, secs)` checkpoint row
-/// per session in the window. Bind order is `user_id, start, user_id, start`.
-const SESSION_ROWS: &str = "\
+/// The time-scoped session union, reused by the busiest-week rollup, the
+/// sitting count and the superlatives: one
+/// `(book_uuid, started_at, ended_at, secs)` checkpoint row per session in the
+/// window. Bind order is `user_id, start, user_id, start`.
+pub(super) const SESSION_ROWS: &str = "\
     SELECT book_uuid, started_at, ended_at, seconds_read AS secs FROM reading_sessions \
         WHERE user_id = ? AND started_at >= ? \
     UNION ALL \
     SELECT book_uuid, started_at, ended_at, seconds_listened AS secs FROM listening_sessions \
         WHERE user_id = ? AND started_at >= ?";
+
+/// The **unwindowed** session union for one user: one
+/// `(book_uuid, started_at, secs)` row per reading and listening session on
+/// record, whatever its date. Bind order is `user_id, user_id`.
+///
+/// Separate from [`SESSION_ROWS`] because a figure about how a *book* was read
+/// — when it was first opened, how much time it holds — must not be clipped to
+/// a reporting period. Windowing it reports a book begun in March and finished
+/// in April as an April sprint.
+pub(super) const USER_SESSION_ROWS: &str = "\
+    SELECT book_uuid, started_at, seconds_read AS secs FROM reading_sessions \
+        WHERE user_id = ? \
+    UNION ALL \
+    SELECT book_uuid, started_at, seconds_listened AS secs FROM listening_sessions \
+        WHERE user_id = ?";
 
 /// Book-level completion events for a user, unioned across the two ways a book
 /// can be "finished": a 100% journal entry (keyed on `created_at`) and an
@@ -114,6 +131,7 @@ pub(super) async fn compute(
     // current-year value rides every summary and a period switch never moves
     // it (the analogue of `current_streak_days`).
     let goal = goals::current_goal(pool, user_id).await?;
+    let superlatives = superlatives::superlatives(pool, user_id, start).await?;
 
     Ok(StatsSummary {
         range,
@@ -147,6 +165,7 @@ pub(super) async fn compute(
         day_of_week: time_patterns.day_of_week,
         unzoned_seconds: time_patterns.unzoned_seconds,
         goal,
+        superlatives,
     })
 }
 

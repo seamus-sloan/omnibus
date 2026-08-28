@@ -16,6 +16,7 @@ mod heatmap;
 mod library;
 mod monthly;
 mod patterns;
+mod superlatives;
 mod tiles;
 
 use donut::{FormatSplit, GenreDonut, LengthSplit};
@@ -25,6 +26,7 @@ use heatmap::HeatmapCard;
 use library::LibrarySizeCard;
 use monthly::MonthlyChart;
 use patterns::TimePatternsCard;
+use superlatives::SuperlativesCard;
 use tiles::HeadlineTiles;
 
 /// Group a non-negative integer's digits in threes with `,` separators.
@@ -375,9 +377,9 @@ fn focus_range_menu(evt: &MountedEvent) {
 #[cfg(not(feature = "web"))]
 fn focus_range_menu(_evt: &MountedEvent) {}
 
-/// The period-scoped module stack: headline tiles, then the composition row
-/// (genre donut + format split, with the length distribution beneath them). A
-/// placeholder card until the first fetch lands. `expanded` is forwarded to the
+/// The period-scoped module stack: headline tiles, the composition row (genre
+/// donut + format split, with the length distribution beneath them), then the
+/// superlatives card. A placeholder card until the first fetch lands. `expanded` is forwarded to the
 /// tiles so a grip click can open that metric's drill-in.
 #[component]
 fn PeriodSummary(
@@ -402,6 +404,7 @@ fn PeriodSummary(
             LengthSplit { summary: summary.clone() }
         }
         TimePatternsCard { summary: summary.clone() }
+        SuperlativesCard { summary: summary.clone() }
     }
 }
 

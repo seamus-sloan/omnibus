@@ -296,6 +296,83 @@ pub struct WeekdayBucket {
     pub seconds: i64,
 }
 
+/// Recorded time a book needs before it can be crowned the window's fastest
+/// read, in seconds.
+///
+/// The metric measures *tracked* reading, and a book read mostly on another
+/// device shows only its tail here — one 40-second checkpoint on the day it
+/// was marked finished would otherwise take the crown from every book the
+/// reader actually raced through. Lives here so the surfaces can state the
+/// floor without a second copy of the number drifting from
+/// `db::stats::superlatives`'s.
+pub const FASTEST_READ_MIN_SECS: i64 = 1800;
+
+/// One superlative that names a book: which book won, and the figure it won
+/// with.
+///
+/// `value`'s **unit is the field's, not this struct's** — pages for the length
+/// superlatives, seconds for the longest sit, days for the fastest read — and
+/// each is documented on [`Superlatives`]. Renderers must not guess.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookSuperlative {
+    pub book_uuid: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub value: i64,
+}
+
+/// The window's single most-X figures — the ranked one-liners a total can't
+/// say, and the shape a recap leads with.
+///
+/// **Every field is optional, and an absent one is the point.** A window that
+/// can't support a superlative omits it rather than crowning its only datum:
+/// a reader who finished one book has no "shortest", and a "longest" that is
+/// also the only book is noise dressed as a finding.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Superlatives {
+    /// The longest book finished in the window, in **pages** as resolved by
+    /// the shared length ladder (`db::stats::pages`). Absent when nothing
+    /// finished in the window resolves a length.
+    #[serde(default)]
+    pub longest_book: Option<BookSuperlative>,
+    /// The shortest book finished in the window, in **pages**. Absent when
+    /// it would name the same book as `longest_book`, or carry the same page
+    /// count — a pair that reads as a range when there isn't one.
+    #[serde(default)]
+    pub shortest_book: Option<BookSuperlative>,
+    /// The single day with the most active seconds in the window, reading and
+    /// listening together. Ties break to the earliest day.
+    #[serde(default)]
+    pub biggest_day: Option<DayActivity>,
+    /// The longest single sitting in the window, in **seconds** — stitched
+    /// checkpoint rows, so this is how long the reader actually sat, not how
+    /// long a client waited between flushes.
+    #[serde(default)]
+    pub longest_sit: Option<BookSuperlative>,
+    /// The book finished in the window in the fewest **days** from its first
+    /// recorded session, counting a same-day read as one day rather than
+    /// zero.
+    ///
+    /// Only books carrying at least [`FASTEST_READ_MIN_SECS`] of recorded
+    /// time are eligible, and even so this is a **lower bound** on how long
+    /// the read really took — reading done before session tracking, or on a
+    /// device that reports nothing, is invisible here. Surfaces must say so.
+    #[serde(default)]
+    pub fastest_read: Option<BookSuperlative>,
+}
+
+impl Superlatives {
+    /// True when the window supports no superlative at all — the surfaces'
+    /// signal to omit the card rather than render a row of em-dashes.
+    pub fn is_empty(&self) -> bool {
+        self.longest_book.is_none()
+            && self.shortest_book.is_none()
+            && self.biggest_day.is_none()
+            && self.longest_sit.is_none()
+            && self.fastest_read.is_none()
+    }
+}
+
 /// Scalar aggregates for the **same elapsed slice** of the preceding period —
 /// feeds each metric tile's drill-in delta. The current window is
 /// period-to-date, so this is month-to-date against the same days last month
@@ -466,6 +543,11 @@ pub struct StatsSummary {
     /// total, not an error.
     #[serde(default)]
     pub unzoned_seconds: i64,
+    /// The window's single most-X figures. Scoped to `range` like the rest of
+    /// this struct; `Superlatives::is_empty` is the surfaces' signal to omit
+    /// the card entirely.
+    #[serde(default)]
+    pub superlatives: Superlatives,
     /// The caller's goal for the **current calendar year**, `None` when none
     /// is set. Like `current_streak_days` this is deliberately *not* windowed:
     /// a goal is annual by definition, so it reads the same on every

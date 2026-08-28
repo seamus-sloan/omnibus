@@ -325,6 +325,89 @@ test("the Pages drill-in reports a reading rate, and says so when it can't", asy
   );
 });
 
+test("the superlatives card names each standout, and omits the ones it can't", async ({
+  page,
+}) => {
+  // Route-mocked: the superlatives rank over finished books and recorded
+  // sessions on the shared fixture, which other specs write. Every key without
+  // `#[serde(default)]` on the Rust struct has to be present or the client
+  // fails the whole decode.
+  const base = {
+    range: "month",
+    reading_seconds: 600,
+    listening_seconds: 0,
+    sessions: 1,
+    active_days: 1,
+    longest_streak_days: 1,
+    busiest_week_start: "2023-11-13",
+    busiest_week_seconds: 14_400,
+    books_finished: 2,
+    heatmap: [],
+    top_authors: [{ name: "Ursula K. Le Guin", seconds: 3600 }],
+    top_tags: [],
+    finished_books: [],
+  };
+  await page.route("**/api/rpc/stats", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...base,
+        superlatives: {
+          longest_book: {
+            book_uuid: "u1",
+            title: "Doorstopper",
+            author: "A. Writer",
+            value: 900,
+          },
+          fastest_read: {
+            book_uuid: "u2",
+            title: "Sprint",
+            author: null,
+            value: 3,
+          },
+        },
+      }),
+    }),
+  );
+  await gotoReady(page, "/stats");
+
+  const card = page.getByTestId("stats-superlatives");
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("Doorstopper");
+  await expect(card).toContainText("900 pages");
+  await expect(card).toContainText("in 3 days");
+  // The busiest week and the most-read author come off fields the payload has
+  // always carried and the web page never drew.
+  await expect(card).toContainText("Week of 13 Nov 2023");
+  await expect(card).toContainText("Ursula K. Le Guin");
+  // Absent superlatives cost their row, not an em-dash.
+  await expect(card).not.toContainText("Shortest book");
+  await expect(card).not.toContainText("Longest sitting");
+  // The fastest read is a lower bound, and says so.
+  await expect(page.getByTestId("stats-superlatives-note")).toContainText(
+    "tracked session",
+  );
+
+  // No superlative at all, and no busiest week: the card is absent rather
+  // than an empty heading.
+  await page.route("**/api/rpc/stats", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...base,
+        busiest_week_start: null,
+        busiest_week_seconds: 0,
+        top_authors: [],
+      }),
+    }),
+  );
+  await gotoReady(page, "/stats");
+  await expect(page.getByTestId("stats-period-section")).toBeVisible();
+  await expect(page.getByTestId("stats-superlatives")).toHaveCount(0);
+});
+
 test("the Finished drill-in lists the books completed in the window", async ({
   page,
 }) => {
