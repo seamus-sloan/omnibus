@@ -388,14 +388,22 @@ async fn move_links(
     Ok(())
 }
 
-/// Every per-user table that soft-references `books.uuid` and must follow the
-/// book across a merge. Ordered so the [`DEDUPE_TABLES`] entries — which have
-/// already had their collisions resolved — retarget alongside the rest.
+/// Every table that soft-references `books.uuid` and must follow the book
+/// across a merge. Mostly per-user; `kobo_annotations_sync` is the one
+/// per-device entry, which is why its collision is handled separately below
+/// rather than by [`dedupe_latest_wins`].
 ///
-/// This list is the merge's half of the soft-reference contract: a table added
-/// here but not there silently strands a user's data on the deleted source
-/// uuid, where it is invisible to anything joining `books` and still visible to
-/// anything that doesn't.
+/// This list is the merge's half of the soft-reference contract: a per-reader
+/// table added to the schema but not here silently strands its rows on the
+/// deleted source uuid, where they are invisible to anything joining `books`
+/// and still visible to anything that doesn't.
+///
+/// **Not exhaustive over every `book_uuid` column.** `shelf_books`,
+/// `wishlist_entries`, `cross_format_links` and `physical_copies` also
+/// soft-reference a book and do *not* follow a merge today — a shelved book
+/// merged into another drops off its shelf. That is a separate pre-existing
+/// bug with its own semantics to settle (which shelf wins, what an inherited
+/// wishlist entry means), deliberately not folded in here.
 const RETARGET_TABLES: [&str; 10] = [
     "reading_progress",
     "audiobook_playback_preferences",
