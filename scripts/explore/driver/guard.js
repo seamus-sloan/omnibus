@@ -17,11 +17,21 @@
   // because start.md forbids it for every agent regardless of ownership.
   const BOOK_SCOPED = /\/api\/(rpc\/(books\/delete-files|merge-books)$|physical\/)/;
   const ALWAYS_REFUSED = /\/api\/rpc\/(author\/delete|cleanup\/delete-entity)/;
+  // Undo is destructive and owner-only, but its payload carries a merge_log_id
+  // and no uuid, so ownership cannot be read from the request. Refusing it
+  // outright would block the very step that found the undo data-loss bug
+  // (#2234), so instead it is allowed only to reverse a merge this guard
+  // already approved — which was itself ownership-checked.
+  const UNDO = /\/api\/rpc\/merge-books\/undo$/;
+  // `merge-books/candidates` is a search, not a mutation. It must keep working
+  // or the merge dialog cannot be used at all.
+  const MERGE_READ = /\/api\/rpc\/merge-books\/candidates$/;
 
   const uuidsIn = (text) =>
     (text || "").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g) || [];
 
   globalThis.__omnibusGuardRefusals = [];
+  globalThis.__omnibusGuardApprovedMerges = 0;
 
   return page.route("**/api/**", (route) => {
     const req = route.request();
@@ -44,6 +54,16 @@
 
     if (ALWAYS_REFUSED.test(url)) return refuse("author and series deletion are forbidden by the rails", []);
 
+    if (MERGE_READ.test(url)) return route.continue();
+
+    if (UNDO.test(url)) {
+      if (globalThis.__omnibusGuardApprovedMerges > 0) {
+        globalThis.__omnibusGuardApprovedMerges -= 1;
+        return route.continue();
+      }
+      return refuse("undo has no uuid to check and follows no merge this guard approved", []);
+    }
+
     if (BOOK_SCOPED.test(url)) {
       const targets = [...uuidsIn(req.postData()), ...uuidsIn(url)];
       const unowned = targets.filter((u) => !owned.has(u));
@@ -51,6 +71,8 @@
       // ownership — refuse rather than wave it through.
       if (targets.length === 0) return refuse("destructive call carried no book uuid to check", []);
       if (unowned.length > 0) return refuse("actor does not own these books", unowned);
+      // Remember an approved merge so its undo can be allowed through.
+      if (/merge-books$/.test(url)) globalThis.__omnibusGuardApprovedMerges += 1;
     }
     return route.continue();
   });

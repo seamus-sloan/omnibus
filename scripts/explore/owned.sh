@@ -19,7 +19,14 @@ ROOT="$(git -C "$HERE" rev-parse --show-toplevel)"
 # OMNIBUS_EXPLORE_JOURNAL_DIR (see .env.example) to somewhere outside the
 # worktrees; the in-repo path remains the fallback for a single checkout.
 if [ -z "${OMNIBUS_EXPLORE_JOURNAL_DIR-}" ] && [ -f "$ROOT/.env" ]; then
-  OMNIBUS_EXPLORE_JOURNAL_DIR="$(grep -E '^OMNIBUS_EXPLORE_JOURNAL_DIR=' "$ROOT/.env" | tail -1 | cut -d= -f2- || true)"
+  raw="$(grep -E '^OMNIBUS_EXPLORE_JOURNAL_DIR=' "$ROOT/.env" | tail -1 | cut -d= -f2- || true)"
+  # .env values are literal text: strip surrounding quotes and expand $VARS and
+  # a leading ~ ourselves. Without this, the `$HOME/...` form .env.example
+  # recommends resolves to a directory that does not exist, owned.sh returns an
+  # empty list, and the guard then refuses an agent's own books.
+  raw="${raw%\"}"; raw="${raw#\"}"; raw="${raw%\'}"; raw="${raw#\'}"
+  raw="${raw/#\~/$HOME}"
+  OMNIBUS_EXPLORE_JOURNAL_DIR="$(eval printf '%s' "\"$raw\"")"
 fi
 JOURNALS="${OMNIBUS_EXPLORE_JOURNAL_DIR:-$ROOT/.claude/runtime/explore}"
 
@@ -29,7 +36,8 @@ import json, pathlib, sys
 actor, root = sys.argv[1], pathlib.Path(sys.argv[2])
 owned = []
 for journal in sorted(root.glob("*/journal.jsonl")):
-    for line in journal.read_text().splitlines():
+    with journal.open() as fh:
+      for line in fh:                      # stream: a long run's journal is large
         line = line.strip()
         if not line:
             continue
