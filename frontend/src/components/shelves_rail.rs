@@ -154,7 +154,11 @@ fn is_row_active(active: RailActive, id: i64) -> bool {
 /// the viewer's own (only once the viewer is known — `None` withholds
 /// attribution rather than guessing), and it isn't the Wishlist, whose name
 /// already opens with the owner so the chip would repeat it.
-fn shows_owner_attribution(viewer_id: Option<i64>, owner_user_id: i64, kind: ShelfKind) -> bool {
+pub(crate) fn shows_owner_attribution(
+    viewer_id: Option<i64>,
+    owner_user_id: i64,
+    kind: ShelfKind,
+) -> bool {
     viewer_id.is_some_and(|vid| vid != owner_user_id) && kind != ShelfKind::Wishlist
 }
 
