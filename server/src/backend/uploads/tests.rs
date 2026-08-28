@@ -546,6 +546,46 @@ async fn audiobook_commit_files_multi_mp3_into_one_folder() {
     assert_eq!(book.title.as_deref(), Some("Compiled Tales"));
 }
 
+/// The audiobook confirm form offers Series / Series index (#2254), and an
+/// audiobook container almost never carries a series statement of its own —
+/// so what the reader types there has to land on the book record.
+#[tokio::test]
+async fn audiobook_commit_persists_the_supplied_series_as_an_override() {
+    let (app, _state, pool) = fixture().await;
+    let _covers = CoversDirGuard::new("upload_audiobook_series");
+    let library = tempfile::tempdir().expect("temp library dir");
+    set_audiobook_library(&pool, &library.path().to_string_lossy()).await;
+
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let (ct, body) = multipart_body(&[
+        ("title", None, b"Audio Title Series"),
+        ("author", None, b"Audio Author"),
+        ("series", None, b"The Analytical Engine"),
+        ("series_index", None, b"3"),
+        (
+            "file",
+            Some("book.mp3"),
+            &fixture_audiobook("ada_lovelace_solo/the_analytical_audiobook.mp3"),
+        ),
+    ]);
+    let res = app
+        .oneshot(post_multipart("/api/uploads/audiobooks", &token, &ct, body))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let commit: UploadCommitResult = serde_json::from_slice(&bytes).unwrap();
+    let book = db::get_book_by_uuid(&pool, &commit.uuid)
+        .await
+        .unwrap()
+        .expect("uploaded audiobook should be indexed");
+    assert_eq!(book.series.as_deref(), Some("The Analytical Engine"));
+    assert_eq!(book.series_index.as_deref(), Some("3"));
+}
+
 #[tokio::test]
 async fn audiobook_commit_requires_configured_library_path() {
     let (app, _state, pool) = fixture().await;

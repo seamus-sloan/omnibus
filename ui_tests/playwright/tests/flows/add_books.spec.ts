@@ -101,6 +101,9 @@ test("auto-fills the form from a multi-part MP3 audiobook", async ({
   await expect(page.getByTestId("add-books-submit")).toBeVisible();
   // The title is derived from the shared album tag across the parts.
   await expect(page.getByLabel("Title")).not.toHaveValue("");
-  // Audiobooks carry no series metadata, so those fields are omitted.
-  await expect(page.getByLabel("Series")).toHaveCount(0);
+  // The audiobook parser extracts no series, which is exactly why the fields
+  // have to be offered here (#2254) — this is the only point in the flow that
+  // can supply one.
+  await expect(page.getByLabel("Series", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Series index")).toBeVisible();
 });

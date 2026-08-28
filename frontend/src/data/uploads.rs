@@ -21,11 +21,15 @@ pub struct EbookUploadMeta {
 }
 
 /// The user's confirmed metadata for an audiobook commit. `title`/`author`
-/// drive the on-disk folder; audiobooks carry no series fields.
+/// drive the on-disk folder; the `series` fields are optional. Audiobook
+/// containers rarely carry a series statement of their own, so these are
+/// usually the only place it can be supplied.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AudiobookUploadMeta {
     pub title: String,
     pub author: String,
+    pub series: String,
+    pub series_index: String,
 }
 
 /// Multipart content-type for an audiobook part, keyed off its extension. The
@@ -142,6 +146,21 @@ pub async fn upload_ebook(
         .map_err(|e| DataError::Other(e.to_string()))
 }
 
+/// Append a text field only when the user actually filled it, so a blank
+/// optional field never reaches the server as an empty override.
+#[cfg(feature = "web")]
+fn append_optional_str(
+    form: &web_sys::FormData,
+    name: &str,
+    value: &str,
+) -> Result<(), DataError> {
+    if value.trim().is_empty() {
+        return Ok(());
+    }
+    form.append_with_str(name, value)
+        .map_err(|e| DataError::Other(format!("FormData::append {name}: {e:?}")))
+}
+
 /// Append one or more audiobook parts to a `FormData` under the `file` field,
 /// each with a typed `Blob`.
 #[cfg(feature = "web")]
@@ -208,6 +227,8 @@ pub async fn upload_audiobook(
         .map_err(|e| DataError::Other(format!("FormData::append title: {e:?}")))?;
     form.append_with_str("author", &meta.author)
         .map_err(|e| DataError::Other(format!("FormData::append author: {e:?}")))?;
+    append_optional_str(&form, "series", &meta.series)?;
+    append_optional_str(&form, "series_index", &meta.series_index)?;
     append_audio_parts(&form, &files)?;
 
     let res = Request::post("/api/uploads/audiobooks")
@@ -324,6 +345,12 @@ pub async fn upload_audiobook(
     let mut form = reqwest::multipart::Form::new()
         .text("title", meta.title)
         .text("author", meta.author);
+    if !meta.series.trim().is_empty() {
+        form = form.text("series", meta.series);
+    }
+    if !meta.series_index.trim().is_empty() {
+        form = form.text("series_index", meta.series_index);
+    }
     for (name, bytes) in files {
         let mime = audio_mime(&name);
         let part = reqwest::multipart::Part::bytes(bytes)
