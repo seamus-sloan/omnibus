@@ -41,6 +41,9 @@ explore::curl() {
 explore::login_admin() {
   EXPLORE_JAR="$(mktemp -t omni-explore-jar)"
   export EXPLORE_JAR
+  # The jar holds a live admin session token. Remove it on any exit — a token
+  # left in /tmp outlives the run and is a credential, not a temp file.
+  trap 'rm -f "${EXPLORE_JAR-}"' EXIT INT TERM
   local code
   code=$(explore::curl -c "$EXPLORE_JAR" -o /dev/null -w '%{http_code}' \
     -X POST "$EXPLORE_URL/api/auth/login" \

@@ -26,6 +26,10 @@ HOST="${OMNIBUS_EXPLORE_SSH_HOST:-applications}"
 DIR="${OMNIBUS_EXPLORE_REMOTE_DIR:-omnibus-main}"
 SNAPS="${OMNIBUS_EXPLORE_SNAPSHOT_DIR:-omnibus-snapshots}"
 KEEP="${OMNIBUS_EXPLORE_SNAPSHOT_KEEP:-10}"
+# KEEP feeds an arithmetic expansion below; a non-numeric value would abort
+# mid-snapshot under `set -e` with an opaque error.
+[[ "$KEEP" =~ ^[0-9]+$ ]] && [ "$KEEP" -ge 1 ] \
+  || { echo "OMNIBUS_EXPLORE_SNAPSHOT_KEEP must be a positive integer (got: $KEEP)" >&2; exit 2; }
 
 cmd="${1:?usage: snapshot.sh take [label] | list | restore <name>}"
 
@@ -37,8 +41,11 @@ case "$cmd" in
       mkdir -p ~/$SNAPS
       cd ~/$DIR
       docker compose stop >/dev/null 2>&1
+      # Bring it back however we leave: a failed tar must not strand the
+      # instance stopped, which would look like an outage rather than a
+      # failed snapshot.
+      trap 'docker compose start >/dev/null 2>&1 || true' EXIT
       tar czf ~/$SNAPS/$name.tgz config books audiobooks
-      docker compose start >/dev/null 2>&1
       # Keep only the newest \$KEEP; a snapshot nobody can restore from is just disk.
       ls -1t ~/$SNAPS/*.tgz 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f
       du -h ~/$SNAPS/$name.tgz | cut -f1" \
@@ -62,8 +69,12 @@ case "$cmd" in
       tar xzf ~/$SNAPS/$name.tgz
       docker compose up -d >/dev/null 2>&1"
     echo "restored $name — waiting for health"
+    # Resolve the container through compose rather than assuming a name: the
+    # container is named after the project directory, so a caller overriding
+    # OMNIBUS_EXPLORE_REMOTE_DIR would otherwise always see health=unknown.
     for _ in $(seq 1 20); do
-      s=$(ssh "$HOST" "docker inspect -f '{{.State.Health.Status}}' omnibus-main 2>/dev/null" || true)
+      s=$(ssh "$HOST" "cd ~/$DIR && cid=\$(docker compose ps -q | head -1) && \
+        [ -n \"\$cid\" ] && docker inspect -f '{{.State.Health.Status}}' \"\$cid\" 2>/dev/null" || true)
       [ "$s" = healthy ] && break
       sleep 3
     done

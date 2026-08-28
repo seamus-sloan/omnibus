@@ -87,7 +87,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--agents", type=int, default=1)
     ap.add_argument("--flows-per-agent", type=int, default=4)
-    ap.add_argument("--seed", type=int, required=True)
+    ap.add_argument("--seed", type=int, default=None,
+                    help="omit to draw one; the seed used is always emitted, "
+                         "and re-running with it reproduces the draw exactly")
     ap.add_argument("--run", required=True)
     ap.add_argument("--catalog", type=Path,
                     default=Path(__file__).resolve().parents[2]
@@ -100,11 +102,24 @@ def main() -> None:
                          "content the corpus cannot supply)")
     args = ap.parse_args()
 
+    if args.agents < 1:
+        sys.exit("--agents must be at least 1")
+    if args.flows_per_agent < 1:
+        sys.exit("--flows-per-agent must be at least 1")
+
     top, subs = parse_catalog(args.catalog)
     for name in filter(None, (s.strip() for s in args.exclude.split(","))):
         top.pop(name, None)
 
-    rng = random.Random(args.seed)
+    # Flows are drawn distinct, so asking for more than exist would silently
+    # yield a shorter sequence — a coverage cut that reads as coverage.
+    if args.flows_per_agent > len(top):
+        sys.exit(f"--flows-per-agent {args.flows_per_agent} exceeds the "
+                 f"{len(top)} flow(s) available after exclusions")
+
+    # A run with no seed is still reproducible, because the seed is emitted.
+    seed = args.seed if args.seed is not None else random.SystemRandom().randrange(2**31)
+    rng = random.Random(seed)
     agents = [
         {
             "actor": f"agent-{i}",
@@ -113,7 +128,7 @@ def main() -> None:
         }
         for i in range(1, args.agents + 1)
     ]
-    json.dump({"run": args.run, "seed": args.seed, "agents": agents}, sys.stdout, indent=2)
+    json.dump({"run": args.run, "seed": seed, "agents": agents}, sys.stdout, indent=2)
     print()
 
 
