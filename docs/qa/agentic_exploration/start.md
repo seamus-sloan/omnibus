@@ -95,7 +95,7 @@ transcripts are thrown away.
 | Field | Meaning |
 |---|---|
 | `ts` | UTC, ms precision. The report correlates agents on this alone — never batch entries and stamp them later. |
-| `seq` | Your own monotonic counter, from 1, for the run. |
+| `seq` | Your own counter, monotonic and unique **per actor**. Derive it from the journal filtered to your own `actor`, never from the line count — the journal is shared, so counting all lines numbers you by other agents' work. Starting above 1 is acceptable; going backwards or repeating is not. |
 | `action` | Dotted verb — `book.open`, `highlight.create`, `metadata.save`, `shelf.add`. |
 | `target` | The book uuid or other entity id, **in full** — never abbreviated. Ownership is looked up on this exact string, so a truncated uuid loses the book forever. `null` when there isn't one. |
 | `params` | **Everything a replayer needs to redo this.** Under-filling it is the commonest way a real bug becomes an anecdote. |

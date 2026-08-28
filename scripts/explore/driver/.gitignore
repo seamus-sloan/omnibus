@@ -1,0 +1,8 @@
+# node_modules is reproducible from package.json + package-lock.json.
+node_modules/
+
+# Should never exist: the driver shares the flake's Chromium via
+# PLAYWRIGHT_BROWSERS_PATH. If this appears, something ran `playwright install`
+# and the driver has silently stopped testing on the same browser as the E2E
+# suite — delete it and check the version pins in package.json.
+browsers/
