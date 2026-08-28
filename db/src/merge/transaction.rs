@@ -388,18 +388,48 @@ async fn move_links(
     Ok(())
 }
 
-/// Re-parent reading progress and playback preferences (with latest-wins
-/// dedupe) plus bookmarks, reading/listening sessions, and highlights from the
-/// source book onto the target. The F1 user-data tables soft-reference the
-/// durable `books.uuid`, so re-parenting is an `UPDATE … SET book_uuid =
+/// Every per-user table that soft-references `books.uuid` and must follow the
+/// book across a merge. Ordered so the [`DEDUPE_TABLES`] entries — which have
+/// already had their collisions resolved — retarget alongside the rest.
+///
+/// This list is the merge's half of the soft-reference contract: a table added
+/// here but not there silently strands a user's data on the deleted source
+/// uuid, where it is invisible to anything joining `books` and still visible to
+/// anything that doesn't.
+const RETARGET_TABLES: [&str; 10] = [
+    "reading_progress",
+    "audiobook_playback_preferences",
+    "bookmarks",
+    "reading_sessions",
+    "listening_sessions",
+    "annotations",
+    "kobo_annotations_sync",
+    "journal_entries",
+    "book_read_status",
+    "user_ratings",
+];
+
+/// The subset of [`RETARGET_TABLES`] carrying a `UNIQUE` key the retarget would
+/// collide on, with the extra key column beyond `(user_id, book_uuid)` where
+/// there is one. Resolved latest-wins by [`dedupe_latest_wins`] before the
+/// retarget runs.
+const DEDUPE_TABLES: [(&str, Option<&str>); 4] = [
+    ("reading_progress", Some("format")),
+    ("audiobook_playback_preferences", None),
+    ("book_read_status", None),
+    ("user_ratings", None),
+];
+
+/// Re-parent every per-user row from the source book onto the target: reading
+/// progress, playback preferences, bookmarks, sessions, highlights, journal
+/// entries, read status, and ratings. The F1 user-data tables soft-reference
+/// the durable `books.uuid`, so re-parenting is an `UPDATE … SET book_uuid =
 /// <target> WHERE book_uuid = <source>` (no FK cascade — a cascade would
 /// *delete* the children). The two canonical uuids are read from `books` while
 /// the source row still exists (it is deleted later in `finalize_merge`).
 ///
-/// Dedupe on `reading_progress` is necessary because `format` is the coarse
-/// `'epub' | 'audio'`, while the merge's format-collision check uses the real
-/// file formats — an M4B book merging with an MP3 book passes the check but
-/// both carry `'audio'` progress rows.
+/// Tables with a `UNIQUE` key the retarget would violate are deduped first;
+/// see [`DEDUPE_TABLES`] and [`dedupe_latest_wins`].
 async fn move_progress_and_history(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     source_id: i64,
@@ -414,12 +444,14 @@ async fn move_progress_and_history(
         .fetch_one(&mut **tx)
         .await?;
 
-    dedupe_reading_progress(tx, &source_uuid, &target_uuid).await?;
-    dedupe_playback_preferences(tx, &source_uuid, &target_uuid).await?;
-    // Per-device annotation sync state keys on (device_id, book_uuid); where a
-    // device tracks BOTH uuids, keep the target's row (the retarget below
-    // would collide) — the watermark is regenerable, and a moved fingerprint
-    // just re-reports the merged book once.
+    for (table, extra_key) in DEDUPE_TABLES {
+        dedupe_latest_wins(tx, table, extra_key, &source_uuid, &target_uuid).await?;
+    }
+    // Per-device annotation sync state keys on (device_id, book_uuid) rather
+    // than on a user, so it can't use the latest-wins helper. Where a device
+    // tracks BOTH uuids, keep the target's row (the retarget below would
+    // collide) — the watermark is regenerable, and a moved fingerprint just
+    // re-reports the merged book once.
     sqlx::query(
         "DELETE FROM kobo_annotations_sync
           WHERE book_uuid = ?2 AND EXISTS (
@@ -431,15 +463,7 @@ async fn move_progress_and_history(
     .bind(&source_uuid)
     .execute(&mut **tx)
     .await?;
-    for table in [
-        "reading_progress",
-        "audiobook_playback_preferences",
-        "bookmarks",
-        "reading_sessions",
-        "listening_sessions",
-        "annotations",
-        "kobo_annotations_sync",
-    ] {
+    for table in RETARGET_TABLES {
         let sql = format!("UPDATE {table} SET book_uuid = ?1 WHERE book_uuid = ?2");
         sqlx::query(&sql)
             .bind(&target_uuid)
@@ -450,72 +474,58 @@ async fn move_progress_and_history(
     Ok(())
 }
 
-/// Latest-wins dedupe of `reading_progress` rows that collide on
-/// `(user_id, format)` once the source's uuid retargets onto the target's —
-/// see [`move_progress_and_history`]'s doc for why the coarse `format`
-/// column makes this necessary.
-async fn dedupe_reading_progress(
+/// Latest-wins dedupe of the rows in `table` that would collide on its
+/// `UNIQUE (user_id, book_uuid[, extra_key])` once the source's uuid retargets
+/// onto the target's. The surviving row is whichever side has the newer
+/// `updated_at`, ties going to the target.
+///
+/// `extra_key` names the third column of that unique key where there is one:
+/// `reading_progress` needs it because `format` is the coarse `'epub' |
+/// 'audio'`, while the merge's format-collision check uses the real file
+/// formats — an M4B book merging with an MP3 book passes the check but both
+/// carry `'audio'` progress rows.
+///
+/// Two passes are required, and in this order: keeping the newest row means
+/// deleting a loser on whichever side it falls, and pass 2's blanket delete of
+/// colliding target rows is only correct once pass 1 has removed the source
+/// rows the target already beat.
+async fn dedupe_latest_wins(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    extra_key: Option<&str>,
     source_uuid: &str,
     target_uuid: &str,
 ) -> Result<(), sqlx::Error> {
-    // Losing source rows first (target is newer or equal) …
-    sqlx::query(
-        "DELETE FROM reading_progress WHERE book_uuid = ?2 AND EXISTS (
-            SELECT 1 FROM reading_progress t
-             WHERE t.book_uuid = ?1 AND t.user_id = reading_progress.user_id
-               AND t.format = reading_progress.format
-               AND t.updated_at >= reading_progress.updated_at)",
-    )
-    .bind(target_uuid)
-    .bind(source_uuid)
-    .execute(&mut **tx)
-    .await?;
-    // … then losing target rows (a strictly newer source row survived).
-    sqlx::query(
-        "DELETE FROM reading_progress WHERE book_uuid = ?1 AND EXISTS (
-            SELECT 1 FROM reading_progress s
-             WHERE s.book_uuid = ?2 AND s.user_id = reading_progress.user_id
-               AND s.format = reading_progress.format)",
-    )
-    .bind(target_uuid)
-    .bind(source_uuid)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
+    // `table` / `extra_key` are fixed literals from the consts above, never
+    // user input.
+    let also = extra_key
+        .map(|k| format!(" AND o.{k} = {table}.{k}"))
+        .unwrap_or_default();
 
-/// Latest-wins dedupe of `audiobook_playback_preferences` rows that collide
-/// on `user_id` once the source's uuid retargets onto the target's. Same
-/// two-pass shape as [`dedupe_reading_progress`].
-async fn dedupe_playback_preferences(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    source_uuid: &str,
-    target_uuid: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "DELETE FROM audiobook_playback_preferences
-          WHERE book_uuid = ?2 AND EXISTS (
-            SELECT 1 FROM audiobook_playback_preferences t
-             WHERE t.book_uuid = ?1
-               AND t.user_id = audiobook_playback_preferences.user_id
-               AND t.updated_at >= audiobook_playback_preferences.updated_at)",
-    )
-    .bind(target_uuid)
-    .bind(source_uuid)
-    .execute(&mut **tx)
-    .await?;
-    sqlx::query(
-        "DELETE FROM audiobook_playback_preferences
-          WHERE book_uuid = ?1 AND EXISTS (
-            SELECT 1 FROM audiobook_playback_preferences s
-             WHERE s.book_uuid = ?2
-               AND s.user_id = audiobook_playback_preferences.user_id)",
-    )
-    .bind(target_uuid)
-    .bind(source_uuid)
-    .execute(&mut **tx)
-    .await?;
+    // Losing source rows first (target is newer or equal) …
+    let sql = format!(
+        "DELETE FROM {table} WHERE book_uuid = ?2 AND EXISTS (
+            SELECT 1 FROM {table} o
+             WHERE o.book_uuid = ?1 AND o.user_id = {table}.user_id{also}
+               AND o.updated_at >= {table}.updated_at)"
+    );
+    sqlx::query(&sql)
+        .bind(target_uuid)
+        .bind(source_uuid)
+        .execute(&mut **tx)
+        .await?;
+
+    // … then losing target rows (a strictly newer source row survived).
+    let sql = format!(
+        "DELETE FROM {table} WHERE book_uuid = ?1 AND EXISTS (
+            SELECT 1 FROM {table} o
+             WHERE o.book_uuid = ?2 AND o.user_id = {table}.user_id{also})"
+    );
+    sqlx::query(&sql)
+        .bind(target_uuid)
+        .bind(source_uuid)
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }
 

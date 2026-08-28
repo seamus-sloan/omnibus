@@ -13,7 +13,7 @@ works in production.
 
 1. **Name it `NNNN_short_description.sql`.** Take the next zero-padded
    number after the highest existing file (latest is
-   `0076_cross_format_follow.sql`). The number is the version
+   `0079_merge_orphan_user_data.sql`). The number is the version
    `_sqlx_migrations` records; renumbering or renaming an applied file
    breaks the applied-version bookkeeping.
 2. **Never edit an applied migration.** Once a file has run anywhere
@@ -61,6 +61,16 @@ a bare `SELECT id FROM books WHERE uuid = ?`. Durable user-data tables
 should soft-reference `book_uuid TEXT` (no FK, no cascade), like
 `metadata_overrides` — not a cascading `book_id` FK that wipes user data
 on reindex.
+
+**A soft-referencing table must also be added to `RETARGET_TABLES` in
+`db/src/merge/transaction.rs`** — that list is the other half of the
+contract. Merge deletes the source `books` row, so a table missing from it
+strands the reader's rows on a uuid no book carries: invisible to every
+query that joins `books`, still counted by every query that doesn't, which
+is how the Finished tile and the trailing-12 chart came to disagree
+(migration `0079` heals the rows, the list stops new ones). If the table
+carries a `UNIQUE` key the retarget would collide on, add it to
+`DEDUPE_TABLES` beside it and the shared latest-wins helper resolves it.
 
 ## Testing
 

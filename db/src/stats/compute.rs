@@ -53,6 +53,38 @@ pub(super) const FINISHED_EVENTS: &str = "\
     SELECT book_uuid, finished_at FROM book_read_status \
         WHERE user_id = ? AND status = 'finished' AND finished_at IS NOT NULL";
 
+/// [`FINISHED_EVENTS`] narrowed to completions on a book that still exists —
+/// the liveness filter **every** completion metric shares. Same
+/// `(book_uuid, finished_at)` shape, same two binds.
+///
+/// A function rather than four hand-written `JOIN books` clauses because the
+/// metrics disagreed when it was four: the headline count, the rail and the
+/// pages estimate joined `books` while the trailing-12 chart and the
+/// vs-previous delta did not, so a single completion on a merged-away book
+/// made the Finished tile and the chart directly above it report different
+/// numbers for the same month. Deriving the filter from one place means a
+/// metric that opts out has to do so visibly.
+fn live_finished_events() -> String {
+    format!(
+        "SELECT f.book_uuid AS book_uuid, f.finished_at AS finished_at \
+         FROM ({FINISHED_EVENTS}) f \
+         JOIN books b ON b.uuid = f.book_uuid"
+    )
+}
+
+/// A rating on a book that still exists, scoped to one user — the same
+/// liveness rule [`live_finished_events`] applies to completions, for the
+/// star-rating metrics. Bind order is `user_id`.
+///
+/// Without it the average rating is computed over rows the UI cannot show:
+/// a rating stranded on a merged-away book renders nowhere on the book page
+/// and still moves the mean on the stats page.
+const LIVE_RATINGS: &str = "\
+    SELECT r.user_id AS user_id, r.half_stars AS half_stars, r.updated_at AS updated_at \
+    FROM user_ratings r \
+    JOIN books b ON b.uuid = r.book_uuid \
+    WHERE r.user_id = ?";
+
 /// Run every per-field query and assemble the [`StatsSummary`] for one user's
 /// window. This is the body [`super::user_stats_at`] caches.
 pub(super) async fn compute(
@@ -155,19 +187,18 @@ pub(super) async fn sum_seconds(
 /// Mean star rating over books the user rated within the window (keyed on
 /// `user_ratings.updated_at`), in stars — `half_stars` is 1..=10, so the
 /// SQL mean halves it. `None` when nothing was rated in the window.
+/// Live books only, per [`LIVE_RATINGS`].
 pub(super) async fn avg_stars(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
 ) -> Result<Option<f64>, StatsError> {
-    Ok(sqlx::query_scalar(
-        "SELECT AVG(half_stars) / 2.0 FROM user_ratings
-         WHERE user_id = ? AND updated_at >= ?",
-    )
-    .bind(user_id)
-    .bind(start)
-    .fetch_one(pool)
-    .await?)
+    let sql = format!("SELECT AVG(half_stars) / 2.0 FROM ({LIVE_RATINGS}) WHERE updated_at >= ?");
+    Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .bind(start)
+        .fetch_one(pool)
+        .await?)
 }
 
 /// Sittings in the window, counted over [`sessionize::stitched`] groups
@@ -434,10 +465,8 @@ pub(super) async fn finished_count(
     start: i64,
 ) -> Result<i64, StatsError> {
     let sql = format!(
-        "SELECT COUNT(DISTINCT f.book_uuid)
-         FROM ({FINISHED_EVENTS}) f
-         JOIN books b ON b.uuid = f.book_uuid
-         WHERE f.finished_at >= ?"
+        "SELECT COUNT(DISTINCT f.book_uuid) FROM ({}) f WHERE f.finished_at >= ?",
+        live_finished_events()
     );
     Ok(sqlx::query_scalar(&sql)
         .bind(user_id)
@@ -595,19 +624,22 @@ async fn avg_stars_bounded(
     start: i64,
     end: i64,
 ) -> Result<Option<f64>, StatsError> {
-    Ok(sqlx::query_scalar(
-        "SELECT AVG(half_stars) / 2.0 FROM user_ratings
-         WHERE user_id = ? AND updated_at >= ? AND updated_at < ?",
-    )
-    .bind(user_id)
-    .bind(start)
-    .bind(end)
-    .fetch_one(pool)
-    .await?)
+    let sql = format!(
+        "SELECT AVG(half_stars) / 2.0 FROM ({LIVE_RATINGS}) \
+         WHERE updated_at >= ? AND updated_at < ?"
+    );
+    Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .bind(start)
+        .bind(end)
+        .fetch_one(pool)
+        .await?)
 }
 
-/// Count of distinct books finished (either source, see [`FINISHED_EVENTS`])
-/// with the completion moment in `[start, end)`.
+/// Count of distinct live books finished (either source, see
+/// [`FINISHED_EVENTS`]) with the completion moment in `[start, end)`. Shares
+/// [`finished_count`]'s definition exactly, so the drill-in's delta compares
+/// two counts of the same thing.
 async fn finished_count_bounded(
     pool: &SqlitePool,
     user_id: i64,
@@ -615,8 +647,9 @@ async fn finished_count_bounded(
     end: i64,
 ) -> Result<i64, StatsError> {
     let sql = format!(
-        "SELECT COUNT(DISTINCT f.book_uuid) FROM ({FINISHED_EVENTS}) f
-         WHERE f.finished_at >= ? AND f.finished_at < ?"
+        "SELECT COUNT(DISTINCT f.book_uuid) FROM ({}) f
+         WHERE f.finished_at >= ? AND f.finished_at < ?",
+        live_finished_events()
     );
     Ok(sqlx::query_scalar(&sql)
         .bind(user_id)
@@ -661,7 +694,7 @@ pub(super) async fn rating_monthly(
     pool: &SqlitePool,
     user_id: i64,
 ) -> Result<Vec<TrendPoint>, StatsError> {
-    let rows = sqlx::query(
+    let sql = format!(
         "WITH RECURSIVE months(month) AS (
              SELECT strftime('%Y-%m', 'now', 'start of month', '-11 months')
              UNION ALL
@@ -671,15 +704,12 @@ pub(super) async fn rating_monthly(
          )
          SELECT months.month AS month, AVG(ur.half_stars) / 2.0 AS avg_stars
          FROM months
-         LEFT JOIN user_ratings ur
-                ON ur.user_id = ?
-               AND strftime('%Y-%m', ur.updated_at, 'unixepoch') = months.month
+         LEFT JOIN ({LIVE_RATINGS}) ur
+                ON strftime('%Y-%m', ur.updated_at, 'unixepoch') = months.month
          GROUP BY months.month
-         ORDER BY months.month",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await?;
+         ORDER BY months.month"
+    );
+    let rows = sqlx::query(&sql).bind(user_id).fetch_all(pool).await?;
 
     Ok(rows
         .into_iter()
@@ -716,10 +746,11 @@ pub(super) async fn books_per_month(
          )
          SELECT months.month AS month, COUNT(DISTINCT f.book_uuid) AS books
          FROM months
-         LEFT JOIN ({FINISHED_EVENTS}) f
+         LEFT JOIN ({}) f
                ON strftime('%Y-%m', f.finished_at, 'unixepoch') = months.month
          GROUP BY months.month
-         ORDER BY months.month"
+         ORDER BY months.month",
+        live_finished_events()
     );
     let rows = sqlx::query(&sql)
         .bind(user_id)
