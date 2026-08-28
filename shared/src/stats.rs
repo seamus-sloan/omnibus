@@ -232,9 +232,13 @@ pub struct StatsSummary {
     /// ending earlier reports zero.
     ///
     /// Server-computed so every client renders the same number rather than
-    /// each deriving its own from `heatmap`. Windowed like every other figure
-    /// here, so a `Week` range caps it at 7 — the unbounded current streak is
-    /// the one on the `AllTime` summary.
+    /// each deriving its own from `heatmap`. **Not windowed**, unlike every
+    /// other figure here: a streak is a fact about right now, not about a
+    /// reporting period, so this reads the same on every `StatsRange`. Windowed
+    /// it would report 2 on the 2nd of the month for a reader 40 days deep —
+    /// and the web card (fed the all-time summary) and the iOS tile (fed the
+    /// period-scoped one) would disagree about the very field that exists to
+    /// stop clients disagreeing.
     #[serde(default)]
     pub current_streak_days: i64,
     /// First active day (UTC `YYYY-MM-DD`) of the busiest ISO week, if any.

@@ -245,6 +245,24 @@ async fn streak_counts_longest_consecutive_run() {
 }
 
 #[tokio::test]
+async fn as_of_returns_a_day_string_and_day_number_describing_the_same_day() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    // The whole reason `as_of` reads both out of one statement: the heatmap
+    // anchors on the string and the streak on the number, so a disagreement
+    // between them silently moves the streak's anchor by a day.
+    let (day, dnum) = as_of(&pool).await.unwrap();
+    let round_tripped: String = sqlx::query_scalar("SELECT date(? * 86400, 'unixepoch')")
+        .bind(dnum)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(day.len(), 10);
+    assert_eq!(round_tripped, day);
+}
+
+#[tokio::test]
 async fn current_streak_runs_up_to_the_servers_today() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 1).await;

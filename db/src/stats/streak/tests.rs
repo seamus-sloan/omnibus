@@ -4,24 +4,13 @@
 
 use super::*;
 use crate::init_db;
-use crate::test_support::seed_minimal_books;
+use crate::test_support::{seed_minimal_books, seed_user};
 
 const DAY: i64 = 86_400;
 
 /// A late-2023 anchor, and the day number it falls on.
 const T0: i64 = 1_700_000_000;
 const T0_DAY: i64 = T0 / DAY;
-
-async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
-    sqlx::query_scalar::<_, i64>(
-        "INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
-         VALUES (?, '!x', 0, 0, 0, 1) RETURNING id",
-    )
-    .bind(name)
-    .fetch_one(pool)
-    .await
-    .unwrap()
-}
 
 async fn reading_session(pool: &SqlitePool, user: i64, uuid: &str, started_at: i64) {
     sqlx::query(
@@ -106,6 +95,17 @@ fn current_run_stops_at_the_gap_and_ignores_the_earlier_streak() {
     assert_eq!(current_run(&[80, 81, 82, 83, 99, 100], 100), 2);
 }
 
+#[test]
+fn current_run_ignores_a_session_dated_in_the_future() {
+    // A device with a fast clock files a session 30 days out. Counted as the
+    // head of the run, the gap behind it breaks the walk and a 3-day streak
+    // reports 1.
+    assert_eq!(current_run(&[98, 99, 100, 130], 100), 3);
+    // And a future day must not stand in for activity the reader never had.
+    assert_eq!(current_run(&[130], 100), 0);
+    assert_eq!(current_run(&[60, 130], 100), 0);
+}
+
 // --- streak -------------------------------------------------------------
 
 #[tokio::test]
@@ -154,6 +154,30 @@ async fn streak_is_all_zero_for_a_user_with_no_sessions() {
     assert_eq!(s.active_days, 0);
     assert_eq!(s.longest_days, 0);
     assert_eq!(s.current_days, 0, "no sessions is a zero streak, not one");
+}
+
+#[tokio::test]
+async fn streak_reports_the_live_run_from_outside_the_window() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    // Ten days running, but the window opens two days ago — the shape of a
+    // reader opening the Month tab on the 2nd. Days active and the record are
+    // the window's; the streak is the reader's.
+    for back in 0..10 {
+        reading_session(&pool, user, "uuid-1", T0 - back * DAY).await;
+    }
+    let window_start = T0 - DAY;
+
+    let s = streak(&pool, user, window_start, T0_DAY).await.unwrap();
+
+    assert_eq!(s.active_days, 2, "days active stay scoped to the window");
+    assert_eq!(s.longest_days, 2, "so does the record");
+    assert_eq!(
+        s.current_days, 10,
+        "the live run is a fact about now, not about the reporting period"
+    );
 }
 
 #[tokio::test]
