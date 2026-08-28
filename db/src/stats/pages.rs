@@ -73,7 +73,7 @@ pub(super) fn book_pages_source() -> String {
 }
 
 /// The distinct live books a user finished in the window — the shared scope of
-/// both aggregates here, and the same completion definition as
+/// all three aggregates here, and the same completion definition as
 /// `compute::finished_count` (a 100% journal entry or an explicit read-status
 /// `finished`, on a book that still exists). A book finished twice counts once.
 /// Bind order is `user_id, user_id, start`.
@@ -138,6 +138,14 @@ const BOOK_READING_SECS: &str = "\
 /// [`pages_read`] does. Books read partly in audio over-report here — their
 /// listening time is excluded from the denominator by design — which is why
 /// the surfaces label this an estimate.
+///
+/// A **zero**-page book is dropped as unmeasured, not summed as [`pages_read`]
+/// harmlessly does: `estimate_word_count` yields `Some(0)` for an EPUB whose
+/// spine loads but strips to no words (image-only or fixed-layout), so a real
+/// book can reach here with `pages = 0`. In a total that costs nothing; against
+/// a denominator it donates its hours while contributing no pages, dragging the
+/// rate down — and if it is the only qualifying book, prints a "0 pages an
+/// hour" that is exactly the claim the empty state exists to avoid making.
 pub(super) async fn pages_per_hour(
     pool: &SqlitePool,
     user_id: i64,
@@ -148,7 +156,7 @@ pub(super) async fn pages_per_hour(
          FROM ({}) fin
          JOIN ({}) p ON p.uuid = fin.uuid
          JOIN ({BOOK_READING_SECS}) t ON t.book_uuid = fin.uuid
-         WHERE p.pages IS NOT NULL AND t.secs > 0",
+         WHERE p.pages > 0 AND t.secs > 0",
         finished_in_window(),
         book_pages_source()
     );

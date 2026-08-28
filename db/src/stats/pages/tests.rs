@@ -392,6 +392,44 @@ async fn pages_per_hour_is_none_when_no_finished_book_has_both_a_length_and_time
     assert_eq!(pages_per_hour(&pool, user, 0).await.unwrap(), None);
 }
 
+/// A `word_count` of 0 is a real stored value — `estimate_word_count` returns
+/// `Some(0)` for an EPUB whose spine loads but strips to no words — and the
+/// ladder turns it into 0 pages, not NULL. Summing that costs `pages_read`
+/// nothing, but here it would donate hours against no pages.
+#[tokio::test]
+async fn pages_per_hour_excludes_a_zero_page_book_from_both_sides() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-a", None, Some(300)).await;
+    finish_journal(&pool, user, "uuid-a", T0).await;
+    read_session(&pool, user, "uuid-a", T0, 10 * 3600).await;
+    // Image-only EPUB: spine loaded, no extractable text.
+    seed_book(&pool, lib, "uuid-zero", Some(0), None).await;
+    finish_journal(&pool, user, "uuid-zero", T0).await;
+    read_session(&pool, user, "uuid-zero", T0, 6 * 3600).await;
+
+    let rate = pages_per_hour(&pool, user, 0).await.unwrap().unwrap();
+
+    // 30/h from the measurable book alone. Counting the zero-page book's
+    // six hours in the denominator would give 300/16h = 18.75.
+    assert!((rate - 30.0).abs() < 1e-9, "{rate}");
+}
+
+#[tokio::test]
+async fn pages_per_hour_is_none_when_the_only_finished_book_measures_zero_pages() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-zero", Some(0), None).await;
+    finish_journal(&pool, user, "uuid-zero", T0).await;
+    read_session(&pool, user, "uuid-zero", T0, 6 * 3600).await;
+
+    // Not `Some(0.0)` — "0 pages an hour" is a claim about how this reader
+    // reads, and an unmeasurable book is not that claim.
+    assert_eq!(pages_per_hour(&pool, user, 0).await.unwrap(), None);
+}
+
 #[tokio::test]
 async fn pages_per_hour_is_none_when_nothing_finished_in_the_window() {
     let pool = init_db("sqlite::memory:").await.unwrap();

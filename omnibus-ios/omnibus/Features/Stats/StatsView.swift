@@ -330,6 +330,14 @@ struct StatsView: View {
                 value: summary.pagesRead.map { "\($0)" } ?? "—",
                 icon: "doc.text"
             )
+            // Directly after Pages so the two share a row of the two-column
+            // grid: the total says how much, this says how fast, and the pair
+            // is the reader's own speed to compare against.
+            StatTile(
+                label: "Pages an hour",
+                value: summary.pagesPerHour.map(Self.rateValue) ?? "—",
+                icon: "speedometer"
+            )
             StatTile(
                 label: "Avg rating",
                 value: summary.avgStars.map { String(format: "%.1f", $0) } ?? "—",
@@ -339,13 +347,6 @@ struct StatsView: View {
                 label: "Books open",
                 value: summary.booksActive > 0 ? "\(summary.booksActive)" : "—",
                 icon: "book"
-            )
-            // Beside Pages deliberately: the total says how much, this says how
-            // fast, and the pair is the reader's own speed to compare against.
-            StatTile(
-                label: "Pages an hour",
-                value: summary.pagesPerHour.map(Self.rateValue) ?? "—",
-                icon: "speedometer"
             )
         }
         .screenPadding()
