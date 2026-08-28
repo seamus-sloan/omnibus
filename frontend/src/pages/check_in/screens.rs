@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::{ExternalBookMeta, ScanBook, WishlistAddRequest};
 
-use super::{wishlist_request_for, CheckInOpen, FlowState};
+use super::{wishlist_request_for, CheckInOpen, FlowState, FoundVia};
 use crate::{media_url, use_server_url, Route};
 
 /// Matching spinner shown while the resolve request is in flight.
@@ -52,7 +52,7 @@ pub(super) fn ConfirmScreen(
                     oninput: move |e| note.set(e.value()),
                 }
             }
-            p { class: "check-in-isbn-line", "Scanned ISBN {isbn}" }
+            p { class: "check-in-isbn-line", {(state.found_via)().isbn_line(&isbn)} }
             div { class: "settings-actions",
                 button {
                     r#type: "button",
@@ -86,17 +86,18 @@ pub(super) fn ConfirmScreen(
 pub(super) fn CloseMatchScreen(
     books: Vec<ScanBook>,
     scanned: ExternalBookMeta,
+    found_via: FoundVia,
     on_yes: EventHandler<ScanBook>,
     on_no: EventHandler<ExternalBookMeta>,
 ) -> Element {
     let many = books.len() > 1;
-    let copy = CloseMatchCopy::for_count(many);
+    let copy = CloseMatchCopy::for_lookup(many, found_via);
     let fallthrough = scanned.clone();
     rsx! {
         div { class: "check-in-screen", "data-testid": "check-in-close-match",
             h1 { "{copy.heading}" }
             p { class: "subtitle", "{copy.subtitle}" }
-            p { class: "check-in-isbn-line", "Scanned ISBN {scanned.isbn13}" }
+            p { class: "check-in-isbn-line", {found_via.isbn_line(&scanned.isbn13)} }
             ul { class: "check-in-match-list", "data-testid": "check-in-close-match-list",
                 for book in books {
                     LibraryPickOption {
@@ -124,8 +125,10 @@ pub(super) fn CloseMatchScreen(
     }
 }
 
-/// The close-match screen's four strings, which all swap together on whether
-/// the ladder offered one candidate or several.
+/// The close-match screen's four strings. Three swap on whether the ladder
+/// offered one candidate or several; the subtitle also names the ISBN the way
+/// the reader actually supplied it — or, after a title search, doesn't claim
+/// they supplied one at all.
 pub(super) struct CloseMatchCopy {
     pub(super) heading: &'static str,
     pub(super) subtitle: &'static str,
@@ -135,18 +138,19 @@ pub(super) struct CloseMatchCopy {
 
 impl CloseMatchCopy {
     /// `many` is `books.len() > 1`.
-    pub(super) fn for_count(many: bool) -> Self {
+    pub(super) fn for_lookup(many: bool, found_via: FoundVia) -> Self {
+        let subtitle = found_via.no_library_match(many);
         if many {
             Self {
                 heading: "Which one is this?",
-                subtitle: "The ISBN you entered isn't on any book in your library, but the title and author match these.",
+                subtitle,
                 pick: "This one",
                 decline: "None of these",
             }
         } else {
             Self {
                 heading: "Is this the book?",
-                subtitle: "The ISBN you entered isn't on any book in your library, but the title and author match this one.",
+                subtitle,
                 pick: "Yes, that's it",
                 decline: "No, different book",
             }
@@ -240,7 +244,7 @@ pub(super) fn ChooseScreen(
                     class: "btn ghost",
                     disabled: busy(),
                     "data-testid": "check-in-wishlist",
-                    onclick: move |_| on_action.call(ChooseAction::Wishlist(wishlist_request_for(&wish_meta))),
+                    onclick: move |_| on_action.call(ChooseAction::Wishlist(wishlist_request_for(&wish_meta, (state.found_via)()))),
                     "Add to my wishlist"
                 }
                 button {

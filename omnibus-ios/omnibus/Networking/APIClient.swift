@@ -474,6 +474,13 @@ actor APIClient {
     /// book transfer fails every other request in the app fast for that whole
     /// window, which is the stall this mechanism exists to prevent.
     private func failFastWhenUnreachable(claimProbe: Bool = true) throws {
+        #if DEBUG
+        // Simulated airplane mode (`DebugOffline`). Every request path in this
+        // actor passes through here, so one check covers the whole client —
+        // and it throws the same error a real unreachable server produces, so
+        // nothing downstream can tell the two apart.
+        if DebugOffline.isForced { throw APIError.offline }
+        #endif
         guard let until = unreachableUntil else { return }
         if Date() < until || probing { throw APIError.offline }
         if claimProbe { probing = true }

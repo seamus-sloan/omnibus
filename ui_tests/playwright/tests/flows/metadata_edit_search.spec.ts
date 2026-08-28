@@ -1062,8 +1062,11 @@ test.describe
       await expect(page.getByTestId("mes-row-cover-note")).toHaveText(
         "Cover updated.",
       );
-      // Immediate, not staged: the save bar never noticed.
-      await expect(page.getByTestId("me-save")).toBeDisabled();
+      // The write is immediate rather than staged, so the bar reports it as
+      // already saved rather than claiming "No changes" — and Save stays
+      // usable as the way out of the editor (#2241).
+      await expect(page.getByTestId("me-cover-replaced")).toBeVisible();
+      await expect(page.getByTestId("me-save")).toBeEnabled();
 
       // And the sidebar follows the write without a reload — both its cover
       // controls and its "Override active" card, which live in two different
@@ -1072,6 +1075,11 @@ test.describe
       await expect(page.getByTestId("cover-remove-override")).toBeVisible();
       await expect(page.getByTestId("cover-hint")).toHaveText("custom upload");
       await expect(page.getByTestId("revert-overrides")).toBeVisible();
+
+      // With no field edited there is no override diff to send, so Save is
+      // purely the exit — it closes the editor without a write.
+      await page.getByTestId("me-save").click();
+      await expect(page).toHaveURL(new RegExp(`/books/${uuid}$`));
     });
 
     test("surfaces a refused cover without changing anything", async ({

@@ -280,3 +280,37 @@ fn extract_metadata_materialization_failure_falls_back_to_embedded() {
     let (_, bytes) = alpha.cover.as_ref().expect("embedded fallback present");
     assert!(!bytes.is_empty(), "embedded fallback must be non-empty");
 }
+
+/// AC1/AC2 of #2240: the same fixture, the same image bytes, declared each of
+/// the two ways a package can point at its cover. The EPUB3 form is what the
+/// generator emits; the legacy form is what `EpubDoc::get_cover` ignores on a
+/// 3.0 package, and what a large share of real-world books actually use.
+#[test]
+fn extract_metadata_extracts_the_cover_from_both_declaration_styles() {
+    let dir = make_test_dir("cover_declaration_styles");
+    copy_fixture_into("alpha.epub", &dir);
+    copy_fixture_with_legacy_cover("alpha.epub", &dir, "legacy.epub");
+
+    let out = scan_ebook_library(Some(dir.to_str().unwrap()));
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    let cover_for = |filename: &str| -> Vec<u8> {
+        out.books
+            .iter()
+            .find(|b| b.metadata.filename == filename)
+            .unwrap_or_else(|| panic!("{filename} present"))
+            .cover
+            .as_ref()
+            .unwrap_or_else(|| panic!("{filename} has a cover"))
+            .1
+            .clone()
+    };
+
+    let epub3 = cover_for("alpha.epub");
+    assert!(!epub3.is_empty());
+    assert_eq!(
+        cover_for("legacy.epub"),
+        epub3,
+        "the legacy declaration must reach the same image"
+    );
+}

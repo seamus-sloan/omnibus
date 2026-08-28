@@ -111,6 +111,7 @@ just lint-ts                                                # biome + typecheck 
 just ios-build                                              # compile check (generic simulator destination)
 just ios-test                                               # omnibusTests unit suite — same script CI runs
 just ios-test-ui                                            # omnibusUITests
+just ios-release-guard                                      # DEBUG-only hooks absent from a Release build
 just ios-sim                                                # boot newest iPhone sim, build, install, launch
 
 # Hybrid mobile shell (mobile/ crate — Android surface)

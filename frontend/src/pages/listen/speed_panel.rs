@@ -28,6 +28,8 @@ pub(super) fn SpeedPanel(
     rsx! {
         ListenPanelShell {
             extra_class: "lp-speed-panel",
+            label: "Playback speed",
+            testid: "speed-panel",
             on_close,
             SpeedPanelBody { rate, rate_error, user_id, uuid }
         }

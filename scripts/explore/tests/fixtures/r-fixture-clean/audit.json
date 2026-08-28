@@ -1,0 +1,12 @@
+{
+  "run": "r-fixture-clean",
+  "generated_at": "2026-08-28T18:05:00Z",
+  "baseline_snapshot": "20260828T175500Z-pre-run-clean",
+  "actors": [
+    "agent-1",
+    "agent-2"
+  ],
+  "checked": 6,
+  "findings": [],
+  "unverifiable": []
+}

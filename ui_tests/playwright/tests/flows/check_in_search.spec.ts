@@ -167,6 +167,70 @@ test.describe("check-in title search", () => {
     await expect(page.getByTestId("check-in-choose")).toBeVisible();
   });
 
+  // #2247: after a title search the reader supplied no ISBN at all — the one
+  // on screen came back from the provider — so neither the match copy nor the
+  // recorded provenance may call it entered or scanned.
+  test("never describes a title-searched book as an entered or scanned ISBN", async ({
+    page,
+  }) => {
+    await reachSearch(page);
+    await mockJsonPost(page, "**/api/rpc/scan/search", {
+      results: [candidate()],
+    });
+
+    await page.getByLabel("Title").fill("name of the wind");
+    await expectMutation(
+      page,
+      { method: "POST", url: "/api/rpc/scan/search", expectedStatus: 200 },
+      async () => page.getByTestId("check-in-search-submit").click(),
+    );
+
+    await mockJsonPost(page, /\/api\/rpc\/scan\/resolve-meta$/, {
+      kind: "close_match",
+      book: {
+        uuid: "close-match-uuid",
+        title: "The Name of the Wind",
+        authors: ["Patrick Rothfuss"],
+        cover_url: null,
+        has_physical: false,
+        isbn: "9780000000000",
+      },
+      others: [],
+      scanned: candidate(),
+    });
+    await expectMutation(
+      page,
+      {
+        method: "POST",
+        url: /\/api\/rpc\/scan\/resolve-meta$/,
+        expectedStatus: 200,
+      },
+      async () => page.getByTestId("check-in-search-result").first().click(),
+    );
+
+    const screen = page.getByTestId("check-in-close-match");
+    await expect(screen).toBeVisible();
+    await expect(screen).toContainText("9780756404741");
+    await expect(screen).not.toContainText("you entered");
+    await expect(screen).not.toContainText("you scanned");
+    await expect(screen).not.toContainText("Scanned ISBN");
+    await expect(screen).not.toContainText("Entered ISBN");
+
+    // And the entry it files records the title search, not a scan.
+    await page.getByTestId("check-in-close-match-no").click();
+    await mockJsonPost(page, "**/api/rpc/scan/wishlist", {
+      book_uuid: "close-match-uuid",
+    });
+    const { request } = await expectMutation(
+      page,
+      { method: "POST", url: "/api/rpc/scan/wishlist", expectedStatus: 200 },
+      async () => page.getByTestId("check-in-wishlist").click(),
+    );
+    expect(
+      (request.postDataJSON() as { req: { source: string } }).req.source,
+    ).toBe("search");
+  });
+
   test("shows the empty-state line when nothing matches", async ({ page }) => {
     await reachSearch(page);
     await mockJsonPost(page, "**/api/rpc/scan/search", { results: [] });

@@ -605,7 +605,11 @@ fn ReaderLayout(
                 "data-testid": "reader-footer",
                 span { class: "rd-bottom-page", style: "color:var(--ink-2);", "{page_str}" }
                 {sync_here_slot(&uuid, loc)}
-                div { style: "flex:1; text-align:center; letter-spacing:.08em;", "{chapter_str}" }
+                div {
+                    style: "flex:1; text-align:center; letter-spacing:.08em;",
+                    "data-testid": "reader-chapter-counter",
+                    "{chapter_str}"
+                }
                 // The phone footer moves the chapter position to the right
                 // edge (the centred div above is hidden there) — rendered on
                 // every target, shown only by the phone breakpoint (rule 07).

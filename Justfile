@@ -179,6 +179,11 @@ ios-test:
 ios-test-ui:
     env -u LD -u CC -u CXX scripts/ios-test.sh ui
 
+# Assert the app's DEBUG-only hooks — the simulated-offline switch and the
+# UI-test launch arguments — are absent from a Release build.
+ios-release-guard:
+    env -u LD -u CC -u CXX scripts/ios-release-guard.sh
+
 # Boot the newest iPhone simulator, build, install, and launch the native app.
 # Prints this workspace's dev-server URL (from `just dev-up`'s env.sh) as a
 # hint for the Connect screen. See scripts/ios-sim.sh.

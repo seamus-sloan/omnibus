@@ -49,6 +49,17 @@ struct AudiobookCommitForm {
     files: Vec<AudioUpload>,
     title: Option<String>,
     author: Option<String>,
+    series: Option<String>,
+    series_index: Option<String>,
+}
+
+/// The confirmed metadata, normalized and detached from the streamed files so
+/// it survives `place_audiobook` consuming `AudiobookCommitForm::files`.
+struct ConfirmedAudiobookMeta {
+    title: String,
+    author: String,
+    series: Option<String>,
+    series_index: Option<String>,
 }
 
 /// Map an uploaded filename to a supported audiobook extension, or `None` if
@@ -179,6 +190,8 @@ async fn parse_audiobook_multipart(
                     }
                     "title" => form.title = field.text().await.ok(),
                     "author" => form.author = field.text().await.ok(),
+                    "series" => form.series = field.text().await.ok(),
+                    "series_index" => form.series_index = field.text().await.ok(),
                     _ => continue,
                 }
             }
@@ -281,8 +294,8 @@ impl PlacedAudiobook {
 }
 
 /// File the uploaded audiobook into the canonical audiobook library, reindex so
-/// the indexer inserts the book, then layer the confirmed title/author as
-/// metadata overrides. Returns 201 with the new book's uuid.
+/// the indexer inserts the book, then layer the confirmed metadata as
+/// overrides. Returns 201 with the new book's uuid.
 pub(in crate::backend) async fn post_upload_audiobook(
     user: AuthUser,
     State(state): State<AppState>,
@@ -293,6 +306,12 @@ pub(in crate::backend) async fn post_upload_audiobook(
     let kind = classify_audio_set(&form.files)?;
     let (Some(title), Some(author)) = (norm(&form.title), norm(&form.author)) else {
         return Err(UploadError::MissingMetadata);
+    };
+    let confirmed = ConfirmedAudiobookMeta {
+        title: title.clone(),
+        author: author.clone(),
+        series: norm(&form.series),
+        series_index: norm(&form.series_index),
     };
 
     let settings = db::get_settings(&state.pool)
@@ -331,7 +350,7 @@ pub(in crate::backend) async fn post_upload_audiobook(
         }
     };
 
-    apply_audiobook_edits(&state, &uuid, &title, &author, user.id).await?;
+    apply_audiobook_edits(&state, &uuid, &confirmed, user.id).await?;
 
     Ok((StatusCode::CREATED, Json(UploadCommitResult { uuid })).into_response())
 }
@@ -444,13 +463,12 @@ fn dedupe_part_name(name: String, used: &mut HashSet<String>) -> String {
     name
 }
 
-/// Diff the user's confirmed title/author against the indexer's embedded values
+/// Diff the user's confirmed metadata against the indexer's embedded values
 /// and persist a metadata override for each field they changed.
 async fn apply_audiobook_edits(
     state: &AppState,
     uuid: &str,
-    title: &str,
-    author: &str,
+    confirmed: &ConfirmedAudiobookMeta,
     user_id: i64,
 ) -> Result<(), UploadError> {
     let book = db::get_book_by_uuid(&state.pool, uuid)
@@ -458,21 +476,39 @@ async fn apply_audiobook_edits(
         .map_err(|e| UploadError::internal("get_book_by_uuid", e))?
         .ok_or_else(|| UploadError::internal("get_book_by_uuid after upload", "book vanished"))?;
 
+    let ConfirmedAudiobookMeta {
+        title,
+        author,
+        series,
+        series_index,
+    } = confirmed;
     let mut overrides = MetadataOverrides::default();
     let mut changed = false;
-    if book.title.as_deref() != Some(title) {
-        overrides.title = Some(title.to_string());
+    if book.title.as_deref() != Some(title.as_str()) {
+        overrides.title = Some(title.clone());
         changed = true;
     }
     let embedded = book.creators.first().map(|c| c.name.as_str());
-    if embedded != Some(author) {
+    if embedded != Some(author.as_str()) {
         overrides.creators = Some(vec![Contributor {
-            name: author.to_string(),
+            name: author.clone(),
             role: None,
             file_as: None,
             id: None,
         }]);
         changed = true;
+    }
+    if let Some(series) = series {
+        if book.series.as_deref() != Some(series.as_str()) {
+            overrides.series = Some(series.clone());
+            changed = true;
+        }
+    }
+    if let Some(series_index) = series_index {
+        if book.series_index.as_deref() != Some(series_index.as_str()) {
+            overrides.series_index = Some(series_index.clone());
+            changed = true;
+        }
     }
 
     if !changed {

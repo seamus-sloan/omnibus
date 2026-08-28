@@ -25,3 +25,8 @@ The ten top-level flows sum to 100%; the rest run inside their parent. Weights
 here are **suggested defaults** — the runner's configuration is authoritative,
 and you never sample anything yourself. You are handed a flow; you execute it.
 
+The iOS lane's `offline_outbox` scenario is deliberately **not** in this table.
+It is not drawn — the one iOS agent always gets it, wrapped around a flow that
+was drawn — so giving it a weight would only unbalance a distribution it never
+takes part in. It lives in [ios_lane.md](../ios_lane.md).
+

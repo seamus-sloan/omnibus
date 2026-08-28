@@ -5,10 +5,10 @@
 use super::super::helpers::{format_hms, remaining_at_rate};
 
 /// Progress fill percent (0–100) for the dock's mini progress bar. Returns 0
-/// when the duration is unknown or `elapsed` is non-finite so the bar never
+/// when the duration is unknown or either input is non-finite so the bar never
 /// renders a NaN width.
 pub(super) fn progress_pct(elapsed: f64, duration: f64) -> f64 {
-    if duration <= 0.0 || !elapsed.is_finite() {
+    if !duration.is_finite() || duration <= 0.0 || !elapsed.is_finite() {
         return 0.0;
     }
     ((elapsed / duration) * 100.0).clamp(0.0, 100.0)
@@ -42,12 +42,14 @@ pub(crate) fn dock_is_active(
 }
 
 /// Wall-clock listening time left at the current speed, e.g.
-/// "about 1h 50m left". `None` while the duration is unknown or once playback
+/// "about 1h 50m left". `None` while the duration is unknown or non-finite, or once playback
 /// reaches/​passes the end (no phantom "1m left" at the finish); a positive
 /// sub-minute remainder rounds up to "about 1m left" rather than counting
 /// seconds.
 pub(super) fn time_left_text(elapsed: f64, duration: f64, rate: f64) -> Option<String> {
-    if duration <= 0.0 || !elapsed.is_finite() {
+    // HTML5 `duration` reads NaN until metadata loads, and NaN fails every
+    // `<=` test below, so it has to be rejected by name.
+    if !duration.is_finite() || duration <= 0.0 || !elapsed.is_finite() {
         return None;
     }
     let rate = if rate.is_finite() && rate > 0.0 {

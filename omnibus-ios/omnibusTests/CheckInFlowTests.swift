@@ -205,6 +205,52 @@ struct CheckInFlowTests {
         )
     }
 
+    // MARK: - Which door the book came through (#2266)
+
+    @Test("a scanned barcode files its wishlist entry as a scan")
+    func barcodeScanRecordsAScanSource() {
+        #expect(CheckInFlow.wishlistSource(.barcodeScan) == .scan)
+        let request = CheckInFlow.wishlistRequest(meta: externalMeta(), foundVia: .barcodeScan)
+        #expect(request.source == .scan)
+        #expect(request.bookUUID == nil)
+        #expect(request.meta?.isbn13 == "9781250903440")
+    }
+
+    @Test("a hand-typed ISBN files as manual, not as a scan")
+    func typedISBNRecordsAManualSource() {
+        #expect(CheckInFlow.wishlistSource(.isbnEntry) == .manual)
+        #expect(
+            CheckInFlow.wishlistRequest(meta: externalMeta(), foundVia: .isbnEntry).source
+                == .manual
+        )
+    }
+
+    @Test("a title search files as search — the reader supplied no ISBN")
+    func titleSearchRecordsASearchSource() {
+        #expect(CheckInFlow.wishlistSource(.titleSearch) == .search)
+        #expect(
+            CheckInFlow.wishlistRequest(meta: externalMeta(), foundVia: .titleSearch).source
+                == .search
+        )
+    }
+
+    @Test("the three doors never share a provenance")
+    func everyDoorRecordsADistinctSource() {
+        let sources = [FoundVia.barcodeScan, .isbnEntry, .titleSearch]
+            .map(CheckInFlow.wishlistSource)
+        #expect(Set(sources).count == 3)
+    }
+
+    @Test("the resolved-book eyebrow never claims a scan the reader didn't make")
+    func foundLineNamesTheDoorActuallyUsed() {
+        #expect(CheckInFlow.foundLine(.barcodeScan) == "You scanned")
+        #expect(CheckInFlow.foundLine(.isbnEntry) == "You entered")
+        #expect(CheckInFlow.foundLine(.titleSearch) == "You picked")
+        for via in [FoundVia.isbnEntry, .titleSearch] {
+            #expect(!CheckInFlow.foundLine(via).contains("scan"))
+        }
+    }
+
     @Test func externalURLDetectionSplitsAbsoluteFromServerRelative() {
         #expect(CheckInFlow.isExternalURL("https://books.google.com/x.jpg"))
         #expect(CheckInFlow.isExternalURL("http://covers.openlibrary.org/x.jpg"))

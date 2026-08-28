@@ -7,10 +7,9 @@ description: Run an exploratory testing swarm against the persistent Omnibus ins
 
 Drives [`docs/qa/agentic_exploration/`](../../../docs/qa/agentic_exploration/start.md)
 against the live instance. You are the **runner**: you own the dice, the
-accounts, and the snapshot. Agents own judgement and nothing else.
-
-> This mutates a shared, long-lived instance and spends real tokens. Run it when
-> asked, not speculatively.
+accounts, and the snapshot. Agents own judgement and nothing else. This mutates
+a shared, long-lived instance and spends real tokens — run it when asked, not
+speculatively.
 
 ## 0. Arguments
 
@@ -22,7 +21,7 @@ accounts, and the snapshot. Agents own judgement and nothing else.
 | `--flows-per-agent` | 4 | Flows are drawn **distinct** per agent. |
 | `--corpus` | — | Directory of real book files. Required if `adding_book` can be drawn. |
 | `--seed` | random | Print whatever you use — it is what makes a run repeatable. |
-| `--ios` | off | **Not implemented.** Refuse and point at #2204 rather than silently running web-only. |
+| `--ios` | off | Adds **exactly one** iOS agent on top of `--agents`. More than one is refused — see step 6a. |
 
 ## 1. Preflight
 
@@ -110,46 +109,59 @@ scripts/explore/driver.sh status
 ```
 
 **One browser per agent is not a nicety.** Run `r-20260828-01` died because
-three subagents shared a tab: one cookie jar, three users collapsed into one,
-and two agents correctly aborted rather than journal under a wrong actor.
+three subagents shared a single browser tab: one cookie jar, three users
+collapsed into one, and two agents correctly aborted rather than journal under
+a wrong actor. The driver makes that impossible.
 
 Agents drive their browser with `driver.sh run <n> "<command>"`, which prints
-`{"text": ..., "isError": ...}`. Tear down with `driver.sh down` when the run
-ends, whatever the outcome.
+`{"text": ..., "isError": ...}`. Tear down with `driver.sh down` (and
+`ios.sh down`) when the run ends, whatever the outcome.
 
-Then **guard each agent** before any of them starts:
-
-```bash
-scripts/explore/driver.sh guard <n> agent-<n> <comma-separated-uuids>
-```
-
-The uuids come from the journals, never from the agent:
+Then **guard each agent** before any of them starts. The uuids come from the
+journals, never from the agent:
 
 ```bash
 scripts/explore/driver.sh guard 1 agent-1 "$(scripts/explore/owned.sh agent-1)"
 ```
 
 `owned.sh` reads **every** journal, not just this run's — ownership is
-provenance and durable.
-
-Without this, ownership is only a sentence in `start.md`, and every exploration
-account is an admin — so nothing stops one agent destroying another's books.
+provenance and is durable, the same reason `provision.sh` keeps usernames
+stable. Without the guard, ownership is only a sentence in `start.md` and every
+exploration account is an admin, so nothing stops one agent destroying
+another's books; with it, the request is refused before it is sent.
 
 After the run, `driver.sh refusals <n>` lists what each agent was stopped from
 doing. **A non-empty list is a finding about the agent or the flow document,
 not about the app.**
+
+### 6a. Start the iOS agent, if `--ios`
+
+```bash
+scripts/explore/ios.sh up            # boot a simulator, build, install, launch
+scripts/explore/ios.sh state         # {online, running, forced_offline}
+```
+
+**One iOS agent, ever.** Two on one simulator share a keychain, a container and
+a session — the same collapse, with no isolation available to fix it. `--ios`
+adds one; asking for more is a refusal, not a clamp.
+
+It is a full agent with its own account, so provision `N+1`. Give it
+`surface: ios`, [`ios_lane.md`](../../../docs/qa/agentic_exploration/ios_lane.md)
+alongside `start.md`, and the `offline_outbox` scenario from that file **on top
+of** its sampled flows — it is the only surface that can run it. There is no
+ownership guard here: keep it off `adding_book` and `merging_books`.
 
 ## 7. Fan out
 
 One subagent per actor, in parallel, each given **only**:
 
 - the absolute path to `docs/qa/agentic_exploration/start.md`, to read in full first;
-- its `actor`, `surface: web`, the base URL, and its own username and password;
+- its `actor`, its `surface` (`web`, or `ios` for the one iOS agent), the base URL, and its own username and password;
 - its sampled sequence — hand over **one flow document at a time**, never the list;
 - the corpus path, and `scripts/explore/journal.py append` — the only way to
   write the journal, since a bare `>>` can tear a line;
 - the run id;
-- **its agent number**, for `driver.sh run <n>` — never another agent's.
+- **its agent number**, for `driver.sh run <n>` — never another agent's. The iOS agent gets `ios.sh` instead, which takes no agent number.
 
 Tell each agent, verbatim in the brief: read
 [`pitfalls.md`](../../../docs/qa/agentic_exploration/pitfalls.md) before
@@ -165,35 +177,15 @@ the most valuable output of every run so far.
 
 ## 8. Audit the run, then report back
 
-Agent prose is unverified; the audit is the only thing that reads the server
-back.
-
-```bash
-scripts/explore/audit.py --accounts <accounts.json> check --run $RUN
-scripts/explore/audit.py vocab --run $RUN     # action names nobody taught it
-```
-
-`check` writes `audit.json` next to the journal. Read three things from it:
-**`findings`** (`missing`/`mismatch`/`unexpected`/`duplicate`, each carrying
-`replay_from` — the `seq` for `audit.py replay --actor <a> --from <seq>`);
-**`unverifiable`**, what it declined to judge and why — an *unrecognised
-action* there is a verb an agent invented, so add its `(noun, verb)` row to
-`audit_lib/vocabulary.py` in the same session; and **`checked`** — many writes
-and few checks means the journals are under-filled, not that the app is healthy.
-
-Summarise from `audit.json` and the journal, never from agent prose. The audit
-says what the server lost; the anomalies say what looked wrong — you need both:
-
-```bash
-scripts/explore/journal.py anomalies --run $RUN
-```
-
-Verify anything high-severity yourself before repeating it to the user — the
-first run produced one retracted finding and one root-caused CSP bug, and the
-difference was checking. State plainly what was excluded, what was left on the
-instance, and the snapshot name to roll back to.
+Follow [after-run.md](after-run.md): run `audit.py check` (it writes
+`audit.json` next to the journal — findings carry the `seq` to replay from,
+`unverifiable` names what it declined to judge, and a low `checked` count means
+under-filled journals, not a healthy app), then generate the report with
+`report.py`, then verify anything high-severity yourself before repeating it —
+the difference between a finding and an anecdote has always been the check.
 
 ## Related
 
 - Catalog + contract: [`docs/qa/agentic_exploration/`](../../../docs/qa/agentic_exploration/start.md)
-- Journal + audit: `scripts/explore/{journal,audit}.py` (#2202) · Report: #2203 · iOS: #2204
+- Journal + audit: `scripts/explore/{journal,audit}.py` (#2202) · Report: `report.py` (#2203)
+- iOS lane: [`ios_lane.md`](../../../docs/qa/agentic_exploration/ios_lane.md) (#2204)
