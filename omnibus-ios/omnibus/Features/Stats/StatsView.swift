@@ -1,6 +1,7 @@
 //  StatsView.swift
 //  Reading stats: a headline panel, supporting tiles, an activity heatmap,
-//  rankings, and the finished-books rail.
+//  rankings, the finished-books rail, and the per-sitting session log behind
+//  all of them.
 
 import Charts
 import SwiftUI
@@ -13,11 +14,20 @@ struct StatsView: View {
     /// Fetched separately from `summary`: library-scoped rather than
     /// per-user, so it must not re-fetch when the range picker moves.
     @State private var librarySize: LibrarySize?
+    /// Fetched separately for the same reason: what the collection is *made
+    /// of* is a library-wide answer that only moves on a reindex.
+    @State private var libraryComposition: LibraryComposition?
     @State private var isLoading = true
     @State private var error: String?
     @State private var isEditingGoal = false
     @State private var goalDraft = ""
     @State private var goalError: String?
+    // The log is its own paged read rather than a rollup of the window above
+    // it, so it holds its own state and never reloads on a range change.
+    @State private var sessions: [SessionLogEntry] = []
+    @State private var sessionCursor: String?
+    @State private var sessionsLoading = false
+    @State private var sessionsError: String?
 
     var body: some View {
         NavigationStack {
@@ -35,12 +45,17 @@ struct StatsView: View {
             // root; a stock large title alongside it would state it twice.
             .toolbar(.hidden, for: .navigationBar)
             .topEdgeScrim()
-            .refreshTask { await load(force: true) }
+            .refreshTask {
+                await load(force: true)
+                await loadSessions()
+            }
             .withDestinations()
         }
         .task {
             await load()
             await loadLibrarySize()
+            await loadLibraryComposition()
+            await loadSessions()
         }
         .onChange(of: range) { _, _ in Task { await load() } }
     }
@@ -58,6 +73,13 @@ struct StatsView: View {
 
                 headline(summary)
                 tiles(summary)
+
+                if let note = Self.pagesCutoverNote(summary) {
+                    Text(note)
+                        .font(.footnote)
+                        .foregroundStyle(palette.ink3Color)
+                        .screenPadding()
+                }
 
                 if !summary.heatmap.isEmpty {
                     section("Activity") {
@@ -175,6 +197,18 @@ struct StatsView: View {
                     }
                 }
 
+                // Omitted rather than emptied: the section's own length is
+                // what reports how much the window holds.
+                let standouts = Self.standoutRows(summary)
+                if !standouts.isEmpty {
+                    section("The standouts") {
+                        StandoutList(
+                            rows: standouts,
+                            showFastestReadNote: summary.superlatives.fastestRead != nil
+                        )
+                    }
+                }
+
                 if !summary.topAuthors.isEmpty {
                     section("Top authors") {
                         RankedList(entries: summary.topAuthors) { entry in
@@ -203,6 +237,16 @@ struct StatsView: View {
                         LibrarySizeSection(size: librarySize)
                     }
                 }
+
+                // Named apart from "How you consumed them" above, which is
+                // read-vs-listened seconds. This is the shelf's own mix.
+                if let libraryComposition, !libraryComposition.isEmpty {
+                    section("What your library is made of") {
+                        LibraryCompositionSection(composition: libraryComposition)
+                    }
+                }
+
+                sessionLogSection
             }
             .padding(.bottom, 40)
         }
@@ -463,8 +507,8 @@ struct StatsView: View {
                 icon: "calendar"
             )
             StatTile(
-                label: "Pages",
-                value: summary.pagesRead.map { "\($0)" } ?? "—",
+                label: "Pages read",
+                value: Self.pagesValue(summary),
                 icon: "doc.text"
             )
             // Directly after Pages so the two share a row of the two-column
@@ -501,6 +545,33 @@ struct StatsView: View {
         return oneDecimal < 10
             ? String(format: "%.1f", oneDecimal)
             : String(format: "%.0f", rate.rounded())
+    }
+
+    /// The Pages read tile's value. Two empty states, not one: a window whose
+    /// only activity was listening turned exactly zero pages — audio has no
+    /// page analogue, so that is an answer — while anything else unmeasurable
+    /// is a genuine em-dash. Kept in step with the web tile's `pages_value`;
+    /// the server owns the `audioOnly` distinction so neither surface invents
+    /// its own.
+    static func pagesValue(_ summary: StatsSummary) -> String {
+        if let pages = summary.pagesRead { return "\(pages)" }
+        return summary.pagesDetail.audioOnly ? "0" : "\u{2014}"
+    }
+
+    /// The cutover caption, or `nil` when the window is fully covered. Page
+    /// progress is differenced from stored positions and none exist before the
+    /// ledger began, so a window reaching past that day is only partly
+    /// measurable and says so rather than reading as complete.
+    ///
+    /// Gated on the server's own overlap answer, not on the range: a Year
+    /// window in the calendar year after the epoch is fully covered and must
+    /// not carry the caveat, while a Week window in the days right after it is
+    /// not covered and must.
+    static func pagesCutoverNote(_ summary: StatsSummary) -> String? {
+        guard summary.pagesDetail.predatesLedger,
+            let since = summary.pagesDetail.sinceDay
+        else { return nil }
+        return "Page tracking began \(since); reading before then isn\u{2019}t counted."
     }
 
     private func finishedRail(_ books: [FinishedBook]) -> some View {
@@ -546,6 +617,185 @@ struct StatsView: View {
         }
     }
 
+    /// Every standout the window supports, in the same order as the web card,
+    /// so a reader switching surfaces reads the same list.
+    ///
+    /// The two rankings the web card ends with are deliberately absent: this
+    /// tab already renders `topAuthors` / `topTags` in full below, and a
+    /// one-line restatement above a whole list is noise.
+    static func standoutRows(_ summary: StatsSummary) -> [StandoutRow] {
+        let s = summary.superlatives
+        let book = { (label: String, sup: BookSuperlative?, detail: (Int64) -> String) in
+            sup.map { StandoutRow(label: label, headline: $0.title, detail: detail($0.value)) }
+        }
+        // Zero seconds means the window has no busiest week, whatever date
+        // rode along beside it.
+        let busiestWeek = summary.busiestWeekSeconds > 0
+            ? summary.busiestWeekStart.map {
+                StandoutRow(
+                    label: "Busiest week",
+                    headline: "Week of \(Self.prettyDay($0))",
+                    detail: Format.humanDuration(summary.busiestWeekSeconds)
+                )
+            }
+            : nil
+        return [
+            book("Longest book", s.longestBook, Self.pagesDetail),
+            book("Shortest book", s.shortestBook, Self.pagesDetail),
+            book("Fastest read", s.fastestRead, Self.daysDetail),
+            book("Longest sitting", s.longestSit, Format.humanDuration),
+            s.biggestDay.map {
+                StandoutRow(
+                    label: "Biggest day",
+                    headline: Self.prettyDay($0.day),
+                    detail: Format.humanDuration($0.seconds)
+                )
+            },
+            busiestWeek,
+        ].compactMap { $0 }
+    }
+
+    /// Parses the server's UTC `YYYY-MM-DD`. Fixed-format, so it is pinned to
+    /// `en_US_POSIX` and Gregorian — a device on a non-Gregorian calendar
+    /// would otherwise fail to read the wire format at all.
+    private static let wireDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// Renders "14 Nov 2023". Also pinned to `en_US_POSIX`: the surrounding
+    /// copy ("Week of …", "Biggest day") is English, and the device locale
+    /// would splice a translated month into it — "Week of 13 nov. 2023".
+    private static let displayDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "d MMM yyyy"
+        return f
+    }()
+
+    /// A UTC `YYYY-MM-DD` as "14 Nov 2023", passing anything unparseable
+    /// through — a malformed day is better company for its figure than none.
+    ///
+    /// Both formatters are cached statics: `DateFormatter` construction is
+    /// expensive and this runs for every standout row on every render.
+    static func prettyDay(_ day: String) -> String {
+        guard let date = wireDayFormatter.date(from: day) else { return day }
+        return displayDayFormatter.string(from: date)
+    }
+
+    /// "412 pages" / "1 page" — the unit is the row's, since
+    /// `BookSuperlative.value` carries a bare number.
+    static func pagesDetail(_ pages: Int64) -> String {
+        "\(pages) page\(pages == 1 ? "" : "s")"
+    }
+
+    /// "in 3 days" / "in a day" — the server already collapses a same-day
+    /// read to 1, so zero never reaches here.
+    static func daysDetail(_ days: Int64) -> String {
+        days == 1 ? "in a day" : "in \(days) days"
+    }
+
+    // MARK: - Session log
+
+    /// The sittings behind every number above — one row per *sit*, not per
+    /// heartbeat flush: the server stitches adjacent checkpoint rows before it
+    /// pages them.
+    @ViewBuilder private var sessionLogSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            SectionLabel("Session log")
+
+            if sessions.isEmpty, let sessionsError {
+                // Distinct from the empty state below: "we couldn't load this"
+                // and "you have no sittings" are different answers, and only
+                // one of them is worth offering a retry for.
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text(sessionsError)
+                        .font(.ui(12.5))
+                        .foregroundStyle(palette.ink2Color)
+                    Button("Try again") { Task { await loadSessions() } }
+                        .font(.monoUI(10.5, weight: .medium))
+                        .disabled(sessionsLoading)
+                }
+            } else if sessions.isEmpty {
+                Text("No sittings recorded yet.")
+                    .font(.ui(12.5))
+                    .foregroundStyle(palette.ink3Color)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(sessions) { entry in
+                        NavigationLink(value: Destination.book(uuid: entry.bookUUID)) {
+                            SessionLogRow(entry: entry)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                // Keyset paging: the cursor names the last row already shown,
+                // so a sitting landing mid-scroll can't shift the next page
+                // the way an offset would.
+                if sessionCursor != nil {
+                    Button {
+                        Task { await loadMoreSessions() }
+                    } label: {
+                        Text(sessionsLoading ? "Loading\u{2026}" : "Show more")
+                            .font(.monoUI(10.5, weight: .medium))
+                            .tracking(0.8)
+                            .textCase(.uppercase)
+                            .foregroundStyle(palette.ink2Color)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(palette.bg2Color))
+                            .overlay(Capsule().strokeBorder(palette.line2.color, lineWidth: 0.5))
+                    }
+                    .disabled(sessionsLoading)
+                }
+
+                if let sessionsError {
+                    Text(sessionsError)
+                        .font(.ui(12))
+                        .foregroundStyle(palette.ink3Color)
+                }
+            }
+        }
+        .screenPadding()
+    }
+
+    private func loadSessions() async {
+        guard !sessionsLoading else { return }
+        sessionsLoading = true
+        do {
+            let page = try await UserDataService.sessionLog()
+            sessions = page.entries
+            sessionCursor = page.nextBefore
+            sessionsError = nil
+        } catch {
+            sessionsError =
+                (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+        sessionsLoading = false
+    }
+
+    private func loadMoreSessions() async {
+        guard let cursor = sessionCursor, !sessionsLoading else { return }
+        sessionsLoading = true
+        do {
+            let page = try await UserDataService.sessionLog(before: cursor)
+            sessions.append(contentsOf: page.entries)
+            sessionCursor = page.nextBefore
+            sessionsError = nil
+        } catch {
+            sessionsError =
+                (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+        sessionsLoading = false
+    }
+
     private func section<Content: View>(
         _ title: String, @ViewBuilder content: () -> Content
     ) -> some View {
@@ -568,6 +818,70 @@ struct StatsView: View {
         } catch {
             // Nothing to say: the section simply doesn't appear.
         }
+    }
+
+    /// Best-effort by design, exactly like `loadLibrarySize`.
+    private func loadLibraryComposition() async {
+        do {
+            for try await read in UserDataService.libraryComposition() {
+                libraryComposition = read.value
+            }
+        } catch {
+            // Nothing to say: the section simply doesn't appear.
+        }
+    }
+
+    /// The five panels, in the order they read: what the files are, then what
+    /// the books are. Mirrors the web card's `build_panels`.
+    static func compositionPanels(_ c: LibraryComposition) -> [CompositionPanel] {
+        [
+            CompositionPanel(
+                title: "Formats", dimension: c.formats,
+                // Coverage is always the whole library here (a live book has a
+                // file by definition), so the useful disclosure is the overlap.
+                note: overlapNote(c.formats),
+                empty: "No files indexed yet."),
+            CompositionPanel(
+                title: "Languages", dimension: c.languages,
+                note: coverageNote(c.languages, of: c.books),
+                empty: "No language metadata yet."),
+            CompositionPanel(
+                title: "Publishers", dimension: c.publishers,
+                note: coverageNote(c.publishers, of: c.books),
+                empty: "No publisher metadata yet."),
+            CompositionPanel(
+                title: "Published", dimension: c.decades,
+                // The uncovered books here are the ones with an absent or
+                // unparseable pubdate — unknown, never bucketed into a decade.
+                note: coverageNote(c.decades, of: c.books),
+                empty: "No publication dates yet."),
+            CompositionPanel(
+                title: "Genres", dimension: c.genres,
+                note: "hand-assigned \u{2014} " + coverageNote(c.genres, of: c.books),
+                empty: "No genres assigned yet."),
+        ]
+    }
+
+    /// "across 58 of 1,510 books" — the denominator, always. A distribution
+    /// without its coverage is a guess wearing a chart.
+    static func coverageNote(_ dimension: CompositionDimension, of libraryBooks: Int64) -> String {
+        coverageLabel(dimension.coverage, of: libraryBooks)
+    }
+
+    /// How many books are held in more than one format, and so counted in more
+    /// than one bar. Without it the bars simply don't add up to the library.
+    static func overlapNote(_ dimension: CompositionDimension) -> String? {
+        let overlap = dimension.overlap
+        guard overlap > 0 else { return nil }
+        return "+\(overlap) \(overlap == 1 ? "book" : "books") held in more than one format"
+    }
+
+    /// The footnote for `books` rows whose files are gone. They carry no
+    /// format, so they'd otherwise vanish from the bars and leave the counts
+    /// failing to reconcile against the library.
+    static func ghostedNote(_ ghosted: Int64) -> String? {
+        guard ghosted > 0 else { return nil }
+        return "\(ghosted) \(ghosted == 1 ? "book" : "books") excluded \u{2014} indexed once, no files on disk now"
     }
 
     /// The library figures worth rendering, skipping anything nothing has
@@ -637,10 +951,13 @@ struct StatsView: View {
     /// "across 1,204 of 1,510 books" — the denominator, always. A figure
     /// without it is a guess wearing a number.
     static func coverageLabel(_ measured: MeasuredTotal, of libraryBooks: Int64) -> String {
-        let grouped = { (n: Int64) -> String in
-            NumberFormatter.localizedString(from: NSNumber(value: n), number: .decimal)
-        }
-        return "across \(grouped(measured.books)) of \(grouped(libraryBooks)) books"
+        "across \(groupedCount(measured.books)) of \(groupedCount(libraryBooks)) books"
+    }
+
+    /// A count with its thousands separators. Shared so a bar's own number and
+    /// the coverage line beneath it can't render the same figure two ways.
+    static func groupedCount(_ n: Int64) -> String {
+        NumberFormatter.localizedString(from: NSNumber(value: n), number: .decimal)
     }
 
     private func load(force: Bool = false) async {
@@ -721,6 +1038,112 @@ private struct GoalBar: View {
     }
 }
 
+/// One rendered dimension: its heading, its bars, and the line beneath them
+/// that says what the bars can't speak for.
+struct CompositionPanel: Identifiable, Hashable {
+    let title: String
+    let dimension: CompositionDimension
+    let note: String?
+    let empty: String
+
+    var id: String { title }
+}
+
+private struct LibraryCompositionSection: View {
+    let composition: LibraryComposition
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            ForEach(StatsView.compositionPanels(composition)) { panel in
+                CompositionPanelView(panel: panel)
+            }
+            if let ghosted = StatsView.ghostedNote(composition.ghostedBooks) {
+                Text(ghosted)
+                    .font(.monoUI(11))
+                    .foregroundStyle(palette.ink3Color)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One dimension's bars, or its empty state. A dimension nothing in the
+/// library carries renders a sentence rather than an axis with no bars on it.
+private struct CompositionPanelView: View {
+    let panel: CompositionPanel
+
+    @Environment(\.palette) private var palette
+
+    /// Scaled to the tallest bar rather than to the library total: a histogram
+    /// whose bars are all four points wide has drawn the shape out of itself.
+    private var peak: Int64 { panel.dimension.slices.map(\.books).max() ?? 0 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text(panel.title)
+                .font(.display(15))
+                .foregroundStyle(palette.ink1Color)
+            if panel.dimension.slices.isEmpty {
+                Text(panel.empty)
+                    .font(.ui(13))
+                    .foregroundStyle(palette.ink3Color)
+            } else {
+                ForEach(panel.dimension.slices) { slice in
+                    CompositionBar(slice: slice, peak: peak)
+                }
+                if let note = panel.note {
+                    Text(note)
+                        .font(.monoUI(11))
+                        .foregroundStyle(palette.ink3Color)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct CompositionBar: View {
+    let slice: CompositionSlice
+    let peak: Int64
+
+    @Environment(\.palette) private var palette
+
+    private var fraction: Double {
+        guard peak > 0 else { return 0 }
+        return min(1, Double(slice.books) / Double(peak))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(slice.label)
+                    .font(.ui(14))
+                    .foregroundStyle(palette.ink1Color)
+                    .lineLimit(1)
+                Spacer(minLength: Spacing.sm)
+                // The count, not the share: "48 books" answers the question a
+                // reader brought to a composition chart. Grouped like the
+                // coverage line, so a four-digit bucket doesn't read
+                // differently from its own note.
+                Text(StatsView.groupedCount(slice.books))
+                    .font(.monoUI(12))
+                    .foregroundStyle(palette.ink2Color)
+            }
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(palette.bg2Color)
+                    Capsule()
+                        .fill(palette.accentColor)
+                        .frame(width: geometry.size.width * fraction)
+                }
+            }
+            .frame(height: 8)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
 /// Reading against listening as one two-tone rule.
 private struct SplitBar: View {
     let reading: Int64
@@ -746,6 +1169,63 @@ private struct SplitBar: View {
         .frame(maxHeight: .infinity, alignment: .bottom)
         .opacity(reading + listening > 0 ? 1 : 0)
         .accessibilityHidden(true)
+    }
+}
+
+/// One standout: what it measures, what won, and by how much. Built by
+/// `StatsView.standoutRows`, which is where the units live.
+struct StandoutRow: Identifiable, Hashable {
+    let label: String
+    let headline: String
+    let detail: String
+
+    var id: String { label }
+}
+
+private struct StandoutList: View {
+    let rows: [StandoutRow]
+    let showFastestReadNote: Bool
+
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            ForEach(rows) { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.label)
+                        .font(.ui(11.5))
+                        .foregroundStyle(palette.ink3Color)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(row.headline)
+                            .font(.display(17))
+                            .foregroundStyle(palette.ink0Color)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                        Spacer(minLength: 0)
+                        Text(row.detail)
+                            .font(.monoUI(11.5))
+                            .foregroundStyle(palette.ink2Color)
+                            .layoutPriority(1)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+            if showFastestReadNote {
+                // The floor is part of the claim, not an aside: without it a
+                // book read mostly on another device reads as a sprint. The
+                // lower-bound clause mirrors the web note — `shared`'s
+                // `fastest_read` doc requires every surface to state it.
+                Text(
+                    "Fastest read counts days from your first tracked session, over books with "
+                        + "at least \(Format.humanDuration(Superlatives.fastestReadMinSeconds)) "
+                        + "of recorded time — reading done before tracking, or on a device that "
+                        + "reports nothing, can only make a book look faster than it was."
+                )
+                .font(.ui(11))
+                .foregroundStyle(palette.ink3Color)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1011,5 +1491,45 @@ private struct HeatmapView: View {
         guard seconds > 0 else { return restColor }
         let intensity = min(1, Double(seconds) / Double(maximum))
         return palette.accentColor.opacity(0.25 + intensity * 0.75)
+    }
+}
+
+/// One sitting: when it started, what it was, and how long it ran.
+private struct SessionLogRow: View {
+    let entry: SessionLogEntry
+
+    @Environment(\.palette) private var palette
+
+    /// Device-local, unlike the web log's UTC: this is a native app on a
+    /// reader's own phone, and a sitting they remember starting at 9pm should
+    /// say so.
+    private var when: String {
+        Date(timeIntervalSince1970: TimeInterval(entry.startedAt))
+            .formatted(date: .abbreviated, time: .shortened)
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.title)
+                    .font(.ui(13.5, weight: .medium))
+                    .foregroundStyle(palette.ink0Color)
+                    .lineLimit(1)
+                Text("\(when) \u{b7} \(entry.format.label)")
+                    .font(.monoUI(10))
+                    .foregroundStyle(palette.ink3Color)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Text(Format.humanDuration(entry.seconds))
+                .font(.ui(12.5))
+                .foregroundStyle(palette.ink2Color)
+        }
+        .padding(.vertical, 9)
+        .overlay(alignment: .top) {
+            Rectangle().fill(palette.line2.color).frame(height: 0.5)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 }

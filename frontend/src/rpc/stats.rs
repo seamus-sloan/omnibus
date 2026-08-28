@@ -6,8 +6,11 @@ use dioxus::fullstack::post;
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use omnibus_db as db;
+#[cfg(feature = "server")]
+use omnibus_shared::SessionCursor;
 use omnibus_shared::{
-    BookInsights, LibrarySize, ReadingGoal, ReadingGoalUpdate, StatsRange, StatsSummary,
+    BookInsights, LibraryComposition, LibrarySize, ReadingGoal, ReadingGoalUpdate, SessionLogPage,
+    StatsRange, StatsSummary,
 };
 
 #[cfg(feature = "server")]
@@ -60,4 +63,49 @@ pub async fn rpc_set_reading_goal(update: ReadingGoalUpdate) -> Result<Option<Re
     Ok(db::stats::set_goal(&pool.0, user.id, &update)
         .await
         .map_err(|e| internal_rpc_error("set reading goal", e))?)
+}
+
+/// Fetch what the library is made of — its format, language, publisher,
+/// decade, and genre mix.
+///
+/// Its own call rather than a field on [`rpc_stats`]'s payload, for the same
+/// reason [`rpc_library_size`] is: the answer is library-wide and only moves
+/// on a reindex, so hanging it off the per-user summary would recompute and
+/// re-send it on every period switch. Mobile uses `GET /api/library-composition`.
+#[post("/api/rpc/library-composition", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_library_composition() -> Result<LibraryComposition> {
+    Ok(db::stats::library_composition(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("library composition", e))?)
+}
+
+/// Fetch one page of the current user's session log, newest sitting first.
+/// `book` scopes it to a single book (the book-detail Stats stop); `before` is
+/// the previous page's `next_before`, echoed back verbatim. Mobile uses the
+/// analogous `GET /api/stats/sessions` REST route.
+///
+/// A `before` that doesn't parse is an **error**, matching the REST route's
+/// 400. Returning an empty page instead would end the reader's log early with
+/// no cursor and no message — silently truncating rather than reporting.
+#[post("/api/rpc/stats/sessions", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_session_log(
+    book: Option<String>,
+    before: Option<String>,
+) -> Result<SessionLogPage> {
+    let cursor = match before.as_deref() {
+        Some(raw) => match SessionCursor::parse(raw) {
+            Some(cursor) => Some(cursor),
+            None => return Err(ServerFnError::new("invalid before cursor").into()),
+        },
+        None => None,
+    };
+    Ok(db::stats::session_log(
+        &pool.0,
+        user.id,
+        book.as_deref(),
+        cursor.as_ref(),
+        db::stats::SESSION_LOG_DEFAULT_LIMIT,
+    )
+    .await
+    .map_err(|e| internal_rpc_error("session log", e))?)
 }

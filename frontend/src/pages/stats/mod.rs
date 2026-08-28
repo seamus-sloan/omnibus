@@ -4,11 +4,14 @@
 //! change. Mirrors the converged Stats design (`screens/stats-converged.jsx`).
 
 use dioxus::prelude::*;
-use omnibus_shared::{LibrarySize, ReadingGoal, StatsRange, StatsSummary, STATS_TTL_SECS};
+use omnibus_shared::{
+    LibraryComposition, LibrarySize, ReadingGoal, StatsRange, StatsSummary, STATS_TTL_SECS,
+};
 
-use crate::components::{PageError, PageLoading};
+use crate::components::{PageError, PageLoading, SessionLogList};
 use crate::{data, use_server_url, Route};
 
+mod composition;
 mod donut;
 mod drill_in;
 mod goal;
@@ -16,8 +19,10 @@ mod heatmap;
 mod library;
 mod monthly;
 mod patterns;
+mod superlatives;
 mod tiles;
 
+use composition::LibraryCompositionCard;
 use donut::{FormatSplit, GenreDonut, LengthSplit};
 use drill_in::{DrillIn, Metric};
 use goal::GoalBand;
@@ -25,6 +30,7 @@ use heatmap::HeatmapCard;
 use library::LibrarySizeCard;
 use monthly::MonthlyChart;
 use patterns::TimePatternsCard;
+use superlatives::SuperlativesCard;
 use tiles::HeadlineTiles;
 
 /// Group a non-negative integer's digits in threes with `,` separators.
@@ -69,6 +75,9 @@ pub fn StatsPage() -> Element {
     // it into the summary would recompute and re-send it on every switcher
     // change. `None` until it lands, and the card renders nothing then.
     let library_size: Signal<Option<LibrarySize>> = use_signal(|| None);
+    // Same reasoning, same shape: what the library is *made of* is a
+    // library-wide answer that only moves on a reindex.
+    let library_composition: Signal<Option<LibraryComposition>> = use_signal(|| None);
     let loading = use_signal(|| true);
     let error: Signal<Option<String>> = use_signal(|| None);
     // Seeded closed on every target (rule 07): the title dropdown only ever
@@ -85,6 +94,7 @@ pub fn StatsPage() -> Element {
     use_period_fetch_effect(server_url.clone(), range, period, error);
     use_all_time_fetch_effect(server_url.clone(), all_time, loading, error, goal);
     use_library_size_fetch_effect(server_url.clone(), library_size);
+    use_library_composition_fetch_effect(server_url.clone(), library_composition);
 
     if loading() {
         return rsx! { PageLoading {} };
@@ -126,7 +136,12 @@ pub fn StatsPage() -> Element {
                 section { class: "st-alltime", "data-testid": "stats-alltime-section",
                     AllTimeSummary { all_time }
                     LibrarySizeCard { size: library_size() }
+                    LibraryCompositionCard { composition: library_composition() }
                 }
+                // The log sits under the aggregates it details, and outside
+                // the period switcher's reach: it is its own paged read, not
+                // a window rollup.
+                SessionLogList { book: None, compact: false }
             }
             if let (Some(metric), Some(summary)) = (expanded(), period.read().clone()) {
                 DrillIn { metric, summary, range: range(), expanded }
@@ -257,6 +272,29 @@ fn use_library_size_fetch_effect(server_url: String, library_size: Signal<Option
     });
 }
 
+/// One-shot fetch of the library composition. Never keyed on the switcher —
+/// what the collection is made of is not a reporting period's figure — and
+/// silent on failure for the same reason its size sibling is: this card is
+/// context beside the reader's own numbers, and a failed fetch must not blank
+/// the page they came for.
+fn use_library_composition_fetch_effect(
+    server_url: String,
+    library_composition: Signal<Option<LibraryComposition>>,
+) {
+    let generation = crate::use_cache_generation();
+    use_effect(move || {
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
+        let url = server_url.clone();
+        let mut library_composition = library_composition;
+        spawn(async move {
+            if let Ok(composition) = data::fetch_library_composition(&url).await {
+                library_composition.set(Some(composition));
+            }
+        });
+    });
+}
+
 /// Editorial header: the title's italic period word doubles as the period
 /// switcher — a trigger that drops the Week / Month / Year / Lifetime menu
 /// straight out of the headline, one control across every form factor.
@@ -375,9 +413,9 @@ fn focus_range_menu(evt: &MountedEvent) {
 #[cfg(not(feature = "web"))]
 fn focus_range_menu(_evt: &MountedEvent) {}
 
-/// The period-scoped module stack: headline tiles, then the composition row
-/// (genre donut + format split, with the length distribution beneath them). A
-/// placeholder card until the first fetch lands. `expanded` is forwarded to the
+/// The period-scoped module stack: headline tiles, the composition row (genre
+/// donut + format split, with the length distribution beneath them), then the
+/// superlatives card. A placeholder card until the first fetch lands. `expanded` is forwarded to the
 /// tiles so a grip click can open that metric's drill-in.
 #[component]
 fn PeriodSummary(
@@ -393,6 +431,7 @@ fn PeriodSummary(
             books_finished: summary.books_finished,
             avg_stars: summary.avg_stars,
             pages_read: summary.pages_read,
+            pages_audio_only: summary.pages_detail.audio_only(),
             listening_seconds: summary.listening_seconds,
             expanded,
         }
@@ -402,13 +441,15 @@ fn PeriodSummary(
             LengthSplit { summary: summary.clone() }
         }
         TimePatternsCard { summary: summary.clone() }
+        SuperlativesCard { summary: summary.clone() }
     }
 }
 
 /// The all-time module stack: the reading-days heatmap card (with the
 /// longest-streak figure in its header), then the books-per-month trend
-/// chart. The library-size card sits alongside these in the same section but
-/// rides its own fetch, so it is mounted by the page rather than here.
+/// chart. The library-size and library-composition cards sit alongside these
+/// in the same section but ride their own fetches, so the page mounts them
+/// rather than this component.
 #[component]
 fn AllTimeSummary(all_time: Signal<Option<StatsSummary>>) -> Element {
     let guard = all_time.read();

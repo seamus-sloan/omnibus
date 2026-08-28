@@ -21,6 +21,7 @@ use super::chapter_nav::chapter_index_for_elapsed;
 use super::stage::chapter_sub_text;
 use crate::components::atrium::Cover;
 use crate::contexts::use_current_user_summary;
+use crate::routes::link_target;
 use crate::{use_playback, Route};
 pub(crate) use meta::dock_is_active;
 use meta::{dock_active_state, dock_sub_text, progress_pct};
@@ -132,7 +133,7 @@ fn MiniDockBar(
                 }
 
                 Link {
-                    to: Route::BookListen { uuid: uuid.clone(), file_id: None },
+                    to: link_target(Route::BookListen { uuid: uuid.clone(), file_id: None }),
                     class: "mini-dock-now",
                     "data-testid": "mini-dock-expand",
                     "aria-label": "Expand player",
@@ -182,7 +183,7 @@ fn MiniDockActions(uuid: String) -> Element {
     rsx! {
         div { class: "mini-dock-actions",
             Link {
-                to: Route::BookListen { uuid: uuid.clone(), file_id: None },
+                to: link_target(Route::BookListen { uuid: uuid.clone(), file_id: None }),
                 class: "mini-dock-ico",
                 "data-testid": "mini-dock-expand-btn",
                 "aria-label": "Expand to full player",

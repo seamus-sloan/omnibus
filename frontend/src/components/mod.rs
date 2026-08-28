@@ -198,3 +198,9 @@ pub use fetch_summary::FetchSummaryButton;
 // Platform-agnostic markup — only the camera-opening effect is target-gated.
 pub mod barcode_scanner;
 pub use barcode_scanner::{BarcodeScanner, ScanStatus};
+
+// The per-sitting reading-session log — the detail behind the stats
+// aggregates. Mounted user-wide by `/stats` and book-scoped by the
+// book-detail Stats stop, so it lives here rather than under either page.
+pub mod session_log;
+pub use session_log::SessionLogList;

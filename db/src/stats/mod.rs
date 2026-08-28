@@ -1,14 +1,16 @@
 //! Reading-stats aggregation over the `reading_sessions` /
 //! `listening_sessions` tables plus `journal_entries` / `book_read_status`
 //! for completion; no new query-time schema. See the `book`, `compute`,
-//! `pages`, `patterns`, `ratings`, and `streak` submodules for the per-scope
-//! aggregation bodies this module's cache wraps, `sessionize` for how
-//! checkpoint rows become sittings, and `library` for the one aggregate here
-//! that describes the collection rather than a reader. Every rollup here
-//! buckets in UTC except `patterns`, which is local-time by necessity — see
-//! its module docs.
+//! `pages`, `patterns`, `ratings`, `streak`, and `superlatives` submodules
+//! for the per-scope aggregation bodies this module's cache wraps,
+//! `sessionize` for how checkpoint rows become sittings, `library` /
+//! `composition` for the two aggregates here that describe the collection
+//! rather than a reader, and `sessions` for the uncached per-sitting log
+//! those aggregates summarize. Every rollup here buckets in UTC except
+//! `patterns`, which is local-time by necessity — see its module docs.
 
 mod book;
+mod composition;
 mod compute;
 mod genre;
 mod goals;
@@ -17,12 +19,15 @@ mod pages;
 mod patterns;
 mod ratings;
 mod sessionize;
+mod sessions;
 mod streak;
+mod superlatives;
 
 #[cfg(test)]
 mod tests;
 
 pub use book::book_insights;
+pub use composition::{invalidate as invalidate_library_composition, library_composition};
 pub use goals::{current_year, goal_for_year, set_goal, GoalError};
 pub use library::{invalidate as invalidate_library_size, library_size};
 /// Per-user aggregate cache TTL. A reload after a just-finished session
@@ -31,6 +36,7 @@ pub use library::{invalidate as invalidate_library_size, library_size};
 /// the frontend's `/stats` footer note can render the real TTL without a
 /// second hardcoded copy of the number.
 pub use omnibus_shared::STATS_TTL_SECS;
+pub use sessions::{session_log, SESSION_LOG_DEFAULT_LIMIT, SESSION_LOG_MAX_LIMIT};
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};

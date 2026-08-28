@@ -251,9 +251,9 @@ pub struct LibrarySize {
     /// image-page count, else the EPUB word estimate.
     #[serde(default)]
     pub pages: MeasuredTotal,
-    /// Total seconds of audio, summed over the parts of the one file the
-    /// server would actually serve for each book. A book with any unprobed
-    /// part is unmeasured rather than partly counted.
+    /// Total seconds of audio, summed over the parts of the format the server
+    /// would actually serve for each book — every volume of it, not one file.
+    /// A book with any unprobed part is unmeasured rather than partly counted.
     #[serde(default)]
     pub listening_seconds: MeasuredTotal,
 }
@@ -296,6 +296,148 @@ pub struct WeekdayBucket {
     pub seconds: i64,
 }
 
+/// Recorded time a book needs before it can be crowned the window's fastest
+/// read, in seconds.
+///
+/// The metric measures *tracked* reading, and a book read mostly on another
+/// device shows only its tail here — one 40-second checkpoint on the day it
+/// was marked finished would otherwise take the crown from every book the
+/// reader actually raced through. Lives here so the surfaces can state the
+/// floor without a second copy of the number drifting from
+/// `db::stats::superlatives`'s.
+pub const FASTEST_READ_MIN_SECS: i64 = 1800;
+
+/// One superlative that names a book: which book won, and the figure it won
+/// with.
+///
+/// `value`'s **unit is the field's, not this struct's** — pages for the length
+/// superlatives, seconds for the longest sit, days for the fastest read — and
+/// each is documented on [`Superlatives`]. Renderers must not guess.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookSuperlative {
+    pub book_uuid: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub value: i64,
+}
+
+/// The window's single most-X figures — the ranked one-liners a total can't
+/// say, and the shape a recap leads with.
+///
+/// **Every field is optional, and an absent one is the point.** A window that
+/// can't support a superlative omits it rather than crowning its only datum:
+/// a reader who finished one book has no "shortest", and a "longest" that is
+/// also the only book is noise dressed as a finding.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Superlatives {
+    /// The longest book finished in the window, in **pages** as resolved by
+    /// the shared length ladder (`db::stats::pages`). Absent when nothing
+    /// finished in the window resolves a length.
+    #[serde(default)]
+    pub longest_book: Option<BookSuperlative>,
+    /// The shortest book finished in the window, in **pages**. Absent when
+    /// it would name the same book as `longest_book`, or carry the same page
+    /// count — a pair that reads as a range when there isn't one.
+    #[serde(default)]
+    pub shortest_book: Option<BookSuperlative>,
+    /// The single day with the most active seconds in the window, reading and
+    /// listening together. Ties break to the earliest day.
+    #[serde(default)]
+    pub biggest_day: Option<DayActivity>,
+    /// The longest single sitting in the window, in **seconds** — stitched
+    /// checkpoint rows, so this is how long the reader actually sat, not how
+    /// long a client waited between flushes.
+    #[serde(default)]
+    pub longest_sit: Option<BookSuperlative>,
+    /// The book finished in the window in the fewest **days** from its first
+    /// recorded session, counting a same-day read as one day rather than
+    /// zero.
+    ///
+    /// Only books carrying at least [`FASTEST_READ_MIN_SECS`] of recorded
+    /// time are eligible, and even so this is a **lower bound** on how long
+    /// the read really took — reading done before session tracking, or on a
+    /// device that reports nothing, is invisible here. Surfaces must say so.
+    #[serde(default)]
+    pub fastest_read: Option<BookSuperlative>,
+}
+
+impl Superlatives {
+    /// True when none of the five server-computed figures is present.
+    ///
+    /// Deliberately **not** the card's render gate. Both surfaces also draw
+    /// rows off `StatsSummary` fields that live outside this struct — the
+    /// busiest week and the top-ranked author and subject — so a window with
+    /// only a busiest week is `is_empty()` yet still has a card to show. The
+    /// gate is the assembled row list; this is a predicate over the five.
+    pub fn is_empty(&self) -> bool {
+        self.longest_book.is_none()
+            && self.shortest_book.is_none()
+            && self.biggest_day.is_none()
+            && self.longest_sit.is_none()
+            && self.fastest_read.is_none()
+    }
+}
+
+/// What the Pages tile could and could not measure in the window, and the day
+/// before which it cannot measure anything at all.
+///
+/// The tile's headline is a single number that has three different empty
+/// states, and they mean different things: a window with no activity, a window
+/// whose only activity was listening (audio has no page analogue, so zero pages
+/// is the *correct* answer rather than an unknown one), and a window of real
+/// reading in books whose length no rung of the ladder resolves. Collapsing all
+/// three into an em-dash tells a reader who listened all week that the server
+/// has no idea what they did.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct PagesReadDetail {
+    /// UTC `YYYY-MM-DD` the forward-progress ledger began recording. Reading
+    /// before it left no position trail to difference and is unrecoverable, so
+    /// a window reaching back past this date is reporting on part of itself —
+    /// which the surfaces state outright rather than leaving as an unexplained
+    /// discontinuity.
+    #[serde(default)]
+    pub since_day: Option<String>,
+    /// Distinct books that contributed measured page progress in the window.
+    pub measured_books: i64,
+    /// Distinct books read in the window whose length no rung of the ladder
+    /// resolves — real reading the total cannot include.
+    pub unmeasured_books: i64,
+    /// Distinct books listened to in the window. Audiobooks contribute no
+    /// pages by design; this is what separates "listened, so zero pages" from
+    /// "nothing happened".
+    pub audio_books: i64,
+    /// Pages per UTC day within the window, active days only, ascending — the
+    /// tile's drill-in trend.
+    #[serde(default)]
+    pub daily: Vec<TrendPoint>,
+    /// Whether this window opens before [`Self::since_day`], so part of it is
+    /// unmeasurable no matter what the reader did.
+    ///
+    /// Computed server-side against the window's real start rather than
+    /// inferred from the [`StatsRange`], because the range is not the fact: a
+    /// Year window in the calendar year *after* the epoch is fully covered, and
+    /// a Week window in the days right after it is not. Only the server knows
+    /// where a period starts — that calendar math lives in SQLite — so it is
+    /// the only side that can answer this without guessing.
+    #[serde(default)]
+    pub window_predates_ledger: bool,
+}
+
+impl PagesReadDetail {
+    /// True when the window holds listening and no reading at all — the one
+    /// empty state whose honest headline is `0`, not an em-dash.
+    pub fn audio_only(&self) -> bool {
+        self.audio_books > 0 && self.measured_books == 0 && self.unmeasured_books == 0
+    }
+
+    /// True when the window starts before the ledger did, so part of it is
+    /// unmeasurable no matter what the reader did — and there is an epoch to
+    /// name in the disclosure.
+    pub fn predates_ledger(&self) -> bool {
+        self.since_day.is_some() && self.window_predates_ledger
+    }
+}
+
 /// Scalar aggregates for the **same elapsed slice** of the preceding period —
 /// feeds each metric tile's drill-in delta. The current window is
 /// period-to-date, so this is month-to-date against the same days last month
@@ -306,6 +448,11 @@ pub struct PeriodComparison {
     pub books_finished: i64,
     pub avg_stars: Option<f64>,
     pub listening_seconds: i64,
+    /// Pages read over the baseline window. Day-grained, unlike its siblings
+    /// here — the ledger buckets by UTC day — so the baseline includes the whole
+    /// of its boundary day, matching the current window's own partial today.
+    #[serde(default)]
+    pub pages_read: i64,
 }
 
 /// The full aggregate payload for one user over one [`StatsRange`].
@@ -314,10 +461,12 @@ pub struct PeriodComparison {
 /// explicit `book_read_status` of `finished`, never from the session tables
 /// (which carry duration but no progress). A book finished both ways counts
 /// once, and every completion metric on this struct — `books_finished`,
-/// `finished_books`, `books_per_month`, `pages_read`, `pages_per_hour`,
-/// `length_buckets` and `previous` — shares that one definition, live books
-/// only. They must not
-/// drift apart: several of them render on the same screen.
+/// `finished_books`, `books_per_month`, `pages_per_hour`, `length_buckets`
+/// and `previous` — shares that one definition, live books only. They must
+/// not drift apart: several of them render on the same screen.
+///
+/// `pages_read` is pointedly **not** one of them. It measures ground covered,
+/// not books completed, and sources from the forward-progress ledger instead.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct StatsSummary {
     pub range: StatsRange,
@@ -348,7 +497,9 @@ pub struct StatsSummary {
     /// stop clients disagreeing.
     #[serde(default)]
     pub current_streak_days: i64,
-    /// First active day (UTC `YYYY-MM-DD`) of the busiest ISO week, if any.
+    /// Monday (UTC `YYYY-MM-DD`) of the busiest ISO week, if any — the week's
+    /// own start, so a surface can label it "Week of …" whether or not the
+    /// reader happened to read on the Monday.
     pub busiest_week_start: Option<String>,
     pub busiest_week_seconds: i64,
     pub books_finished: i64,
@@ -399,16 +550,23 @@ pub struct StatsSummary {
     /// bucket counts sum to the set the mean is taken over.
     #[serde(default)]
     pub rating_histogram: Vec<RatingBucket>,
-    /// Pages read in the window — the Pages tile. Each book finished in the
-    /// window contributes its length as resolved by the one ladder in
-    /// `db::stats::pages`: a print-edition page count from the metadata
-    /// overrides, else a comic's exact image-page count, else the EPUB word
-    /// estimate. Exact for some books and an estimate for others, which is why
-    /// the tile labels itself as an estimate.
+    /// Pages read in the window — the Pages tile. Sums the ground each book
+    /// was actually carried over inside the window (the forward-progress
+    /// ledger, migration `0083`) against its length as resolved by the one
+    /// ladder in `db::stats::pages`: a print-edition page count from the
+    /// metadata overrides, else a comic's exact image-page count, else the EPUB
+    /// word estimate. Exact for some books and an estimate for others, which is
+    /// why the surfaces keep the estimate disclosure in the drill-in.
     ///
-    /// `None` when no finished book in the window resolves a length on any
-    /// rung — an unmeasured book contributes nothing rather than zero — which
-    /// drives the tile's em-dash empty state.
+    /// Deliberately **not** the length of the books finished in the window:
+    /// that figure reported nothing for a reader who finished nothing, and
+    /// dumped a whole book's length into whichever window its status flip
+    /// happened to land in.
+    ///
+    /// `None` when no book read in the window resolves a length on any rung —
+    /// an unmeasured book contributes nothing rather than zero. See
+    /// [`Self::pages_detail`] before rendering that as "no data": it also
+    /// covers the audio-only window, whose honest answer is zero.
     #[serde(default)]
     pub pages_read: Option<i64>,
     /// Estimated reading speed over the window, in pages per hour — the
@@ -419,10 +577,15 @@ pub struct StatsSummary {
     /// resolve a length *and* carry recorded reading time: a book that
     /// contributes pages contributes the hours behind them, so a book begun
     /// before the window reports a plausible rate instead of its whole length
-    /// against one window's hours. Narrower than `pages_read`'s population by
-    /// the books nobody has recorded reading time on, and by those whose
-    /// length resolves to zero pages: a total carries a zero harmlessly, but a
-    /// rate would spend that book's hours against none of its pages.
+    /// against one window's hours.
+    ///
+    /// Scoped to books *finished* in the window, where `pages_read` beside it
+    /// is scoped to ground *covered* in it: the two answer different questions
+    /// over different sets of books, so dividing one by the other — or by
+    /// `reading_seconds` — is not this figure. Narrowed further by the books
+    /// nobody has recorded reading time on, and by those whose length resolves
+    /// to zero pages: a total carries a zero harmlessly, but a rate would spend
+    /// that book's hours against none of its pages.
     ///
     /// Reading time only — listening is excluded, since narration speed is
     /// the narrator's, not the reader's. A book read partly in audio
@@ -466,12 +629,24 @@ pub struct StatsSummary {
     /// total, not an error.
     #[serde(default)]
     pub unzoned_seconds: i64,
+    /// The window's single most-X figures. Scoped to `range` like the rest of
+    /// this struct. [`Superlatives::is_empty`] is a predicate over these five,
+    /// **not** the card's render gate — the surfaces draw rows off fields
+    /// outside this struct too, so gating on it would drop a card that still
+    /// has something to show. See that method's docs.
+    #[serde(default)]
+    pub superlatives: Superlatives,
     /// The caller's goal for the **current calendar year**, `None` when none
     /// is set. Like `current_streak_days` this is deliberately *not* windowed:
     /// a goal is annual by definition, so it reads the same on every
     /// [`StatsRange`] and a period switch never moves it.
     #[serde(default)]
     pub goal: Option<ReadingGoal>,
+    /// What `pages_read` could and could not see in this window, plus the day
+    /// the ledger behind it started. Server-owned so the web tile and the iOS
+    /// tile cannot disagree about which empty state a window is in.
+    #[serde(default)]
+    pub pages_detail: PagesReadDetail,
 }
 
 impl StatsSummary {
@@ -631,4 +806,234 @@ impl ReadingGoalUpdate {
         }
         Ok(())
     }
+}
+
+/// One bucket of a [`LibraryComposition`] dimension: a display label and the
+/// distinct live books behind it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompositionSlice {
+    pub label: String,
+    pub books: i64,
+}
+
+/// One dimension of the library's composition — its buckets plus the coverage
+/// behind them.
+///
+/// The coverage pair is the same [`MeasuredTotal`] contract the library-size
+/// figures use, read one level up: `total` is **bucket placements** (the sum
+/// of every slice's `books`) and `books` is the **distinct live books** the
+/// dimension describes. The two differ exactly when a book lands in more than
+/// one bucket — a dual-format book, a multi-genre one — so `total - books` is
+/// the overlap, and `books` against `LibraryComposition::books` is the share
+/// of the library the dimension can speak for at all.
+///
+/// `coverage.books == 0` means nothing in the library carries this dimension,
+/// which the surfaces render as an empty state rather than an empty chart.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompositionDimension {
+    #[serde(default)]
+    pub slices: Vec<CompositionSlice>,
+    #[serde(default)]
+    pub coverage: MeasuredTotal,
+}
+
+impl CompositionDimension {
+    /// True when no live book carries this dimension at all.
+    pub fn is_empty(&self) -> bool {
+        self.coverage.books == 0 || self.slices.is_empty()
+    }
+
+    /// Books that land in more than one bucket — the overlap a reader needs
+    /// to reconcile the slices against the library total. Zero for every
+    /// dimension whose buckets are mutually exclusive.
+    pub fn overlap(&self) -> i64 {
+        (self.coverage.total - self.coverage.books).max(0)
+    }
+
+    /// Live books this dimension has nothing to say about — no language link,
+    /// no publisher, no genre override. `library_books` is
+    /// [`LibraryComposition::books`].
+    pub fn uncovered(&self, library_books: i64) -> i64 {
+        (library_books - self.coverage.books).max(0)
+    }
+}
+
+/// What the collection is made of: its format mix, language mix, publisher
+/// spread, publication-decade histogram, and genre distribution.
+///
+/// **Library-scoped, not user-scoped**, and deliberately not a field on
+/// [`StatsSummary`] for the same reason [`LibrarySize`] isn't: it is the same
+/// answer for every reader and only moves on a reindex, so hanging it off a
+/// per-user payload would recompute and re-send it on every period switch.
+///
+/// Every count is `DISTINCT` over books, never over rows. `book_files` is one
+/// row per *file* (migration `0018` keys it `UNIQUE(book_id, format,
+/// ordinal)`), so a twelve-part M4B is twelve rows and counting rows would
+/// report one audiobook as twelve.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryComposition {
+    /// Live books — those with at least one surviving `book_files` row. The
+    /// denominator every dimension's coverage is read against, and the same
+    /// population [`LibrarySize::books`] counts.
+    pub books: i64,
+    /// Books whose files are gone: a `books` row with no surviving
+    /// `book_files`, the rows `db::admin_health::index_status` calls ghosted.
+    ///
+    /// Reported rather than dropped. They carry no format at all, so they
+    /// would otherwise vanish from the format rollup and leave the per-format
+    /// counts quietly failing to reconcile against the library. The identity
+    /// the surfaces publish is `books + ghosted_books` = every `books` row.
+    #[serde(default)]
+    pub ghosted_books: i64,
+    /// Format mix by `book_files.format`, most books first. A book held in
+    /// two formats is counted **once in each bucket** — it really is both —
+    /// so the slices sum to `formats.coverage.total`, which exceeds `books`
+    /// by exactly the dual-format overlap.
+    #[serde(default)]
+    pub formats: CompositionDimension,
+    /// Language mix by `languages.code`, tail folded into "Other". Books with
+    /// no language link are uncovered rather than bucketed as unknown — an
+    /// absent link means the file never declared one.
+    #[serde(default)]
+    pub languages: CompositionDimension,
+    /// Publisher spread by `publishers.name`, tail folded into "Other".
+    #[serde(default)]
+    pub publishers: CompositionDimension,
+    /// Publication decades, oldest first, and **not folded** — a histogram
+    /// sorted by height or truncated at six bars is a bar chart of nothing.
+    /// The year comes from the same `CAST(substr(pubdate, 1, 4) AS INTEGER)`
+    /// extraction smart-shelf rules use, so a decade histogram and a
+    /// `year >= 1990` shelf can never disagree about a book.
+    ///
+    /// There is deliberately **no `Unknown` bucket**: a book with an absent
+    /// or unparseable `pubdate` is uncovered, reported through the coverage
+    /// pair like every other dimension's unknowns. That uniformity is what
+    /// keeps `sum(slices) == coverage.total` checkable everywhere.
+    #[serde(default)]
+    pub decades: CompositionDimension,
+    /// Genre distribution, tail folded into "Other".
+    ///
+    /// **Read its coverage before its slices.** Genres have no link table by
+    /// design (migration `0066`): nothing Omnibus parses carries one, so they
+    /// live only in `metadata_overrides -> '$.genres'` and this describes
+    /// exactly the books someone has hand-edited. Presenting a 4%-of-library
+    /// sample as "your library's genres" is the failure mode the coverage
+    /// pair exists to prevent.
+    #[serde(default)]
+    pub genres: CompositionDimension,
+}
+
+impl LibraryComposition {
+    /// True when the library has nothing to describe — no live books, or no
+    /// dimension carrying a single one. The surfaces' signal to render
+    /// nothing rather than five empty charts.
+    pub fn is_empty(&self) -> bool {
+        self.books == 0
+            || (self.formats.is_empty()
+                && self.languages.is_empty()
+                && self.publishers.is_empty()
+                && self.decades.is_empty()
+                && self.genres.is_empty())
+    }
+}
+
+/// Which of the two session tables a stitched sitting drew from.
+///
+/// [`Self::Mixed`] is not a fallback: a dual-format book read and listened to
+/// in one stretch stitches into a single sitting (see `db::stats::sessionize`),
+/// and reporting it as one or the other would name a format the reader didn't
+/// spend the whole sitting in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionFormat {
+    Reading,
+    Listening,
+    Mixed,
+}
+
+impl SessionFormat {
+    /// Human label for a log row — past tense, since a logged sitting is over.
+    pub fn label(&self) -> &'static str {
+        match self {
+            SessionFormat::Reading => "Read",
+            SessionFormat::Listening => "Listened",
+            SessionFormat::Mixed => "Read & listened",
+        }
+    }
+}
+
+/// One sitting in the reading-session log: adjacent checkpoint rows stitched
+/// back together, so an entry is a sit rather than a heartbeat flush.
+///
+/// `seconds` is the *recorded* time across the sitting, not `ended_at -
+/// started_at`: a sitting the reader paused mid-way spans more wall clock than
+/// it recorded, and the recorded figure is the one every other stats surface
+/// reports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionLogEntry {
+    pub book_uuid: String,
+    pub title: String,
+    pub format: SessionFormat,
+    /// Unix seconds of the sitting's first checkpoint row.
+    pub started_at: i64,
+    /// Unix seconds of its last checkpoint row's end.
+    pub ended_at: i64,
+    /// Seconds recorded across the sitting.
+    pub seconds: i64,
+}
+
+impl SessionLogEntry {
+    /// This entry's cursor — what a caller passes as `before` to fetch the
+    /// page that continues after it.
+    pub fn cursor(&self) -> SessionCursor {
+        SessionCursor {
+            started_at: self.started_at,
+            book_uuid: self.book_uuid.clone(),
+        }
+    }
+}
+
+/// A keyset cursor into the session log: the last-seen sitting's start plus
+/// its book, ordered `(started_at DESC, book_uuid DESC)`.
+///
+/// The book uuid is not decoration. Two different books can start a sitting in
+/// the same second, and a cursor carrying only `started_at` either drops the
+/// tie's remainder (`<`) or repeats it forever (`<=`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCursor {
+    pub started_at: i64,
+    pub book_uuid: String,
+}
+
+impl SessionCursor {
+    /// Wire form, `"{started_at}:{book_uuid}"` — split on the **first** colon,
+    /// so the uuid half is taken verbatim even if it contains one of its own.
+    pub fn encode(&self) -> String {
+        format!("{}:{}", self.started_at, self.book_uuid)
+    }
+
+    /// Parse [`Self::encode`]'s output. `None` on anything else — the handler
+    /// turns that into a 400 rather than silently serving page one, which
+    /// would loop a paging client.
+    pub fn parse(raw: &str) -> Option<Self> {
+        let (started, uuid) = raw.split_once(':')?;
+        if uuid.is_empty() {
+            return None;
+        }
+        Some(SessionCursor {
+            started_at: started.parse().ok()?,
+            book_uuid: uuid.to_string(),
+        })
+    }
+}
+
+/// One page of the reading-session log, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SessionLogPage {
+    pub entries: Vec<SessionLogEntry>,
+    /// The cursor for the next page, or `None` at the end of the log. Encoded
+    /// rather than structured so a client pages by echoing it back without
+    /// knowing how the keyset is built.
+    #[serde(default)]
+    pub next_before: Option<String>,
 }

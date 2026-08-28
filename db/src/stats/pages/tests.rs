@@ -1,7 +1,9 @@
-//! Unit tests for the length ladder and the three aggregates over it —
-//! [`super::pages_read`], [`super::pages_per_hour`] and
+//! Unit tests for the length ladder and the aggregates over it —
+//! [`super::pages_read`] and its detail, [`super::pages_per_hour`], and
 //! [`super::length_buckets`]. Every input is a persisted column, so these seed
-//! those columns directly — no EPUB or CBZ is opened at query time.
+//! those columns directly: no EPUB or CBZ is opened at query time, and the
+//! forward-progress ledger is seeded rather than driven through the position
+//! write path (covered in `db::progress::ledger`).
 
 use super::*;
 use crate::init_db;
@@ -111,6 +113,27 @@ async fn listen_session(pool: &SqlitePool, user: i64, uuid: &str, started_at: i6
     .unwrap();
 }
 
+/// Seed one day's forward progress on a book — the ledger rows
+/// `db::progress::ledger` writes from the position path.
+async fn read_percent(pool: &SqlitePool, user: i64, uuid: &str, day: &str, gained: i64) {
+    sqlx::query(
+        "INSERT INTO reading_progress_daily
+             (user_id, book_uuid, format, day, percent_gained)
+         VALUES (?, ?, 'epub', ?, ?)",
+    )
+    .bind(user)
+    .bind(uuid)
+    .bind(day)
+    .bind(gained)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// The UTC day `T0` falls in — every ledger row here is seeded on it unless a
+/// test is specifically about day bucketing.
+const T0_DAY: &str = "2023-11-14";
+
 /// The count in a named bucket, or -1 when the bucket is missing entirely.
 fn books_in(buckets: &[LengthBucket], label: &str) -> i64 {
     buckets
@@ -131,7 +154,7 @@ async fn pages_read_prefers_print_pages_over_every_estimate() {
     // image count and the word estimate alike.
     seed_book(&pool, lib, "uuid-a", Some(275), Some(30)).await;
     set_print_pages(&pool, "uuid-a", 412).await;
-    finish_journal(&pool, user, "uuid-a", T0).await;
+    read_percent(&pool, user, "uuid-a", T0_DAY, 100).await;
 
     assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(412));
 }
@@ -143,7 +166,7 @@ async fn pages_read_uses_the_comic_page_count_when_no_print_pages_exist() {
     let lib = seed_lib(&pool).await;
     // A CBZ carries an exact image-page count and no word count.
     seed_book(&pool, lib, "uuid-a", None, Some(32)).await;
-    finish_journal(&pool, user, "uuid-a", T0).await;
+    read_percent(&pool, user, "uuid-a", T0_DAY, 100).await;
 
     assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(32));
 }
@@ -158,7 +181,7 @@ async fn pages_read_prefers_the_comic_page_count_over_the_word_estimate() {
     // swapping the two COALESCE arms is otherwise invisible to every other
     // test here, since each covers a rung in isolation.
     seed_book(&pool, lib, "uuid-a", Some(275 * 40), Some(32)).await;
-    finish_journal(&pool, user, "uuid-a", T0).await;
+    read_percent(&pool, user, "uuid-a", T0_DAY, 100).await;
 
     assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(32));
 }
@@ -170,8 +193,8 @@ async fn pages_read_falls_back_to_the_word_count_estimate() {
     let lib = seed_lib(&pool).await;
     seed_book(&pool, lib, "uuid-a", Some(275), None).await; // 1 page
     seed_book(&pool, lib, "uuid-b", Some(550), None).await; // 2 pages
-    finish_journal(&pool, user, "uuid-a", T0).await;
-    finish_journal(&pool, user, "uuid-b", T0).await;
+    read_percent(&pool, user, "uuid-a", T0_DAY, 100).await;
+    read_percent(&pool, user, "uuid-b", T0_DAY, 100).await;
 
     assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(3));
 }
@@ -185,8 +208,8 @@ async fn pages_read_rounds_the_word_estimate_to_the_nearest_page() {
     // not zero.
     seed_book(&pool, lib, "uuid-a", Some(137), None).await;
     seed_book(&pool, lib, "uuid-b", Some(138), None).await;
-    finish_journal(&pool, user, "uuid-a", T0).await;
-    finish_journal(&pool, user, "uuid-b", T0).await;
+    read_percent(&pool, user, "uuid-a", T0_DAY, 100).await;
+    read_percent(&pool, user, "uuid-b", T0_DAY, 100).await;
 
     assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(1));
 }
@@ -194,76 +217,313 @@ async fn pages_read_rounds_the_word_estimate_to_the_nearest_page() {
 // --- pages_read ---------------------------------------------------------
 
 #[tokio::test]
-async fn pages_read_is_none_when_nothing_finished_in_the_window() {
+async fn pages_read_counts_part_of_a_book_without_any_completion() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
     let lib = seed_lib(&pool).await;
-    // A finished-count-eligible book exists but is never marked finished.
-    seed_book(&pool, lib, "uuid-a", Some(550), None).await;
-
-    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), None);
-}
-
-#[tokio::test]
-async fn pages_read_counts_a_book_finished_via_read_status() {
-    let pool = init_db("sqlite::memory:").await.unwrap();
-    let user = seed_user(&pool, "alice").await;
-    let lib = seed_lib(&pool).await;
-    seed_book(&pool, lib, "uuid-a", Some(825), None).await; // 3 pages
-                                                            // Finished via read-status only (no journal entry) — the tile uses the
-                                                            // same unified completion definition as the rest of the stats page.
-    finish_read_status(&pool, user, "uuid-a", T0).await;
-
-    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(3));
-}
-
-#[tokio::test]
-async fn pages_read_counts_a_book_finished_both_ways_once() {
-    let pool = init_db("sqlite::memory:").await.unwrap();
-    let user = seed_user(&pool, "alice").await;
-    let lib = seed_lib(&pool).await;
-    seed_book(&pool, lib, "uuid-a", Some(550), None).await; // 2 pages
-    finish_journal(&pool, user, "uuid-a", T0).await;
-    finish_read_status(&pool, user, "uuid-a", T0).await;
-
-    // The DISTINCT-book scope collapses the two completion events to one row,
-    // so the length is counted once (2 pages, not 4).
-    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(2));
-}
-
-#[tokio::test]
-async fn pages_read_is_none_when_no_finished_book_resolves_a_length() {
-    let pool = init_db("sqlite::memory:").await.unwrap();
-    let user = seed_user(&pool, "alice").await;
-    let lib = seed_lib(&pool).await;
-    // Finished, but every rung is NULL (audio-only / not-yet-backfilled).
+    // The whole point of the metric: a reader steadily through a quarter of a
+    // 400-page book has read 100 pages, and nothing was finished to say so.
     seed_book(&pool, lib, "uuid-a", None, None).await;
+    set_print_pages(&pool, "uuid-a", 400).await;
+    read_percent(&pool, user, "uuid-a", T0_DAY, 25).await;
+
+    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(100));
+}
+
+#[tokio::test]
+async fn pages_read_ignores_a_finish_that_covered_no_ground_in_the_window() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    // A 600-page book read months ago and only *marked* finished now. The flip
+    // must not dump its length into this window.
+    seed_book(&pool, lib, "uuid-a", None, Some(600)).await;
     finish_journal(&pool, user, "uuid-a", T0).await;
+    finish_read_status(&pool, user, "uuid-a", T0).await;
 
     assert_eq!(pages_read(&pool, user, 0).await.unwrap(), None);
 }
 
 #[tokio::test]
-async fn pages_read_ignores_finishes_outside_the_window() {
+async fn pages_read_sums_every_book_and_day_in_the_window() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-a", None, Some(200)).await;
+    seed_book(&pool, lib, "uuid-b", None, Some(400)).await;
+    read_percent(&pool, user, "uuid-a", "2023-11-14", 10).await; // 20
+    read_percent(&pool, user, "uuid-a", "2023-11-15", 15).await; // 30
+    read_percent(&pool, user, "uuid-b", "2023-11-15", 25).await; // 100
+
+    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(150));
+}
+
+#[tokio::test]
+async fn pages_read_rounds_the_total_once_rather_than_per_book() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    // Three books at 0.4 pages each: rounded per book that is zero, rounded
+    // once it is one. A reader who turned a few pages in several books should
+    // not lose them all to rounding.
+    for uuid in ["uuid-a", "uuid-b", "uuid-c"] {
+        seed_book(&pool, lib, uuid, None, Some(40)).await;
+        read_percent(&pool, user, uuid, T0_DAY, 1).await;
+    }
+
+    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(1));
+}
+
+#[tokio::test]
+async fn pages_read_is_none_when_nothing_was_read_in_the_window() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
     let lib = seed_lib(&pool).await;
     seed_book(&pool, lib, "uuid-a", Some(550), None).await;
-    finish_journal(&pool, user, "uuid-a", T0).await;
 
-    // A window starting after the finish must not see it.
-    assert_eq!(pages_read(&pool, user, T0 + 1).await.unwrap(), None);
+    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn pages_read_is_none_when_no_book_read_resolves_a_length() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    // Read, but every rung is NULL (not-yet-backfilled) — an unmeasured book
+    // contributes nothing rather than zero.
+    seed_book(&pool, lib, "uuid-a", None, None).await;
+    read_percent(&pool, user, "uuid-a", T0_DAY, 40).await;
+
+    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn pages_read_ignores_ground_covered_outside_the_window() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-a", None, Some(200)).await;
+    read_percent(&pool, user, "uuid-a", "2023-11-14", 50).await;
+
+    // A window starting the next day must not see it.
+    assert_eq!(pages_read(&pool, user, T0 + 86_400).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn pages_read_ignores_another_users_reading() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-a", None, Some(200)).await;
+    read_percent(&pool, bob, "uuid-a", T0_DAY, 50).await;
+
+    assert_eq!(pages_read(&pool, alice, 0).await.unwrap(), None);
 }
 
 #[tokio::test]
 async fn pages_read_ignores_a_ghosted_book_with_no_live_row() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    // Completion event references a uuid with no `books` row (ghosted): the
-    // inner join drops it, so there is no data.
-    finish_journal(&pool, user, "uuid-ghost", T0).await;
+    // A ledger row against a uuid with no `books` row (ghosted): the join
+    // drops it, so there is no data.
+    read_percent(&pool, user, "uuid-ghost", T0_DAY, 60).await;
 
     assert_eq!(pages_read(&pool, user, 0).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn pages_read_propagates_sqlx_error_when_the_ledger_table_is_missing() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("DROP TABLE reading_progress_daily")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = pages_read(&pool, 1, 0).await.unwrap_err();
+
+    assert!(matches!(err, StatsError::Sqlx(_)));
+}
+
+// --- pages_read_bounded -------------------------------------------------
+
+#[tokio::test]
+async fn pages_read_bounded_covers_its_slice_inclusive_of_the_boundary_day() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-a", None, Some(100)).await;
+    read_percent(&pool, user, "uuid-a", "2023-11-13", 10).await; // before
+    read_percent(&pool, user, "uuid-a", "2023-11-14", 20).await; // in
+    read_percent(&pool, user, "uuid-a", "2023-11-15", 40).await; // after
+
+    // The ledger is day-grained and the window it is compared against always
+    // carries a partial today, so the boundary day is included.
+    let pages = pages_read_bounded(&pool, user, T0, T0).await.unwrap();
+
+    assert_eq!(pages, 20);
+}
+
+/// Midnight UTC on 2023-11-15 — `compute::prev_window_from` clamps a baseline's
+/// `end` to the current period's start, which is always a day boundary.
+const T0_NEXT_MIDNIGHT: i64 = 1_700_006_400;
+
+#[tokio::test]
+async fn pages_read_bounded_excludes_a_boundary_landing_exactly_on_midnight() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-a", None, Some(100)).await;
+    read_percent(&pool, user, "uuid-a", "2023-11-14", 20).await;
+    read_percent(&pool, user, "uuid-a", "2023-11-15", 40).await;
+
+    // `end` at midnight means zero elapsed seconds on the day it names, so that
+    // day belongs to the *next* window. Counting it would let the clamped
+    // baseline swallow day one of the window it is the baseline for, and report
+    // a 0% delta against a day comparing with itself.
+    let pages = pages_read_bounded(&pool, user, T0, T0_NEXT_MIDNIGHT)
+        .await
+        .unwrap();
+
+    assert_eq!(pages, 20);
+}
+
+#[tokio::test]
+async fn pages_read_bounded_is_zero_rather_than_none_for_an_empty_baseline() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    assert_eq!(pages_read_bounded(&pool, user, 0, T0).await.unwrap(), 0);
+}
+
+// --- pages_detail -------------------------------------------------------
+
+#[tokio::test]
+async fn pages_detail_separates_an_audio_only_window_from_an_empty_one() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-audio", None, None).await;
+    listen_session(&pool, user, "uuid-audio", T0, 600).await;
+
+    let detail = pages_detail(&pool, user, 0).await.unwrap();
+
+    assert_eq!(detail.audio_books, 1);
+    assert_eq!(detail.measured_books, 0);
+    assert_eq!(detail.unmeasured_books, 0);
+    // The one empty state whose honest headline is zero, not an em-dash.
+    assert!(detail.audio_only());
+}
+
+#[tokio::test]
+async fn pages_detail_reports_an_empty_window_as_not_audio_only() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    let detail = pages_detail(&pool, user, 0).await.unwrap();
+
+    assert_eq!(detail.audio_books, 0);
+    assert!(!detail.audio_only());
+    assert!(detail.daily.is_empty());
+}
+
+#[tokio::test]
+async fn pages_detail_counts_measured_and_unmeasured_books_apart() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-known", None, Some(120)).await;
+    seed_book(&pool, lib, "uuid-unknown", None, None).await;
+    read_percent(&pool, user, "uuid-known", T0_DAY, 50).await;
+    read_percent(&pool, user, "uuid-unknown", T0_DAY, 50).await;
+
+    let detail = pages_detail(&pool, user, 0).await.unwrap();
+
+    assert_eq!(detail.measured_books, 1);
+    // Real reading the total cannot include — a tile that never says so
+    // understates itself without admitting it.
+    assert_eq!(detail.unmeasured_books, 1);
+    assert!(!detail.audio_only());
+}
+
+#[tokio::test]
+async fn pages_detail_charts_pages_per_day_ascending() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-a", None, Some(200)).await;
+    read_percent(&pool, user, "uuid-a", "2023-11-15", 10).await;
+    read_percent(&pool, user, "uuid-a", "2023-11-14", 25).await;
+
+    let detail = pages_detail(&pool, user, 0).await.unwrap();
+
+    let points: Vec<(String, f64)> = detail
+        .daily
+        .iter()
+        .map(|p| (p.label.clone(), p.value))
+        .collect();
+    assert_eq!(
+        points,
+        vec![
+            ("2023-11-14".to_string(), 50.0),
+            ("2023-11-15".to_string(), 20.0),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn pages_detail_carries_the_ledger_epoch_so_the_cutover_can_be_stated() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    let detail = pages_detail(&pool, user, 0).await.unwrap();
+
+    // Reading before this day left no position trail to difference; the
+    // surfaces state the date rather than letting the tile change meaning
+    // without saying so.
+    let since = detail.since_day.expect("migration 0083 records the epoch");
+    assert_eq!(since.len(), 10, "expected YYYY-MM-DD, got {since}");
+}
+
+#[tokio::test]
+async fn pages_detail_flags_a_window_that_opens_before_the_ledger_did() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    // The epoch is stamped `date('now')` by the migration, so a window opening
+    // at the unix epoch certainly predates it and one opening now does not.
+    // The range never enters into it — only where the window actually starts.
+    assert!(
+        pages_detail(&pool, user, 0)
+            .await
+            .unwrap()
+            .window_predates_ledger
+    );
+
+    // CAST: `strftime` returns TEXT, which will not decode as an `i64`.
+    let now: i64 = sqlx::query_scalar("SELECT CAST(strftime('%s','now') AS INTEGER)")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !pages_detail(&pool, user, now)
+            .await
+            .unwrap()
+            .window_predates_ledger
+    );
+}
+
+#[tokio::test]
+async fn pages_detail_propagates_sqlx_error_when_the_ledger_table_is_missing() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("DROP TABLE reading_progress_daily")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = pages_detail(&pool, 1, 0).await.unwrap_err();
+
+    assert!(matches!(err, StatsError::Sqlx(_)));
 }
 
 // --- pages_per_hour -----------------------------------------------------

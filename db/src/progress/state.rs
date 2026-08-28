@@ -13,7 +13,7 @@ use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use crate::{resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec};
 
-use super::{format_str, parse_format, ProgressError};
+use super::{format_str, ledger, parse_format, ProgressError};
 
 /// Attach a server-derived KoboSpan location (and percent, when the row
 /// has none) to an existing epub row WITHOUT advancing any freshness
@@ -22,6 +22,9 @@ use super::{format_str, parse_format, ProgressError};
 /// Kobo sync delta forever. Optimistic: no-ops unless the row still has
 /// no location and its event time is unchanged since the caller read it.
 /// Returns whether a row was updated.
+///
+/// A percent this fills is observed by the forward-progress ledger, like every
+/// other writer of that column — see [`attach_derived_percent`].
 pub async fn attach_derived_kobo_location(
     pool: &SqlitePool,
     user_id: i64,
@@ -33,22 +36,41 @@ pub async fn attach_derived_kobo_location(
     let book_uuid = resolve_canonical_book_uuid(pool, book_uuid)
         .await?
         .ok_or(ProgressError::BookNotFound)?;
-    let result = sqlx::query(
+    let attached: Option<Option<i64>> = sqlx::query_scalar(
         "UPDATE reading_progress
             SET kobo_location = ?,
                 progress_percent = COALESCE(progress_percent, ?)
           WHERE user_id = ? AND book_uuid = ? AND format = 'epub'
             AND kobo_location IS NULL
-            AND COALESCE(client_updated_at, updated_at) = ?",
+            AND COALESCE(client_updated_at, updated_at) = ?
+      RETURNING progress_percent",
     )
     .bind(location_json)
     .bind(percent)
     .bind(user_id)
     .bind(&book_uuid)
     .bind(expected_client_updated_at)
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok(result.rows_affected() > 0)
+    // This is the third writer of `progress_percent`, and the ledger has to see
+    // all three or it silently under-counts: a CFI-only write ledgers nothing,
+    // and whichever of this attach and `attach_derived_percent` lands first
+    // makes the other a no-op. `RETURNING` gives the percent the row actually
+    // ended up with rather than the one offered, so a `COALESCE` that kept an
+    // existing value re-observes that value — which the mark has already seen,
+    // so it accrues nothing — instead of dragging the mark to a lower one.
+    if let Some(Some(settled)) = attached {
+        ledger::observe_percent(
+            pool,
+            user_id,
+            &book_uuid,
+            ProgressFormat::Epub,
+            settled,
+            expected_client_updated_at,
+        )
+        .await?;
+    }
+    Ok(attached.is_some())
 }
 
 /// Attach a server-derived whole-book percent to an existing epub row
@@ -81,7 +103,25 @@ pub async fn attach_derived_percent(
     .bind(expected_client_updated_at)
     .execute(pool)
     .await?;
-    Ok(result.rows_affected() > 0)
+    let attached = result.rows_affected() > 0;
+    if attached {
+        // For a CFI-only client (the iOS reader) this attach — not the upsert —
+        // is where the position first becomes a percent, so it is the only
+        // place the forward-progress ledger can see it. Stamped with the
+        // position's own event time, since the derivation runs off the request
+        // path and its completion moment says nothing about when the reading
+        // happened.
+        ledger::observe_percent(
+            pool,
+            user_id,
+            &book_uuid,
+            ProgressFormat::Epub,
+            percent,
+            expected_client_updated_at,
+        )
+        .await?;
+    }
+    Ok(attached)
 }
 
 /// Derive the whole-book visible-text percent for a stored epub CFI from

@@ -23,13 +23,10 @@ pub(super) fn same_hand_author_label(primary_author: &str) -> String {
     }
 }
 
-/// Four-digit publication year for the tile subline, or `None` when absent.
+/// Publication year for the tile subline, or `None` when the book names no
+/// real one.
 pub(super) fn same_hand_year(b: &EbookMetadata) -> Option<String> {
-    b.published
-        .as_deref()
-        .and_then(|p| p.get(0..4))
-        .filter(|y| !y.is_empty())
-        .map(str::to_string)
+    b.published.as_deref().and_then(crate::format::format_year)
 }
 
 /// Build a minimal [`EbookMetadata`] so the shared `Cover` can render a
@@ -102,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn same_hand_year_extracts_four_digit_prefix() {
+    fn same_hand_year_reads_the_year_off_a_stored_date() {
         let b = EbookMetadata {
             published: Some("2020-09-15".into()),
             ..Default::default()
@@ -111,15 +108,21 @@ mod tests {
     }
 
     #[test]
-    fn same_hand_year_is_none_when_missing_or_too_short() {
+    fn same_hand_year_is_none_when_missing_or_implausible() {
         let missing = EbookMetadata::default();
         assert_eq!(same_hand_year(&missing), None);
         let short = EbookMetadata {
             published: Some("20".into()),
             ..Default::default()
         };
-        // `get(0..4)` returns `None` for a string shorter than four bytes.
         assert_eq!(same_hand_year(&short), None);
+        // Calibre's "no publish date" placeholder must not caption a tile
+        // with the year 0101.
+        let sentinel = EbookMetadata {
+            published: Some("0101-01-01T00:00:00+00:00".into()),
+            ..Default::default()
+        };
+        assert_eq!(same_hand_year(&sentinel), None);
     }
 
     #[test]

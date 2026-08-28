@@ -315,6 +315,40 @@ async fn gc_keeps_book_with_user_rating() {
 }
 
 #[tokio::test]
+async fn gc_keeps_book_with_forward_progress_ledger() {
+    // #2139: the day buckets are reading history, so a book that still records
+    // ground covered must survive the purge — the guard is what stops the GC
+    // deleting the `books` row those rows join against.
+    let _covers = CoversTempDir::new("gc_pages_ledger");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = seed_and_make_missing(&pool, "read.epub").await;
+    backdate_missing_since(&pool, &uuid, 40).await;
+    sqlx::query(
+        "INSERT INTO reading_progress_daily
+             (user_id, book_uuid, format, day, percent_gained)
+         VALUES (?, ?, 'epub', '2026-08-01', 12)",
+    )
+    .bind(user_id)
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let purged = gc_books_missing_files(&pool, MISSING_FILES_RETENTION_DAYS)
+        .await
+        .unwrap();
+    assert_eq!(purged, 0);
+    assert!(
+        book_exists(&pool, &uuid).await,
+        "a book with recorded page progress is never purged"
+    );
+}
+
+#[tokio::test]
 async fn gc_keeps_book_with_journal_entry() {
     let _covers = CoversTempDir::new("gc_user_journal");
     let pool = init_db("sqlite::memory:").await.unwrap();
@@ -840,6 +874,14 @@ async fn user_data_book_uuid_probes_use_the_book_uuid_first_index() {
         ("reading_progress", "idx_reading_progress_book_uuid"),
         ("bookmarks", "idx_bookmarks_book_uuid"),
         ("reading_sessions", "idx_reading_sessions_book_uuid"),
+        (
+            "reading_progress_daily",
+            "idx_reading_progress_daily_book_uuid",
+        ),
+        (
+            "reading_progress_marks",
+            "idx_reading_progress_marks_book_uuid",
+        ),
         ("listening_sessions", "idx_listening_sessions_book_uuid"),
         ("annotations", "idx_annotations_book_uuid"),
         ("wishlist_entries", "idx_wishlist_book"),

@@ -1,8 +1,9 @@
-//! Genre + tag chip lists for the book-detail hero, each with an admin-only
-//! "+ genres" / "+ tags" pill that swaps the list for the shared
-//! [`ChipEditor`] — suggestions come from the library-wide genre/tag clouds,
-//! and every add/remove saves a `genres`/`subjects` override immediately (the
-//! landing table's inline chip-cell contract).
+//! Genre + tag chip lists for the book-detail hero. Each renders as its own
+//! labelled row, with an admin-only "+ genres" / "+ tags" pill that swaps the
+//! list for the shared [`ChipEditor`] — suggestions come from the
+//! library-wide genre/tag clouds, and every add/remove saves a
+//! `genres`/`subjects` override immediately (the landing table's inline
+//! chip-cell contract).
 
 use dioxus::prelude::*;
 use omnibus_shared::MetadataOverrides;
@@ -41,6 +42,23 @@ impl BdChipKind {
         match self {
             Self::Genres => "chip chip-genre",
             Self::Tags => "chip",
+        }
+    }
+
+    /// The row label standing in front of this kind's chips. Genres and tags
+    /// are different things and edit different override fields, so each set
+    /// is named rather than left to be told apart by chip styling.
+    fn row_label(self) -> &'static str {
+        match self {
+            Self::Genres => "Genres",
+            Self::Tags => "Tags",
+        }
+    }
+
+    fn row_testid(self) -> &'static str {
+        match self {
+            Self::Genres => "bd-genre-row",
+            Self::Tags => "bd-tag-row",
         }
     }
 
@@ -199,30 +217,36 @@ pub(super) fn BdChipListEditor(uuid: String, kind: BdChipKind, values: Vec<Strin
 
     rsx! {
         if editing() {
-            div {
-                class: "{kind.list_class()} bd-chips-editor-host",
-                "data-testid": "{kind.editor_testid()}",
-                ChipEditor {
-                    values: chips,
-                    on_change,
-                    suggestions: ReadSignal::from(pool),
-                    on_close: move |_| editing.set(false),
-                    options: kind.editor_options(),
+            div { class: "bd-chip-row", "data-testid": "{kind.row_testid()}",
+                span { class: "label bd-chip-row-label", "{kind.row_label()}" }
+                div {
+                    class: "{kind.list_class()} bd-chips-editor-host",
+                    "data-testid": "{kind.editor_testid()}",
+                    ChipEditor {
+                        values: chips,
+                        on_change,
+                        suggestions: ReadSignal::from(pool),
+                        on_close: move |_| editing.set(false),
+                        options: kind.editor_options(),
+                    }
                 }
             }
         } else if !chips().is_empty() || is_admin() {
-            ul { class: "{kind.list_class()}", "data-testid": "{kind.list_testid()}",
-                for chip in chips().iter() {
-                    li { key: "{chip}", class: "{kind.chip_class()}", "{chip}" }
-                }
-                if is_admin() {
-                    li { class: "bd-add-chip-item",
-                        button {
-                            r#type: "button",
-                            class: "chip bd-add-chip",
-                            "data-testid": "{kind.add_testid()}",
-                            onclick: open_editor,
-                            "{kind.add_label()}"
+            div { class: "bd-chip-row", "data-testid": "{kind.row_testid()}",
+                span { class: "label bd-chip-row-label", "{kind.row_label()}" }
+                ul { class: "{kind.list_class()}", "data-testid": "{kind.list_testid()}",
+                    for chip in chips().iter() {
+                        li { key: "{chip}", class: "{kind.chip_class()}", "{chip}" }
+                    }
+                    if is_admin() {
+                        li { class: "bd-add-chip-item",
+                            button {
+                                r#type: "button",
+                                class: "chip bd-add-chip",
+                                "data-testid": "{kind.add_testid()}",
+                                onclick: open_editor,
+                                "{kind.add_label()}"
+                            }
                         }
                     }
                 }
@@ -261,10 +285,27 @@ mod tests {
     }
 
     #[test]
+    fn chip_list_editor_labels_each_kinds_own_row() {
+        // The reported confusion: "+ genres" sat directly above the tag chips
+        // while "+ tags" trailed them, so the two sets read as one. Each kind
+        // now owns a labelled row of its own.
+        let genres = render(BdChipKind::Genres, vec!["Horror".into()]);
+        assert!(genres.contains("data-testid=\"bd-genre-row\""), "{genres}");
+        assert!(genres.contains(">Genres<"), "{genres}");
+        assert!(!genres.contains(">Tags<"), "{genres}");
+
+        let tags = render(BdChipKind::Tags, vec!["fiction".into()]);
+        assert!(tags.contains("data-testid=\"bd-tag-row\""), "{tags}");
+        assert!(tags.contains(">Tags<"), "{tags}");
+        assert!(!tags.contains(">Genres<"), "{tags}");
+    }
+
+    #[test]
     fn chip_list_editor_hides_add_pill_and_list_on_ssr_when_empty() {
         // SSR resolves no `CurrentUser`, so `is_admin` is false and an empty
         // list renders nothing — first-WASM-paint parity (rule 07).
         let html = render(BdChipKind::Tags, Vec::new());
+        assert!(!html.contains("data-testid=\"bd-tag-row\""), "{html}");
         assert!(!html.contains("data-testid=\"bd-tag-list\""), "{html}");
         assert!(!html.contains("data-testid=\"bd-add-tags\""), "{html}");
     }

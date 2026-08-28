@@ -15,6 +15,8 @@ use dioxus_router::Link;
 use omnibus_shared::BookFileInfo;
 
 #[cfg(not(feature = "mobile"))]
+use crate::routes::link_target;
+#[cfg(not(feature = "mobile"))]
 use crate::Route;
 
 use crate::components::glyphs::{book_glyph, headphones_glyph};
@@ -347,7 +349,7 @@ fn read_book_action(_uuid: &str) -> Element {
 fn listen_book_action(uuid: &str) -> Element {
     rsx! {
         Link {
-            to: Route::BookListen { uuid: uuid.to_string(), file_id: None },
+            to: link_target(Route::BookListen { uuid: uuid.to_string(), file_id: None }),
             class: "btn",
             "data-testid": "action-listen",
             "Listen"

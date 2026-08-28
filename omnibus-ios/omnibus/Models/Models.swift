@@ -1367,6 +1367,222 @@ struct WeekdayBucket: Codable, Hashable, Sendable, Identifiable {
     var id: Int64 { weekday }
 }
 
+/// One bucket of a library-composition dimension: a display label and the
+/// distinct live books behind it.
+struct CompositionSlice: Codable, Hashable, Sendable, Identifiable {
+    var label: String = ""
+    var books: Int64 = 0
+
+    var id: String { label }
+}
+
+/// One dimension of the library's composition — its buckets plus the coverage
+/// behind them.
+///
+/// The coverage pair is read one level up from `MeasuredTotal`'s usual sense:
+/// `total` is **bucket placements** and `books` is the **distinct live books**
+/// the dimension describes, so `total - books` is the overlap of books landing
+/// in more than one bucket.
+struct CompositionDimension: Codable, Hashable, Sendable {
+    var slices: [CompositionSlice] = []
+    var coverage = MeasuredTotal()
+
+    init(slices: [CompositionSlice] = [], coverage: MeasuredTotal = MeasuredTotal()) {
+        self.slices = slices
+        self.coverage = coverage
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        slices = try c.decodeIfPresent([CompositionSlice].self, forKey: .slices) ?? []
+        coverage = try c.decodeIfPresent(MeasuredTotal.self, forKey: .coverage) ?? MeasuredTotal()
+    }
+
+    /// True when no live book carries this dimension at all — the Stats tab's
+    /// signal to render a sentence rather than an axis with no bars on it.
+    var isEmpty: Bool { coverage.books == 0 || slices.isEmpty }
+
+    /// Books that land in more than one bucket. Zero for every dimension whose
+    /// buckets are mutually exclusive.
+    var overlap: Int64 { max(0, coverage.total - coverage.books) }
+}
+
+/// What the collection is made of: its format, language, publisher,
+/// publication-decade, and genre mix.
+///
+/// Library-scoped, not user-scoped, and fetched separately from
+/// `StatsSummary` — the same answer for every reader, moving only on a
+/// reindex, so carrying it on the per-user payload would re-send it on every
+/// range change.
+struct LibraryComposition: Codable, Sendable {
+    /// Live books — those with at least one surviving file. The denominator
+    /// every dimension's coverage is read against.
+    var books: Int64 = 0
+    /// Books indexed once whose files are gone. Reported rather than dropped:
+    /// they carry no format at all, so they would otherwise vanish from the
+    /// format mix and leave its counts failing to reconcile.
+    var ghostedBooks: Int64 = 0
+    var formats = CompositionDimension()
+    var languages = CompositionDimension()
+    var publishers = CompositionDimension()
+    var decades = CompositionDimension()
+    /// Genres have no link table by design, so this describes only the books
+    /// someone has hand-edited. Read `genres.coverage` before its slices.
+    var genres = CompositionDimension()
+
+    enum CodingKeys: String, CodingKey {
+        case books, formats, languages, publishers, decades, genres
+        case ghostedBooks = "ghosted_books"
+    }
+
+    init() {}
+
+    /// Field-by-field for the same reason `LibrarySize` is: the Rust fields
+    /// are `#[serde(default)]`, and an app ahead of its server must lose a
+    /// dimension rather than the whole screen.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        books = try c.decodeIfPresent(Int64.self, forKey: .books) ?? 0
+        ghostedBooks = try c.decodeIfPresent(Int64.self, forKey: .ghostedBooks) ?? 0
+        let dim = { (key: CodingKeys) throws -> CompositionDimension in
+            try c.decodeIfPresent(CompositionDimension.self, forKey: key) ?? CompositionDimension()
+        }
+        formats = try dim(.formats)
+        languages = try dim(.languages)
+        publishers = try dim(.publishers)
+        decades = try dim(.decades)
+        genres = try dim(.genres)
+    }
+
+    /// True when the library has nothing to describe — the Stats tab's signal
+    /// to render no section at all rather than five empty ones.
+    var isEmpty: Bool {
+        books == 0
+            || (formats.isEmpty && languages.isEmpty && publishers.isEmpty && decades.isEmpty
+                && genres.isEmpty)
+    }
+}
+
+/// What the Pages read tile could and could not measure in the window, and the
+/// day before which it cannot measure anything at all.
+///
+/// Mirrors `omnibus_shared::PagesReadDetail`. The tile's empty state is not one
+/// state: a window with no activity, a window of listening only (audio has no
+/// page analogue, so zero pages is the *correct* answer rather than an unknown
+/// one), and real reading in books whose length nothing resolves are three
+/// different facts. The server owns the distinction so this tile and the web
+/// one cannot disagree about which of them a window is in.
+struct PagesReadDetail: Codable, Sendable {
+    var sinceDay: String?
+    var measuredBooks: Int64 = 0
+    var unmeasuredBooks: Int64 = 0
+    var audioBooks: Int64 = 0
+    /// Whether this window opens before `sinceDay`, so part of it is
+    /// unmeasurable. Server-computed against the window's real start — the
+    /// range alone does not answer it, and only the server knows where a
+    /// period begins.
+    var windowPredatesLedger = false
+
+    // The wire type also carries a per-day `daily` series for the web tile's
+    // drill-in chart. This screen has no drill-in, so it is left undecoded
+    // rather than mirrored into a property nothing reads.
+
+    enum CodingKeys: String, CodingKey {
+        case sinceDay = "since_day"
+        case measuredBooks = "measured_books"
+        case unmeasuredBooks = "unmeasured_books"
+        case audioBooks = "audio_books"
+        case windowPredatesLedger = "window_predates_ledger"
+    }
+
+    init() {}
+
+    /// Field-by-field for the same reason `StatsSummary` is: the synthesized
+    /// decoder ignores property defaults, so one missing key would throw.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sinceDay = try c.decodeIfPresent(String.self, forKey: .sinceDay)
+        measuredBooks = try c.decodeIfPresent(Int64.self, forKey: .measuredBooks) ?? 0
+        unmeasuredBooks = try c.decodeIfPresent(Int64.self, forKey: .unmeasuredBooks) ?? 0
+        audioBooks = try c.decodeIfPresent(Int64.self, forKey: .audioBooks) ?? 0
+        windowPredatesLedger =
+            try c.decodeIfPresent(Bool.self, forKey: .windowPredatesLedger) ?? false
+    }
+
+    /// True when the window holds listening and no reading at all — the one
+    /// empty state whose honest headline is `0`, not an em-dash.
+    var audioOnly: Bool { audioBooks > 0 && measuredBooks == 0 && unmeasuredBooks == 0 }
+
+    /// True when the window starts before the ledger did, so part of it is
+    /// unmeasurable — and there is an epoch to name in the disclosure.
+    var predatesLedger: Bool { sinceDay != nil && windowPredatesLedger }
+}
+
+/// One superlative that names a book: which book won, and the figure it won
+/// with.
+///
+/// `value`'s unit is the *field's*, not this type's — pages for the length
+/// superlatives, seconds for the longest sit, days for the fastest read. The
+/// rows in `StatsView` supply it; nothing here should guess.
+struct BookSuperlative: Codable, Hashable, Sendable {
+    var bookUUID: String
+    var title: String
+    var author: String?
+    var value: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case title, author, value
+        case bookUUID = "book_uuid"
+    }
+}
+
+/// The window's single most-X figures. Every field is optional, and an absent
+/// one means the window can't support that superlative — it is omitted, never
+/// rendered as a zero or an em-dash.
+struct Superlatives: Codable, Sendable {
+    var longestBook: BookSuperlative?
+    var shortestBook: BookSuperlative?
+    var biggestDay: DayActivity?
+    var longestSit: BookSuperlative?
+    /// Fewest days from a book's first *tracked* session to its completion. A
+    /// lower bound — reading done before session tracking, or on a device that
+    /// reports nothing, is invisible here — which the section states.
+    var fastestRead: BookSuperlative?
+
+    enum CodingKeys: String, CodingKey {
+        case longestBook = "longest_book"
+        case shortestBook = "shortest_book"
+        case biggestDay = "biggest_day"
+        case longestSit = "longest_sit"
+        case fastestRead = "fastest_read"
+    }
+
+    init() {}
+
+    /// Decoded field-by-field for the same reason `StatsSummary` is: every
+    /// field is `#[serde(default)]` on the Rust side, and an app running
+    /// ahead of its server must lose a row rather than the whole tab.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        longestBook = try c.decodeIfPresent(BookSuperlative.self, forKey: .longestBook)
+        shortestBook = try c.decodeIfPresent(BookSuperlative.self, forKey: .shortestBook)
+        biggestDay = try c.decodeIfPresent(DayActivity.self, forKey: .biggestDay)
+        longestSit = try c.decodeIfPresent(BookSuperlative.self, forKey: .longestSit)
+        fastestRead = try c.decodeIfPresent(BookSuperlative.self, forKey: .fastestRead)
+    }
+
+    var isEmpty: Bool {
+        longestBook == nil && shortestBook == nil && biggestDay == nil && longestSit == nil
+            && fastestRead == nil
+    }
+
+    /// Recorded time a book needs before the server will crown it the fastest
+    /// read — `omnibus_shared::FASTEST_READ_MIN_SECS`. Mirrored here so the
+    /// caveat on the Stats tab states the real floor rather than a sentence
+    /// that quietly stops being true when the server's changes.
+    static let fastestReadMinSeconds: Int64 = 1800
+}
+
 struct StatsSummary: Codable, Sendable {
     var range: StatsRange = .month
     var readingSeconds: Int64 = 0
@@ -1395,6 +1611,10 @@ struct StatsSummary: Codable, Sendable {
     /// The window's ratings by half-star bucket — the shape `avgStars`
     /// flattens away. All ten buckets arrive, zeros included.
     var ratingHistogram: [RatingBucket] = []
+    /// Pages actually turned in the window — the ground each book was carried
+    /// over, scaled by its resolved length. Not the length of the books
+    /// finished in it. `nil` means nothing measurable; see `pagesDetail` before
+    /// rendering that as "no data".
     var pagesRead: Int64?
     /// Estimated pages an hour over the window — the rate `pagesRead` is
     /// missing. Weighted by seconds across the books finished in the window
@@ -1417,10 +1637,16 @@ struct StatsSummary: Codable, Sendable {
     /// before the server started recording one. Disclosed rather than folded
     /// in: bucketing them as UTC would put a reader's evening at 4am.
     var unzonedSeconds: Int64 = 0
+    /// The window's single most-X figures. Every field inside is optional; an
+    /// all-empty set means the window supports no superlative and the section
+    /// is omitted.
+    var superlatives = Superlatives()
     /// The reader's goal for the current calendar year, `nil` when none is
     /// set. Unwindowed, like `currentStreakDays` — a goal is annual, so it
     /// reads the same whichever range the picker is on.
     var goal: ReadingGoal?
+    /// What `pagesRead` could and could not see, plus the day its ledger began.
+    var pagesDetail = PagesReadDetail()
 
     enum CodingKeys: String, CodingKey {
         case range, sessions, heatmap
@@ -1447,7 +1673,9 @@ struct StatsSummary: Codable, Sendable {
         case hourOfDay = "hour_of_day"
         case dayOfWeek = "day_of_week"
         case unzonedSeconds = "unzoned_seconds"
+        case superlatives
         case goal
+        case pagesDetail = "pages_detail"
     }
 
     init() {}
@@ -1491,7 +1719,11 @@ struct StatsSummary: Codable, Sendable {
         hourOfDay = try c.decodeIfPresent([HourBucket].self, forKey: .hourOfDay) ?? []
         dayOfWeek = try c.decodeIfPresent([WeekdayBucket].self, forKey: .dayOfWeek) ?? []
         unzonedSeconds = try c.decodeIfPresent(Int64.self, forKey: .unzonedSeconds) ?? 0
+        superlatives = try c.decodeIfPresent(Superlatives.self, forKey: .superlatives)
+            ?? Superlatives()
         goal = try c.decodeIfPresent(ReadingGoal.self, forKey: .goal)
+        pagesDetail =
+            try c.decodeIfPresent(PagesReadDetail.self, forKey: .pagesDetail) ?? PagesReadDetail()
     }
 
     var totalSeconds: Int64 { readingSeconds + listeningSeconds }
@@ -2005,4 +2237,70 @@ struct AudiobookInspection: Codable, Hashable, Sendable {
 /// Mirrors `omnibus_shared::UploadCommitResult`.
 struct UploadCommitResult: Codable, Hashable, Sendable {
     var uuid: String
+}
+
+// MARK: - Reading session log
+
+/// Which of the two session tables a stitched sitting drew from. Mirrors
+/// `omnibus_shared::SessionFormat`.
+///
+/// `mixed` is not a fallback: a dual-format book read and listened to in one
+/// stretch stitches into a single sitting server-side, and naming it as one
+/// format alone would claim time the reader didn't spend there.
+enum SessionFormat: String, Codable, Hashable, Sendable {
+    case reading
+    case listening
+    case mixed
+
+    /// Past tense — a logged sitting is over.
+    var label: String {
+        switch self {
+        case .reading: "Read"
+        case .listening: "Listened"
+        case .mixed: "Read & listened"
+        }
+    }
+}
+
+/// One sitting in the reading-session log — adjacent checkpoint rows stitched
+/// back together, so a row is a sit rather than a heartbeat flush. Mirrors
+/// `omnibus_shared::SessionLogEntry`.
+///
+/// `seconds` is the *recorded* time, not `endedAt - startedAt`: a sitting the
+/// reader paused mid-way spans more wall clock than it recorded, and the
+/// recorded figure is what every other stats surface reports.
+struct SessionLogEntry: Codable, Hashable, Sendable, Identifiable {
+    var bookUUID: String
+    var title: String
+    var format: SessionFormat
+    var startedAt: Int64
+    var endedAt: Int64
+    var seconds: Int64
+
+    /// `(book, start)` is unique per sitting — two sittings of one book cannot
+    /// share a start.
+    var id: String { bookUUID + ":" + String(startedAt) }
+
+    enum CodingKeys: String, CodingKey {
+        case title, format, seconds
+        case bookUUID = "book_uuid"
+        case startedAt = "started_at"
+        case endedAt = "ended_at"
+    }
+}
+
+/// One page of the session log, newest first. Mirrors
+/// `omnibus_shared::SessionLogPage`.
+///
+/// `nextBefore` is an opaque keyset cursor: echo it back as `before` to get the
+/// page that continues after the last entry here, `nil` at the end of the log.
+/// Not an offset — a sitting landing mid-scroll would shift every later page.
+struct SessionLogPage: Codable, Hashable, Sendable {
+    var entries: [SessionLogEntry]
+    var nextBefore: String?
+
+    enum CodingKeys: String, CodingKey {
+        case entries
+        case nextBefore = "next_before"
+    }
 }

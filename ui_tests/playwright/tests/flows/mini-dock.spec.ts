@@ -173,7 +173,7 @@ test("dock expand navigates back to the full player", async ({
   await expect(page.getByTestId("mini-dock")).toBeVisible();
   await page.getByTestId("mini-dock-expand-btn").click();
 
-  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
+  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
   await expect(
     page.getByRole("button", { name: "Play", exact: true }),
   ).toBeVisible();
@@ -301,7 +301,7 @@ test("dock speed popover sets playback rate and reaches the shared audio + full 
     .click({ position: { x: 10, y: 10 } });
   await expect(pop).not.toHaveClass(/open/);
   await page.getByTestId("mini-dock-expand-btn").click();
-  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
+  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
   await expect(page.getByTestId("listen-rate")).toContainText(next.toFixed(1));
 });
 
@@ -339,7 +339,7 @@ test("dock sleep popover arms a countdown that the full player then shows", asyn
     .getByTestId("mini-dock-scrim")
     .click({ position: { x: 10, y: 10 } });
   await page.getByTestId("mini-dock-expand-btn").click();
-  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
+  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
   await page.getByRole("button", { name: /^sleep/i }).click();
   await expect(page.getByTestId("sleep-status")).toHaveText(/^(29|30):\d\d$/);
 });

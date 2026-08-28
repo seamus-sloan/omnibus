@@ -5,17 +5,24 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Pinned solely for `playwright-driver.browsers`. Kept separate from
+    # nixpkgs-unstable so moving the Chromium bundle does not also move the
+    # Rust toolchain, dioxus-cli and node — the browser version has to track
+    # the npm @playwright/test pin, and nothing else should be dragged along
+    # for that. Bump this rev and `@playwright/test` together, never apart.
+    nixpkgs-playwright.url = "github:NixOS/nixpkgs/c27cdad491a991b11ed731760aa2ef8db0cb0410";
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs-unstable";
     };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-unstable, flake-utils, fenix }:
+  outputs = { self, nixpkgs, nixpkgs-unstable, nixpkgs-playwright, flake-utils, fenix }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
         pkgs-unstable = import nixpkgs-unstable { inherit system; };
+        pkgs-playwright = import nixpkgs-playwright { inherit system; };
 
         # Slim core Rust toolchain. wasm32 rust-std is kept here because it's
         # small (single-digit MB) and lets rust-analyzer / `cargo check` exercise
@@ -184,7 +191,7 @@
         # E2E extras layer on top of webExtras: Playwright's Nix-provided
         # Chromium bundle. The PLAYWRIGHT_BROWSERS_PATH export below pins it.
         e2eExtras = [
-          pkgs-unstable.playwright-driver.browsers
+          pkgs-playwright.playwright-driver.browsers
         ];
 
         # Mobile extras: JDK for the Android NDK toolchain. Mobile rust
@@ -309,9 +316,16 @@
         '';
 
         # `e2e` shell pins Playwright's Chromium to the Nix store. The npm
-        # @playwright/test version must match this bundle's version.
+        # @playwright/test version must match this bundle's version — each
+        # Playwright minor expects a specific Chromium build number, so the
+        # `nixpkgs-playwright` rev and the `@playwright/test` range move
+        # together or not at all.
+        #
+        # The agentic-exploration driver (scripts/explore/driver/) pins its own
+        # transitive `playwright` to the same version for the same reason, so
+        # it shares this bundle instead of downloading a second Chromium.
         playwrightHook = ''
-          export PLAYWRIGHT_BROWSERS_PATH="${pkgs-unstable.playwright-driver.browsers}"
+          export PLAYWRIGHT_BROWSERS_PATH="${pkgs-playwright.playwright-driver.browsers}"
           export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
         '';
 

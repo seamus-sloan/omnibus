@@ -63,7 +63,12 @@ the book uuids — those are what the audit reconciles.
 - The shelf saves under a different name, visibility, or kind.
 - It does not appear, or disappears after a reload.
 - Selecting it shows books that do not belong to it.
-- Another user's shelves are visible to you.
+- Another user's shelf is visible **and you are not an admin**. Admins see every
+  shelf by design, and the exploration accounts are currently all admins — so on
+  this instance the criterion is undecidable and you should journal `uncertain`
+  rather than guess. (Worth reporting separately: another user's private shelf
+  renders in the rail with no owner attribution, while the wishlists beside it
+  do show owner names.)
 - **On iOS:** removing a book from a shelf deletes the book. High severity.
 
 ## Sharp edges
@@ -72,6 +77,6 @@ the book uuids — those are what the audit reconciles.
   change. Correct.
 - A **Smart** shelf fills by rule, so being unable to add a book to it by hand
   is correct on every surface.
-- Your display name is denormalised into the wishlist shelf's name, so that one
-  may carry an older name than your profile does. Journal it `uncertain` rather
-  than deciding.
+- Your display name is denormalised into the wishlist shelf's name. It has been
+  observed updating in the same render as a profile save, so a *stale* name
+  there is worth journalling as a real observation rather than shrugging off.

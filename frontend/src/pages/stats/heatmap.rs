@@ -26,7 +26,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 }
 
 /// Inverse of [`days_from_civil`]: `(year, month, day)` for an epoch day.
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
+pub(super) fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;
@@ -40,7 +40,7 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 }
 
 /// Epoch-day number for a UTC `YYYY-MM-DD` string, `None` when malformed.
-fn day_number(day: &str) -> Option<i64> {
+pub(super) fn day_number(day: &str) -> Option<i64> {
     let mut parts = day.splitn(3, '-');
     let y: i64 = parts.next()?.parse().ok()?;
     let m: i64 = parts.next()?.parse().ok()?;
@@ -63,8 +63,9 @@ fn intensity(secs: i64, max: i64) -> u8 {
     u8::try_from((1 + (secs.saturating_mul(4).saturating_sub(1)) / max).min(4)).unwrap_or(4)
 }
 
-/// Human duration for cell tooltips: "42 m", "3 h", "3 h 20 m".
-fn format_active_time(secs: i64) -> String {
+/// Human duration for cell tooltips and the superlatives card: "42 m",
+/// "3 h", "3 h 20 m".
+pub(super) fn format_active_time(secs: i64) -> String {
     let hours = secs / 3600;
     let minutes = (secs % 3600) / 60;
     match (hours, minutes) {
@@ -75,7 +76,7 @@ fn format_active_time(secs: i64) -> String {
 }
 
 /// Three-letter month name for a 1-based month number.
-fn month_abbr(m: i64) -> &'static str {
+pub(super) fn month_abbr(m: i64) -> &'static str {
     match m {
         1 => "Jan",
         2 => "Feb",

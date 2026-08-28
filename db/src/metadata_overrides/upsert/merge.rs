@@ -12,7 +12,10 @@ use crate::books::{get_books_by_ids, resolve_book_ids_bulk};
 
 use super::super::fts::{rebuild_fts_for_book, rebuild_fts_for_books_batch};
 use super::super::links::{materialize_genre_rows, materialize_series_link, materialize_tag_rows};
-use super::{touch_book_last_modified, upsert_overrides_row, MetadataOverridesError};
+use super::{
+    invalidate_composition_cache, touch_book_last_modified, upsert_overrides_row,
+    MetadataOverridesError,
+};
 
 /// Merge `incoming` field overrides on top of any existing overrides for
 /// `book_uuid` and persist the result inside one `BEGIN IMMEDIATE`
@@ -43,6 +46,7 @@ pub async fn merge_metadata_overrides(
     crate::taxonomy::delete_orphan_genres(&mut tx).await?;
     tx.commit().await?;
 
+    invalidate_composition_cache();
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
         tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override merge failed");
     }
@@ -165,6 +169,7 @@ pub async fn bulk_merge_metadata_overrides(
     crate::taxonomy::delete_orphan_genres(&mut tx).await?;
     tx.commit().await?;
 
+    invalidate_composition_cache();
     if let Err(e) = rebuild_fts_for_books_batch(pool, uuids).await {
         tracing::warn!(book_count = uuids.len(), error = %e, "books_fts batch rebuild after bulk override merge failed");
     }
