@@ -137,12 +137,41 @@ async fn run_cleanup_detection(
     Ok(inserted)
 }
 
+/// Whether a task can change how big the library itself is.
+///
+/// `db::stats::library`'s totals are library-wide and cached behind a long TTL,
+/// because a collection changes on a scan rather than on a sitting. These four
+/// tasks are what move it; everything else leaves the entry alone rather than
+/// paying for a recompute the reader would not see a different answer from.
+pub(super) fn resizes_library(task: &Task) -> bool {
+    matches!(
+        task,
+        Task::Scan { .. }
+            | Task::ScanAudiobooks { .. }
+            | Task::BackfillWordCounts { .. }
+            | Task::BackfillPageCounts { .. }
+    )
+}
+
 impl Worker {
+    /// Run a queued [`Task`], then drop the library-size cache if the task
+    /// could have changed the library's own content — which is what stops a
+    /// just-finished scan reporting the size of the library the reader had
+    /// before it.
+    pub(super) async fn execute(self: &Arc<Self>, task: Task, id: TaskId) -> TaskOutcome {
+        let resizes = resizes_library(&task);
+        let outcome = self.dispatch(task, id).await;
+        if resizes {
+            crate::stats::invalidate_library_size();
+        }
+        outcome
+    }
+
     /// Dispatch a queued [`Task`] to its owning handler. Each arm either
     /// delegates straight to a small `handle_*`/report helper below or (for
     /// the handful of one-liners with no shared shape — FTS rebuild, cleanup
     /// detection) inlines its single call directly.
-    pub(super) async fn execute(self: &Arc<Self>, task: Task, id: TaskId) -> TaskOutcome {
+    async fn dispatch(self: &Arc<Self>, task: Task, id: TaskId) -> TaskOutcome {
         match task {
             Task::Scan { library_path } => self.handle_scan(library_path, id).await,
             Task::ScanAudiobooks { library_path } => {

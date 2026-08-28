@@ -54,7 +54,7 @@ const UNKNOWN_LABEL: &str = "Unknown";
 ///
 /// Takes no binds — it is library-wide, and every caller narrows it by joining
 /// its own set of book uuids.
-fn book_pages_source() -> String {
+pub(super) fn book_pages_source() -> String {
     format!(
         "SELECT b.uuid AS uuid,
                 COALESCE(

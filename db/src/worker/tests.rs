@@ -1991,3 +1991,70 @@ async fn task_scan_posts_detect_cleanup_that_refreshes_dedup_suggestions() {
         "expected the scan's DetectCleanup follow-up to persist the pre-existing suggestion"
     );
 }
+
+// ---------- library-size cache invalidation gate ----------
+
+/// The freshness contract for `db::stats::library`'s cache. The TTL is
+/// documented as the backstop, so this predicate — not the clock — is what
+/// stops a just-finished scan reporting the size the reader had before it.
+#[test]
+fn resizes_library_selects_the_tasks_that_change_the_library_itself() {
+    let path = || "/lib".to_string();
+    for (name, task) in [
+        (
+            "Scan",
+            Task::Scan {
+                library_path: path(),
+            },
+        ),
+        (
+            "ScanAudiobooks",
+            Task::ScanAudiobooks {
+                library_path: path(),
+            },
+        ),
+        (
+            "BackfillWordCounts",
+            Task::BackfillWordCounts {
+                library_path: path(),
+            },
+        ),
+        (
+            "BackfillPageCounts",
+            Task::BackfillPageCounts {
+                library_path: path(),
+            },
+        ),
+    ] {
+        assert!(
+            super::handlers::resizes_library(&task),
+            "{name} changes how big the library is and must drop the cache"
+        );
+    }
+
+    // The adjacent `Backfill*` tasks are the trap: they touch books without
+    // moving any figure the card reports, so paying for a recompute after one
+    // would be waste, not freshness.
+    for (name, task) in [
+        (
+            "BackfillChapters",
+            Task::BackfillChapters {
+                library_path: path(),
+            },
+        ),
+        (
+            "BackfillThumbs",
+            Task::BackfillThumbs {
+                library_path: path(),
+            },
+        ),
+        ("RebuildFtsIndex", Task::RebuildFtsIndex),
+        ("RefetchAuthorPhotos", Task::RefetchAuthorPhotos),
+        ("KepubConvert", Task::KepubConvert { book_id: 1 }),
+    ] {
+        assert!(
+            !super::handlers::resizes_library(&task),
+            "{name} leaves the library's size alone and must keep the cache"
+        );
+    }
+}

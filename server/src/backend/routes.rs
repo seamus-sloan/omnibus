@@ -231,6 +231,7 @@ fn bookmark_routes() -> Router<AppState> {
 fn engagement_routes() -> Router<AppState> {
     Router::new()
         .route("/api/stats", get(stats::get_stats))
+        .route("/api/library-size", get(stats::get_library_size))
         .route("/api/ratings", post(ratings::post_rating))
         .route(
             "/api/ratings/others/{uuid}",

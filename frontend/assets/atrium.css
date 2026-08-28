@@ -9113,6 +9113,22 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-mo-label { margin-top: 6px; font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
 .st-mo-current .st-mo-label { color: var(--accent); font-weight: 600; }
 
+/* ── Library-size card ────────────────────────────────────────────── */
+.st-lib-card { display: flex; flex-direction: column; gap: 14px; }
+/* auto-fit: the card renders only the figures the library has been measured
+   for, so it holds anywhere from one column to three. */
+.st-lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px 20px;
+}
+.st-lib-figure { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.st-lib-value {
+  font-family: var(--serif); font-size: 30px; color: var(--ink-0); line-height: 1.1;
+}
+.st-lib-unit { font-size: 14px; color: var(--ink-2); }
+.st-lib-coverage { font-size: 11px; color: var(--ink-3); }
+
 /* ── Scaffold cards (shown while a section's fetch is in flight) ──── */
 .st-summary-card { display: flex; flex-direction: column; gap: 8px; }
 .st-summary-line { font-size: 14px; color: var(--ink-1); }

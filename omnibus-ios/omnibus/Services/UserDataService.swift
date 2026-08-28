@@ -836,6 +836,17 @@ enum UserDataService {
         }
     }
 
+    /// How big the library is in words, pages, and hours of audio.
+    ///
+    /// Its own read rather than a field on `stats` — the answer is
+    /// library-wide and only moves on a reindex, so folding it in would
+    /// re-fetch it on every range change.
+    static func librarySize() -> AsyncThrowingStream<CacheRead<LibrarySize>, Error> {
+        Cache.live(CacheKey.librarySize) {
+            try await APIClient.shared.get("/api/library-size")
+        }
+    }
+
     // MARK: - Offline prefetch
 
     /// Pull down everything a book needs to be *usable* with no network: where

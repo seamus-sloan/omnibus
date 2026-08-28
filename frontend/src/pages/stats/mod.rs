@@ -4,7 +4,7 @@
 //! change. Mirrors the converged Stats design (`screens/stats-converged.jsx`).
 
 use dioxus::prelude::*;
-use omnibus_shared::{StatsRange, StatsSummary, STATS_TTL_SECS};
+use omnibus_shared::{LibrarySize, StatsRange, StatsSummary, STATS_TTL_SECS};
 
 use crate::components::{PageError, PageLoading};
 use crate::{data, use_server_url, Route};
@@ -12,14 +12,34 @@ use crate::{data, use_server_url, Route};
 mod donut;
 mod drill_in;
 mod heatmap;
+mod library;
 mod monthly;
 mod tiles;
 
 use donut::{FormatSplit, GenreDonut, LengthSplit};
 use drill_in::{DrillIn, Metric};
 use heatmap::HeatmapCard;
+use library::LibrarySizeCard;
 use monthly::MonthlyChart;
 use tiles::HeadlineTiles;
+
+/// Group a non-negative integer's digits in threes with `,` separators.
+/// Negative inputs (never produced by `db::stats`) fall back to a plain
+/// `to_string` rather than mangling the sign.
+fn group_thousands(n: i64) -> String {
+    if n < 0 {
+        return n.to_string();
+    }
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
 
 /// The italicized period word in the page title.
 fn period_word(range: StatsRange) -> &'static str {
@@ -41,6 +61,10 @@ pub fn StatsPage() -> Element {
     let range = use_signal(StatsRange::default);
     let period: Signal<Option<StatsSummary>> = use_signal(|| None);
     let all_time: Signal<Option<StatsSummary>> = use_signal(|| None);
+    // Library-scale rather than per-user, so it rides its own fetch: folding
+    // it into the summary would recompute and re-send it on every switcher
+    // change. `None` until it lands, and the card renders nothing then.
+    let library_size: Signal<Option<LibrarySize>> = use_signal(|| None);
     let loading = use_signal(|| true);
     let error: Signal<Option<String>> = use_signal(|| None);
     // Seeded closed on every target (rule 07): the title dropdown only ever
@@ -51,7 +75,8 @@ pub fn StatsPage() -> Element {
     let expanded: Signal<Option<Metric>> = use_signal(|| None);
 
     use_period_fetch_effect(server_url.clone(), range, period, error);
-    use_all_time_fetch_effect(server_url, all_time, loading, error);
+    use_all_time_fetch_effect(server_url.clone(), all_time, loading, error);
+    use_library_size_fetch_effect(server_url, library_size);
 
     if loading() {
         return rsx! { PageLoading {} };
@@ -81,6 +106,7 @@ pub fn StatsPage() -> Element {
                 }
                 section { class: "st-alltime", "data-testid": "stats-alltime-section",
                     AllTimeSummary { all_time }
+                    LibrarySizeCard { size: library_size() }
                 }
             }
             if let (Some(metric), Some(summary)) = (expanded(), period.read().clone()) {
@@ -173,6 +199,25 @@ fn use_all_time_fetch_effect(
                 Err(e) => error.set(Some(e.to_string())),
             }
             loading.set(false);
+        });
+    });
+}
+
+/// One-shot fetch of the library-scale totals. Never keyed on the switcher —
+/// the library's size is not a reporting period's figure — and deliberately
+/// silent on failure: this card is context beside the reader's own numbers,
+/// and a library-size fetch that fails must not blank the page they came for.
+fn use_library_size_fetch_effect(server_url: String, library_size: Signal<Option<LibrarySize>>) {
+    let generation = crate::use_cache_generation();
+    use_effect(move || {
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
+        let url = server_url.clone();
+        let mut library_size = library_size;
+        spawn(async move {
+            if let Ok(size) = data::fetch_library_size(&url).await {
+                library_size.set(Some(size));
+            }
         });
     });
 }
@@ -326,7 +371,8 @@ fn PeriodSummary(
 
 /// The all-time module stack: the reading-days heatmap card (with the
 /// longest-streak figure in its header), then the books-per-month trend
-/// chart.
+/// chart. The library-size card sits alongside these in the same section but
+/// rides its own fetch, so it is mounted by the page rather than here.
 #[component]
 fn AllTimeSummary(all_time: Signal<Option<StatsSummary>>) -> Element {
     let guard = all_time.read();
@@ -370,5 +416,15 @@ mod tests {
             freshness_note_text(),
             format!("Stats are accurate to the last ~{STATS_TTL_SECS} seconds.")
         );
+    }
+
+    #[test]
+    fn group_thousands_handles_short_and_negative_inputs() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(9), "9");
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(1000), "1,000");
+        assert_eq!(group_thousands(1_234_567), "1,234,567");
+        assert_eq!(group_thousands(-42), "-42");
     }
 }

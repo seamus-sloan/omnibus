@@ -137,3 +137,78 @@ async fn api_get_stats_returns_500_when_db_fails() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+// --- GET /api/library-size ----------------------------------------------
+
+#[tokio::test]
+async fn api_get_library_size_requires_auth() {
+    let (app, _state, _pool) = fixture().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/library-size")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// The success and DB-failure paths in **one test**, unlike their `/api/stats`
+/// siblings. Those keep themselves apart by picking a distinct `StatsRange`,
+/// because that cache is keyed on `(user_id, range)`. The library-size cache is
+/// a single process-wide entry with nothing to key on, so two tests clearing
+/// and repopulating it in the same process race — and the DB-failure one would
+/// be served the other's cached 200. Sequencing them inside one test is what
+/// removes the interleaving rather than relying on the runner's isolation.
+#[tokio::test]
+async fn api_get_library_size_reports_coverage_then_500s_when_the_db_fails() {
+    let (app, state, pool) = fixture().await;
+    let (book_id, _) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    sqlx::query("UPDATE books SET word_count = 275 WHERE id = ?")
+        .bind(book_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    omnibus_db::stats::invalidate_library_size();
+
+    let res = crate::backend::rest_router(state.clone())
+        .oneshot(get_with_bearer("/api/library-size", &token))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let size: omnibus_shared::LibrarySize = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(size.books, 1);
+    assert_eq!(size.words.total, 275);
+    assert_eq!(size.words.books, 1, "the total must carry its denominator");
+
+    // FKs off before the DROP so references to `books` can't turn the drop
+    // itself into an error (same as the ebooks suite).
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE books")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+    // Without this the handler would serve the 200 cached moments ago and the
+    // failure path would never run.
+    omnibus_db::stats::invalidate_library_size();
+
+    let res = app
+        .oneshot(get_with_bearer("/api/library-size", &token))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    // Leave nothing cached from a dropped-table pool for whatever runs next.
+    omnibus_db::stats::invalidate_library_size();
+}
