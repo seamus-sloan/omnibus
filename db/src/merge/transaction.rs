@@ -404,8 +404,10 @@ async fn move_links(
 /// merged into another drops off its shelf. That is a separate pre-existing
 /// bug with its own semantics to settle (which shelf wins, what an inherited
 /// wishlist entry means), deliberately not folded in here.
-const RETARGET_TABLES: [&str; 10] = [
+const RETARGET_TABLES: [&str; 12] = [
     "reading_progress",
+    "reading_progress_marks",
+    "reading_progress_daily",
     "audiobook_playback_preferences",
     "bookmarks",
     "reading_sessions",
@@ -421,8 +423,12 @@ const RETARGET_TABLES: [&str; 10] = [
 /// collide on, with the extra key column beyond `(user_id, book_uuid)` where
 /// there is one. Resolved latest-wins by [`dedupe_latest_wins`] before the
 /// retarget runs.
-const DEDUPE_TABLES: [(&str, Option<&str>); 4] = [
+const DEDUPE_TABLES: [(&str, Option<&str>); 5] = [
     ("reading_progress", Some("format")),
+    // The forward-progress mark is a snapshot of a position, exactly like the
+    // progress row it shadows, so latest-wins is the same right answer here.
+    // Its day buckets are not — see `fold_daily_ledger`.
+    ("reading_progress_marks", Some("format")),
     ("audiobook_playback_preferences", None),
     ("book_read_status", None),
     ("user_ratings", None),
@@ -455,6 +461,7 @@ async fn move_progress_and_history(
     for (table, extra_key) in DEDUPE_TABLES {
         dedupe_latest_wins(tx, table, extra_key, &source_uuid, &target_uuid).await?;
     }
+    fold_daily_ledger(tx, &source_uuid, &target_uuid).await?;
     // Per-device annotation sync state keys on (device_id, book_uuid) rather
     // than on a user, so it can't use the latest-wins helper. Where a device
     // tracks BOTH uuids, keep the target's row (the retarget below would
@@ -479,6 +486,54 @@ async fn move_progress_and_history(
             .execute(&mut **tx)
             .await?;
     }
+    Ok(())
+}
+
+/// Fold the source book's forward-progress day buckets into the target's,
+/// clearing the `(user_id, book_uuid, day, format)` collisions the retarget
+/// would otherwise hit.
+///
+/// **Summed, not deduped.** Every other colliding table here holds a snapshot —
+/// a position, a rating, a read status — where keeping the newest row is the
+/// only sensible answer. `reading_progress_daily` holds a *counter*, and a
+/// reader who covered ground in both editions on the same day covered all of
+/// it; latest-wins would throw one side's reading away outright.
+///
+/// The source rows the fold consumed are deleted, so the blanket retarget that
+/// follows moves only the days the target had nothing on.
+async fn fold_daily_ledger(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    source_uuid: &str,
+    target_uuid: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE reading_progress_daily AS t
+            SET percent_gained = t.percent_gained + (
+                    SELECT SUM(s.percent_gained) FROM reading_progress_daily s
+                     WHERE s.book_uuid = ?2 AND s.user_id = t.user_id
+                       AND s.day = t.day AND s.format = t.format)
+          WHERE t.book_uuid = ?1
+            AND EXISTS (SELECT 1 FROM reading_progress_daily s
+                         WHERE s.book_uuid = ?2 AND s.user_id = t.user_id
+                           AND s.day = t.day AND s.format = t.format)",
+    )
+    .bind(target_uuid)
+    .bind(source_uuid)
+    .execute(&mut **tx)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM reading_progress_daily
+          WHERE book_uuid = ?2 AND EXISTS (
+            SELECT 1 FROM reading_progress_daily t
+             WHERE t.book_uuid = ?1 AND t.user_id = reading_progress_daily.user_id
+               AND t.day = reading_progress_daily.day
+               AND t.format = reading_progress_daily.format)",
+    )
+    .bind(target_uuid)
+    .bind(source_uuid)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 

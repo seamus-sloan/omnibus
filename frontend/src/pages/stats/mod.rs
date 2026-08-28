@@ -6,7 +6,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::{LibrarySize, ReadingGoal, StatsRange, StatsSummary, STATS_TTL_SECS};
 
-use crate::components::{PageError, PageLoading};
+use crate::components::{PageError, PageLoading, SessionLogList};
 use crate::{data, use_server_url, Route};
 
 mod donut;
@@ -16,6 +16,7 @@ mod heatmap;
 mod library;
 mod monthly;
 mod patterns;
+mod superlatives;
 mod tiles;
 
 use donut::{FormatSplit, GenreDonut, LengthSplit};
@@ -25,6 +26,7 @@ use heatmap::HeatmapCard;
 use library::LibrarySizeCard;
 use monthly::MonthlyChart;
 use patterns::TimePatternsCard;
+use superlatives::SuperlativesCard;
 use tiles::HeadlineTiles;
 
 /// Group a non-negative integer's digits in threes with `,` separators.
@@ -127,6 +129,10 @@ pub fn StatsPage() -> Element {
                     AllTimeSummary { all_time }
                     LibrarySizeCard { size: library_size() }
                 }
+                // The log sits under the aggregates it details, and outside
+                // the period switcher's reach: it is its own paged read, not
+                // a window rollup.
+                SessionLogList { book: None, compact: false }
             }
             if let (Some(metric), Some(summary)) = (expanded(), period.read().clone()) {
                 DrillIn { metric, summary, range: range(), expanded }
@@ -375,9 +381,9 @@ fn focus_range_menu(evt: &MountedEvent) {
 #[cfg(not(feature = "web"))]
 fn focus_range_menu(_evt: &MountedEvent) {}
 
-/// The period-scoped module stack: headline tiles, then the composition row
-/// (genre donut + format split, with the length distribution beneath them). A
-/// placeholder card until the first fetch lands. `expanded` is forwarded to the
+/// The period-scoped module stack: headline tiles, the composition row (genre
+/// donut + format split, with the length distribution beneath them), then the
+/// superlatives card. A placeholder card until the first fetch lands. `expanded` is forwarded to the
 /// tiles so a grip click can open that metric's drill-in.
 #[component]
 fn PeriodSummary(
@@ -393,6 +399,7 @@ fn PeriodSummary(
             books_finished: summary.books_finished,
             avg_stars: summary.avg_stars,
             pages_read: summary.pages_read,
+            pages_audio_only: summary.pages_detail.audio_only(),
             listening_seconds: summary.listening_seconds,
             expanded,
         }
@@ -402,6 +409,7 @@ fn PeriodSummary(
             LengthSplit { summary: summary.clone() }
         }
         TimePatternsCard { summary: summary.clone() }
+        SuperlativesCard { summary: summary.clone() }
     }
 }
 

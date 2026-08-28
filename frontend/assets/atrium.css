@@ -8949,6 +8949,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   text-overflow: ellipsis; white-space: nowrap;
 }
 .st-drill-finished-author { font-size: 11px; color: var(--ink-3); }
+
+/* Pages read drill-in prose: coverage plus the tracking-cutover date. Stacked
+   rather than run together so the cutover line reads as its own caveat. */
+.st-drill-pages-note { display: flex; flex-direction: column; gap: 6px; }
 .st-drill-finished-rating { font-size: 12px; color: var(--ink-2); flex: 0 0 auto; }
 
 @media (min-width: 721px) {
@@ -9135,6 +9139,27 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .st-lib-unit { font-size: 14px; color: var(--ink-2); }
 .st-lib-coverage { font-size: 11px; color: var(--ink-3); }
+/* ── Superlatives card ────────────────────────────────────────────── */
+.st-sup-card { display: flex; flex-direction: column; gap: 14px; }
+/* auto-fit rather than a fixed column count: the card renders only the rows
+   the window supports, so its length varies from one to eight. */
+.st-sup-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px 20px;
+}
+.st-sup-row { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.st-sup-label { color: var(--ink-3); }
+.st-sup-headline {
+  font-family: var(--serif);
+  font-size: 17px;
+  color: var(--ink-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.st-sup-detail { font-size: 12px; color: var(--ink-2); }
+.st-sup-note { margin: 0; font-size: 11.5px; color: var(--ink-3); }
 
 /* ── Scaffold cards (shown while a section's fetch is in flight) ──── */
 .st-summary-card { display: flex; flex-direction: column; gap: 8px; }
@@ -11344,4 +11369,62 @@ html {
 
 @media (prefers-reduced-motion: reduce) {
   .st-goal-fill { transition: none; }
+}
+
+/* ── Session log ──────────────────────────────────────────────────────
+   The per-sitting list behind the stats aggregates: a card on /stats, and
+   the same rows without card chrome inside the book-detail Stats stop. */
+.st-log { padding: 20px 22px 22px; }
+.st-log-head { margin-bottom: 14px; }
+.st-log-title { margin: 0 0 4px; font-family: var(--serif); font-weight: 600; font-size: 20px; }
+.st-log-sub {
+  margin: 0; font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: .06em; color: var(--ink-3);
+}
+.st-log-placeholder { min-height: 84px; }
+.st-log-empty { margin: 0; color: var(--ink-2); font-size: 14px; }
+.st-log-error { margin: 10px 0 0; color: var(--bad); font-size: 13px; }
+
+.st-log-list { list-style: none; margin: 0; padding: 0; }
+.st-log-row {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 4px 16px;
+  align-items: baseline; padding: 10px 0; border-top: 1px solid var(--line-2);
+}
+.st-log-row:first-child { border-top: 0; }
+/* Scoped past `.atrium .mono`, which both of these carry for its face and
+   which would otherwise win the size and colour on specificity alone. */
+.st-log .st-log-when {
+  font-size: 11px; color: var(--ink-3); letter-spacing: .02em; white-space: nowrap;
+}
+.st-log-mid { min-width: 0; }
+.st-log-book {
+  font-size: 14.5px; color: var(--ink-0);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.st-log-format {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.st-log .st-log-dur { font-size: 13px; color: var(--ink-1); white-space: nowrap; }
+
+.st-log-more {
+  margin-top: 12px; padding: 7px 14px; cursor: pointer;
+  background: none; border: 1px solid var(--line-2); border-radius: 999px;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.st-log-more:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.st-log-more:disabled { opacity: .5; cursor: default; }
+
+/* Inside the marquee stop the card chrome comes from the stop itself, and
+   the list is capped so the stop keeps its own scroll rather than growing
+   past the viewport. */
+.bdmq .st-log-compact { max-width: 560px; }
+.bdmq .st-log-compact .st-log-list { max-height: min(280px, 34vh); overflow-y: auto; }
+.bdmq-logk { margin-top: 30px; }
+
+@media (max-width: 720px) {
+  .st-log { padding: 16px 16px 18px; }
+  .st-log-row { grid-template-columns: 1fr auto; }
+  .st-log-when { grid-column: 1 / -1; }
 }

@@ -214,6 +214,66 @@ fn length_buckets_default_to_empty_when_absent_from_the_wire() {
 }
 
 #[test]
+fn book_superlative_round_trips_through_json() {
+    let b = BookSuperlative {
+        book_uuid: "0f2c-uuid".to_string(),
+        title: "Doorstopper".to_string(),
+        author: Some("Ursula K. Le Guin".to_string()),
+        value: 900,
+    };
+    let wire = serde_json::to_string(&b).unwrap();
+    assert_eq!(serde_json::from_str::<BookSuperlative>(&wire).unwrap(), b);
+}
+
+#[test]
+fn book_superlative_author_survives_a_null_on_the_wire() {
+    // The db left-joins the author, so a book with no position-0 creator
+    // still wins its category and arrives with an explicit null.
+    let b: BookSuperlative =
+        serde_json::from_str(r#"{"book_uuid":"u","title":"Untitled","author":null,"value":12}"#)
+            .unwrap();
+    assert_eq!(b.author, None);
+}
+
+#[test]
+fn superlatives_is_empty_only_when_every_figure_is_absent() {
+    let mut s = Superlatives::default();
+    assert!(s.is_empty());
+
+    s.biggest_day = Some(DayActivity {
+        day: "2023-11-15".to_string(),
+        seconds: 3600,
+    });
+    assert!(!s.is_empty());
+}
+
+#[test]
+fn superlatives_default_to_empty_when_absent_from_the_wire() {
+    // An app running ahead of its server must lose the card, not the tab.
+    let s: StatsSummary = serde_json::from_str(
+        r#"{"range":"month","reading_seconds":0,"listening_seconds":0,"sessions":0,
+            "active_days":0,"longest_streak_days":0,"busiest_week_start":null,
+            "busiest_week_seconds":0,"books_finished":0,"heatmap":[],
+            "top_authors":[],"top_tags":[],"finished_books":[]}"#,
+    )
+    .unwrap();
+    assert!(s.superlatives.is_empty());
+}
+
+#[test]
+fn one_absent_superlative_costs_only_its_own_field() {
+    // Each field carries its own `#[serde(default)]`, so a server that omits
+    // a single figure must not blank the four beside it.
+    let s: Superlatives = serde_json::from_str(
+        r#"{"longest_book":{"book_uuid":"u","title":"T","author":null,"value":900}}"#,
+    )
+    .unwrap();
+    assert_eq!(s.longest_book.map(|b| b.value), Some(900));
+    assert!(s.shortest_book.is_none());
+    assert!(s.fastest_read.is_none());
+}
+
+#[test]
 fn as_query_matches_the_serde_wire_name() {
     for range in StatsRange::ALL {
         let wire = serde_json::to_string(&range).unwrap();
@@ -441,4 +501,155 @@ fn reading_goal_update_sends_only_the_fields_it_names() {
         serde_json::to_string(&ReadingGoalUpdate::clear_books()).unwrap(),
         "{}"
     );
+}
+
+#[test]
+fn pages_read_detail_audio_only_requires_no_reading_at_all() {
+    let listening = PagesReadDetail {
+        audio_books: 2,
+        ..Default::default()
+    };
+    assert!(listening.audio_only());
+    // Any reading in the window — measurable or not — means the em-dash is the
+    // honest answer, because something happened that pages describe.
+    assert!(!PagesReadDetail {
+        audio_books: 2,
+        unmeasured_books: 1,
+        ..Default::default()
+    }
+    .audio_only());
+    assert!(!PagesReadDetail {
+        audio_books: 2,
+        measured_books: 1,
+        ..Default::default()
+    }
+    .audio_only());
+    // An empty window is not audio-only; it is empty.
+    assert!(!PagesReadDetail::default().audio_only());
+}
+
+#[test]
+fn pages_read_detail_predates_ledger_needs_both_an_epoch_and_an_overlap() {
+    let overlapping = PagesReadDetail {
+        since_day: Some("2026-08-01".to_string()),
+        window_predates_ledger: true,
+        ..Default::default()
+    };
+    assert!(overlapping.predates_ledger());
+
+    // The server says this window opens after the epoch, so the date is
+    // context rather than a caveat — whatever range it came from. A Year
+    // window in the calendar year after the epoch lands here.
+    assert!(!PagesReadDetail {
+        since_day: Some("2026-08-01".to_string()),
+        ..Default::default()
+    }
+    .predates_ledger());
+
+    // Nothing recorded, nothing to disclose — even if the flag says otherwise.
+    assert!(!PagesReadDetail {
+        window_predates_ledger: true,
+        ..Default::default()
+    }
+    .predates_ledger());
+    assert!(!PagesReadDetail::default().predates_ledger());
+}
+
+#[test]
+fn stats_summary_decodes_a_payload_from_a_server_without_the_pages_detail() {
+    // The app ships ahead of a self-hosted server routinely; a stats field it
+    // hasn't learned yet must cost one tile, not the whole screen.
+    let json = r#"{"range":"month","reading_seconds":60,"listening_seconds":0,
+        "avg_stars":null,"sessions":1,"active_days":1,"longest_streak_days":1,
+        "busiest_week_start":null,"busiest_week_seconds":0,"books_finished":0,
+        "heatmap":[],"top_authors":[],"top_tags":[],"finished_books":[],
+        "pages_read":12}"#;
+    let summary: StatsSummary = serde_json::from_str(json).unwrap();
+
+    assert_eq!(summary.pages_read, Some(12));
+    assert_eq!(summary.pages_detail, PagesReadDetail::default());
+    assert_eq!(summary.previous.pages_read, 0);
+}
+
+#[test]
+fn pages_read_detail_round_trips_over_the_wire() {
+    let detail = PagesReadDetail {
+        since_day: Some("2026-08-01".to_string()),
+        measured_books: 3,
+        unmeasured_books: 1,
+        audio_books: 2,
+        daily: vec![TrendPoint {
+            label: "2026-08-01".to_string(),
+            value: 41.0,
+        }],
+        window_predates_ledger: true,
+    };
+    let json = serde_json::to_string(&detail).unwrap();
+    assert_eq!(
+        serde_json::from_str::<PagesReadDetail>(&json).unwrap(),
+        detail
+    );
+    // Snake-case on the wire, as every other field on the summary is.
+    assert!(json.contains("\"since_day\""), "{json}");
+    assert!(json.contains("\"unmeasured_books\""), "{json}");
+    assert!(json.contains("\"window_predates_ledger\""), "{json}");
+}
+
+#[test]
+fn session_cursor_round_trips_through_its_wire_form() {
+    let c = SessionCursor {
+        started_at: 1_700_000_000,
+        book_uuid: "7f3a-uuid".into(),
+    };
+    assert_eq!(c.encode(), "1700000000:7f3a-uuid");
+    assert_eq!(SessionCursor::parse(&c.encode()), Some(c));
+}
+
+#[test]
+fn session_cursor_parse_rejects_malformed_input() {
+    for raw in ["", "1700000000", "notanumber:uuid", "1700000000:", ":uuid"] {
+        assert_eq!(SessionCursor::parse(raw), None, "accepted {raw:?}");
+    }
+}
+
+#[test]
+fn session_cursor_parse_keeps_a_negative_start_and_splits_on_the_first_colon() {
+    let c = SessionCursor::parse("-5:a:b").unwrap();
+    assert_eq!(c.started_at, -5);
+    assert_eq!(c.book_uuid, "a:b");
+}
+
+#[test]
+fn session_format_labels_name_the_activity_in_the_past_tense() {
+    assert_eq!(SessionFormat::Reading.label(), "Read");
+    assert_eq!(SessionFormat::Listening.label(), "Listened");
+    assert_eq!(SessionFormat::Mixed.label(), "Read & listened");
+}
+
+#[test]
+fn session_format_serializes_as_snake_case() {
+    assert_eq!(
+        serde_json::to_string(&SessionFormat::Mixed).unwrap(),
+        "\"mixed\""
+    );
+}
+
+#[test]
+fn session_log_page_defaults_its_cursor_when_absent_from_the_wire() {
+    let page: SessionLogPage = serde_json::from_str(r#"{"entries":[]}"#).unwrap();
+    assert!(page.entries.is_empty());
+    assert_eq!(page.next_before, None);
+}
+
+#[test]
+fn session_log_entry_cursor_names_its_own_start_and_book() {
+    let entry = SessionLogEntry {
+        book_uuid: "uuid-1".into(),
+        title: "Title 1".into(),
+        format: SessionFormat::Reading,
+        started_at: 42,
+        ended_at: 100,
+        seconds: 58,
+    };
+    assert_eq!(entry.cursor().encode(), "42:uuid-1");
 }

@@ -1,6 +1,7 @@
 //  StatsView.swift
 //  Reading stats: a headline panel, supporting tiles, an activity heatmap,
-//  rankings, and the finished-books rail.
+//  rankings, the finished-books rail, and the per-sitting session log behind
+//  all of them.
 
 import Charts
 import SwiftUI
@@ -18,6 +19,12 @@ struct StatsView: View {
     @State private var isEditingGoal = false
     @State private var goalDraft = ""
     @State private var goalError: String?
+    // The log is its own paged read rather than a rollup of the window above
+    // it, so it holds its own state and never reloads on a range change.
+    @State private var sessions: [SessionLogEntry] = []
+    @State private var sessionCursor: String?
+    @State private var sessionsLoading = false
+    @State private var sessionsError: String?
 
     var body: some View {
         NavigationStack {
@@ -35,12 +42,16 @@ struct StatsView: View {
             // root; a stock large title alongside it would state it twice.
             .toolbar(.hidden, for: .navigationBar)
             .topEdgeScrim()
-            .refreshTask { await load(force: true) }
+            .refreshTask {
+                await load(force: true)
+                await loadSessions()
+            }
             .withDestinations()
         }
         .task {
             await load()
             await loadLibrarySize()
+            await loadSessions()
         }
         .onChange(of: range) { _, _ in Task { await load() } }
     }
@@ -58,6 +69,13 @@ struct StatsView: View {
 
                 headline(summary)
                 tiles(summary)
+
+                if let note = Self.pagesCutoverNote(summary) {
+                    Text(note)
+                        .font(.footnote)
+                        .foregroundStyle(palette.ink3Color)
+                        .screenPadding()
+                }
 
                 if !summary.heatmap.isEmpty {
                     section("Activity") {
@@ -175,6 +193,18 @@ struct StatsView: View {
                     }
                 }
 
+                // Omitted rather than emptied: the section's own length is
+                // what reports how much the window holds.
+                let standouts = Self.standoutRows(summary)
+                if !standouts.isEmpty {
+                    section("The standouts") {
+                        StandoutList(
+                            rows: standouts,
+                            showFastestReadNote: summary.superlatives.fastestRead != nil
+                        )
+                    }
+                }
+
                 if !summary.topAuthors.isEmpty {
                     section("Top authors") {
                         RankedList(entries: summary.topAuthors) { entry in
@@ -203,6 +233,8 @@ struct StatsView: View {
                         LibrarySizeSection(size: librarySize)
                     }
                 }
+
+                sessionLogSection
             }
             .padding(.bottom, 40)
         }
@@ -463,8 +495,8 @@ struct StatsView: View {
                 icon: "calendar"
             )
             StatTile(
-                label: "Pages",
-                value: summary.pagesRead.map { "\($0)" } ?? "—",
+                label: "Pages read",
+                value: Self.pagesValue(summary),
                 icon: "doc.text"
             )
             // Directly after Pages so the two share a row of the two-column
@@ -501,6 +533,33 @@ struct StatsView: View {
         return oneDecimal < 10
             ? String(format: "%.1f", oneDecimal)
             : String(format: "%.0f", rate.rounded())
+    }
+
+    /// The Pages read tile's value. Two empty states, not one: a window whose
+    /// only activity was listening turned exactly zero pages — audio has no
+    /// page analogue, so that is an answer — while anything else unmeasurable
+    /// is a genuine em-dash. Kept in step with the web tile's `pages_value`;
+    /// the server owns the `audioOnly` distinction so neither surface invents
+    /// its own.
+    static func pagesValue(_ summary: StatsSummary) -> String {
+        if let pages = summary.pagesRead { return "\(pages)" }
+        return summary.pagesDetail.audioOnly ? "0" : "\u{2014}"
+    }
+
+    /// The cutover caption, or `nil` when the window is fully covered. Page
+    /// progress is differenced from stored positions and none exist before the
+    /// ledger began, so a window reaching past that day is only partly
+    /// measurable and says so rather than reading as complete.
+    ///
+    /// Gated on the server's own overlap answer, not on the range: a Year
+    /// window in the calendar year after the epoch is fully covered and must
+    /// not carry the caveat, while a Week window in the days right after it is
+    /// not covered and must.
+    static func pagesCutoverNote(_ summary: StatsSummary) -> String? {
+        guard summary.pagesDetail.predatesLedger,
+            let since = summary.pagesDetail.sinceDay
+        else { return nil }
+        return "Page tracking began \(since); reading before then isn\u{2019}t counted."
     }
 
     private func finishedRail(_ books: [FinishedBook]) -> some View {
@@ -544,6 +603,185 @@ struct StatsView: View {
             .scrollIndicators(.hidden)
             .scrollTargetBehavior(.viewAligned)
         }
+    }
+
+    /// Every standout the window supports, in the same order as the web card,
+    /// so a reader switching surfaces reads the same list.
+    ///
+    /// The two rankings the web card ends with are deliberately absent: this
+    /// tab already renders `topAuthors` / `topTags` in full below, and a
+    /// one-line restatement above a whole list is noise.
+    static func standoutRows(_ summary: StatsSummary) -> [StandoutRow] {
+        let s = summary.superlatives
+        let book = { (label: String, sup: BookSuperlative?, detail: (Int64) -> String) in
+            sup.map { StandoutRow(label: label, headline: $0.title, detail: detail($0.value)) }
+        }
+        // Zero seconds means the window has no busiest week, whatever date
+        // rode along beside it.
+        let busiestWeek = summary.busiestWeekSeconds > 0
+            ? summary.busiestWeekStart.map {
+                StandoutRow(
+                    label: "Busiest week",
+                    headline: "Week of \(Self.prettyDay($0))",
+                    detail: Format.humanDuration(summary.busiestWeekSeconds)
+                )
+            }
+            : nil
+        return [
+            book("Longest book", s.longestBook, Self.pagesDetail),
+            book("Shortest book", s.shortestBook, Self.pagesDetail),
+            book("Fastest read", s.fastestRead, Self.daysDetail),
+            book("Longest sitting", s.longestSit, Format.humanDuration),
+            s.biggestDay.map {
+                StandoutRow(
+                    label: "Biggest day",
+                    headline: Self.prettyDay($0.day),
+                    detail: Format.humanDuration($0.seconds)
+                )
+            },
+            busiestWeek,
+        ].compactMap { $0 }
+    }
+
+    /// Parses the server's UTC `YYYY-MM-DD`. Fixed-format, so it is pinned to
+    /// `en_US_POSIX` and Gregorian — a device on a non-Gregorian calendar
+    /// would otherwise fail to read the wire format at all.
+    private static let wireDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// Renders "14 Nov 2023". Also pinned to `en_US_POSIX`: the surrounding
+    /// copy ("Week of …", "Biggest day") is English, and the device locale
+    /// would splice a translated month into it — "Week of 13 nov. 2023".
+    private static let displayDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "d MMM yyyy"
+        return f
+    }()
+
+    /// A UTC `YYYY-MM-DD` as "14 Nov 2023", passing anything unparseable
+    /// through — a malformed day is better company for its figure than none.
+    ///
+    /// Both formatters are cached statics: `DateFormatter` construction is
+    /// expensive and this runs for every standout row on every render.
+    static func prettyDay(_ day: String) -> String {
+        guard let date = wireDayFormatter.date(from: day) else { return day }
+        return displayDayFormatter.string(from: date)
+    }
+
+    /// "412 pages" / "1 page" — the unit is the row's, since
+    /// `BookSuperlative.value` carries a bare number.
+    static func pagesDetail(_ pages: Int64) -> String {
+        "\(pages) page\(pages == 1 ? "" : "s")"
+    }
+
+    /// "in 3 days" / "in a day" — the server already collapses a same-day
+    /// read to 1, so zero never reaches here.
+    static func daysDetail(_ days: Int64) -> String {
+        days == 1 ? "in a day" : "in \(days) days"
+    }
+
+    // MARK: - Session log
+
+    /// The sittings behind every number above — one row per *sit*, not per
+    /// heartbeat flush: the server stitches adjacent checkpoint rows before it
+    /// pages them.
+    @ViewBuilder private var sessionLogSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            SectionLabel("Session log")
+
+            if sessions.isEmpty, let sessionsError {
+                // Distinct from the empty state below: "we couldn't load this"
+                // and "you have no sittings" are different answers, and only
+                // one of them is worth offering a retry for.
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text(sessionsError)
+                        .font(.ui(12.5))
+                        .foregroundStyle(palette.ink2Color)
+                    Button("Try again") { Task { await loadSessions() } }
+                        .font(.monoUI(10.5, weight: .medium))
+                        .disabled(sessionsLoading)
+                }
+            } else if sessions.isEmpty {
+                Text("No sittings recorded yet.")
+                    .font(.ui(12.5))
+                    .foregroundStyle(palette.ink3Color)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(sessions) { entry in
+                        NavigationLink(value: Destination.book(uuid: entry.bookUUID)) {
+                            SessionLogRow(entry: entry)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                // Keyset paging: the cursor names the last row already shown,
+                // so a sitting landing mid-scroll can't shift the next page
+                // the way an offset would.
+                if sessionCursor != nil {
+                    Button {
+                        Task { await loadMoreSessions() }
+                    } label: {
+                        Text(sessionsLoading ? "Loading\u{2026}" : "Show more")
+                            .font(.monoUI(10.5, weight: .medium))
+                            .tracking(0.8)
+                            .textCase(.uppercase)
+                            .foregroundStyle(palette.ink2Color)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(palette.bg2Color))
+                            .overlay(Capsule().strokeBorder(palette.line2.color, lineWidth: 0.5))
+                    }
+                    .disabled(sessionsLoading)
+                }
+
+                if let sessionsError {
+                    Text(sessionsError)
+                        .font(.ui(12))
+                        .foregroundStyle(palette.ink3Color)
+                }
+            }
+        }
+        .screenPadding()
+    }
+
+    private func loadSessions() async {
+        guard !sessionsLoading else { return }
+        sessionsLoading = true
+        do {
+            let page = try await UserDataService.sessionLog()
+            sessions = page.entries
+            sessionCursor = page.nextBefore
+            sessionsError = nil
+        } catch {
+            sessionsError =
+                (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+        sessionsLoading = false
+    }
+
+    private func loadMoreSessions() async {
+        guard let cursor = sessionCursor, !sessionsLoading else { return }
+        sessionsLoading = true
+        do {
+            let page = try await UserDataService.sessionLog(before: cursor)
+            sessions.append(contentsOf: page.entries)
+            sessionCursor = page.nextBefore
+            sessionsError = nil
+        } catch {
+            sessionsError =
+                (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+        sessionsLoading = false
     }
 
     private func section<Content: View>(
@@ -746,6 +984,63 @@ private struct SplitBar: View {
         .frame(maxHeight: .infinity, alignment: .bottom)
         .opacity(reading + listening > 0 ? 1 : 0)
         .accessibilityHidden(true)
+    }
+}
+
+/// One standout: what it measures, what won, and by how much. Built by
+/// `StatsView.standoutRows`, which is where the units live.
+struct StandoutRow: Identifiable, Hashable {
+    let label: String
+    let headline: String
+    let detail: String
+
+    var id: String { label }
+}
+
+private struct StandoutList: View {
+    let rows: [StandoutRow]
+    let showFastestReadNote: Bool
+
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            ForEach(rows) { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.label)
+                        .font(.ui(11.5))
+                        .foregroundStyle(palette.ink3Color)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(row.headline)
+                            .font(.display(17))
+                            .foregroundStyle(palette.ink0Color)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                        Spacer(minLength: 0)
+                        Text(row.detail)
+                            .font(.monoUI(11.5))
+                            .foregroundStyle(palette.ink2Color)
+                            .layoutPriority(1)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+            if showFastestReadNote {
+                // The floor is part of the claim, not an aside: without it a
+                // book read mostly on another device reads as a sprint. The
+                // lower-bound clause mirrors the web note — `shared`'s
+                // `fastest_read` doc requires every surface to state it.
+                Text(
+                    "Fastest read counts days from your first tracked session, over books with "
+                        + "at least \(Format.humanDuration(Superlatives.fastestReadMinSeconds)) "
+                        + "of recorded time — reading done before tracking, or on a device that "
+                        + "reports nothing, can only make a book look faster than it was."
+                )
+                .font(.ui(11))
+                .foregroundStyle(palette.ink3Color)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1011,5 +1306,45 @@ private struct HeatmapView: View {
         guard seconds > 0 else { return restColor }
         let intensity = min(1, Double(seconds) / Double(maximum))
         return palette.accentColor.opacity(0.25 + intensity * 0.75)
+    }
+}
+
+/// One sitting: when it started, what it was, and how long it ran.
+private struct SessionLogRow: View {
+    let entry: SessionLogEntry
+
+    @Environment(\.palette) private var palette
+
+    /// Device-local, unlike the web log's UTC: this is a native app on a
+    /// reader's own phone, and a sitting they remember starting at 9pm should
+    /// say so.
+    private var when: String {
+        Date(timeIntervalSince1970: TimeInterval(entry.startedAt))
+            .formatted(date: .abbreviated, time: .shortened)
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.title)
+                    .font(.ui(13.5, weight: .medium))
+                    .foregroundStyle(palette.ink0Color)
+                    .lineLimit(1)
+                Text("\(when) \u{b7} \(entry.format.label)")
+                    .font(.monoUI(10))
+                    .foregroundStyle(palette.ink3Color)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Text(Format.humanDuration(entry.seconds))
+                .font(.ui(12.5))
+                .foregroundStyle(palette.ink2Color)
+        }
+        .padding(.vertical, 9)
+        .overlay(alignment: .top) {
+            Rectangle().fill(palette.line2.color).frame(height: 0.5)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 }

@@ -8,7 +8,7 @@ use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use crate::resolve_canonical_book_uuid_exec;
 
-use super::{format_str, ProgressError};
+use super::{format_str, ledger, ProgressError};
 
 /// Backward jump in an accepted audio position write that's worth a WARN
 /// (~10 minutes). A normal skip-back or chapter re-listen is well under
@@ -134,6 +134,21 @@ pub async fn upsert_progress_tx(
 
     execute_upsert_query(tx, user_id, &book_uuid, fmt, update).await?;
     let record = read_progress_row(tx, user_id, book_uuid, update.format, fmt).await?;
+
+    // Ledger the *surviving* position, not the offered one: a write the
+    // timestamp guard rejected leaves the row — and so the mark — where it was,
+    // which is exactly the accrual a rejected write deserves.
+    if let Some(percent) = record.progress_percent {
+        ledger::observe_percent_tx(
+            tx,
+            user_id,
+            &record.book_uuid,
+            record.format,
+            percent,
+            record.client_updated_at,
+        )
+        .await?;
+    }
 
     // If this write was rejected (by either guard above), the row is
     // unchanged, so `new` equals the pre-write snapshot and this can't

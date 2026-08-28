@@ -170,14 +170,43 @@ test("headline tiles render finished, avg rating, pages, and listening", async (
   await expect(page.getByTestId("stats-tile-avg-rating")).toContainText(
     /\d\.\d\s*★/,
   );
-  // #1029: the finished journal seeded in beforeAll gives the Pages tile a
-  // real (spine-word-count-derived) estimate — a digit, not the em-dash
-  // placeholder. The exact count depends on fixture text length, covered by
-  // db::stats unit tests instead of pinned here.
-  await expect(page.getByTestId("stats-tile-pages")).toContainText(/\d/);
+  // #2139: the tile counts pages *turned* in the window, not the length of the
+  // books finished in it, so the finished journal seeded in beforeAll no longer
+  // gives it a value — only real position writes do, and this spec deliberately
+  // makes none. They would join the Continue fan the landing specs assert on,
+  // and land on a book those specs read. Both a digit and the em-dash are
+  // legitimate here; the label is the contract this test pins, and the
+  // arithmetic lives in the db::stats unit tests.
+  const pages = page.getByTestId("stats-tile-pages");
+  await expect(pages).toContainText("Pages read");
+  await expect(pages).toContainText(/\d|—/);
   await expect(page.getByTestId("stats-tile-listening")).toContainText(
     /\d+\s*(m|h)/,
   );
+});
+
+test("the Pages read drill-in explains its coverage and states the cutover", async ({
+  page,
+}) => {
+  await gotoReady(page, "/stats");
+
+  await page.getByTestId("stats-tile-pages").click();
+  const drillIn = page.getByTestId("stats-drill-in");
+  await expect(drillIn).toBeVisible();
+  await expect(drillIn).toContainText("Pages read");
+
+  // AC6: the panel renders content rather than opening to nothing, whatever
+  // the window holds.
+  await expect(page.getByTestId("stats-drill-pages-note")).toBeVisible();
+  // AC9: page progress is differenced from stored positions and none exist
+  // before the ledger began, so the tile changes meaning at a date — which the
+  // UI states rather than leaving it as an unexplained discontinuity.
+  await expect(page.getByTestId("stats-drill-pages-cutover")).toContainText(
+    /Page tracking began \d{4}-\d{2}-\d{2}/,
+  );
+
+  await page.getByTestId("stats-drill-close").click();
+  await expect(drillIn).toHaveCount(0);
 });
 
 test("a tile's grip opens its drill-in and the close button dismisses it", async ({
@@ -323,6 +352,93 @@ test("the Pages drill-in reports a reading rate, and says so when it can't", asy
   await expect(page.getByTestId("stats-drill-pages-rate")).toContainText(
     "both a measurable length and recorded reading time",
   );
+});
+
+test("the superlatives card names each standout, and omits the ones it can't", async ({
+  page,
+}) => {
+  // Route-mocked: the superlatives rank over finished books and recorded
+  // sessions on the shared fixture, which other specs write. Every key without
+  // `#[serde(default)]` on the Rust struct has to be present or the client
+  // fails the whole decode.
+  const base = {
+    range: "month",
+    reading_seconds: 600,
+    listening_seconds: 0,
+    sessions: 1,
+    active_days: 1,
+    longest_streak_days: 1,
+    busiest_week_start: "2023-11-13",
+    busiest_week_seconds: 14_400,
+    books_finished: 2,
+    heatmap: [],
+    top_authors: [{ name: "Ursula K. Le Guin", seconds: 3600 }],
+    top_tags: [],
+    finished_books: [],
+  };
+  await page.route("**/api/rpc/stats", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...base,
+        superlatives: {
+          longest_book: {
+            book_uuid: "u1",
+            title: "Doorstopper",
+            author: "A. Writer",
+            value: 900,
+          },
+          fastest_read: {
+            book_uuid: "u2",
+            title: "Sprint",
+            author: null,
+            value: 3,
+          },
+        },
+      }),
+    }),
+  );
+  await gotoReady(page, "/stats");
+
+  const card = page.getByTestId("stats-superlatives");
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("Doorstopper");
+  await expect(card).toContainText("900 pages");
+  await expect(card).toContainText("in 3 days");
+  // The busiest week and the most-read author come off fields the payload has
+  // always carried and the web page never drew.
+  await expect(card).toContainText("Week of 13 Nov 2023");
+  await expect(card).toContainText("Ursula K. Le Guin");
+  // Absent superlatives cost their row, not an em-dash.
+  await expect(card).not.toContainText("Shortest book");
+  await expect(card).not.toContainText("Longest sitting");
+  // The fastest read is a lower bound, and says so.
+  await expect(page.getByTestId("stats-superlatives-note")).toContainText(
+    "tracked session",
+  );
+
+  // No superlative at all, and no busiest week: the card is absent rather
+  // than an empty heading.
+  await page.route("**/api/rpc/stats", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...base,
+        busiest_week_start: null,
+        busiest_week_seconds: 0,
+        top_authors: [],
+      }),
+    }),
+  );
+  await gotoReady(page, "/stats");
+  // Wait on a period-owned element, not the section: until the period fetch
+  // resolves, PeriodSummary renders a bare placeholder that is visible and
+  // carries no card — so asserting absence here would pass on the loading
+  // state and miss the regression this half of the test exists to catch.
+  await expect(page.getByTestId("stats-tile-finished")).toBeVisible();
+  await expect(page.getByTestId("stats-superlatives")).toHaveCount(0);
 });
 
 test("the Finished drill-in lists the books completed in the window", async ({
@@ -851,4 +967,47 @@ test("a failed goal save surfaces the error and leaves the goal unset", async ({
   // server rejected.
   await expect(page.getByTestId("stats-goal-invite")).toBeVisible();
   await expect(page.getByTestId("stats-goal-progress")).toHaveCount(0);
+});
+
+test("the session log lists stitched sittings under the aggregates", async ({
+  page,
+}) => {
+  await gotoReady(page, "/stats");
+
+  const log = page.getByTestId("session-log");
+  await expect(log).toBeVisible();
+  await expect(log.getByRole("heading", { name: "Session log" })).toBeVisible();
+
+  // The list arrives from its own post-mount fetch, so poll rather than
+  // asserting against the first paint.
+  const rows = page.getByTestId("session-log-row");
+  await expect.poll(() => rows.count()).toBeGreaterThan(0);
+
+  // AC2 — book, start time, format, and length on every row. Asserted by
+  // shape: other specs share this user and add sittings of their own, and the
+  // arithmetic is pinned by the db::stats unit tests.
+  const first = rows.first();
+  await expect(first).toContainText(/\d{4}/); // the year in the start stamp
+  await expect(first).toContainText(/Read|Listened/);
+  await expect(first).toContainText(/\d+(h|m)/);
+
+  // AC3 (the stitch itself) is pinned by the db::stats::sessions unit tests,
+  // not here: this is the user-wide log for a user every other spec also
+  // records sittings against, so any one seeded sitting can be pushed off the
+  // newest page by a parallel spec and must not be asserted by identity.
+  await expect(page.getByTestId("session-log-empty")).toHaveCount(0);
+});
+
+test("a failed session-log fetch surfaces an error without blanking the page", async ({
+  page,
+}) => {
+  await page.route("**/api/rpc/stats/sessions", (route) =>
+    route.fulfill({ status: 500, body: "boom" }),
+  );
+
+  await gotoReady(page, "/stats");
+  await expect(page.getByTestId("session-log-error")).toBeVisible();
+  await expect(page.getByTestId("session-log-row")).toHaveCount(0);
+  // The aggregates above it are unaffected — the log is its own read.
+  await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
 });

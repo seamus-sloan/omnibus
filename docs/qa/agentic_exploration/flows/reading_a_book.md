@@ -22,7 +22,8 @@ starting.
 1. Reach the book from the library, an author page, a search, or the continue
    surface on the home page. Vary this between runs.
 2. Open it to read. Note where it opened — at the start, or where you left off.
-3. Read forward through roughly 10% of the book. Turn pages the way a person
+3. Read forward through roughly 10% of the book **by position**, not by time
+   spent. Turn pages the way a person
    does: some quickly, some slowly. Do not spam the page-forward control.
    **If page-turning itself is broken**, that is a `fail` and you should journal
    it as one — but do not abandon the flow. Reaching a position through the

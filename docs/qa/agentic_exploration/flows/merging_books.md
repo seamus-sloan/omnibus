@@ -49,9 +49,16 @@ detectable.
 - The merge summary names the two books you actually chose.
 - Afterwards there is one book carrying both formats.
 - The other book is gone from the library, search, author pages, and shelves.
-- Reading position, highlights, bookmarks, ratings, and read status from both
-  sides are present on the survivor.
-- An undo, if taken, restores both books with their data.
+- Highlights and bookmarks from both sides are present on the survivor — these
+  accumulate, so "both" is literal.
+- For the **scalar** values that cannot merge — rating, read status, reading
+  position — the survivor keeps a coherent single value, and you journal which
+  side it came from. There is no documented conflict rule, so either side
+  winning is acceptable; what is not acceptable is a value belonging to neither,
+  or one side's value landing on the wrong book.
+- An undo, if taken, restores both books with **their own** data — each book
+  carrying the rating, read status and identifiers it had before the merge, not
+  the other's. Check both books, not just the survivor.
 
 ## Fail
 
