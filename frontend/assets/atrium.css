@@ -6124,6 +6124,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-scrim { position: absolute; inset: 0; z-index: 8;
   background: color-mix(in oklch, var(--bg-0) 55%, transparent);
   backdrop-filter: blur(1.5px); }
+/* While the Aa panel is open its trigger has to stay clickable, so the top
+   bar (normally z-index 6, under the scrim) is lifted over the scrim — but
+   left under the panel itself at 16. The panel hangs below the bar, so this
+   changes nothing visually. */
+.rd-top.rd-top-over-scrim { z-index: 9; }
 .rd-scrim-clear { background: transparent; backdrop-filter: none; z-index: 18; }
 
 /* ── Selection popover (highlights) ────────────────────────────── */
