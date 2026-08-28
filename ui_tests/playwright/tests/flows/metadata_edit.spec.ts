@@ -74,9 +74,10 @@ test.describe
         page.locator(".me-chip-item").getByText(TARGET.authors[0]!),
       ).toBeVisible();
 
-      // Save bar is present.
+      // Save bar is present. The discard link names what it actually drops
+      // — a replaced cover is written immediately and it cannot undo one.
       await expect(page.getByTestId("me-save")).toBeVisible();
-      await expect(page.getByTestId("me-discard")).toBeVisible();
+      await expect(page.getByTestId("me-discard")).toHaveText("Discard edits");
 
       // Save is initially disabled (no dirty fields).
       await expect(page.getByTestId("me-save")).toBeDisabled();
