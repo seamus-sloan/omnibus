@@ -32,7 +32,9 @@ starting.
 4. Somewhere in the middle, do one incidental thing a reader does — open the
    table of contents, change the font size, search for a word, switch the
    theme. Pick a different one each time.
-5. Leave the reader deliberately, through the app's own way out.
+5. Leave the reader with its **Back to book** control, which returns you to the
+   book's detail page. Unlike the audiobook player there is no mini-player, so
+   this genuinely ends the session.
 6. Come back to the book's detail page and check that your position is
    reflected there.
 
