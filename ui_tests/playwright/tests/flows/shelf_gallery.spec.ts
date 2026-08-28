@@ -73,6 +73,9 @@ test("selects a shelf in place: glow moves, list filters, URL stays put", async 
     "false",
   );
   await expect(page.getByTestId("lib-section-title")).toContainText(name);
+  // The header count comes from the member list the grid is rendering, so it
+  // can't report a stale membership aggregate (#2255).
+  await expect(page.getByTestId("lib-section-title")).toContainText("1 book");
   // Only the shelf member renders; selection filtered in place (no navigation).
   await expect(page.getByTestId(/^ebook-row-/)).toHaveCount(1);
   await expect(page.getByTestId("ebook-table")).toContainText("Alpha");
@@ -161,6 +164,7 @@ test("an empty shelf says it is empty, not that a search found nothing", async (
   );
 
   await expect(page.getByTestId("lib-section-title")).toContainText(name);
+  await expect(page.getByTestId("lib-section-title")).toContainText("0 books");
   await expect(page.getByTestId("lib-empty")).toHaveText(
     "No books in this shelf.",
   );

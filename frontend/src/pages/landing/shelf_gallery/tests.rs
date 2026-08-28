@@ -51,17 +51,32 @@ fn attributed_owner_names_only_shelves_the_viewer_does_not_own() {
     // Viewer unresolved (SSR + first paint): withhold rather than guess.
     assert_eq!(attributed_owner(&shelf, None), None);
     // The Wishlist name already opens with its owner.
-    assert_eq!(attributed_owner(&summary(2, ShelfKind::Wishlist), Some(1)), None);
+    assert_eq!(
+        attributed_owner(&summary(2, ShelfKind::Wishlist), Some(1)),
+        None
+    );
 }
 
 #[test]
 fn shelf_aria_label_names_the_kind_the_badge_glyph_only_draws() {
     assert_eq!(
-        shelf_aria_label("Space Operas", 12, ShelfKind::Smart, Visibility::Public, None),
+        shelf_aria_label(
+            "Space Operas",
+            12,
+            ShelfKind::Smart,
+            Visibility::Public,
+            None
+        ),
         "Smart shelf Space Operas, 12 books \u{00b7} Public"
     );
     assert_eq!(
-        shelf_aria_label("Wishlist", 3, ShelfKind::Wishlist, Visibility::Private, None),
+        shelf_aria_label(
+            "Wishlist",
+            3,
+            ShelfKind::Wishlist,
+            Visibility::Private,
+            None
+        ),
         "Wishlist Wishlist, 3 books"
     );
     // A hand-picked shelf has no badge, so its label carries no kind word.

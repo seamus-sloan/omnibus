@@ -47,6 +47,29 @@ pub(super) fn section_title(selection: ShelfSelection, shelves: &[ShelfSummary])
     }
 }
 
+/// The header count for a gallery pick. The member list is the fresher of the
+/// two sources — it refetches with the pick, while the gallery's summary
+/// carries a server-side aggregate that goes stale the moment membership
+/// changes elsewhere — so it wins once it has loaded, and the summary only
+/// stands in while that fetch is still out (#2255).
+pub(super) fn shelf_book_count(
+    selection: ShelfSelection,
+    shelves: &[ShelfSummary],
+    members: Option<usize>,
+) -> usize {
+    if let Some(len) = members {
+        return len;
+    }
+    match selection {
+        ShelfSelection::Shelf(id) => shelves
+            .iter()
+            .find(|s| s.id == id)
+            .and_then(|s| usize::try_from(s.book_count).ok())
+            .unwrap_or(0),
+        ShelfSelection::All => 0,
+    }
+}
+
 /// Per-render snapshot of the data the markup sub-components consume.
 /// Computed by [`derive_view_state`] so the [`super::LandingPage`] body is
 /// just composition.
@@ -118,17 +141,11 @@ pub(super) fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) ->
     // count on a gallery pick; the (capped) result count on search.
     let book_count = match source {
         VisibleSource::Search => sigs.books.read().len(),
-        VisibleSource::Shelf => {
-            let member_len = sigs.shelf_books.read().as_ref().map(Vec::len).unwrap_or(0);
-            match selection {
-                ShelfSelection::Shelf(id) => shelves
-                    .iter()
-                    .find(|s| s.id == id)
-                    .map(|s| usize::try_from(s.book_count).unwrap_or(member_len))
-                    .unwrap_or(member_len),
-                ShelfSelection::All => member_len,
-            }
-        }
+        VisibleSource::Shelf => shelf_book_count(
+            selection,
+            &shelves,
+            sigs.shelf_books.read().as_ref().map(Vec::len),
+        ),
         VisibleSource::Browse => (sigs.total)()
             .map(|t| usize::try_from(t).unwrap_or(0))
             .unwrap_or_else(|| sigs.books.read().len()),
@@ -240,3 +257,6 @@ pub(super) fn build_handlers(sigs: &LandingSignals) -> LandingHandlers {
         }),
     }
 }
+
+#[cfg(test)]
+mod tests;
