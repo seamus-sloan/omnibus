@@ -25,6 +25,7 @@ async fn record_session_inserts_per_format_row() {
             progress_units: 360,
             device_id: None,
             client_id: None,
+            utc_offset_minutes: None,
         },
     )
     .await
@@ -50,6 +51,7 @@ async fn record_session_inserts_per_format_row() {
             progress_units: 600,
             device_id: None,
             client_id: None,
+            utc_offset_minutes: None,
         },
     )
     .await
@@ -78,6 +80,7 @@ async fn record_session_inserts_per_format_row() {
             progress_units: 10,
             device_id: None,
             client_id: None,
+            utc_offset_minutes: None,
         },
     )
     .await
@@ -103,6 +106,7 @@ async fn record_session_tx_inserts_row_when_committed() {
             progress_units: 360,
             device_id: None,
             client_id: None,
+            utc_offset_minutes: None,
         },
     )
     .await
@@ -143,6 +147,7 @@ async fn insert_session_tx_inserts_epub_row_against_pre_resolved_uuid() {
             progress_units: 360,
             device_id: None,
             client_id: None,
+            utc_offset_minutes: None,
         },
         &uuid,
     )
@@ -181,6 +186,7 @@ async fn insert_session_tx_inserts_audio_row_against_pre_resolved_uuid() {
             progress_units: 600,
             device_id: None,
             client_id: None,
+            utc_offset_minutes: None,
         },
         &uuid,
     )
@@ -221,6 +227,7 @@ async fn record_session_tx_rollback_leaves_no_rows() {
                 progress_units: 360,
                 device_id: None,
                 client_id: None,
+                utc_offset_minutes: None,
             },
         )
         .await
@@ -281,6 +288,7 @@ async fn record_session_resolves_merged_uuid_and_records_against_canonical_book(
             progress_units: 360,
             device_id: None,
             client_id: None,
+            utc_offset_minutes: None,
         },
     )
     .await
@@ -318,6 +326,7 @@ async fn record_session_resolves_merged_audio_uuid_to_canonical_book() {
             progress_units: 600,
             device_id: None,
             client_id: None,
+            utc_offset_minutes: None,
         },
     )
     .await
@@ -351,6 +360,7 @@ async fn record_session_replay_with_same_client_id_inserts_one_row() {
         progress_units: 360,
         device_id: None,
         client_id: Some("session-abc".into()),
+        utc_offset_minutes: None,
     };
 
     // The reply to the first post is lost, so the client replays the very
@@ -385,6 +395,7 @@ async fn record_session_scopes_client_id_per_user_and_format() {
         progress_units: 360,
         device_id: None,
         client_id: Some("shared-handle".into()),
+        utc_offset_minutes: None,
     };
 
     record_session(&pool, alice, &report(ProgressFormat::Epub))
@@ -430,6 +441,7 @@ async fn record_session_without_client_id_still_inserts_every_report() {
         progress_units: 360,
         device_id: None,
         client_id: None,
+        utc_offset_minutes: None,
     };
     record_session(&pool, user, &report).await.unwrap();
     record_session(&pool, user, &report).await.unwrap();
@@ -439,4 +451,71 @@ async fn record_session_without_client_id_still_inserts_every_report() {
         .await
         .unwrap();
     assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn record_session_persists_the_capture_time_utc_offset_for_both_formats() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    // The offset is the only record of *where* the session happened, so it
+    // must survive the insert — `db::stats::patterns` excludes a row without
+    // one from the time-of-day charts entirely.
+    for (format, table) in [
+        (ProgressFormat::Epub, "reading_sessions"),
+        (ProgressFormat::Audio, "listening_sessions"),
+    ] {
+        record_session(
+            &pool,
+            user,
+            &SessionReport {
+                book_uuid: uuid.clone(),
+                format,
+                started_at: 100,
+                ended_at: 460,
+                progress_units: 360,
+                device_id: None,
+                client_id: None,
+                utc_offset_minutes: Some(-420),
+            },
+        )
+        .await
+        .unwrap();
+        let stored: Option<i64> =
+            sqlx::query_scalar(&format!("SELECT utc_offset_minutes FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, Some(-420), "{table} dropped the offset");
+    }
+}
+
+#[tokio::test]
+async fn record_session_leaves_the_utc_offset_null_when_the_client_sends_none() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    record_session(
+        &pool,
+        user,
+        &SessionReport {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            started_at: 100,
+            ended_at: 460,
+            progress_units: 360,
+            device_id: None,
+            client_id: None,
+            utc_offset_minutes: None,
+        },
+    )
+    .await
+    .unwrap();
+    // NULL, never 0 — zero is UTC, which is a place, and this row records no
+    // place at all.
+    let stored: Option<i64> = sqlx::query_scalar("SELECT utc_offset_minutes FROM reading_sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, None);
 }

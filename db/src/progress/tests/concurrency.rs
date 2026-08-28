@@ -90,6 +90,7 @@ async fn record_session_succeeds_for_many_concurrent_writers_on_one_pool() {
                         progress_units: 60,
                         device_id: None,
                         client_id: None,
+                        utc_offset_minutes: None,
                     },
                 )
                 .await

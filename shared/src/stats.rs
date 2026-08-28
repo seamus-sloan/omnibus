@@ -266,6 +266,36 @@ impl LibrarySize {
     }
 }
 
+/// One column of the time-of-day strip: an hour of the reader's **local** day
+/// and the active seconds recorded in it, reading and listening together.
+///
+/// `hour` is 0..=23 in the reader's own clock, resolved server-side from the
+/// UTC offset each session carried at capture time (`db::stats::patterns`) —
+/// never from the viewing client's zone, which would make the same account
+/// read differently on a phone abroad than on the desktop at home.
+/// [`StatsSummary::hour_of_day`] always carries all 24, ascending, zeros
+/// included.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HourBucket {
+    pub hour: i64,
+    pub seconds: i64,
+}
+
+/// One column of the day-of-week strip: a weekday in the reader's local
+/// calendar and the active seconds recorded on it.
+///
+/// `weekday` is 0 = Monday .. 6 = Sunday, and the server sends `label` with
+/// it for the same reason `LengthBucket` carries its own: week-start is a
+/// convention, and a client that assumed Sunday-first would silently draw
+/// every column one place out. [`StatsSummary::day_of_week`] always carries
+/// all 7, Monday first, zeros included.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WeekdayBucket {
+    pub weekday: i64,
+    pub label: String,
+    pub seconds: i64,
+}
+
 /// Scalar aggregates for the **same elapsed slice** of the preceding period —
 /// feeds each metric tile's drill-in delta. The current window is
 /// period-to-date, so this is month-to-date against the same days last month
@@ -408,6 +438,34 @@ pub struct StatsSummary {
     /// rather than flat bars.
     #[serde(default)]
     pub length_buckets: Vec<LengthBucket>,
+    /// Active seconds in the window by **local** hour of day — all 24
+    /// buckets, ascending, zeros included, so the shape of a day stays
+    /// readable rather than collapsing to whichever hours had activity.
+    /// Reading and listening together, like every other activity metric here.
+    ///
+    /// Bucketed server-side against the UTC offset each session recorded at
+    /// capture time, so every client draws the same columns from the same
+    /// payload. Sessions with no recorded offset are **not** in these totals;
+    /// their seconds are reported separately as [`Self::unzoned_seconds`].
+    #[serde(default)]
+    pub hour_of_day: Vec<HourBucket>,
+    /// Active seconds in the window by local weekday — all 7 buckets, Monday
+    /// first, zeros included. Same scoping and same exclusion as
+    /// [`Self::hour_of_day`], so the two strips always describe one set of
+    /// sessions and sum to the same total.
+    #[serde(default)]
+    pub day_of_week: Vec<WeekdayBucket>,
+    /// Active seconds in the window that carry no capture-time UTC offset and
+    /// so can't be placed on a local clock — rows written before migration
+    /// 0080, or by a client that doesn't report one.
+    ///
+    /// Surfaced rather than folded in: attributing them to UTC would put a
+    /// reader's evening in the small hours, and attributing them to some later
+    /// offset would invent a fact about where they were. A non-zero value is a
+    /// disclosure the two strips are drawn over less than the window's whole
+    /// total, not an error.
+    #[serde(default)]
+    pub unzoned_seconds: i64,
 }
 
 impl StatsSummary {
@@ -425,5 +483,17 @@ impl StatsSummary {
     /// state on the count would blank a populated page.
     pub fn is_empty(&self) -> bool {
         self.total_seconds() == 0 && self.books_finished == 0
+    }
+
+    /// Whether the time-pattern strips have anything to draw.
+    ///
+    /// Both strips are zero-filled to a fixed width, so "no data" and "a full
+    /// day of nothing" render identically — this is the predicate that tells
+    /// them apart, and it is deliberately shared rather than re-derived per
+    /// surface. Checks the hour strip alone: the two rollups run over one set
+    /// of sessions, so a non-empty weekday strip without a non-empty hour
+    /// strip is not a state the server can produce.
+    pub fn has_time_patterns(&self) -> bool {
+        self.hour_of_day.iter().any(|b| b.seconds > 0)
     }
 }

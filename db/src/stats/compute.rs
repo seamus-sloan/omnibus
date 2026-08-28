@@ -1,15 +1,16 @@
 //! SQL-heavy aggregation body for [`super::user_stats`]: `compute` runs one
 //! query per [`StatsSummary`] field and assembles the result. Sibling modules
 //! hold the rollups that grew their own sub-topic — `genre` for the donut,
-//! `pages` for the page estimate, `ratings` for the star metrics — keeping
-//! each file under the house line-count cap.
+//! `pages` for the page estimate, `patterns` for the time-of-day and
+//! day-of-week strips, `ratings` for the star metrics — keeping each file
+//! under the house line-count cap.
 
 use omnibus_shared::{
     DayActivity, FinishedBook, MonthCount, PeriodComparison, RankedEntity, StatsRange, StatsSummary,
 };
 use sqlx::{Row, SqlitePool};
 
-use super::{genre, pages, ratings, sessionize, streak, StatsError};
+use super::{genre, pages, patterns, ratings, sessionize, streak, StatsError};
 
 /// How many rows the top-authors / top-tags rollups return.
 const TOP_N: i64 = 8;
@@ -108,6 +109,7 @@ pub(super) async fn compute(
     let pages_read = pages::pages_read(pool, user_id, start).await?;
     let pages_per_hour = pages::pages_per_hour(pool, user_id, start).await?;
     let length_buckets = pages::length_buckets(pool, user_id, start).await?;
+    let time_patterns = patterns::time_patterns(pool, user_id, start).await?;
 
     Ok(StatsSummary {
         range,
@@ -137,6 +139,9 @@ pub(super) async fn compute(
         pages_read,
         pages_per_hour,
         length_buckets,
+        hour_of_day: time_patterns.hour_of_day,
+        day_of_week: time_patterns.day_of_week,
+        unzoned_seconds: time_patterns.unzoned_seconds,
     })
 }
 

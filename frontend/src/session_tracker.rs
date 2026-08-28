@@ -149,7 +149,43 @@ fn build_report(uuid: &str, format: ProgressFormat, start: i64, end: i64) -> Opt
         // Web posts a report once, on unmount, and never retries it — there
         // is no replay for a handle to make idempotent.
         client_id: None,
+        utc_offset_minutes: local_utc_offset_minutes(start),
     })
+}
+
+/// Minutes east of UTC on this device as of `unix_secs` — `-420` in Los
+/// Angeles, `330` in Kolkata. Stamped onto every session so the server can
+/// bucket it on the reader's own clock (`db::stats::patterns`) instead of on
+/// UTC.
+///
+/// Asked about the segment's own start rather than about "now": the two
+/// differ by an hour across a DST transition, and the offset that belongs on
+/// the row is the one that was in effect while the reading happened. It is a
+/// fact about where and when the reading happened, so a reader who later
+/// travels — or reads through the small hours of a transition night — must
+/// not have those sittings relabelled.
+///
+/// Not a hydration concern (rule 07): this runs from the tracker's flush
+/// path, never from a component body, so no markup depends on it.
+fn local_utc_offset_minutes(unix_secs: i64) -> Option<i64> {
+    #[cfg(feature = "web")]
+    {
+        // `time::local_utc_offset_secs` already owns the JS sign flip and the
+        // for-this-timestamp lookup; a second derivation here is how the two
+        // drift apart.
+        Some(crate::time::local_utc_offset_secs(unix_secs) / 60)
+    }
+    // The Android shell builds native, where `std` exposes no local offset and
+    // the crate carries no date library to ask. `local_utc_offset_secs`
+    // answers 0 there, which is a *claim* of UTC rather than an absence — so
+    // this reports `None` instead, and the session stays out of the
+    // local-time strips (it still counts everywhere else) until the shell
+    // grows a source for it.
+    #[cfg(not(feature = "web"))]
+    {
+        let _ = unix_secs;
+        None
+    }
 }
 
 /// Shared handle: the hooks mutate the tracker from effect closures, JS

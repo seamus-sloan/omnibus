@@ -250,12 +250,30 @@ pub struct SessionReport {
     /// which post once and never retry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    /// Minutes east of UTC on the recording device at capture time — `-420`
+    /// for UTC-7, `330` for UTC+05:30. The time-of-day rollups bucket
+    /// `started_at` against this instead of against UTC (see
+    /// `db::stats::patterns`), which is what lets a reader outside UTC see
+    /// their own evening as an evening, and keeps a session read while
+    /// travelling anchored to the place it happened.
+    ///
+    /// `None` from a client that doesn't report one, and on every row
+    /// predating migration 0080 — those are excluded from the time-pattern
+    /// charts rather than silently defaulted to UTC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utc_offset_minutes: Option<i64>,
 }
 
 impl SessionReport {
     /// Maximum length (in chars) of a client-minted session id. Mirror of
     /// [`CreateHighlight::CLIENT_ID_MAX_LEN`].
     pub const CLIENT_ID_MAX_LEN: usize = CreateHighlight::CLIENT_ID_MAX_LEN;
+
+    /// Lower bound (inclusive) on [`Self::utc_offset_minutes`] — UTC-12:00.
+    pub const UTC_OFFSET_MIN_MINUTES: i64 = -12 * 60;
+    /// Upper bound (inclusive) on [`Self::utc_offset_minutes`] — UTC+14:00,
+    /// the eastern extreme of the real IANA span (Kiritimati).
+    pub const UTC_OFFSET_MAX_MINUTES: i64 = 14 * 60;
 
     /// Reject empty UUIDs, inverted time ranges, negative durations, and a
     /// malformed `client_id` before they reach the `reading_sessions` /
@@ -286,6 +304,19 @@ impl SessionReport {
                 return Err(format!(
                     "client_id exceeds {} characters",
                     Self::CLIENT_ID_MAX_LEN
+                ));
+            }
+        }
+        // Bounded at the boundary rather than trusted: the offset is a
+        // *shift applied to a timestamp*, so an absurd value doesn't produce a
+        // wrong-looking row, it silently relabels the session's hour and
+        // weekday in the aggregate.
+        if let Some(offset) = self.utc_offset_minutes {
+            if !(Self::UTC_OFFSET_MIN_MINUTES..=Self::UTC_OFFSET_MAX_MINUTES).contains(&offset) {
+                return Err(format!(
+                    "utc_offset_minutes must be between {} and {}",
+                    Self::UTC_OFFSET_MIN_MINUTES,
+                    Self::UTC_OFFSET_MAX_MINUTES
                 ));
             }
         }

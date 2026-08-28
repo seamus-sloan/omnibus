@@ -154,6 +154,18 @@ struct StatsView: View {
                     }
                 }
 
+                // Zero-filled to 24 and 7 columns, so an empty period has the
+                // same shape as a full one — `hasTimePatterns` is what tells
+                // them apart, and without it the section would draw two rows
+                // of flat bars and call it a reading pattern. It still shows
+                // for a period that is *only* unplaceable activity, because
+                // that is the one case a reader needs the note to explain.
+                if summary.hasTimePatterns || summary.unzonedSeconds > 0 {
+                    section("When you read") {
+                        TimePatternCharts(summary: summary)
+                    }
+                }
+
                 if !summary.topAuthors.isEmpty {
                     section("Top authors") {
                         RankedList(entries: summary.topAuthors) { entry in
