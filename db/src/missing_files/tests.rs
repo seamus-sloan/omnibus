@@ -878,6 +878,10 @@ async fn user_data_book_uuid_probes_use_the_book_uuid_first_index() {
             "reading_progress_daily",
             "idx_reading_progress_daily_book_uuid",
         ),
+        (
+            "reading_progress_marks",
+            "idx_reading_progress_marks_book_uuid",
+        ),
         ("listening_sessions", "idx_listening_sessions_book_uuid"),
         ("annotations", "idx_annotations_book_uuid"),
         ("wishlist_entries", "idx_wishlist_book"),
