@@ -4,13 +4,10 @@
 
 use omnibus_shared::{ProgressFormat, ResumePoint};
 
-use crate::pages::listen::remaining_at_rate;
-
 /// Meta line + progress percentage for a resume point. Audio rows with known
-/// totals get "Ch. N · 42% · 7h 50m left" — the "left" span rate-adjusted by
-/// the saved playback rate, matching the player's readouts; audio without
-/// totals falls back to the raw position; epub rows read as a plain continue
-/// affordance.
+/// totals get "Ch. N · 42% · 7h 50m left" — the "left" span in book time,
+/// matching the player's readouts (#2246); audio without totals falls back to
+/// the raw position; epub rows read as a plain continue affordance.
 pub(super) fn resume_meta(point: &ResumePoint) -> (String, Option<i64>) {
     if point.record.format == ProgressFormat::Epub {
         // A stored whole-book percent (a Kobo's write, the comic pager's
@@ -27,10 +24,7 @@ pub(super) fn resume_meta(point: &ResumePoint) -> (String, Option<i64>) {
             // Clamped to 0..=100 above, so the cast is in-range (NaN → 0).
             #[allow(clippy::cast_possible_truncation)]
             let pct = ((pos / total).clamp(0.0, 1.0) * 100.0).round() as i64;
-            let left = format_hm_left(remaining_at_rate(
-                (total - pos).max(0.0),
-                point.playback_rate.unwrap_or(1.0),
-            ));
+            let left = format_hm_left((total - pos).max(0.0));
             let ch = point
                 .chapter_number
                 .map(|n| format!("Ch. {n} \u{00b7} "))
@@ -110,14 +104,15 @@ mod tests {
         assert_eq!(meta, "Ch. 3 \u{00b7} 50% \u{00b7} 1h 00m left");
     }
 
+    // Issue #2246: the card reads book time, the one clock the player uses,
+    // so a saved playback rate moves nothing here either.
     #[test]
-    fn resume_meta_scales_time_left_by_the_saved_playback_rate() {
+    fn resume_meta_reads_book_time_regardless_of_the_saved_playback_rate() {
         let mut p = point(ProgressFormat::Audio, Some(3600.0), Some(7200.0));
         p.playback_rate = Some(2.0);
         let (meta, pct) = resume_meta(&p);
-        // Percent stays in book time; only the wall-clock wait scales.
         assert_eq!(pct, Some(50));
-        assert_eq!(meta, "Ch. 3 \u{00b7} 50% \u{00b7} 30m left");
+        assert_eq!(meta, "Ch. 3 \u{00b7} 50% \u{00b7} 1h 00m left");
     }
 
     #[test]

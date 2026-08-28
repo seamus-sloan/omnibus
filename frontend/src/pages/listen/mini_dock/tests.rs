@@ -29,15 +29,15 @@ fn progress_pct_treats_non_finite_elapsed_as_zero() {
 
 #[test]
 fn time_left_text_is_none_when_duration_unknown() {
-    assert_eq!(time_left_text(10.0, 0.0, 1.0), None);
-    assert_eq!(time_left_text(f64::NAN, 100.0, 1.0), None);
+    assert_eq!(time_left_text(10.0, 0.0), None);
+    assert_eq!(time_left_text(f64::NAN, 100.0), None);
 }
 
 #[test]
 fn time_left_text_formats_hours_and_minutes() {
     // 6600 s left at 1.0× → 110 min → 1h 50m.
     assert_eq!(
-        time_left_text(0.0, 6600.0, 1.0),
+        time_left_text(0.0, 6600.0),
         Some("about 1h 50m left".to_string())
     );
 }
@@ -45,16 +45,7 @@ fn time_left_text_formats_hours_and_minutes() {
 #[test]
 fn time_left_text_formats_minutes_only_under_an_hour() {
     assert_eq!(
-        time_left_text(0.0, 1800.0, 1.0),
-        Some("about 30m left".to_string())
-    );
-}
-
-#[test]
-fn time_left_text_divides_by_playback_rate() {
-    // 3600 s left at 2.0× → 30 wall-clock minutes.
-    assert_eq!(
-        time_left_text(0.0, 3600.0, 2.0),
+        time_left_text(0.0, 1800.0),
         Some("about 30m left".to_string())
     );
 }
@@ -62,30 +53,21 @@ fn time_left_text_divides_by_playback_rate() {
 #[test]
 fn time_left_text_is_none_at_or_past_the_end() {
     // At the finish there is no time left — don't claim a phantom "1m".
-    assert_eq!(time_left_text(3600.0, 3600.0, 1.0), None);
-    assert_eq!(time_left_text(4000.0, 3600.0, 1.0), None);
+    assert_eq!(time_left_text(3600.0, 3600.0), None);
+    assert_eq!(time_left_text(4000.0, 3600.0), None);
 }
 
 #[test]
-fn time_left_text_floors_at_one_minute_and_ignores_bad_rate() {
+fn time_left_text_floors_at_one_minute() {
     assert_eq!(
-        time_left_text(3599.0, 3600.0, 1.0),
+        time_left_text(3599.0, 3600.0),
         Some("about 1m left".to_string())
-    );
-    // Non-finite / non-positive rates fall back to 1.0×.
-    assert_eq!(
-        time_left_text(0.0, 1800.0, f64::NAN),
-        Some("about 30m left".to_string())
-    );
-    assert_eq!(
-        time_left_text(0.0, 1800.0, 0.0),
-        Some("about 30m left".to_string())
     );
 }
 
 #[test]
 fn dock_sub_text_includes_chapter_clock_and_time_left() {
-    let sub = dock_sub_text(Some("Ch. 2 \u{00b7} The Journey".into()), 65.0, 3665.0, 1.0);
+    let sub = dock_sub_text(Some("Ch. 2 \u{00b7} The Journey".into()), 65.0, 3665.0);
     assert_eq!(
         sub,
         "Ch. 2 \u{00b7} The Journey \u{00b7} 1:05 / 1:01:05 \u{00b7} about 1h 0m left"
@@ -95,19 +77,19 @@ fn dock_sub_text_includes_chapter_clock_and_time_left() {
 #[test]
 fn dock_sub_text_is_clock_and_time_left_without_chapters() {
     assert_eq!(
-        dock_sub_text(None, 65.0, 185.0, 1.0),
+        dock_sub_text(None, 65.0, 185.0),
         "1:05 / 3:05 \u{00b7} about 2m left"
     );
 }
 
+// Issue #2246: the dock's clock is book time, so a speed change moves
+// nothing on it — the same figures the full player and the chapter list
+// show.
 #[test]
-fn dock_sub_text_scales_the_clock_to_the_playback_rate() {
-    // 10 book-minutes into an hour at 2x: the clock and the time-left share
-    // one wall-clock basis (5:00 elapsed + 25m left = the 30:00 total),
-    // rather than a 1x clock beside a rate-adjusted "left" (#2108).
+fn dock_sub_text_reads_book_time_regardless_of_speed() {
     assert_eq!(
-        dock_sub_text(None, 600.0, 3600.0, 2.0),
-        "5:00 / 30:00 \u{00b7} about 25m left"
+        dock_sub_text(None, 600.0, 3600.0),
+        "10:00 / 1:00:00 \u{00b7} about 50m left"
     );
 }
 

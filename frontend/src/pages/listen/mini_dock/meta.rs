@@ -2,7 +2,7 @@
 //! gate shared with the `/read` route, and the subtitle line (chapter ·
 //! clock · time-left).
 
-use super::super::helpers::{format_hms, remaining_at_rate};
+use super::super::helpers::format_hms;
 
 /// Progress fill percent (0–100) for the dock's mini progress bar. Returns 0
 /// when the duration is unknown or `elapsed` is non-finite so the bar never
@@ -41,21 +41,17 @@ pub(crate) fn dock_is_active(
     book.is_some() && uuid.is_some()
 }
 
-/// Wall-clock listening time left at the current speed, e.g.
-/// "about 1h 50m left". `None` while the duration is unknown or once playback
+/// Book time left, e.g. "about 1h 50m left" — the same clock the dock's own
+/// `elapsed / total` reads and the chapter list states its durations in
+/// (#2246). `None` while the duration is unknown or once playback
 /// reaches/​passes the end (no phantom "1m left" at the finish); a positive
 /// sub-minute remainder rounds up to "about 1m left" rather than counting
 /// seconds.
-pub(super) fn time_left_text(elapsed: f64, duration: f64, rate: f64) -> Option<String> {
+pub(super) fn time_left_text(elapsed: f64, duration: f64) -> Option<String> {
     if duration <= 0.0 || !elapsed.is_finite() {
         return None;
     }
-    let rate = if rate.is_finite() && rate > 0.0 {
-        rate
-    } else {
-        1.0
-    };
-    let secs = (duration - elapsed) / rate;
+    let secs = duration - elapsed;
     if secs <= 0.0 {
         return None;
     }
@@ -73,27 +69,20 @@ pub(super) fn time_left_text(elapsed: f64, duration: f64, rate: f64) -> Option<S
 }
 
 /// Build the dock subtitle: the chapter label (when present), the inline
-/// `elapsed / total` clock, and the speed-adjusted time left. The single-row
-/// bar has no separate time track, so the clock lives here. The clock shares
-/// the time-left's rate-adjusted wall-clock basis — a 1x clock beside a
-/// rate-adjusted "left" disagrees with itself off 1x (#2108, matching the
-/// player surfaces).
+/// `elapsed / total` clock, and the time left. The single-row bar has no
+/// separate time track, so the clock lives here. Every figure is book time,
+/// the one clock the whole player reads in (#2246).
 pub(super) fn dock_sub_text(
     chapter_sub: Option<String>,
     elapsed: f64,
     duration: f64,
-    rate: f64,
 ) -> String {
-    let time = format!(
-        "{} / {}",
-        format_hms(remaining_at_rate(elapsed, rate)),
-        format_hms(remaining_at_rate(duration, rate))
-    );
+    let time = format!("{} / {}", format_hms(elapsed), format_hms(duration));
     let mut sub = match chapter_sub {
         Some(chapter) => format!("{chapter} \u{00b7} {time}"),
         None => time,
     };
-    if let Some(left) = time_left_text(elapsed, duration, rate) {
+    if let Some(left) = time_left_text(elapsed, duration) {
         sub.push_str(" \u{00b7} ");
         sub.push_str(&left);
     }

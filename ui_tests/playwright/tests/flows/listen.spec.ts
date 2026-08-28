@@ -286,6 +286,54 @@ test("surfaces playback speed persistence failures without reverting playback", 
   );
 });
 
+// Regression for issue #2246. The transport used to divide elapsed/remaining/
+// total by the playback rate while the chapter list stayed in book time, so
+// off 1x the two disagreed with each other — and elapsed ran *backwards* on a
+// speed-up. Everything the player shows is book time now, so a speed change
+// moves nothing.
+test("a speed change moves neither the transport clock nor the chapter durations", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MULTIPART_MP3_BOOK.title);
+  // The rate write is stubbed out: this asserts what the player *displays*,
+  // and a real write would set a speed every other test on this fixture sees.
+  await page.route(PLAYBACK_RATE_SET_URL, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({}),
+    }),
+  );
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  const times = page.getByTestId("listen-scrub-times");
+  await expect(times).toContainText("remaining");
+  const timesBefore = (await times.innerText()).trim();
+  expect(timesBefore).toMatch(/\d+:\d\d/);
+
+  const drawer = page.getByTestId("chapters-drawer");
+  await page.getByRole("button", { name: /^chapters/i }).click();
+  await expect(drawer).toBeVisible();
+  const chaptersBefore = (await drawer.innerText()).trim();
+  expect(chaptersBefore).toMatch(/\d+:\d\d/);
+  await page.getByRole("button", { name: /^chapters/i }).click();
+  await expect(drawer).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Playback speed" }).click();
+  await page.getByRole("button", { name: "1.5×", exact: true }).click();
+  await expect(page.getByTestId("listen-rate")).toHaveText("1.50×");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("speed-panel")).toHaveCount(0);
+
+  // One clock for the whole screen: neither readout moved.
+  expect((await times.innerText()).trim()).toBe(timesBefore);
+  await page.getByRole("button", { name: /^chapters/i }).click();
+  await expect(drawer).toBeVisible();
+  expect((await drawer.innerText()).trim()).toBe(chaptersBefore);
+});
+
 // ---------------------------------------------------------------------------
 // 3. Open from book detail
 // ---------------------------------------------------------------------------

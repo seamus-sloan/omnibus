@@ -368,7 +368,6 @@ pub(super) fn PlayerStageBinding(
                 elapsed: elapsed_now,
                 duration: dur,
                 remaining: (dur - elapsed_now).max(0.0),
-                rate: (signals.rate)(),
                 scrub_max: scrub_max(dur),
                 current_chapter_index: current_chapter_index(),
                 // Only meaningful once playback was actually requested — a

@@ -329,15 +329,20 @@ pub(super) fn format_hms(seconds: f64) -> String {
 }
 
 /// Wall-clock seconds a listener at `rate` experiences for a real (1x)
-/// book-time span — remaining, elapsed, or a whole duration; falls back to
-/// `seconds` unscaled when `rate` is non-finite or non-positive. Shared by
-/// the web and mobile players and the landing resume hero so every readout
-/// on a row shares one basis: a 1x elapsed or total label beside a
-/// rate-adjusted remaining label disagrees with its own row the moment the
-/// speed leaves 1x (#2108). Positions that *name a place* in the book —
-/// bookmark timestamps, chapter start times, chapter-list lengths — stay 1x
-/// book-time; only elapsed/remaining/total rows scale.
-pub(crate) fn remaining_at_rate(seconds: f64, rate: f64) -> f64 {
+/// book-time span; falls back to `seconds` unscaled when `rate` is
+/// non-finite or non-positive.
+///
+/// **Not for a displayed clock.** Every readout in the player — elapsed,
+/// remaining, total, chapter durations, the chapters drawer, the mini dock,
+/// the resume card — is book time, so the transport and the chapter list
+/// cannot disagree and elapsed cannot run backwards when the listener speeds
+/// up (#2246). This is for a genuine wall-clock *timer*: the sleep timer's
+/// end-of-chapter countdown is the only caller, and a new one needs the same
+/// justification.
+// The sleep timer is the desktop/web player's, so this has no caller in a
+// mobile build.
+#[cfg(not(feature = "mobile"))]
+pub(super) fn remaining_at_rate(seconds: f64, rate: f64) -> f64 {
     if !rate.is_finite() || rate <= 0.0 {
         return seconds;
     }
