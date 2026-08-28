@@ -34,6 +34,13 @@ const MULTIPART_MP3_BOOK = AUDIOBOOK_BOOKS.find(
 const LOCAL_SEED_BOOK = AUDIOBOOK_BOOKS.find(
   (b) => b.format === "MP3" && b.source === "public_domain",
 )!;
+// The one-clock spec needs chapters whose real lengths are minutes, not the
+// ~2.09s of a generated fixture: halving two seconds is invisible at the
+// second granularity `format_hms` renders, so a generated book would let a
+// 1x chapter list pass as a rate-adjusted one. The public-domain M4B is the
+// only long book no other spec persists a rate on — `LOCAL_SEED_BOOK` looks
+// like the better fit but the seed test leaves 1.80x saved on it.
+const CHAPTERED_BOOK = M4B_BOOK;
 
 /**
  * Wait until the listen page's manifest fetch has resolved and
@@ -333,7 +340,7 @@ test("a speed change rescales the transport total and the chapter durations toge
   page,
   request,
 }) => {
-  const uuid = await fetchBookUuidByTitle(request, MULTIPART_MP3_BOOK.title);
+  const uuid = await fetchBookUuidByTitle(request, CHAPTERED_BOOK.title);
   // The rate write is stubbed out: this asserts what the player *displays*,
   // and a real write would set a speed every other test on this fixture sees.
   await page.route(PLAYBACK_RATE_SET_URL, (route) =>
@@ -358,13 +365,19 @@ test("a speed change rescales the transport total and the chapter durations toge
   await expect(page.getByTestId("speed-panel")).toHaveCount(0);
 
   // Both readouts halve, so they still describe the same book — and the
-  // listener sees the time the book will actually take them. One second of
+  // listener sees the time the book will actually take them. A second of
   // slack per figure absorbs the truncation in `format_hms`.
-  expect(await transportTotalSeconds(page)).toBeCloseTo(totalAt1x / 2, -0.5);
+  const totalAt2x = await transportTotalSeconds(page);
+  expect(totalAt2x).toBeLessThan(totalAt1x);
+  expect(Math.abs(totalAt2x - totalAt1x / 2)).toBeLessThanOrEqual(1);
+
   const chaptersAt2x = await chapterDurationSeconds(page);
   expect(chaptersAt2x.length).toBe(chaptersAt1x.length);
   chaptersAt2x.forEach((secs, i) => {
-    expect(secs).toBeCloseTo(chaptersAt1x[i]! / 2, -0.5);
+    // Every figure must actually have moved — a chapter list left at 1x is
+    // exactly what this test exists to catch.
+    expect(secs, `chapter ${i} should rescale`).toBeLessThan(chaptersAt1x[i]!);
+    expect(Math.abs(secs - chaptersAt1x[i]! / 2)).toBeLessThanOrEqual(1);
   });
 });
 
