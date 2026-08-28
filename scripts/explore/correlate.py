@@ -53,6 +53,16 @@ BORING_STATUSES = {304}
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 UNRANKED = "unranked"
 
+# An anomaly is a defect unless the agent said otherwise. `kind: issue` is for
+# friction the agent hit while running — a control that responded slowly, a
+# step it could not validate, a step that took far longer than it should —
+# which is worth reporting but is not a claim that the app is wrong. This is
+# still the agent's judgement rendered verbatim, not a rule about behaviour
+# (see the report.py docstring); an unrecognised word reads as a defect,
+# because misfiling friction costs a row in the wrong table while misfiling a
+# defect loses it.
+ISSUE_KINDS = {"issue", "friction", "execution"}
+
 # Requests the browser makes on its own. Attributing these to an agent's action
 # is noise dressed as a finding; nothing else is suppressed.
 IGNORED_PATHS = {"/favicon.ico"}
@@ -115,6 +125,12 @@ class Entry:
     def severity(self) -> str:
         raw = str(self.params.get("severity", "")).strip().lower()
         return raw or UNRANKED
+
+    @property
+    def kind(self) -> str:
+        """`defect` or `issue` — which table this anomaly belongs in."""
+        raw = str(self.params.get("kind", "")).strip().lower()
+        return "issue" if raw in ISSUE_KINDS else "defect"
 
     @property
     def citation(self) -> str:

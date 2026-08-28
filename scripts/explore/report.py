@@ -58,6 +58,10 @@ from correlate import (  # noqa: E402
 DETAIL_DEFAULT = "medium"
 TABLE_CLIP = 140
 DETAIL_CLIP = 1200
+# A summary row is a pointer to the detail block, not a substitute for it —
+# start.md asks agents for at most two short sentences, and this is the cap
+# that keeps one that ran long from pushing the rest of the table off-screen.
+DESCRIPTION_CLIP = 200
 
 # What to expand under an anomaly, and the param names agents actually use for
 # each. `start.md` pins only `severity`, `expected` and `observed`; the rest is
@@ -144,6 +148,12 @@ class Report:
         self.log_src = log_src
         self.spans = run.spans()
         self.anomalies = ranked_anomalies(run)
+        # Split on the agent's own `kind`, worst-first within each. Two tables,
+        # because "the app is wrong" and "this was slow or unverifiable" are
+        # read by different people for different reasons, and a single ranked
+        # list buries the first kind under the second on a friction-heavy run.
+        self.defect_rows = [a for a in self.anomalies if a.kind == "defect"]
+        self.issue_rows = [a for a in self.anomalies if a.kind == "issue"]
         self.out: list[str] = []
 
     # ---------- facts the verdict and the sections both need ----------
@@ -211,12 +221,14 @@ class Report:
         self.verdict()
         self.citations()
         self.coverage()
-        self.ranked()
+        self.defects()
+        self.execution_issues()
         self.detail()
         self.server_log()
         self.audit_section()
         self.integrity()
         self.timeline()
+        self.journal_files()
         return "\n".join(self.out).rstrip() + "\n"
 
     def header(self) -> None:
@@ -319,31 +331,44 @@ class Report:
             self.add(f"| {actor} | {clip(flows, 80)} | {len(entries)} | {len(anom)} | {vs} |")
         self.add("")
 
-    def ranked(self) -> None:
+    def defects(self) -> None:
+        """What the agents say is wrong with the app."""
+        self.anomaly_table("Defects", self.defect_rows)
+
+    def execution_issues(self) -> None:
+        """Friction the agents hit while running — a control that responded
+        slowly, a step they could not validate, a step that took far longer
+        than it should. Reportable, but not a claim that the app is wrong.
+        """
+        self.anomaly_table("Execution issues", self.issue_rows)
+
+    def anomaly_table(self, title: str, rows: list) -> None:
         """AC2: every row cites the journal line needed to reproduce it."""
-        if not self.anomalies:
+        if not rows:
             return
-        self.add("## Ranked anomalies", "",
-                 "| # | Severity | Agent | Flow | Time | Journal | What |",
-                 "|---:|---|---|---|---|---|---|")
-        for i, a in enumerate(self.anomalies, start=1):
+        self.add(f"## {title}", "",
+                 "| # | Priority | Description | Agent |",
+                 "|---:|---|---|---|")
+        for i, a in enumerate(rows, start=1):
             summary = a.note or a.params.get("observed") or a.params.get("expected") or ""
-            self.add(
-                f"| {i} | {a.severity} | {a.actor} | {a.flow} | {hhmmss(a)} | "
-                f"`L{a.line}` (seq {a.seq}) | {clip(summary, TABLE_CLIP)} |"
-            )
+            self.add(f"| {i} | {a.severity} | {clip(summary, DESCRIPTION_CLIP)} "
+                     f"(`L{a.line}`) | {a.actor} |")
         self.add("")
 
     def detail(self) -> None:
+        # Numbered per table, and labelled with which one — a bare "3." would
+        # be ambiguous the moment there are two numbered lists above it.
         cut = severity_rank(self.args.detail_severity)
-        shown = [a for a in self.anomalies if severity_rank(a.severity) <= cut]
+        shown = [(label, i, a)
+                 for label, rows in (("Defect", self.defect_rows), ("Issue", self.issue_rows))
+                 for i, a in enumerate(rows, start=1)
+                 if severity_rank(a.severity) <= cut]
         if not shown:
             return
         self.add(f"### Detail — {self.args.detail_severity} and above", "")
-        for i, a in enumerate(self.anomalies, start=1):
-            if severity_rank(a.severity) > cut:
-                continue
-            self.add(f"#### {i}. `{a.severity}` · {a.actor} · {a.flow} · {hhmmss(a)} · `L{a.line}`", "")
+        for label, i, a in shown:
+            self.add(f"#### {label} {i}. `{a.severity}` · {a.actor} · {a.flow} · "
+                     f"{hhmmss(a)} · `L{a.line}`", "")
             if a.target:
                 self.add(f"- **Target** `{a.target}`")
             for label, keys in DETAIL_FIELDS:
@@ -480,6 +505,31 @@ class Report:
                 self.add(f"- `{hhmmss(e)}` `L{e.line}` **{e.action}** ({e.flow}, {e.outcome})"
                          f"{extra}")
             self.add("", "</details>", "")
+
+    def journal_files(self) -> None:
+        """Where the run's records are, in full, and always — this is the one
+        section that is rendered even when it is the only thing to say.
+
+        Every citation above is a line number in a file, and the report is read
+        long after the session that produced it is gone. A reader who cannot
+        find the journal cannot replay a single row.
+        """
+        run_dir = self.run.path.parent
+        self.add("## Journal files", "",
+                 f"- Run directory — `{run_dir}`",
+                 f"- Journal — `{self.run.path}` "
+                 f"({plural(len(self.run.entries), 'entry', 'entries')})")
+
+        audit_path = self.args.audit or (run_dir / "audit.json")
+        self.add(f"- Audit — `{audit_path}`" if Path(audit_path).is_file()
+                 else f"- Audit — not written ({self.audit_src.headline})")
+
+        if self.args.out != "-":
+            out = Path(self.args.out) if self.args.out else run_dir / "report.md"
+            self.add(f"- This report — `{out}`")
+        for path in self.args.server_log or []:
+            self.add(f"- Server log — `{path}`")
+        self.add("")
 
 
 def load_env() -> None:

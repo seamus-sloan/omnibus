@@ -112,7 +112,13 @@ Three entries are special:
 
 - **`flow.start`** — first line of every flow.
 - **`anomaly`** — something looked wrong. `params` carries `severity`
-  (`high`/`medium`/`low`), `expected`, and `observed`.
+  (`high`/`medium`/`low`), `expected`, `observed`, and `kind`: **`defect`** when
+  the app is wrong, **`issue`** when the *run* was — a control that responded
+  slowly, a step you could not validate, a step that took far longer than it
+  should. The two are reported in separate tables, and an anomaly with no
+  `kind` is read as a defect. Keep its `note` to **two short sentences at
+  most**: that note is a description cell in the report, and the detail belongs
+  in `expected`, `observed`, and `repro`.
 - **`flow.end`** — last line. `params` carries `verdict` (`pass`, `fail`, or
   `uncertain`) and a one-sentence `reason`.
 
