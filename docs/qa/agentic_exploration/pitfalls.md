@@ -33,11 +33,13 @@ rather than pressing on with unreliable evidence.
 
 ## Your driver, not the app
 
-- **A command that returns `"Done"` did not fail.** The driver only prints a
-  value for *expression-shaped* commands. `page.evaluate(async () => { … return
-  x })` yields `"Done"`; the same thing written without braces —
-  `page.evaluate(() => fetch(…).then(r => r.status))` — yields the value.
-  Getting `"Done"` means rewrite the command, not that the app is broken.
+- **A command that returns `"Done"` did not fail.** The driver swallows the
+  result whenever the command contains a semicolon — **including one inside a
+  string literal**: `page.evaluate(() => "a; b")` yields `"Done"` while
+  `page.evaluate(() => "a b")` yields `"a b"`. Brace-bodied arrows
+  (`async () => { … return x }`) hit it for the same reason. Rewrite without
+  semicolons — chain with `.then()` and drop statement separators. `"Done"`
+  means rewrite the command, not that the app is broken.
 - **A file input cannot be clicked.** Clicking one opens a native dialog nothing
   can see. Upload with
   `page.getByTestId("add-books-file-input").setInputFiles("/abs/path.epub")`
