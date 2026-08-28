@@ -76,7 +76,7 @@ DETAIL_FIELDS = (
 
 def clip(text, limit: int) -> str:
     """One-line, pipe-safe, length-capped — markdown table cells are unforgiving."""
-    s = " ".join(str(text or "").split()).replace("|", "\\|")
+    s = " ".join(str(text if text is not None else "").split()).replace("|", "\\|")
     return s if len(s) <= limit else s[: limit - 1].rstrip() + "…"
 
 
@@ -414,7 +414,7 @@ class Report:
                 cite = f"`L{line}` (seq {seq})" if line else (f"seq {seq}" if seq is not None else "—")
                 self.add(
                     f"| {clip(f.get('kind'), 20)} | {clip(f.get('actor'), 20)} | "
-                    f"{clip(f.get('what'), 30)} | `{clip(f.get('target'), 40)}` | "
+                    f"{clip(f.get('what'), 30)} | {'`' + clip(f.get('target'), 40) + '`' if f.get('target') else '—'} | "
                     f"{clip(f.get('expected'), 90)} | {clip(f.get('observed'), 90)} | {cite} |"
                 )
             self.add("")

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -435,8 +436,21 @@ def fetch_server_log(
     while cursor <= end.date():
         days.append(cursor.isoformat())
         cursor += timedelta(days=1)
-    files = " ".join(f"~/{remote_dir}/{log_dir}/omnibus.log.{d}" for d in days)
-    cmd = f"grep -hE '{PREFILTER}' {files} 2>/dev/null || true"
+    # shlex.quote leaves a clean path untouched (so `~` still expands) and
+    # quotes only when metacharacters appear — at which point injection safety
+    # beats tilde expansion for a value that was never a sane path anyway.
+    files = " ".join(
+        "~/" + shlex.quote(f"{remote_dir}/{log_dir}/omnibus.log.{d}") for d in days
+    )
+    # Paths are quoted because remote_dir/log_dir come from env/.env — a space
+    # or metacharacter must stay a filename, not become remote shell. grep's
+    # rc contract: 0 matches, 1 no matches (fine — a quiet day), >=2 a real
+    # error (missing dir, unreadable file) that must surface as a caveat
+    # rather than be masked into "read from …" by a blanket `|| true`.
+    cmd = (
+        f"grep -hE {shlex.quote(PREFILTER)} {files} 2>/dev/null; "
+        "rc=$?; [ $rc -le 1 ] && exit 0; exit $rc"
+    )
     try:
         proc = subprocess.run(
             ["ssh", "-o", "ConnectTimeout=15", "-o", "BatchMode=yes", host, cmd],
