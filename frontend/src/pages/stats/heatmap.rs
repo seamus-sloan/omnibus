@@ -1,9 +1,8 @@
 //! Reading-days heatmap card: a pure-CSS GitHub-style trailing-year calendar
 //! grid (in the all-time section, never re-queried by the switcher) with the
-//! current and longest streak figures in its header. Both are server-computed
-//! so no client derives its own. Day math runs on epoch-day numbers via
-//! the civil-date algorithms below — no date crate — over the DTO's UTC
-//! `YYYY-MM-DD` strings.
+//! server-computed current and longest streak figures in its header. Day math
+//! runs on epoch-day numbers via the civil-date algorithms below — no date
+//! crate — over the DTO's UTC `YYYY-MM-DD` strings.
 
 use std::collections::HashMap;
 
@@ -230,6 +229,52 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two streak figures land in their own slots, and neither takes the
+    /// other's. Asserting only that both labels appear can't tell them apart —
+    /// swapping the two bindings would leave such a test green while the card
+    /// reported a reader's record as the run they're on.
+    #[cfg(feature = "server")]
+    #[test]
+    fn heatmap_card_renders_current_and_longest_in_their_own_slots() {
+        let summary = StatsSummary {
+            as_of_day: "2026-07-12".to_string(),
+            current_streak_days: 3,
+            longest_streak_days: 9,
+            ..Default::default()
+        };
+        let html = crate::test_support::render(rsx! { HeatmapCard { summary } });
+
+        let at = |testid: &str| {
+            html.find(&format!(r#""{testid}""#))
+                .unwrap_or_else(|| panic!("{testid} missing from:\n{html}"))
+        };
+        let (current_at, longest_at) = (at("stats-current-streak"), at("stats-longest-streak"));
+        assert!(
+            current_at < longest_at,
+            "the live run leads, the record follows"
+        );
+
+        // Bounded at the record's slot, so a swapped binding shows up as the
+        // record's 9 appearing where the live run's 3 belongs.
+        let current = &html[current_at..longest_at];
+        assert!(current.contains('3'), "current slot: {current}");
+        assert!(
+            current.contains("Current streak"),
+            "current slot: {current}"
+        );
+        assert!(
+            !current.contains('9'),
+            "the record leaked into the current slot: {current}"
+        );
+
+        let longest = &html[longest_at..];
+        assert!(longest.contains('9'), "longest slot: {longest}");
+        assert!(
+            longest.contains("Longest streak"),
+            "longest slot: {longest}"
+        );
+    }
 
     #[test]
     fn day_number_round_trips_through_day_string() {
