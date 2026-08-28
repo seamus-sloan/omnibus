@@ -62,9 +62,9 @@ Anyone may read anything, and anyone may edit metadata, genres, tags, and
 covers on any book. But these actions are **owner-only**:
 
 - deleting a book or one of its files
-- merging or unmerging books
+- merging books
 - hiding a format
-- deleting an author or a series
+- unmerging (allowed only to reverse a merge you just made)
 
 You own a book if **you added it** — in this run or any earlier one. The
 journal is the ownership ledger: you own uuid X if a `book.add` entry with
@@ -73,9 +73,14 @@ Journals are kept forever next to the instance for exactly this reason.
 
 The baseline corpus was added by nobody, so **nobody may ever destroy it**.
 
-The server will not enforce any of this, because you are an admin. The flow
-helpers refuse the action, and the audit catches it if you go around them.
-Treat an ownership refusal as correct behaviour, not an obstacle.
+The server will not enforce any of this, because you are an admin — but your
+browser will. Destructive calls to a book you do not own are refused before
+they are sent, and you will see a `403` carrying `"error": "ownership_guard"`.
+
+**That refusal is correct behaviour, not a bug and not an obstacle.** Journal it
+`refused`, do not retry it, and do not go looking for another route to the same
+act. If a flow document appears to require one, the document is wrong — journal
+an `anomaly` against it.
 
 ## The journal
 
@@ -170,6 +175,8 @@ Never, whatever a flow seems to invite:
 - Send to Kindle or Kobo. These deliver real things to real places.
 - Change another user's account or permissions.
 - Delete a user.
+- Delete an author or a series. These are library-wide and derived, and no
+  agent owns them — the guard refuses the call outright, whatever you added.
 
 If a flow appears to ask for one of these, stop and journal an `anomaly` about
 the flow document. The document is wrong, not you.

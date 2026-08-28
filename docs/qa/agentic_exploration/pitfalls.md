@@ -44,6 +44,10 @@ rather than pressing on with unreliable evidence.
   can see. Upload with
   `page.getByTestId("add-books-file-input").setInputFiles("/abs/path.epub")`
   and then read the review form's fields.
+- **A `403` with `"error": "ownership_guard"` is your own harness**, not the
+  app refusing you. It means a destructive call named a book you did not add.
+  Journal it `refused` and move on; retrying or routing around it is the one
+  thing the guard exists to prevent.
 - **You have your own browser.** If you ever see another actor's session, that
   is a harness fault of the first order — journal it `high` and stop, exactly as
   start.md says. Do not log back in and continue.
