@@ -81,6 +81,14 @@ CREATE INDEX idx_reading_progress_daily_user_day
 CREATE INDEX idx_reading_progress_daily_book_uuid
     ON reading_progress_daily(book_uuid);
 
+-- The marks table needs the same index for the same reason, and its primary key
+-- cannot stand in: `merge::transaction` retargets by `book_uuid` alone, with no
+-- `user_id` predicate, so a PK leading with `user_id` is unusable for that probe
+-- and the merge would full-scan. Every other retargeted table already carries a
+-- `book_uuid` index; this one was the omission.
+CREATE INDEX idx_reading_progress_marks_book_uuid
+    ON reading_progress_marks(book_uuid);
+
 -- Both tables carry `updated_at` and join `merge::transaction`'s
 -- `RETARGET_TABLES`: a per-reader table that soft-references `books.uuid` and
 -- is *not* on that list strands its rows on a merged-away uuid, where nothing
