@@ -267,17 +267,12 @@ fn home_kicker(
             tail: String::new(),
         };
     }
-    let year = b
+    let year_tail = b
         .published
         .as_deref()
-        .and_then(|p| p.get(0..4))
-        .unwrap_or("")
-        .to_string();
-    let year_tail = if year.is_empty() {
-        String::new()
-    } else {
-        format!(" \u{b7} {year}")
-    };
+        .and_then(crate::format::format_year)
+        .map(|year| format!(" \u{b7} {year}"))
+        .unwrap_or_default();
     // The bare series name, not the `Name #N` label: the position follows it
     // as its own "Book N of M" clause, per the design.
     if let Some(series) = b.series.clone().or_else(|| view.series.clone()) {

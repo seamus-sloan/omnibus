@@ -174,9 +174,8 @@ fn split_meta_and_files(
     let year = b
         .published
         .as_deref()
-        .and_then(|p| p.get(0..4))
-        .unwrap_or("")
-        .to_string();
+        .and_then(crate::format::format_year)
+        .unwrap_or_default();
     let meta_line = match (authors_line.is_empty(), year.is_empty()) {
         (false, false) => format!("{authors_line} · {year}"),
         (false, true) => authors_line.to_string(),
@@ -381,9 +380,9 @@ fn info_sections(uuid: &str, b: &EbookMetadata, series: &Option<String>) -> Elem
             table { class: "bd-meta-table mono m-bd-info",
                 tbody {
                     if let Some(p) = b.publisher.clone() { BdMetaRow { k: "Publisher".to_string(), v: p } }
-                    if let Some(d) = b.published.clone() { BdMetaRow { k: "Published".to_string(), v: d } }
+                    if let Some(d) = b.published.as_deref().and_then(crate::format::format_date_short_opt) { BdMetaRow { k: "Published".to_string(), v: d } }
                     if let Some(l) = b.language.clone() { BdMetaRow { k: "Language".to_string(), v: l } }
-                    if let Some(a) = b.added_at.clone() { BdMetaRow { k: "Added".to_string(), v: a } }
+                    if let Some(a) = b.added_at.as_deref().and_then(crate::format::format_date_short_opt) { BdMetaRow { k: "Added".to_string(), v: a } }
                     if let Some(s) = series.clone() { BdMetaRow { k: "Series".to_string(), v: s } }
                     for (i, ident) in b.identifiers.iter().enumerate() {
                         BdMetaRow {

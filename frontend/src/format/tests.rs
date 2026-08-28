@@ -54,23 +54,23 @@ fn plural_matches_count() {
 fn format_date_short_renders_a_full_iso_timestamp_with_offset() {
     assert_eq!(
         format_date_short("2016-05-02T21:00:00+00:00"),
-        "May 2, 2016"
+        "May 2nd, 2016"
     );
 }
 
 #[test]
 fn format_date_short_renders_a_full_iso_timestamp_with_z_suffix() {
-    assert_eq!(format_date_short("2026-07-31T00:01:35Z"), "July 31, 2026");
+    assert_eq!(format_date_short("2026-07-31T00:01:35Z"), "Jul 31st, 2026");
 }
 
 #[test]
 fn format_date_short_renders_the_sqlite_datetime_shape_added_at_uses() {
-    assert_eq!(format_date_short("2024-01-02 03:04:05"), "January 2, 2024");
+    assert_eq!(format_date_short("2024-01-02 03:04:05"), "Jan 2nd, 2024");
 }
 
 #[test]
 fn format_date_short_renders_a_bare_calendar_date() {
-    assert_eq!(format_date_short("1843-10-01"), "October 1, 1843");
+    assert_eq!(format_date_short("1843-10-01"), "Oct 1st, 1843");
 }
 
 #[test]
@@ -112,7 +112,67 @@ fn format_date_short_renders_an_em_dash_for_year_at_or_below_the_sentinel() {
 
 #[test]
 fn format_date_short_renders_a_real_year_just_above_the_sentinel() {
-    assert_eq!(format_date_short("0102-01-01"), "January 1, 102");
+    assert_eq!(format_date_short("0102-01-01"), "Jan 1st, 102");
+}
+
+#[test]
+fn format_date_short_ordinalizes_every_day_of_the_month() {
+    // The 11th/12th/13th are the cases a naive last-digit rule renders as
+    // "11st"/"12nd"/"13rd".
+    assert_eq!(format_date_short("2026-08-01"), "Aug 1st, 2026");
+    assert_eq!(format_date_short("2026-08-02"), "Aug 2nd, 2026");
+    assert_eq!(format_date_short("2026-08-03"), "Aug 3rd, 2026");
+    assert_eq!(format_date_short("2026-08-04"), "Aug 4th, 2026");
+    assert_eq!(format_date_short("2026-08-11"), "Aug 11th, 2026");
+    assert_eq!(format_date_short("2026-08-12"), "Aug 12th, 2026");
+    assert_eq!(format_date_short("2026-08-13"), "Aug 13th, 2026");
+    assert_eq!(format_date_short("2026-08-21"), "Aug 21st, 2026");
+    assert_eq!(format_date_short("2026-08-22"), "Aug 22nd, 2026");
+    assert_eq!(format_date_short("2026-08-23"), "Aug 23rd, 2026");
+    assert_eq!(format_date_short("2026-08-31"), "Aug 31st, 2026");
+}
+
+#[test]
+fn format_year_renders_the_bare_year_of_a_full_timestamp() {
+    assert_eq!(
+        format_year("2015-01-01T05:00:00+00:00"),
+        Some("2015".to_string())
+    );
+    assert_eq!(format_year("2016-05"), Some("2016".to_string()));
+    assert_eq!(format_year("2016"), Some("2016".to_string()));
+}
+
+#[test]
+fn format_year_treats_the_calibre_undefined_date_sentinel_as_absent() {
+    // The hero kicker's reported "· 0101": a raw `published.get(0..4)`
+    // rendered the placeholder year as if it were a real one.
+    assert_eq!(format_year("0101-01-01T00:00:00+00:00"), None);
+    assert_eq!(format_year("0001-01-01"), None);
+}
+
+#[test]
+fn format_year_is_absent_for_empty_and_unparsable_text() {
+    assert_eq!(format_year(""), None);
+    assert_eq!(format_year("circa 1850"), None);
+}
+
+#[test]
+fn format_year_agrees_with_format_date_short_on_whether_a_date_exists() {
+    // AC3 of #2244: the kicker and the table cell must never disagree about
+    // the same book's date.
+    for raw in [
+        "2015-01-01T05:00:00+00:00",
+        "0101-01-01T00:00:00+00:00",
+        "circa 1850",
+        "",
+        "2016",
+    ] {
+        assert_eq!(
+            format_year(raw).is_some(),
+            format_date_short(raw) != "\u{2014}",
+            "disagreed on {raw:?}"
+        );
+    }
 }
 
 #[test]

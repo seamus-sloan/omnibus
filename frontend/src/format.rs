@@ -1,9 +1,10 @@
 //! Small display formatters shared across surfaces: file size/label for
 //! `book_files` pickers, [`plural`] for search-result summaries,
 //! [`facet_query`] for taxonomy refinements, and the
-//! [`format_date_short`]/[`format_date_month_year`] pair for table and
-//! series-card dates. Pure functions with no Dioxus/renderer state, so
-//! they unit-test easily and render identically on SSR and WASM (rule 07).
+//! [`format_date_short`]/[`format_date_month_year`]/[`format_year`] trio that
+//! every reader-facing date goes through. Pure functions with no
+//! Dioxus/renderer state, so they unit-test easily and render identically on
+//! SSR and WASM (rule 07).
 
 use omnibus_shared::BookFileInfo;
 
@@ -80,19 +81,11 @@ const EM_DASH: &str = "\u{2014}";
 /// parsed year in this range means "date unknown," not "ancient."
 const SENTINEL_YEAR_MAX: i32 = 101;
 
+/// Abbreviated month names — the reader-facing date reads `Aug 1st, 2026`,
+/// short enough for a table cell and unambiguous in every locale that reads
+/// the app.
 const MONTH_NAMES: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
 /// A calendar date pulled from a stored date string's leading `YYYY`,
@@ -135,36 +128,66 @@ fn month_name(month: u32) -> Option<&'static str> {
         .copied()
 }
 
-/// Shared absent/sentinel gate for the two public formatters below: parses
-/// `raw`, renders it with `render` when it names a real year, and falls back
-/// to an em dash otherwise.
-fn render_date(raw: &str, render: impl FnOnce(&ParsedDate) -> String) -> String {
-    match parse_date_prefix(raw) {
-        Some(d) if d.year > SENTINEL_YEAR_MAX => render(&d),
-        _ => EM_DASH.to_string(),
+/// Shared absent/sentinel gate for the public formatters below: parses `raw`
+/// and renders it with `render`, or `None` when it names no real year.
+fn render_date(raw: &str, render: impl FnOnce(&ParsedDate) -> String) -> Option<String> {
+    parse_date_prefix(raw)
+        .filter(|d| d.year > SENTINEL_YEAR_MAX)
+        .map(|d| render(&d))
+}
+
+/// English ordinal suffix for a day of the month — `1st`, `2nd`, `3rd`,
+/// `4th`, with the 11th/12th/13th exceptions the naive last-digit rule gets
+/// wrong.
+fn ordinal_suffix(day: u32) -> &'static str {
+    match (day % 100, day % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
     }
 }
 
-/// Format a stored date string as a short human date for a table cell —
-/// `"May 2, 2016"`, falling back to `"May 2016"` or `"2016"` as the source
-/// narrows. Absent, unparsable, and sentinel dates (see
-/// [`SENTINEL_YEAR_MAX`]) render as an em dash.
+/// Format a stored date string as the reader-facing date every surface uses —
+/// `"Aug 1st, 2026"`, falling back to `"Aug 2026"` or `"2026"` as the source
+/// narrows. Absent, unparsable, and sentinel dates (see [`SENTINEL_YEAR_MAX`])
+/// render as an em dash.
 pub fn format_date_short(raw: &str) -> String {
+    format_date_short_opt(raw).unwrap_or_else(|| EM_DASH.to_string())
+}
+
+/// [`format_date_short`]'s answer, or `None` where that would render an em
+/// dash — for a surface (the book-detail metadata table) that drops an absent
+/// date's row entirely rather than printing a dash beside rows of facts.
+pub fn format_date_short_opt(raw: &str) -> Option<String> {
     render_date(raw, |d| match (d.month.and_then(month_name), d.day) {
-        (Some(month), Some(day)) => format!("{month} {day}, {}", d.year),
+        (Some(month), Some(day)) => {
+            format!("{month} {day}{}, {}", ordinal_suffix(day), d.year)
+        }
         (Some(month), None) => format!("{month} {}", d.year),
         (None, _) => d.year.to_string(),
     })
 }
 
+/// The bare publication year for a kicker or a cover caption, or `None` when
+/// the source names no real year. Goes through the same parse and sentinel
+/// gate as [`format_date_short`], so a kicker can never disagree with the
+/// table cell beside it — a naive `raw.get(0..4)` renders Calibre's
+/// `0101-01-01` placeholder as the year `0101`.
+pub fn format_year(raw: &str) -> Option<String> {
+    render_date(raw, |d| d.year.to_string())
+}
+
 /// Format a stored date string as `"May 2016"` for a series card — coarser
-/// than [`format_date_short`] since a card only has room for month + year.
-/// Same absent/sentinel handling.
+/// than [`format_date_short`] since a card only has room for month + year,
+/// on the same abbreviated month names. Same absent/sentinel handling.
 pub fn format_date_month_year(raw: &str) -> String {
     render_date(raw, |d| match d.month.and_then(month_name) {
         Some(month) => format!("{month} {}", d.year),
         None => d.year.to_string(),
     })
+    .unwrap_or_else(|| EM_DASH.to_string())
 }
 
 #[cfg(test)]
