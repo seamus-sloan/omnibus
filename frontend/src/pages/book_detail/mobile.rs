@@ -16,12 +16,12 @@ use crate::components::atrium::Cover;
 use crate::components::FetchSummaryButton;
 use crate::{data, Route};
 
-use super::body::bd_identifier_rows;
 use super::discovery::{
     cover_src, list_count_label, same_hand_author_label, same_hand_title, same_hand_year,
     suggestion_cover_book, SuggestionsSpinner,
 };
 use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerChrome, FilePickerKind};
+use super::identifiers::bd_identifier_rows;
 use super::immersive::BdImmersiveButton;
 use super::journal::BdJournalSection;
 use super::rating::BdRatingWidget;

@@ -241,11 +241,7 @@ fn home_kicker_matches_the_shelf_stops_wording_for_the_library_count() {
         false,
         None,
     );
-    assert!(
-        kicker.tail.contains("3 in your library"),
-        "{}",
-        kicker.tail
-    );
+    assert!(kicker.tail.contains("3 in your library"), "{}", kicker.tail);
 }
 
 #[test]

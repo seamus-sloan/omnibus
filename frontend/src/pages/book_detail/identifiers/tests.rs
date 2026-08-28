@@ -1,8 +1,8 @@
-//! Tests for the identifier helpers: `bd_identifier_key`'s rendered-list key
-//! must stay unique across same-scheme, schemeless, and delimiter-containing
-//! values so Dioxus keying never collides; `bd_identifier_label` maps a
-//! scheme to something a reader can read; and `bd_identifier_rows` collapses
-//! one identifier listed under several schemes into a single row.
+//! Tests for [`super`]: `bd_identifier_key`'s rendered-list key must stay
+//! unique across same-scheme, schemeless, and delimiter-containing values so
+//! Dioxus keying never collides; the label maps a scheme to something a
+//! reader can read; and `bd_identifier_rows` collapses one identifier listed
+//! under several schemes into a single row.
 
 use super::*;
 
@@ -64,40 +64,25 @@ fn bd_identifier_label_prefers_a_real_scheme() {
 
 #[test]
 fn bd_identifier_label_infers_isbn_from_shape_when_scheme_unknown() {
-    assert_eq!(
-        label(&ident(Some("unknown"), "978-0-7564-0407-9")),
-        "ISBN"
-    );
+    assert_eq!(label(&ident(Some("unknown"), "978-0-7564-0407-9")), "ISBN");
     assert_eq!(label(&ident(None, "012345678X")), "ISBN");
-    assert_eq!(
-        label(&ident(None, "not-an-isbn")),
-        "Identifier"
-    );
+    assert_eq!(label(&ident(None, "not-an-isbn")), "Identifier");
 }
 
 #[test]
 fn bd_identifier_label_names_an_onix_codelist_value() {
     // The reported row labelled "15" — the ONIX codelist-5 code an EPUB 3
     // `identifier-type` refinement carries for an ISBN-13.
-    assert_eq!(
-        label(&ident(Some("15"), "9780316769488")),
-        "ISBN-13"
-    );
+    assert_eq!(label(&ident(Some("15"), "9780316769488")), "ISBN-13");
     assert_eq!(label(&ident(Some("02"), "0316769487")), "ISBN-10");
-    assert_eq!(
-        label(&ident(Some("06"), "10.1000/182")),
-        "DOI"
-    );
+    assert_eq!(label(&ident(Some("06"), "10.1000/182")), "DOI");
 }
 
 #[test]
 fn bd_identifier_label_never_shows_a_bare_numeric_scheme() {
     // A codelist value this table doesn't know is still not a label — fall
     // back to the value's own shape rather than printing the code.
-    assert_eq!(
-        label(&ident(Some("99"), "9780316769488")),
-        "ISBN"
-    );
+    assert_eq!(label(&ident(Some("99"), "9780316769488")), "ISBN");
     assert_eq!(label(&ident(Some("99"), "xyz")), "Identifier");
 }
 
@@ -106,10 +91,7 @@ fn bd_identifier_label_names_the_source_uuid_for_what_it_holds() {
     // Calibre writes its own book uuid under the `uuid` scheme; it is not
     // the book's Omnibus uuid, so the row must not claim to be one.
     assert_eq!(
-        label(&ident(
-            Some("uuid"),
-            "c0e51a66-085f-4805-b116-a0d451d281bd"
-        )),
+        label(&ident(Some("uuid"), "c0e51a66-085f-4805-b116-a0d451d281bd")),
         "Source UUID"
     );
     assert_eq!(label(&ident(Some("calibre"), "412")), "Calibre ID");

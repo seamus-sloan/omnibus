@@ -9,7 +9,7 @@ use omnibus_shared::EbookMetadata;
 
 use crate::components::{BookActionMeta, FormatSwitcher};
 use crate::format::format_date_short_opt;
-use crate::pages::book_detail::body::bd_identifier_rows;
+use crate::pages::book_detail::identifiers::bd_identifier_rows;
 use crate::pages::book_detail::physical::{BdBookIdentity, BdPhysicalPanel, BdWishlistRailSlot};
 use crate::pages::book_detail::{BdMetaRow, PhysSignals};
 use crate::Route;
