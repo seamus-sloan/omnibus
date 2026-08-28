@@ -84,6 +84,22 @@ struct StatsSummaryCodecTests {
         let summary = try decodeSummary(summaryJSON())
         #expect(summary.lengthBuckets.isEmpty)
     }
+
+    @Test("the reading rate decodes as a fraction, not a truncated count")
+    func decodesPagesPerHour() throws {
+        // A fractional value on purpose: an Int64 CodingKey here would either
+        // throw or silently floor 32.6 to 32.
+        let summary = try decodeSummary(summaryJSON(extra: #","pages_per_hour":32.6"#))
+        #expect(summary.pagesPerHour == 32.6)
+    }
+
+    @Test("a server that predates the reading rate still decodes")
+    func decodesWithoutPagesPerHour() throws {
+        // `nil` is the tile's em-dash, and must not be reachable as a zero —
+        // "0 pages an hour" is a claim about the reader, not about the server.
+        let summary = try decodeSummary(summaryJSON())
+        #expect(summary.pagesPerHour == nil)
+    }
 }
 
 @Suite("Rating bucket labelling")

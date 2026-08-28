@@ -106,6 +106,7 @@ pub(super) async fn compute(
     let listening_daily = listening_daily(pool, user_id, start).await?;
     let rating_monthly = ratings::rating_monthly(pool, user_id).await?;
     let pages_read = pages::pages_read(pool, user_id, start).await?;
+    let pages_per_hour = pages::pages_per_hour(pool, user_id, start).await?;
     let length_buckets = pages::length_buckets(pool, user_id, start).await?;
 
     Ok(StatsSummary {
@@ -134,6 +135,7 @@ pub(super) async fn compute(
         rating_monthly,
         rating_histogram,
         pages_read,
+        pages_per_hour,
         length_buckets,
     })
 }

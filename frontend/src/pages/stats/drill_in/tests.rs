@@ -175,6 +175,14 @@ fn short_month_and_short_day_fall_back_on_malformed_input() {
 }
 
 #[test]
+fn rate_value_keeps_a_decimal_only_below_ten_pages_an_hour() {
+    assert_eq!(rate_value(4.25), "4.2");
+    assert_eq!(rate_value(9.96), "10.0");
+    assert_eq!(rate_value(32.4), "32");
+    assert_eq!(rate_value(32.6), "33");
+}
+
+#[test]
 fn finished_book_as_ebook_carries_title_author_and_cover() {
     let book = FinishedBook {
         book_uuid: "u1".to_string(),

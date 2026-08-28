@@ -2,8 +2,9 @@
 //! desktop, switched by a CSS media query so the rsx stays identical on
 //! every target (rule 07). Shows a vs-previous-period delta, the
 //! metric's trend chart, and — per metric — the half-star distribution
-//! (Avg rating) or the books completed in the window (Finished), all
-//! from the already-fetched `StatsSummary` (no new RPC).
+//! (Avg rating), the estimated reading speed (Pages), or the books completed
+//! in the window (Finished), all from the already-fetched `StatsSummary` (no
+//! new RPC).
 
 use dioxus::prelude::*;
 use omnibus_shared::{
@@ -332,6 +333,9 @@ pub(super) fn DrillIn(
                 if metric == Metric::AvgRating {
                     {render_histogram(&summary.rating_histogram)}
                 }
+                if metric == Metric::Pages {
+                    {render_pages_rate(summary.pages_per_hour)}
+                }
                 if metric == Metric::Finished {
                     {render_finished_list(&summary.finished_books, summary.books_finished, &server_url)}
                 }
@@ -407,6 +411,43 @@ fn render_trend(metric: Metric, bars: &[TrendBar]) -> Element {
         "stats-drill-trend",
         &format!("{} trend", metric.title()),
     )
+}
+
+/// A reading rate for display: one decimal under ten pages an hour, whole
+/// pages above it. Nobody reads at 32.4 pages an hour reproducibly, and the
+/// decimal would dress an estimate as a measurement.
+fn rate_value(rate: f64) -> String {
+    if rate < 10.0 {
+        format!("{rate:.1}")
+    } else {
+        format!("{:.0}", rate.round())
+    }
+}
+
+/// The Pages drill-in's reading-speed line — the rate the tile's total is
+/// missing, and the number a reader actually compares against their own past.
+///
+/// Absent rather than zeroed when there's nothing to divide: "0 pages per
+/// hour" is a claim about how this reader reads, and no finished book having
+/// recorded time is not that claim.
+fn render_pages_rate(rate: Option<f64>) -> Element {
+    let Some(rate) = rate else {
+        return rsx! {
+            p { class: "st-drill-delta-empty", "data-testid": "stats-drill-pages-rate",
+                "No book finished in this window has recorded reading time yet."
+            }
+        };
+    };
+    rsx! {
+        div { class: "label st-drill-section-label", "Reading speed" }
+        p { class: "st-drill-rate", "data-testid": "stats-drill-pages-rate",
+            span { class: "st-drill-rate-value", {rate_value(rate)} }
+            " est. pages an hour"
+        }
+        p { class: "st-drill-rate-note",
+            "Estimated from the books you finished in this window and every hour you spent reading them. Listening time isn\u{2019}t counted, so a book you partly heard reads faster here than you read it."
+        }
+    }
 }
 
 /// The Avg rating drill-in's distribution: how many books landed in each

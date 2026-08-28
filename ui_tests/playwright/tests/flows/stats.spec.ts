@@ -245,6 +245,69 @@ test("the Avg rating drill-in charts every half-star bucket on a star axis", asy
   await expect(chart.locator('[title="5 ★ · 3 books"]')).toBeVisible();
 });
 
+test("the Pages drill-in reports a reading rate, and says so when it can't", async ({
+  page,
+}) => {
+  // Route-mocked, like the histogram above: the rate is computed off finished
+  // books and recorded reading time on the shared fixture, both of which other
+  // specs write. Two fulfilments in one test so the em-dash branch is pinned
+  // against the same page.
+  // Every key without `#[serde(default)]` on the Rust struct has to be here,
+  // or the client fails the whole decode and renders its error state.
+  const summary = (pagesPerHour: number | null) => ({
+    range: "month",
+    reading_seconds: 600,
+    listening_seconds: 0,
+    sessions: 1,
+    active_days: 1,
+    longest_streak_days: 1,
+    busiest_week_start: null,
+    busiest_week_seconds: 600,
+    books_finished: 1,
+    heatmap: [],
+    top_authors: [],
+    top_tags: [],
+    finished_books: [],
+    pages_read: 412,
+    pages_per_hour: pagesPerHour,
+  });
+
+  await page.route("**/api/rpc/stats", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(summary(32.6)),
+    }),
+  );
+  await gotoReady(page, "/stats");
+  await page.getByTestId("stats-tile-pages").click();
+
+  // Whole pages above ten an hour — the decimal would dress an estimate as a
+  // measurement — and labelled an estimate, like the tile it expands.
+  const rate = page.getByTestId("stats-drill-pages-rate");
+  await expect(rate).toBeVisible();
+  await expect(rate).toContainText("33");
+  await expect(rate).toContainText("est. pages an hour");
+
+  await page.getByTestId("stats-drill-close").click();
+
+  // No rate is a "can't tell", never a zero: a reader whose finished books
+  // carry no recorded time has not read at 0 pages an hour.
+  await page.route("**/api/rpc/stats", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(summary(null)),
+    }),
+  );
+  await gotoReady(page, "/stats");
+  await page.getByTestId("stats-tile-pages").click();
+
+  await expect(page.getByTestId("stats-drill-pages-rate")).toContainText(
+    "recorded reading time",
+  );
+});
+
 test("the Finished drill-in lists the books completed in the window", async ({
   page,
 }) => {

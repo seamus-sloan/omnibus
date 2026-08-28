@@ -284,8 +284,9 @@ pub struct PeriodComparison {
 /// explicit `book_read_status` of `finished`, never from the session tables
 /// (which carry duration but no progress). A book finished both ways counts
 /// once, and every completion metric on this struct — `books_finished`,
-/// `finished_books`, `books_per_month`, `pages_read`, `length_buckets` and
-/// `previous` — shares that one definition, live books only. They must not
+/// `finished_books`, `books_per_month`, `pages_read`, `pages_per_hour`,
+/// `length_buckets` and `previous` — shares that one definition, live books
+/// only. They must not
 /// drift apart: several of them render on the same screen.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct StatsSummary {
@@ -380,6 +381,25 @@ pub struct StatsSummary {
     /// drives the tile's em-dash empty state.
     #[serde(default)]
     pub pages_read: Option<i64>,
+    /// Estimated reading speed over the window, in pages per hour — the
+    /// context `pages_read` is missing, and the figure a reader compares
+    /// against their own past rather than against anyone else's.
+    ///
+    /// A **seconds-weighted** mean over the books finished in the window that
+    /// resolve a length *and* carry recorded reading time: a book that
+    /// contributes pages contributes the hours behind them, so a book begun
+    /// before the window reports a plausible rate instead of its whole length
+    /// against one window's hours. Narrower than `pages_read`'s population by
+    /// exactly the books nobody has recorded reading time on.
+    ///
+    /// Reading time only — listening is excluded, since narration speed is
+    /// the narrator's, not the reader's. A book read partly in audio
+    /// therefore over-reports here.
+    ///
+    /// `None` when no finished book in the window has both, driving the same
+    /// em-dash empty state `pages_read` does.
+    #[serde(default)]
+    pub pages_per_hour: Option<f64>,
     /// Books finished in the window bucketed by length, plus the unknown
     /// bucket. Every bucket is present, zeros included; an all-zero set means
     /// nothing was finished, which the surfaces render as an empty state

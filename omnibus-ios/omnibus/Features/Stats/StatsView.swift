@@ -340,8 +340,23 @@ struct StatsView: View {
                 value: summary.booksActive > 0 ? "\(summary.booksActive)" : "—",
                 icon: "book"
             )
+            // Beside Pages deliberately: the total says how much, this says how
+            // fast, and the pair is the reader's own speed to compare against.
+            StatTile(
+                label: "Pages an hour",
+                value: summary.pagesPerHour.map(Self.rateValue) ?? "—",
+                icon: "speedometer"
+            )
         }
         .screenPadding()
+    }
+
+    /// A reading rate for display: one decimal under ten pages an hour, whole
+    /// pages above. Mirrors the web drill-in's `rate_value` — nobody reads at
+    /// 32.4 pages an hour reproducibly, and the decimal would dress an
+    /// estimate as a measurement.
+    private static func rateValue(_ rate: Double) -> String {
+        String(format: rate < 10 ? "%.1f" : "%.0f", rate)
     }
 
     private func finishedRail(_ books: [FinishedBook]) -> some View {
