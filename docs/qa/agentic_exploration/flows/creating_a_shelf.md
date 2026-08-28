@@ -66,7 +66,9 @@ the book uuids — those are what the audit reconciles.
 - Another user's shelf is visible **and you are not an admin**. Admins see every
   shelf by design, and the exploration accounts are currently all admins — so on
   this instance the criterion is undecidable and you should journal `uncertain`
-  rather than guess. (Worth reporting separately: another user's private shelf
+  rather than guess. Non-admin exploration accounts are planned; once one exists
+  this becomes a real, decidable fail criterion and the `uncertain` escape stops
+  applying. (Worth reporting separately: another user's private shelf
   renders in the rail with no owner attribution, while the wishlists beside it
   do show owner names.)
 - **On iOS:** removing a book from a shelf deletes the book. High severity.
