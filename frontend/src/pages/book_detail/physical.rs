@@ -902,7 +902,8 @@ pub(super) fn source_label(source: WishlistSource) -> &'static str {
     match source {
         WishlistSource::Scan => "a scan",
         WishlistSource::Detail => "this page",
-        WishlistSource::Manual => "manual entry",
+        WishlistSource::Manual => "an ISBN you entered",
+        WishlistSource::Search => "a title search",
     }
 }
 

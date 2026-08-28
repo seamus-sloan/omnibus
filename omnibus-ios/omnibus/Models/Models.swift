@@ -1761,8 +1761,12 @@ struct AddPhysicalOnlyRequest: Codable, Sendable {
 }
 
 /// `#[serde(rename_all = "lowercase")]` on the Rust side.
+///
+/// `search` covers a title-search add, where the reader supplied no ISBN at
+/// all — the web check-in flow records it (#2247); this client still posts
+/// `scan` for every path of its own, but must decode entries the web created.
 enum WishlistSource: String, Codable, Sendable {
-    case scan, detail, manual
+    case scan, detail, manual, search
 }
 
 /// Names its target with either an existing `book_uuid` or resolved `meta`;

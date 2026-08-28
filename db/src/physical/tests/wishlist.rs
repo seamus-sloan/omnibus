@@ -24,6 +24,28 @@ async fn add_wishlist_entry_returns_the_entry() {
     assert_eq!(entry.source, WishlistSource::Scan);
 }
 
+/// Migration 0083 widened the `source` CHECK to admit the title-search door
+/// (#2247); without it this insert fails the constraint outright.
+#[tokio::test]
+async fn add_wishlist_entry_accepts_the_title_search_source() {
+    let pool = pool().await;
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "reader").await;
+
+    let entry = add_wishlist_entry(&pool, user, "uuid-1", WishlistSource::Search)
+        .await
+        .unwrap();
+
+    assert_eq!(entry.source, WishlistSource::Search);
+    assert_eq!(
+        get_wishlist_entry(&pool, user, "uuid-1")
+            .await
+            .unwrap()
+            .map(|e| e.source),
+        Some(WishlistSource::Search)
+    );
+}
+
 #[tokio::test]
 async fn add_wishlist_entry_errors_when_book_missing() {
     let pool = pool().await;
