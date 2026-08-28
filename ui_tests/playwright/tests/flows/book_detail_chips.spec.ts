@@ -59,6 +59,17 @@ test("renders the book detail chip-editor layout", async ({
   // they are the entry point, not a decoration on existing chips.
   await expect(page.getByTestId("bd-add-genres")).toHaveText("+ genres");
   await expect(page.getByTestId("bd-add-tags")).toHaveText("+ tags");
+
+  // #2257: genres and tags are separate labelled rows, and each add pill
+  // sits inside the row it adds to — not trailing the other set's chips.
+  const genreRow = page.getByTestId("bd-genre-row");
+  const tagRow = page.getByTestId("bd-tag-row");
+  await expect(genreRow).toContainText("Genres");
+  await expect(tagRow).toContainText("Tags");
+  await expect(genreRow.getByTestId("bd-add-genres")).toBeVisible();
+  await expect(tagRow.getByTestId("bd-add-tags")).toBeVisible();
+  await expect(genreRow.getByTestId("bd-add-tags")).toHaveCount(0);
+  await expect(tagRow.getByTestId("bd-add-genres")).toHaveCount(0);
 });
 
 test("adds a tag from the hero pill, persists it, and suggests it on reopen", async ({
