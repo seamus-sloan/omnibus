@@ -61,6 +61,11 @@ pub fn estimate_word_count<R: std::io::Read + std::io::Seek>(doc: &mut EpubDoc<R
 }
 
 /// Whether a space-separated `properties` attribute carries `wanted`.
+///
+/// Belt-and-braces for a malformed package: `nav` is a *manifest* item
+/// property, which `EpubDoc::get_nav_id` already reads, and the attribute
+/// reached here is the spine `itemref`'s (`page-spread-*`, `rendition:*`). A
+/// well-formed EPUB will never declare `nav` on it.
 fn declares_property(properties: Option<&str>, wanted: &str) -> bool {
     properties.is_some_and(|ps| ps.split_ascii_whitespace().any(|p| p == wanted))
 }
@@ -77,15 +82,29 @@ fn is_navigation_document(html: &str) -> bool {
 
 /// Minimal HTML tag stripper — good enough for a word-count estimate, not a
 /// renderer: drops everything between (and including) `<` / `>`, plus the
-/// bodies of the [`SUPPRESSED_ELEMENTS`].
+/// bodies of the [`SUPPRESSED_ELEMENTS`] and the contents of comments.
 fn strip_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut tag = String::new();
     let mut in_tag = false;
+    // A comment runs to `-->`, not to the first `>` inside it. Without this
+    // state a commented-out `<style>` opens a suppression that nothing closes
+    // — the `>` of `-->` isn't a close tag — and the rest of the document is
+    // silently dropped from the count.
+    let mut in_comment = false;
     // The element whose text is currently being discarded, or `None` while text
     // is being kept. Not a depth counter: neither `script` nor `style` nests.
     let mut suppressed: Option<&'static str> = None;
     for ch in html.chars() {
+        if in_comment {
+            tag.push(ch);
+            if ch == '>' && tag.ends_with("-->") {
+                in_comment = false;
+                in_tag = false;
+                tag.clear();
+            }
+            continue;
+        }
         match ch {
             '<' => {
                 in_tag = true;
@@ -102,7 +121,10 @@ fn strip_tags(html: &str) -> String {
                     None => None,
                 };
             }
-            _ if in_tag => tag.push(ch),
+            _ if in_tag => {
+                tag.push(ch);
+                in_comment = tag == "!--";
+            }
             _ if suppressed.is_some() => {}
             _ => out.push(ch),
         }

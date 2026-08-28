@@ -189,3 +189,23 @@ fn epub3_with_nav_in_spine() -> Vec<u8> {
         ("ch1.xhtml", ch1),
     ])
 }
+
+#[test]
+fn strip_tags_keeps_the_document_after_a_comment_containing_a_suppressed_tag() {
+    // The `>` of `-->` closes nothing, so without comment state the `<style>`
+    // inside this comment suppresses every word after it. Commented-out markup
+    // is ordinary, well-formed XHTML — not a malformed-input edge case.
+    assert_eq!(
+        strip_tags("<p>one</p><!-- <style> --><p>two three</p>"),
+        "onetwo three"
+    );
+    assert_eq!(
+        strip_tags("<p>one</p><!-- <script>x</script> --><p>two</p>"),
+        "onetwo"
+    );
+    // A real stylesheet after a comment is still suppressed.
+    assert_eq!(
+        strip_tags("<!-- note --><style>p{color:red}</style><p>kept</p>"),
+        "kept"
+    );
+}

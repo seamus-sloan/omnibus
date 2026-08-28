@@ -21,12 +21,23 @@
 --     word count in the first place (the walk needs a spine), so a comic or an
 --     audiobook is untouched here and its NULL stays a NULL.
 --   * *Never null a column the backfill cannot re-derive.* The backfill's work
---     set is `books` joined to `scan_roots` on `library_id` and to an EPUB
---     `book_files` row, so a row failing either join would be nulled and never
---     refilled. Both joins are repeated here as EXISTS guards, which is what
---     protects a **ghosted** book above all: removing a file drops its
---     `book_files` rows and keeps the `books` row, so a ghost has no EPUB to
---     re-read and keeps the count it already has.
+--     set is `books` joined to `scan_roots` on `library_id` **at the configured
+--     `ebook_library_path`** and to an EPUB `book_files` row, so a row failing
+--     either join would be nulled and never refilled. Both joins are repeated
+--     here as EXISTS guards.
+--
+--     The `book_files` one protects a **ghosted** book: removing a file drops
+--     its `book_files` rows and keeps the `books` row, so a ghost has no EPUB
+--     to re-read and keeps the count it already has.
+--
+--     The `scan_roots` one has to carry the *path* predicate, not just the
+--     foreign key. `books.library_id` is `NOT NULL REFERENCES scan_roots(id)`
+--     and foreign keys are enforced, so an EXISTS on the id alone is true for
+--     every surviving row and excludes nothing. What it must exclude is a root
+--     that still owns books but is no longer the configured one —
+--     `settings::prune_orphan_libraries` deliberately keeps such a root, and
+--     `backfill_word_counts` is only ever posted with the configured path, so
+--     those books would be nulled with nothing left to refill them.
 --
 -- Residual, and it is a real one: the backfill runs per library and only when
 -- posted. `server::main::kick_recovery_scans` now posts it at boot for a
@@ -51,5 +62,6 @@ UPDATE books
        )
    AND EXISTS (
         SELECT 1 FROM scan_roots l
+          JOIN settings s ON s.key = 'ebook_library_path' AND s.value = l.path
          WHERE l.id = books.library_id
        );
