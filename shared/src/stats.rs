@@ -723,3 +723,104 @@ impl ReadingGoalUpdate {
         Ok(())
     }
 }
+
+/// Which of the two session tables a stitched sitting drew from.
+///
+/// [`Self::Mixed`] is not a fallback: a dual-format book read and listened to
+/// in one stretch stitches into a single sitting (see `db::stats::sessionize`),
+/// and reporting it as one or the other would name a format the reader didn't
+/// spend the whole sitting in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionFormat {
+    Reading,
+    Listening,
+    Mixed,
+}
+
+impl SessionFormat {
+    /// Human label for a log row — past tense, since a logged sitting is over.
+    pub fn label(&self) -> &'static str {
+        match self {
+            SessionFormat::Reading => "Read",
+            SessionFormat::Listening => "Listened",
+            SessionFormat::Mixed => "Read & listened",
+        }
+    }
+}
+
+/// One sitting in the reading-session log: adjacent checkpoint rows stitched
+/// back together, so an entry is a sit rather than a heartbeat flush.
+///
+/// `seconds` is the *recorded* time across the sitting, not `ended_at -
+/// started_at`: a sitting the reader paused mid-way spans more wall clock than
+/// it recorded, and the recorded figure is the one every other stats surface
+/// reports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionLogEntry {
+    pub book_uuid: String,
+    pub title: String,
+    pub format: SessionFormat,
+    /// Unix seconds of the sitting's first checkpoint row.
+    pub started_at: i64,
+    /// Unix seconds of its last checkpoint row's end.
+    pub ended_at: i64,
+    /// Seconds recorded across the sitting.
+    pub seconds: i64,
+}
+
+impl SessionLogEntry {
+    /// This entry's cursor — what a caller passes as `before` to fetch the
+    /// page that continues after it.
+    pub fn cursor(&self) -> SessionCursor {
+        SessionCursor {
+            started_at: self.started_at,
+            book_uuid: self.book_uuid.clone(),
+        }
+    }
+}
+
+/// A keyset cursor into the session log: the last-seen sitting's start plus
+/// its book, ordered `(started_at DESC, book_uuid DESC)`.
+///
+/// The book uuid is not decoration. Two different books can start a sitting in
+/// the same second, and a cursor carrying only `started_at` either drops the
+/// tie's remainder (`<`) or repeats it forever (`<=`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCursor {
+    pub started_at: i64,
+    pub book_uuid: String,
+}
+
+impl SessionCursor {
+    /// Wire form, `"{started_at}:{book_uuid}"` — split on the **first** colon,
+    /// so the uuid half is taken verbatim even if it contains one of its own.
+    pub fn encode(&self) -> String {
+        format!("{}:{}", self.started_at, self.book_uuid)
+    }
+
+    /// Parse [`Self::encode`]'s output. `None` on anything else — the handler
+    /// turns that into a 400 rather than silently serving page one, which
+    /// would loop a paging client.
+    pub fn parse(raw: &str) -> Option<Self> {
+        let (started, uuid) = raw.split_once(':')?;
+        if uuid.is_empty() {
+            return None;
+        }
+        Some(SessionCursor {
+            started_at: started.parse().ok()?,
+            book_uuid: uuid.to_string(),
+        })
+    }
+}
+
+/// One page of the reading-session log, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SessionLogPage {
+    pub entries: Vec<SessionLogEntry>,
+    /// The cursor for the next page, or `None` at the end of the log. Encoded
+    /// rather than structured so a client pages by echoing it back without
+    /// knowing how the keyset is built.
+    #[serde(default)]
+    pub next_before: Option<String>,
+}

@@ -128,6 +128,6 @@ pub(crate) use transport::note_server_fn_err;
 pub use transport::web_auth_state;
 #[cfg(feature = "mobile")]
 pub(crate) use transport::{
-    client_kind, drain_error, http_client, note_status, require_online, streaming_client,
-    with_bearer,
+    client_kind, drain_error, encode_query_value, http_client, note_status, require_online,
+    streaming_client, with_bearer,
 };

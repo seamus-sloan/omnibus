@@ -33,14 +33,15 @@ pub(super) const SESSION_BOOK_SECS: &str = "\
 
 /// The time-scoped session union, reused by the busiest-week rollup, the
 /// sitting count and the superlatives: one
-/// `(book_uuid, started_at, ended_at, secs)` checkpoint row per session in the
-/// window. Bind order is `user_id, start, user_id, start`.
+/// `(book_uuid, started_at, ended_at, secs, is_audio)` checkpoint row per
+/// session in the window, where `is_audio` discriminates the two tables for
+/// [`sessionize::stitched`]. Bind order is `user_id, start, user_id, start`.
 pub(super) const SESSION_ROWS: &str = "\
-    SELECT book_uuid, started_at, ended_at, seconds_read AS secs FROM reading_sessions \
-        WHERE user_id = ? AND started_at >= ? \
+    SELECT book_uuid, started_at, ended_at, seconds_read AS secs, 0 AS is_audio \
+        FROM reading_sessions WHERE user_id = ? AND started_at >= ? \
     UNION ALL \
-    SELECT book_uuid, started_at, ended_at, seconds_listened AS secs FROM listening_sessions \
-        WHERE user_id = ? AND started_at >= ?";
+    SELECT book_uuid, started_at, ended_at, seconds_listened AS secs, 1 AS is_audio \
+        FROM listening_sessions WHERE user_id = ? AND started_at >= ?";
 
 /// The **unwindowed** session union for one user: one
 /// `(book_uuid, started_at, secs)` row per reading and listening session on

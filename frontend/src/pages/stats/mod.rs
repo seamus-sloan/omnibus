@@ -6,7 +6,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::{LibrarySize, ReadingGoal, StatsRange, StatsSummary, STATS_TTL_SECS};
 
-use crate::components::{PageError, PageLoading};
+use crate::components::{PageError, PageLoading, SessionLogList};
 use crate::{data, use_server_url, Route};
 
 mod donut;
@@ -129,6 +129,10 @@ pub fn StatsPage() -> Element {
                     AllTimeSummary { all_time }
                     LibrarySizeCard { size: library_size() }
                 }
+                // The log sits under the aggregates it details, and outside
+                // the period switcher's reach: it is its own paged read, not
+                // a window rollup.
+                SessionLogList { book: None, compact: false }
             }
             if let (Some(metric), Some(summary)) = (expanded(), period.read().clone()) {
                 DrillIn { metric, summary, range: range(), expanded }

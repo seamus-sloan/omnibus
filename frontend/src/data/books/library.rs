@@ -324,15 +324,7 @@ pub(crate) async fn search_ebooks_online(
 ) -> Result<EbookLibrary, DataError> {
     // Percent-encode the query so FTS5 operators and whitespace survive the
     // URL.
-    let encoded: String = q
-        .bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect();
+    let encoded = super::super::encode_query_value(q);
     let url = format!("{server_url}/api/search?q={encoded}");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
@@ -346,15 +338,7 @@ pub(crate) async fn search_ebooks_online(
 #[cfg(feature = "mobile")]
 pub async fn search_palette(server_url: &str, q: &str) -> Result<PaletteResults, DataError> {
     crate::data::require_online()?;
-    let encoded: String = q
-        .bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect();
+    let encoded = super::super::encode_query_value(q);
     let url = format!("{server_url}/api/search/palette?q={encoded}");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());

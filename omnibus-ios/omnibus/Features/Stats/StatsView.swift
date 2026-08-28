@@ -1,6 +1,7 @@
 //  StatsView.swift
 //  Reading stats: a headline panel, supporting tiles, an activity heatmap,
-//  rankings, and the finished-books rail.
+//  rankings, the finished-books rail, and the per-sitting session log behind
+//  all of them.
 
 import Charts
 import SwiftUI
@@ -18,6 +19,12 @@ struct StatsView: View {
     @State private var isEditingGoal = false
     @State private var goalDraft = ""
     @State private var goalError: String?
+    // The log is its own paged read rather than a rollup of the window above
+    // it, so it holds its own state and never reloads on a range change.
+    @State private var sessions: [SessionLogEntry] = []
+    @State private var sessionCursor: String?
+    @State private var sessionsLoading = false
+    @State private var sessionsError: String?
 
     var body: some View {
         NavigationStack {
@@ -35,12 +42,16 @@ struct StatsView: View {
             // root; a stock large title alongside it would state it twice.
             .toolbar(.hidden, for: .navigationBar)
             .topEdgeScrim()
-            .refreshTask { await load(force: true) }
+            .refreshTask {
+                await load(force: true)
+                await loadSessions()
+            }
             .withDestinations()
         }
         .task {
             await load()
             await loadLibrarySize()
+            await loadSessions()
         }
         .onChange(of: range) { _, _ in Task { await load() } }
     }
@@ -215,6 +226,8 @@ struct StatsView: View {
                         LibrarySizeSection(size: librarySize)
                     }
                 }
+
+                sessionLogSection
             }
             .padding(.bottom, 40)
         }
@@ -640,6 +653,101 @@ struct StatsView: View {
     /// read to 1, so zero never reaches here.
     static func daysDetail(_ days: Int64) -> String {
         days == 1 ? "in a day" : "in \(days) days"
+    }
+
+    // MARK: - Session log
+
+    /// The sittings behind every number above — one row per *sit*, not per
+    /// heartbeat flush: the server stitches adjacent checkpoint rows before it
+    /// pages them.
+    @ViewBuilder private var sessionLogSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            SectionLabel("Session log")
+
+            if sessions.isEmpty, let sessionsError {
+                // Distinct from the empty state below: "we couldn't load this"
+                // and "you have no sittings" are different answers, and only
+                // one of them is worth offering a retry for.
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text(sessionsError)
+                        .font(.ui(12.5))
+                        .foregroundStyle(palette.ink2Color)
+                    Button("Try again") { Task { await loadSessions() } }
+                        .font(.monoUI(10.5, weight: .medium))
+                        .disabled(sessionsLoading)
+                }
+            } else if sessions.isEmpty {
+                Text("No sittings recorded yet.")
+                    .font(.ui(12.5))
+                    .foregroundStyle(palette.ink3Color)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(sessions) { entry in
+                        NavigationLink(value: Destination.book(uuid: entry.bookUUID)) {
+                            SessionLogRow(entry: entry)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                // Keyset paging: the cursor names the last row already shown,
+                // so a sitting landing mid-scroll can't shift the next page
+                // the way an offset would.
+                if sessionCursor != nil {
+                    Button {
+                        Task { await loadMoreSessions() }
+                    } label: {
+                        Text(sessionsLoading ? "Loading\u{2026}" : "Show more")
+                            .font(.monoUI(10.5, weight: .medium))
+                            .tracking(0.8)
+                            .textCase(.uppercase)
+                            .foregroundStyle(palette.ink2Color)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(palette.bg2Color))
+                            .overlay(Capsule().strokeBorder(palette.line2.color, lineWidth: 0.5))
+                    }
+                    .disabled(sessionsLoading)
+                }
+
+                if let sessionsError {
+                    Text(sessionsError)
+                        .font(.ui(12))
+                        .foregroundStyle(palette.ink3Color)
+                }
+            }
+        }
+        .screenPadding()
+    }
+
+    private func loadSessions() async {
+        guard !sessionsLoading else { return }
+        sessionsLoading = true
+        do {
+            let page = try await UserDataService.sessionLog()
+            sessions = page.entries
+            sessionCursor = page.nextBefore
+            sessionsError = nil
+        } catch {
+            sessionsError =
+                (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+        sessionsLoading = false
+    }
+
+    private func loadMoreSessions() async {
+        guard let cursor = sessionCursor, !sessionsLoading else { return }
+        sessionsLoading = true
+        do {
+            let page = try await UserDataService.sessionLog(before: cursor)
+            sessions.append(contentsOf: page.entries)
+            sessionCursor = page.nextBefore
+            sessionsError = nil
+        } catch {
+            sessionsError =
+                (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+        sessionsLoading = false
     }
 
     private func section<Content: View>(
@@ -1164,5 +1272,45 @@ private struct HeatmapView: View {
         guard seconds > 0 else { return restColor }
         let intensity = min(1, Double(seconds) / Double(maximum))
         return palette.accentColor.opacity(0.25 + intensity * 0.75)
+    }
+}
+
+/// One sitting: when it started, what it was, and how long it ran.
+private struct SessionLogRow: View {
+    let entry: SessionLogEntry
+
+    @Environment(\.palette) private var palette
+
+    /// Device-local, unlike the web log's UTC: this is a native app on a
+    /// reader's own phone, and a sitting they remember starting at 9pm should
+    /// say so.
+    private var when: String {
+        Date(timeIntervalSince1970: TimeInterval(entry.startedAt))
+            .formatted(date: .abbreviated, time: .shortened)
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.title)
+                    .font(.ui(13.5, weight: .medium))
+                    .foregroundStyle(palette.ink0Color)
+                    .lineLimit(1)
+                Text("\(when) \u{b7} \(entry.format.label)")
+                    .font(.monoUI(10))
+                    .foregroundStyle(palette.ink3Color)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Text(Format.humanDuration(entry.seconds))
+                .font(.ui(12.5))
+                .foregroundStyle(palette.ink2Color)
+        }
+        .padding(.vertical, 9)
+        .overlay(alignment: .top) {
+            Rectangle().fill(palette.line2.color).frame(height: 0.5)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 }
