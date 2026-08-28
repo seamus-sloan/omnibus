@@ -39,7 +39,9 @@ pub(super) fn web_shelf_body(
     let is_smart = current.kind == ShelfKind::Smart;
     rsx! {
         div { class: "shelf-layout",
-            ShelvesRail { active: RailActive::Shelf(id) }
+            // `reload` is bumped by every membership edit on this page, so the
+            // rail's counts refresh with the grid instead of going stale.
+            ShelvesRail { active: RailActive::Shelf(id), reload: reload() }
             div { class: "shelf-main",
                 ShelfHeader {
                     shelf: current.clone(),

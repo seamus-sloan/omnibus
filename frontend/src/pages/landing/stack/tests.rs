@@ -119,3 +119,14 @@ fn lead_accent_style_follows_the_front_book_and_is_empty_without_one() {
     assert_eq!(lead_accent_style(&entries, 9), "");
     assert_eq!(lead_accent_style(&[], 0), "");
 }
+
+#[test]
+fn stack_kicker_names_a_single_book_instead_of_counting_a_stack() {
+    // One book on the fan: nothing to bring forward, so nothing implies a
+    // stack behind it.
+    assert_eq!(stack_kicker(1), "your in-progress book");
+    // A defensive zero renders the same line — the stack is hidden anyway.
+    assert_eq!(stack_kicker(0), "your in-progress book");
+    assert_eq!(stack_kicker(2), "2 books open");
+    assert_eq!(stack_kicker(5), "5 books open");
+}

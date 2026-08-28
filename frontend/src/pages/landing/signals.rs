@@ -238,7 +238,7 @@ fn wire_landing_effects(
     let fetch_key = wire_page_fetch_effects(server_url, query, prefs, want_more, fetch_sigs);
     wire_bulk_selection_clear(fetch_key, shelf_wiring.selection, bulk_selected);
     wire_prefs_hydration(prefs, fetch_sigs);
-    wire_shelf_effects(server_url, prefs, shelf_wiring);
+    wire_shelf_effects(server_url, prefs, fetch_sigs.generation, shelf_wiring);
 }
 
 /// Refetches page 1 on query/sort/filter/hidden-formats change and arms the
@@ -359,7 +359,12 @@ fn wire_prefs_hydration(mut prefs: Signal<ViewPrefs>, fetch_sigs: FetchSignals) 
 /// Arms the shelf-gallery + hero effects: the shelves list, the hero feed,
 /// the selected shelf's full detail, its member list, and the one-time
 /// reconcile of a persisted gallery pick.
-fn wire_shelf_effects(server_url: &str, prefs: Signal<ViewPrefs>, shelf_wiring: ShelfWiring) {
+fn wire_shelf_effects(
+    server_url: &str,
+    prefs: Signal<ViewPrefs>,
+    generation: Signal<u64>,
+    shelf_wiring: ShelfWiring,
+) {
     let ShelfWiring {
         mut selection,
         shelves,
@@ -372,6 +377,7 @@ fn wire_shelf_effects(server_url: &str, prefs: Signal<ViewPrefs>, shelf_wiring: 
     spawn_shelves_list_effect(
         server_url.to_string(),
         shelves_tick,
+        generation,
         shelves,
         shelves_loaded,
         selection,

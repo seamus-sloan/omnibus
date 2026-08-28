@@ -191,6 +191,16 @@ pub(super) fn lead_accent_style(entries: &[StackEntry], lead: usize) -> String {
         .unwrap_or_default()
 }
 
+/// The kicker above the front book. A fan of one has nothing behind it, so it
+/// names what the reader is looking at instead of counting a stack (#2259).
+pub(super) fn stack_kicker(count: usize) -> String {
+    if count <= 1 {
+        "your in-progress book".to_string()
+    } else {
+        format!("{count} books open")
+    }
+}
+
 /// The stack: the lead book named in type on the left of nothing — centred —
 /// with every open book fanned beneath it. Clicking the lead cover resumes;
 /// clicking any other brings it forward, as do the arrow keys while a card
@@ -209,7 +219,7 @@ pub(super) fn ResumeStack(entries: Vec<StackEntry>, mut lead: Signal<usize>) -> 
             aria_label: "Continue reading",
             div { class: "lmq-stack-side",
                 div { class: "lmq-kicker",
-                    if count == 1 { "1 book open" } else { "{count} books open" }
+                    "{stack_kicker(count)}"
                     if front.linked {
                         crate::components::sync_glyph::SyncGlyph { size: 13 }
                         "synced"
@@ -227,10 +237,13 @@ pub(super) fn ResumeStack(entries: Vec<StackEntry>, mut lead: Signal<usize>) -> 
                 StackAlts { front: front.clone() }
                 div { class: "lmq-stack-keys",
                     span { class: "lmq-key", kbd { "\u{21b5}" } "resume the front book" }
-                    span { class: "lmq-key",
-                        kbd { "\u{2190}" }
-                        kbd { "\u{2192}" }
-                        "bring another forward"
+                    // Nothing to bring forward when the fan holds one book.
+                    if count > 1 {
+                        span { class: "lmq-key",
+                            kbd { "\u{2190}" }
+                            kbd { "\u{2192}" }
+                            "bring another forward"
+                        }
                     }
                 }
             }

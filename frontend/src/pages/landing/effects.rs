@@ -309,12 +309,17 @@ pub(super) fn spawn_load_more_effect(
 pub(super) fn spawn_shelves_list_effect(
     server_url: String,
     tick: Signal<u32>,
+    generation: Signal<u64>,
     mut shelves: Signal<Vec<ShelfSummary>>,
     mut shelves_loaded: Signal<bool>,
     mut selection: Signal<ShelfSelection>,
 ) {
     use_effect(move || {
         let _ = tick();
+        // A gallery entry's count is a server-side aggregate, so it goes stale
+        // the moment a membership changes elsewhere. Re-run on the same
+        // background revalidation every other list here rides (#2255).
+        let _ = generation();
         let url = server_url.clone();
         spawn(async move {
             let Ok(list) = data::list_shelves(&url).await else {
