@@ -64,7 +64,9 @@ impl Extreme {
 /// The longest or shortest book finished in the window, measured by the
 /// shared length ladder. Books the ladder can't measure are excluded rather
 /// than sorted as zero — an audiobook is not the shortest book of the year.
-/// Ties break on title so the answer is stable across runs.
+/// Ties break on the *rendered* title — the `COALESCE`d alias rather than
+/// `b.title` — so an untitled book sorts where the reader sees it instead of
+/// ahead of everything on a NULL.
 async fn extreme_book(
     pool: &SqlitePool,
     user_id: i64,
@@ -78,7 +80,7 @@ async fn extreme_book(
          JOIN ({}) p ON p.uuid = fin.uuid
          {AUTHOR_JOIN}
          WHERE p.pages IS NOT NULL
-         ORDER BY p.pages {}, b.title ASC
+         ORDER BY p.pages {}, title ASC
          LIMIT 1",
         pages::finished_in_window(),
         pages::book_pages_source(),
@@ -184,7 +186,7 @@ async fn longest_sit(
 ///
 /// A book whose only recorded sessions post-date its completion (finished
 /// elsewhere, re-read here) is dropped rather than reported as a negative
-/// span. Ties break on title.
+/// span. Ties break on the rendered title, as above.
 async fn fastest_read(
     pool: &SqlitePool,
     user_id: i64,
@@ -204,7 +206,7 @@ async fn fastest_read(
          ) s ON s.book_uuid = f.book_uuid
          {AUTHOR_JOIN}
          WHERE s.secs >= {FASTEST_READ_MIN_SECS} AND s.first_at <= f.finished_at
-         ORDER BY value ASC, b.title ASC
+         ORDER BY value ASC, title ASC
          LIMIT 1",
         super::FINISHED_EVENTS
     );
