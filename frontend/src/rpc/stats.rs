@@ -7,7 +7,8 @@ use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use omnibus_db as db;
 use omnibus_shared::{
-    BookInsights, LibrarySize, ReadingGoal, ReadingGoalUpdate, StatsRange, StatsSummary,
+    BookInsights, LibraryComposition, LibrarySize, ReadingGoal, ReadingGoalUpdate, StatsRange,
+    StatsSummary,
 };
 
 #[cfg(feature = "server")]
@@ -60,4 +61,18 @@ pub async fn rpc_set_reading_goal(update: ReadingGoalUpdate) -> Result<Option<Re
     Ok(db::stats::set_goal(&pool.0, user.id, &update)
         .await
         .map_err(|e| internal_rpc_error("set reading goal", e))?)
+}
+
+/// Fetch what the library is made of — its format, language, publisher,
+/// decade, and genre mix.
+///
+/// Its own call rather than a field on [`rpc_stats`]'s payload, for the same
+/// reason [`rpc_library_size`] is: the answer is library-wide and only moves
+/// on a reindex, so hanging it off the per-user summary would recompute and
+/// re-send it on every period switch. Mobile uses `GET /api/library-composition`.
+#[post("/api/rpc/library-composition", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_library_composition() -> Result<LibraryComposition> {
+    Ok(db::stats::library_composition(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("library composition", e))?)
 }

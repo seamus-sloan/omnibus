@@ -867,6 +867,14 @@ enum UserDataService {
         return goal
     }
 
+    /// What the library is made of — format, language, publisher, decade, and
+    /// genre mix. Its own read for the same reason `librarySize` is.
+    static func libraryComposition() -> AsyncThrowingStream<CacheRead<LibraryComposition>, Error> {
+        Cache.live(CacheKey.libraryComposition) {
+            try await APIClient.shared.get("/api/library-composition")
+        }
+    }
+
     // MARK: - Offline prefetch
 
     /// Pull down everything a book needs to be *usable* with no network: where

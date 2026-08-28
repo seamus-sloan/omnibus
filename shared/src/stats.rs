@@ -251,9 +251,9 @@ pub struct LibrarySize {
     /// image-page count, else the EPUB word estimate.
     #[serde(default)]
     pub pages: MeasuredTotal,
-    /// Total seconds of audio, summed over the parts of the one file the
-    /// server would actually serve for each book. A book with any unprobed
-    /// part is unmeasured rather than partly counted.
+    /// Total seconds of audio, summed over the parts of the format the server
+    /// would actually serve for each book — every volume of it, not one file.
+    /// A book with any unprobed part is unmeasured rather than partly counted.
     #[serde(default)]
     pub listening_seconds: MeasuredTotal,
 }
@@ -721,5 +721,134 @@ impl ReadingGoalUpdate {
             }
         }
         Ok(())
+    }
+}
+
+/// One bucket of a [`LibraryComposition`] dimension: a display label and the
+/// distinct live books behind it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompositionSlice {
+    pub label: String,
+    pub books: i64,
+}
+
+/// One dimension of the library's composition — its buckets plus the coverage
+/// behind them.
+///
+/// The coverage pair is the same [`MeasuredTotal`] contract the library-size
+/// figures use, read one level up: `total` is **bucket placements** (the sum
+/// of every slice's `books`) and `books` is the **distinct live books** the
+/// dimension describes. The two differ exactly when a book lands in more than
+/// one bucket — a dual-format book, a multi-genre one — so `total - books` is
+/// the overlap, and `books` against `LibraryComposition::books` is the share
+/// of the library the dimension can speak for at all.
+///
+/// `coverage.books == 0` means nothing in the library carries this dimension,
+/// which the surfaces render as an empty state rather than an empty chart.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompositionDimension {
+    #[serde(default)]
+    pub slices: Vec<CompositionSlice>,
+    #[serde(default)]
+    pub coverage: MeasuredTotal,
+}
+
+impl CompositionDimension {
+    /// True when no live book carries this dimension at all.
+    pub fn is_empty(&self) -> bool {
+        self.coverage.books == 0 || self.slices.is_empty()
+    }
+
+    /// Books that land in more than one bucket — the overlap a reader needs
+    /// to reconcile the slices against the library total. Zero for every
+    /// dimension whose buckets are mutually exclusive.
+    pub fn overlap(&self) -> i64 {
+        (self.coverage.total - self.coverage.books).max(0)
+    }
+
+    /// Live books this dimension has nothing to say about — no language link,
+    /// no publisher, no genre override. `library_books` is
+    /// [`LibraryComposition::books`].
+    pub fn uncovered(&self, library_books: i64) -> i64 {
+        (library_books - self.coverage.books).max(0)
+    }
+}
+
+/// What the collection is made of: its format mix, language mix, publisher
+/// spread, publication-decade histogram, and genre distribution.
+///
+/// **Library-scoped, not user-scoped**, and deliberately not a field on
+/// [`StatsSummary`] for the same reason [`LibrarySize`] isn't: it is the same
+/// answer for every reader and only moves on a reindex, so hanging it off a
+/// per-user payload would recompute and re-send it on every period switch.
+///
+/// Every count is `DISTINCT` over books, never over rows. `book_files` is one
+/// row per *file* (migration `0018` keys it `UNIQUE(book_id, format,
+/// ordinal)`), so a twelve-part M4B is twelve rows and counting rows would
+/// report one audiobook as twelve.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryComposition {
+    /// Live books — those with at least one surviving `book_files` row. The
+    /// denominator every dimension's coverage is read against, and the same
+    /// population [`LibrarySize::books`] counts.
+    pub books: i64,
+    /// Books whose files are gone: a `books` row with no surviving
+    /// `book_files`, the rows `db::admin_health::index_status` calls ghosted.
+    ///
+    /// Reported rather than dropped. They carry no format at all, so they
+    /// would otherwise vanish from the format rollup and leave the per-format
+    /// counts quietly failing to reconcile against the library. The identity
+    /// the surfaces publish is `books + ghosted_books` = every `books` row.
+    #[serde(default)]
+    pub ghosted_books: i64,
+    /// Format mix by `book_files.format`, most books first. A book held in
+    /// two formats is counted **once in each bucket** — it really is both —
+    /// so the slices sum to `formats.coverage.total`, which exceeds `books`
+    /// by exactly the dual-format overlap.
+    #[serde(default)]
+    pub formats: CompositionDimension,
+    /// Language mix by `languages.code`, tail folded into "Other". Books with
+    /// no language link are uncovered rather than bucketed as unknown — an
+    /// absent link means the file never declared one.
+    #[serde(default)]
+    pub languages: CompositionDimension,
+    /// Publisher spread by `publishers.name`, tail folded into "Other".
+    #[serde(default)]
+    pub publishers: CompositionDimension,
+    /// Publication decades, oldest first, and **not folded** — a histogram
+    /// sorted by height or truncated at six bars is a bar chart of nothing.
+    /// The year comes from the same `CAST(substr(pubdate, 1, 4) AS INTEGER)`
+    /// extraction smart-shelf rules use, so a decade histogram and a
+    /// `year >= 1990` shelf can never disagree about a book.
+    ///
+    /// There is deliberately **no `Unknown` bucket**: a book with an absent
+    /// or unparseable `pubdate` is uncovered, reported through the coverage
+    /// pair like every other dimension's unknowns. That uniformity is what
+    /// keeps `sum(slices) == coverage.total` checkable everywhere.
+    #[serde(default)]
+    pub decades: CompositionDimension,
+    /// Genre distribution, tail folded into "Other".
+    ///
+    /// **Read its coverage before its slices.** Genres have no link table by
+    /// design (migration `0066`): nothing Omnibus parses carries one, so they
+    /// live only in `metadata_overrides -> '$.genres'` and this describes
+    /// exactly the books someone has hand-edited. Presenting a 4%-of-library
+    /// sample as "your library's genres" is the failure mode the coverage
+    /// pair exists to prevent.
+    #[serde(default)]
+    pub genres: CompositionDimension,
+}
+
+impl LibraryComposition {
+    /// True when the library has nothing to describe — no live books, or no
+    /// dimension carrying a single one. The surfaces' signal to render
+    /// nothing rather than five empty charts.
+    pub fn is_empty(&self) -> bool {
+        self.books == 0
+            || (self.formats.is_empty()
+                && self.languages.is_empty()
+                && self.publishers.is_empty()
+                && self.decades.is_empty()
+                && self.genres.is_empty())
     }
 }

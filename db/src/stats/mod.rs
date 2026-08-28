@@ -3,12 +3,13 @@
 //! for completion; no new query-time schema. See the `book`, `compute`,
 //! `pages`, `patterns`, `ratings`, `streak`, and `superlatives` submodules
 //! for the per-scope aggregation bodies this module's cache wraps,
-//! `sessionize` for how checkpoint rows become sittings, and `library` for
-//! the one aggregate here that describes the collection rather than a
-//! reader. Every rollup here buckets in UTC except `patterns`, which is
-//! local-time by necessity — see its module docs.
+//! `sessionize` for how checkpoint rows become sittings, and `library` /
+//! `composition` for the two aggregates here that describe the collection
+//! rather than a reader. Every rollup here buckets in UTC except `patterns`,
+//! which is local-time by necessity — see its module docs.
 
 mod book;
+mod composition;
 mod compute;
 mod genre;
 mod goals;
@@ -24,6 +25,7 @@ mod superlatives;
 mod tests;
 
 pub use book::book_insights;
+pub use composition::{invalidate as invalidate_library_composition, library_composition};
 pub use goals::{current_year, goal_for_year, set_goal, GoalError};
 pub use library::{invalidate as invalidate_library_size, library_size};
 /// Per-user aggregate cache TTL. A reload after a just-finished session

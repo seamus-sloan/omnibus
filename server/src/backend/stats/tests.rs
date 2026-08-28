@@ -382,3 +382,72 @@ async fn api_put_stats_goal_returns_500_when_db_fails() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+// --- GET /api/library-composition ---------------------------------------
+
+#[tokio::test]
+async fn api_get_library_composition_requires_auth() {
+    let (app, _state, _pool) = fixture().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/library-composition")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_get_library_composition_returns_dimensions_with_their_coverage() {
+    let (app, _state, pool) = fixture().await;
+    seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    // Cached library-wide across the whole test binary, so this test clears
+    // it rather than picking a unique key the way the per-user ones do.
+    omnibus_db::stats::invalidate_library_composition();
+
+    let res = app
+        .oneshot(get_with_bearer("/api/library-composition", &token))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let composition: omnibus_shared::LibraryComposition = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(composition.books, 1);
+    assert_eq!(composition.ghosted_books, 0);
+    assert_eq!(composition.formats.coverage.books, 1);
+    // No publisher metadata anywhere: an empty dimension, not an empty chart.
+    assert!(composition.publishers.is_empty());
+}
+
+#[tokio::test]
+async fn api_get_library_composition_returns_500_when_db_fails() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    omnibus_db::stats::invalidate_library_composition();
+
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE books")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+
+    let res = app
+        .oneshot(get_with_bearer("/api/library-composition", &token))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    omnibus_db::stats::invalidate_library_composition();
+}

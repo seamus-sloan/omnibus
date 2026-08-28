@@ -2,7 +2,8 @@
 //! the same `db::stats` aggregate as the web `/api/rpc/stats` server function,
 //! windowed by an optional `?range=` param (snake_case `StatsRange`, default
 //! month). `PUT /api/stats/goal` sets the annual goal; `GET /api/library-size`
-//! is the library-scale total, unwindowed and the same for every reader.
+//! and `GET /api/library-composition` describe the collection itself — its
+//! scale and its mix — the same for every reader.
 
 use axum::{
     extract::{Query, State},
@@ -75,6 +76,24 @@ pub(super) async fn put_stats_goal(
             | GoalError::InvalidTarget(_)
             | GoalError::InvalidYear(_)),
         ) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+/// What the library is made of — format, language, publisher, publication
+/// decade, and genre.
+///
+/// Its own route rather than a field on [`get_stats`]'s payload for the same
+/// reason [`get_library_size`] is: the answer is library-wide and only moves
+/// on a reindex, so carrying it there would recompute and re-send it on every
+/// period switch. The auth extractor still applies — the figures aren't
+/// per-user, but the library isn't public.
+pub(super) async fn get_library_composition(
+    _user: AuthUser,
+    State(state): State<AppState>,
+) -> Response {
+    match db::stats::library_composition(&state.pool).await {
+        Ok(composition) => Json(composition).into_response(),
+        Err(e) => internal("get_library_composition", e),
     }
 }
 

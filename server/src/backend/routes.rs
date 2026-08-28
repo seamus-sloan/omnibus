@@ -233,6 +233,10 @@ fn engagement_routes() -> Router<AppState> {
         .route("/api/stats", get(stats::get_stats))
         .route("/api/stats/goal", put(stats::put_stats_goal))
         .route("/api/library-size", get(stats::get_library_size))
+        .route(
+            "/api/library-composition",
+            get(stats::get_library_composition),
+        )
         .route("/api/ratings", post(ratings::post_rating))
         .route(
             "/api/ratings/others/{uuid}",

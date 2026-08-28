@@ -13,6 +13,9 @@ struct StatsView: View {
     /// Fetched separately from `summary`: library-scoped rather than
     /// per-user, so it must not re-fetch when the range picker moves.
     @State private var librarySize: LibrarySize?
+    /// Fetched separately for the same reason: what the collection is *made
+    /// of* is a library-wide answer that only moves on a reindex.
+    @State private var libraryComposition: LibraryComposition?
     @State private var isLoading = true
     @State private var error: String?
     @State private var isEditingGoal = false
@@ -41,6 +44,7 @@ struct StatsView: View {
         .task {
             await load()
             await loadLibrarySize()
+            await loadLibraryComposition()
         }
         .onChange(of: range) { _, _ in Task { await load() } }
     }
@@ -213,6 +217,14 @@ struct StatsView: View {
                 if let librarySize, !librarySize.isEmpty {
                     section("Your library, in reading terms") {
                         LibrarySizeSection(size: librarySize)
+                    }
+                }
+
+                // Named apart from "How you consumed them" above, which is
+                // read-vs-listened seconds. This is the shelf's own mix.
+                if let libraryComposition, !libraryComposition.isEmpty {
+                    section("What your library is made of") {
+                        LibraryCompositionSection(composition: libraryComposition)
                     }
                 }
             }
@@ -666,6 +678,70 @@ struct StatsView: View {
         }
     }
 
+    /// Best-effort by design, exactly like `loadLibrarySize`.
+    private func loadLibraryComposition() async {
+        do {
+            for try await read in UserDataService.libraryComposition() {
+                libraryComposition = read.value
+            }
+        } catch {
+            // Nothing to say: the section simply doesn't appear.
+        }
+    }
+
+    /// The five panels, in the order they read: what the files are, then what
+    /// the books are. Mirrors the web card's `build_panels`.
+    static func compositionPanels(_ c: LibraryComposition) -> [CompositionPanel] {
+        [
+            CompositionPanel(
+                title: "Formats", dimension: c.formats,
+                // Coverage is always the whole library here (a live book has a
+                // file by definition), so the useful disclosure is the overlap.
+                note: overlapNote(c.formats),
+                empty: "No files indexed yet."),
+            CompositionPanel(
+                title: "Languages", dimension: c.languages,
+                note: coverageNote(c.languages, of: c.books),
+                empty: "No language metadata yet."),
+            CompositionPanel(
+                title: "Publishers", dimension: c.publishers,
+                note: coverageNote(c.publishers, of: c.books),
+                empty: "No publisher metadata yet."),
+            CompositionPanel(
+                title: "Published", dimension: c.decades,
+                // The uncovered books here are the ones with an absent or
+                // unparseable pubdate — unknown, never bucketed into a decade.
+                note: coverageNote(c.decades, of: c.books),
+                empty: "No publication dates yet."),
+            CompositionPanel(
+                title: "Genres", dimension: c.genres,
+                note: "hand-assigned \u{2014} " + coverageNote(c.genres, of: c.books),
+                empty: "No genres assigned yet."),
+        ]
+    }
+
+    /// "across 58 of 1,510 books" — the denominator, always. A distribution
+    /// without its coverage is a guess wearing a chart.
+    static func coverageNote(_ dimension: CompositionDimension, of libraryBooks: Int64) -> String {
+        coverageLabel(dimension.coverage, of: libraryBooks)
+    }
+
+    /// How many books are held in more than one format, and so counted in more
+    /// than one bar. Without it the bars simply don't add up to the library.
+    static func overlapNote(_ dimension: CompositionDimension) -> String? {
+        let overlap = dimension.overlap
+        guard overlap > 0 else { return nil }
+        return "+\(overlap) \(overlap == 1 ? "book" : "books") held in more than one format"
+    }
+
+    /// The footnote for `books` rows whose files are gone. They carry no
+    /// format, so they'd otherwise vanish from the bars and leave the counts
+    /// failing to reconcile against the library.
+    static func ghostedNote(_ ghosted: Int64) -> String? {
+        guard ghosted > 0 else { return nil }
+        return "\(ghosted) \(ghosted == 1 ? "book" : "books") excluded \u{2014} indexed once, no files on disk now"
+    }
+
     /// The library figures worth rendering, skipping anything nothing has
     /// been measured for — a "0 words" row describes a library that doesn't
     /// exist. Mirrors the web card's `build_figures`.
@@ -733,10 +809,13 @@ struct StatsView: View {
     /// "across 1,204 of 1,510 books" — the denominator, always. A figure
     /// without it is a guess wearing a number.
     static func coverageLabel(_ measured: MeasuredTotal, of libraryBooks: Int64) -> String {
-        let grouped = { (n: Int64) -> String in
-            NumberFormatter.localizedString(from: NSNumber(value: n), number: .decimal)
-        }
-        return "across \(grouped(measured.books)) of \(grouped(libraryBooks)) books"
+        "across \(groupedCount(measured.books)) of \(groupedCount(libraryBooks)) books"
+    }
+
+    /// A count with its thousands separators. Shared so a bar's own number and
+    /// the coverage line beneath it can't render the same figure two ways.
+    static func groupedCount(_ n: Int64) -> String {
+        NumberFormatter.localizedString(from: NSNumber(value: n), number: .decimal)
     }
 
     private func load(force: Bool = false) async {
@@ -814,6 +893,112 @@ private struct GoalBar: View {
         .accessibilityElement()
         .accessibilityLabel("Reading goal progress")
         .accessibilityValue("\(Int((fraction * 100).rounded())) percent")
+    }
+}
+
+/// One rendered dimension: its heading, its bars, and the line beneath them
+/// that says what the bars can't speak for.
+struct CompositionPanel: Identifiable, Hashable {
+    let title: String
+    let dimension: CompositionDimension
+    let note: String?
+    let empty: String
+
+    var id: String { title }
+}
+
+private struct LibraryCompositionSection: View {
+    let composition: LibraryComposition
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            ForEach(StatsView.compositionPanels(composition)) { panel in
+                CompositionPanelView(panel: panel)
+            }
+            if let ghosted = StatsView.ghostedNote(composition.ghostedBooks) {
+                Text(ghosted)
+                    .font(.monoUI(11))
+                    .foregroundStyle(palette.ink3Color)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One dimension's bars, or its empty state. A dimension nothing in the
+/// library carries renders a sentence rather than an axis with no bars on it.
+private struct CompositionPanelView: View {
+    let panel: CompositionPanel
+
+    @Environment(\.palette) private var palette
+
+    /// Scaled to the tallest bar rather than to the library total: a histogram
+    /// whose bars are all four points wide has drawn the shape out of itself.
+    private var peak: Int64 { panel.dimension.slices.map(\.books).max() ?? 0 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text(panel.title)
+                .font(.display(15))
+                .foregroundStyle(palette.ink1Color)
+            if panel.dimension.slices.isEmpty {
+                Text(panel.empty)
+                    .font(.ui(13))
+                    .foregroundStyle(palette.ink3Color)
+            } else {
+                ForEach(panel.dimension.slices) { slice in
+                    CompositionBar(slice: slice, peak: peak)
+                }
+                if let note = panel.note {
+                    Text(note)
+                        .font(.monoUI(11))
+                        .foregroundStyle(palette.ink3Color)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct CompositionBar: View {
+    let slice: CompositionSlice
+    let peak: Int64
+
+    @Environment(\.palette) private var palette
+
+    private var fraction: Double {
+        guard peak > 0 else { return 0 }
+        return min(1, Double(slice.books) / Double(peak))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(slice.label)
+                    .font(.ui(14))
+                    .foregroundStyle(palette.ink1Color)
+                    .lineLimit(1)
+                Spacer(minLength: Spacing.sm)
+                // The count, not the share: "48 books" answers the question a
+                // reader brought to a composition chart. Grouped like the
+                // coverage line, so a four-digit bucket doesn't read
+                // differently from its own note.
+                Text(StatsView.groupedCount(slice.books))
+                    .font(.monoUI(12))
+                    .foregroundStyle(palette.ink2Color)
+            }
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(palette.bg2Color)
+                    Capsule()
+                        .fill(palette.accentColor)
+                        .frame(width: geometry.size.width * fraction)
+                }
+            }
+            .frame(height: 8)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
