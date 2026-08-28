@@ -89,6 +89,13 @@ test("renders the reader layout", async ({ page, request }) => {
   // SSR markup and are robust to that.
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
 
+  // The chapter counter is 1-based against a 1-based total (issue #2249):
+  // it must never open on `Ch 0 of N`, a readout that can never reach its
+  // own total.
+  await expect(page.getByTestId("reader-chapter-counter")).toHaveText(
+    /^Ch\u00a0[1-9]\d* of \d+$/,
+  );
+
   // Top chrome: back, contents, search, Aa, highlights, bookmark.
   await expect(page.getByTestId("reader-back")).toBeVisible();
   await expect(page.getByTestId("reader-toc")).toBeVisible();
