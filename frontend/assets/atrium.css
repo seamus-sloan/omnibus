@@ -4989,11 +4989,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 /* Unified settings: permission-gated left sidebar + a content column that
    holds the active section's card(s). (#1324) */
+/* The app shell (`.app-shell > main`) pads horizontally only, so — like
+   `.landing-col` — the page spaces itself off the sticky top bar. 1.5rem
+   matches `.settings-content`'s inter-card gap, so the run of cards is evenly
+   spaced from the first one on. */
 .settings-layout {
   display: grid;
   grid-template-columns: 232px 1fr;
   gap: 2rem;
   align-items: start;
+  padding-top: 1.5rem;
 }
 .settings-content {
   display: flex;
