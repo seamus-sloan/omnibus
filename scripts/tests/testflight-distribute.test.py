@@ -56,9 +56,11 @@ class Resp:
 class FakeASC:
     """A scripted App Store Connect.
 
-    `build_states` is consumed one entry per `GET /v1/builds`, so a scenario can
-    say "PROCESSING, then VALID" and exercise the poll rather than only its
-    happy last iteration.
+    `build_states` is consumed one entry per *processing poll* — the
+    version-filtered `GET /v1/builds` — so a scenario can say "PROCESSING, then
+    VALID" and exercise the poll rather than only its happy last iteration. The
+    membership probe shares that path but is answered from `attached_groups` and
+    consumes nothing, so adding groups to a scenario cannot shift its states.
     """
 
     def __init__(self, build_states, external_state="READY_FOR_BETA_SUBMISSION",

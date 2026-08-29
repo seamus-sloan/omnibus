@@ -540,9 +540,9 @@ release dispatch against Apple's live API, its suite
 (`scripts/tests/testflight-distribute.test.py`, HTTP stubbed, no credentials) is
 gated in CI by `script-tests.yml`. Those stubs encode Apple's contract as it
 was last observed, and cannot notice it changing: `GET /v1/builds/{id}/betaGroups`
-answered for months, then began returning `FORBIDDEN_ERROR` because that
-relationship is write-only, and the suite went on passing while every real
-dispatch failed short of attaching anything. Membership is therefore read from
+answered for months before App Store Connect began enforcing that relationship
+as write-only and returning `FORBIDDEN_ERROR`, and the suite went on passing
+against the stub while every real dispatch failed short of attaching anything. Membership is therefore read from
 the builds side (`filter[id]` + `filter[betaGroups]`), and a live dispatch stays
 the only place the contract is genuinely exercised. A daily companion workflow
 (`testflight-feedback.yml`) turns new TestFlight screenshot feedback into
