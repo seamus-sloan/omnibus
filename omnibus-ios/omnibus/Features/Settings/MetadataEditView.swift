@@ -225,12 +225,6 @@ struct MetadataEditView: View {
                     }
                 }
 
-                if let book {
-                    group("Cover") {
-                        Plate { coverSection(book) }
-                    }
-                }
-
                 if let error {
                     Text(error)
                         .font(.ui(13))
@@ -255,12 +249,37 @@ struct MetadataEditView: View {
 
     /// Which book you're editing — a title in the bar alone isn't enough
     /// anchoring once the fields are full of someone else's punctuation.
+    ///
+    /// The cover doubles as the replace-cover control — the iOS face of the
+    /// web editor's Cover card (`cover_editor.rs`): tap to pick a photo,
+    /// long-press to revert to the original. A pick uploads on the spot;
+    /// there is no staged state to save, which is why the write reports
+    /// through its own status line instead of joining the draft.
     private func header(_ book: Book) -> some View {
         HStack(spacing: Spacing.md) {
-            BookCover(identity: CoverIdentity(book), size: .sm, cornerRadius: 4)
-                .id(coverRevision)
-                .frame(width: 48)
-                .coverShadow(0.6)
+            PhotosPicker(selection: $coverPhotoItem, matching: .images) {
+                BookCover(identity: CoverIdentity(book), size: .sm, cornerRadius: 4)
+                    .id(coverRevision)
+                    .frame(width: 48)
+                    .coverShadow(0.6)
+                    // Says "this is editable" without adding a second control:
+                    // a small camera badge riding the cover's corner.
+                    .overlay(alignment: .bottomTrailing) { coverBadge }
+            }
+            .buttonStyle(.plain)
+            .disabled(isCoverBusy || !connectivity.isOnline)
+            .contextMenu {
+                if book.hasCoverOverride {
+                    Button {
+                        Task { await revertCover() }
+                    } label: {
+                        Label("Revert to original cover", systemImage: "arrow.uturn.backward")
+                    }
+                    .disabled(isCoverBusy || !connectivity.isOnline)
+                }
+            }
+            .accessibilityIdentifier("cover-replace")
+            .accessibilityLabel("Replace cover")
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(book.displayTitle)
@@ -273,10 +292,31 @@ struct MetadataEditView: View {
                     .tracking(0.7)
                     .textCase(.uppercase)
                     .foregroundStyle(book.hasOverride ? palette.accentColor : palette.ink3Color)
+
+                if let coverStatus {
+                    Text(coverStatus)
+                        .font(.ui(12))
+                        .foregroundStyle(palette.ink2Color)
+                        .accessibilityIdentifier("cover-status")
+                }
             }
 
             Spacer(minLength: 0)
         }
+    }
+
+    /// The camera badge on the header cover's corner.
+    private var coverBadge: some View {
+        Image(systemName: "camera.fill")
+            .font(.system(size: 8, weight: .semibold))
+            .foregroundStyle(palette.ink1Color)
+            .padding(4)
+            .background(Circle().fill(palette.bg1Color.opacity(0.92)))
+            .overlay(Circle().strokeBorder(palette.line2.color, lineWidth: 0.5))
+            .offset(x: 6, y: 6)
+            // Purely decorative — without this VoiceOver announces it as an
+            // extra element inside the picker control.
+            .accessibilityHidden(true)
     }
 
     private func group<Content: View>(
@@ -359,62 +399,6 @@ struct MetadataEditView: View {
         }
         .buttonStyle(PressableStyle())
         .accessibilityIdentifier("metadata-fetch-open")
-    }
-
-    /// The cover as an immediate-write control — the iOS face of the web
-    /// editor's Cover card (`cover_editor.rs`). Picking a photo uploads it on
-    /// the spot; there is no staged state to save, which is why this renders
-    /// its own status line instead of joining the draft.
-    private func coverSection(_ book: Book) -> some View {
-        HStack(alignment: .top, spacing: Spacing.md) {
-            BookCover(identity: CoverIdentity(book), size: .md, cornerRadius: 5)
-                .id(coverRevision)
-                .frame(width: 84)
-                .coverShadow(0.6)
-
-            VStack(alignment: .leading, spacing: 9) {
-                Text(coverHint(book))
-                    .font(.monoUI(10, weight: .medium))
-                    .tracking(0.7)
-                    .textCase(.uppercase)
-                    .foregroundStyle(
-                        book.hasCoverOverride ? palette.accentColor : palette.ink3Color
-                    )
-
-                PhotosPicker(selection: $coverPhotoItem, matching: .images) {
-                    Text("Replace cover")
-                        .font(.ui(14, weight: .medium))
-                }
-                .disabled(isCoverBusy || !connectivity.isOnline)
-                .accessibilityIdentifier("cover-replace")
-
-                if book.hasCoverOverride {
-                    Button("Revert to scanned cover") { Task { await revertCover() } }
-                        .font(.ui(14))
-                        .foregroundStyle(palette.ink2Color)
-                        .disabled(isCoverBusy || !connectivity.isOnline)
-                        .accessibilityIdentifier("cover-revert")
-                }
-
-                if let coverStatus {
-                    Text(coverStatus)
-                        .font(.ui(12.5))
-                        .foregroundStyle(palette.ink2Color)
-                        .accessibilityIdentifier("cover-status")
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-    }
-
-    /// Where the current art came from — same three states the web editor's
-    /// hint line reports.
-    private func coverHint(_ book: Book) -> String {
-        if book.coverURL == nil { return "No cover available" }
-        return book.hasCoverOverride ? "Custom upload" : "Extracted from file"
     }
 
     private var revertButton: some View {

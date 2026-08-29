@@ -356,17 +356,18 @@ Features/           — one directory per surface: Account, AddBooks, Auth,
                       single writer; the cover is the one card that can't stage
                       and writes immediately through
                       `/api/ebooks/{uuid}/cover/from-url`, and says so. The
-                      editor itself carries a Cover section on the same
-                      immediate-write contract — the native twin of the web
-                      sidebar's `cover_editor.rs` — a `PhotosPicker` whose pick
-                      is re-encoded by `UploadImageEncoder` (Design/: bounded
-                      1x JPEG shared with the avatar path, since Photos hands
-                      out HEIC the server's sniff rejects and originals exceed
-                      the 10 MiB cap) and posted to `/api/ebooks/{uuid}/cover`
-                      via `LibraryService.uploadCover`, plus a revert to the
-                      scanned cover through the matching `DELETE`; both
-                      invalidate every cached thumb size, the full cover, and
-                      the cached book record.
+                      editor's header cover is itself the replace-cover
+                      control, on the same immediate-write contract — the
+                      native twin of the web sidebar's `cover_editor.rs`: tap
+                      opens a `PhotosPicker` whose pick is re-encoded by
+                      `UploadImageEncoder` (Design/: bounded 1x JPEG shared
+                      with the avatar path, since Photos hands out HEIC the
+                      server's sniff rejects and originals exceed the 10 MiB
+                      cap) and posted to `/api/ebooks/{uuid}/cover` via
+                      `LibraryService.uploadCover`; long-press reveals "Revert
+                      to original cover" (the matching `DELETE`) while an
+                      override is active. Both invalidate every cached thumb
+                      size, the full cover, and the cached book record.
                       Stats' `TimePatternCharts` (#2183) is the "When you read"
                       section — `Charts` bar strips over the summary's
                       `hourOfDay` / `dayOfWeek` buckets, rendered exactly as
