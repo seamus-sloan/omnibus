@@ -14,6 +14,7 @@ use crate::normalize::normalize_author;
 
 mod apply;
 mod entity_ops;
+mod prune;
 mod review;
 mod snapshot;
 mod undo;
@@ -25,6 +26,7 @@ pub use apply::{
     apply_book_title_override, apply_delete_author, apply_merge_authors, apply_merge_series,
     apply_merge_tags, apply_tag_split, CleanupApplyError,
 };
+pub use prune::{prune_stale_suggestions, prune_undetected};
 pub use review::{
     decide_suggestion, review_counts, review_queue, CleanupStoreError, REVIEW_QUEUE_MAX,
 };
@@ -155,18 +157,27 @@ pub async fn detect_book_titles(
     // TITLE_SUFFIX_PATTERN requires at least one of these five literal
     // characters to match at all (','+'-' for the author-dash prefix,
     // '['/']' for the series-bracket prefix, '#' for the series-hash
-    // prefix, '-' for the acronym-index prefix, '('/')' for the trailing
-    // parenthetical) — a title with none of them cannot match any pattern,
-    // so skipping it here can never miss a real suggestion. Cuts the
-    // regex work (and the row transfer) down from every book to only the
-    // ones that could plausibly match.
+    // prefix, '-' for the acronym-index and series-index prefixes,
+    // '('/')' for the trailing parenthetical) — a title with none of them
+    // cannot match any pattern, so skipping it here can never miss a real
+    // suggestion. Cuts the regex work (and the row transfer) down from
+    // every book to only the ones that could plausibly match.
+    //
+    // A book carrying a title override is skipped outright: the override is
+    // the authority on what that book is called, whether it was typed on the
+    // edit form or written by accepting an earlier rename here. Detecting off
+    // `books.title` regardless is what made the queue keep proposing renames
+    // for books that had already been renamed — the scanned title never
+    // changes, so the same card came back forever.
     let rows: Vec<(i64, String, String)> = sqlx::query_as(
-        "SELECT id, uuid, title FROM books
-          WHERE instr(title, ',') > 0
-             OR instr(title, '-') > 0
-             OR instr(title, '[') > 0
-             OR instr(title, '#') > 0
-             OR instr(title, '(') > 0",
+        "SELECT b.id, b.uuid, b.title FROM books b
+           LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+          WHERE json_type(mo.overrides, '$.title') IS NULL
+            AND (instr(b.title, ',') > 0
+              OR instr(b.title, '-') > 0
+              OR instr(b.title, '[') > 0
+              OR instr(b.title, '#') > 0
+              OR instr(b.title, '(') > 0)",
     )
     .fetch_all(pool)
     .await?;
@@ -255,28 +266,77 @@ impl MergeEntity {
         matches!(self, Self::Author)
     }
 
-    /// `(id, name, sort, book_id)` — one row per linked book, `NULL` book_id
-    /// for an entity with none, `sort` NULL where the table has no such
-    /// column (tags). Left un-aggregated (no `COUNT`/`GROUP BY`) so a merge
-    /// group can later count *distinct* affected books instead of summing
-    /// each entity's count, which would double-count a book linked to more
-    /// than one of the group's members.
+    /// `(id, name, sort, book_id)` — one row per **effective** linked book,
+    /// `NULL` book_id for an entity with none, `sort` NULL where the table has
+    /// no such column (tags). Left un-aggregated (no `COUNT`/`GROUP BY`) so a
+    /// merge group can later count *distinct* affected books instead of
+    /// summing each entity's count, which would double-count a book linked to
+    /// more than one of the group's members.
+    ///
+    /// "Effective" is the override-aware membership set the rest of the app
+    /// browses by — arm (1) canonical link rows on books carrying no override
+    /// for this field, arm (2) the memberships an override names — mirroring
+    /// `browse::list_authors`/`series_index_sql` and `taxonomy::delete_orphan_tags`.
+    /// Detecting off the canonical link tables alone proposes cleanups for
+    /// authors and tags a reader can no longer see anywhere, because an
+    /// override replaced the book's whole creators/subjects list and left the
+    /// link rows behind.
     fn sql(self) -> &'static str {
         match self {
             Self::Author => {
-                "SELECT a.id, a.name, a.sort, bal.book AS book_id
+                "SELECT a.id, a.name, a.sort, e.book_id
                    FROM authors a
-                   LEFT JOIN books_authors_link bal ON bal.author = a.id"
+                   LEFT JOIN (
+                     SELECT bal.author AS entity_id, bal.book AS book_id
+                       FROM books_authors_link bal
+                       JOIN books b ON b.id = bal.book
+                       LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+                      WHERE json_type(mo.overrides, '$.creators') IS NULL
+                     UNION
+                     SELECT a2.id, b.id
+                       FROM books b
+                       JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+                       JOIN json_each(mo.overrides, '$.creators') je
+                       JOIN authors a2
+                         ON a2.name = json_extract(je.value, '$.name') COLLATE NOCASE
+                      WHERE json_type(mo.overrides, '$.creators') IS NOT NULL
+                   ) e ON e.entity_id = a.id"
             }
             Self::Series => {
-                "SELECT s.id, s.name, s.sort, bsl.book AS book_id
+                "SELECT s.id, s.name, s.sort, e.book_id
                    FROM series s
-                   LEFT JOIN books_series_link bsl ON bsl.series = s.id"
+                   LEFT JOIN (
+                     SELECT bsl.series AS entity_id, bsl.book AS book_id
+                       FROM books_series_link bsl
+                       JOIN books b ON b.id = bsl.book
+                       LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+                      WHERE json_type(mo.overrides, '$.series') IS NULL
+                     UNION
+                     SELECT s2.id, b.id
+                       FROM books b
+                       JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+                       JOIN series s2
+                         ON s2.name = json_extract(mo.overrides, '$.series') COLLATE NOCASE
+                      WHERE json_type(mo.overrides, '$.series') IS NOT NULL
+                   ) e ON e.entity_id = s.id"
             }
             Self::Tag => {
-                "SELECT t.id, t.name, NULL AS sort, btl.book AS book_id
+                "SELECT t.id, t.name, NULL AS sort, e.book_id
                    FROM tags t
-                   LEFT JOIN books_tags_link btl ON btl.tag = t.id"
+                   LEFT JOIN (
+                     SELECT btl.tag AS entity_id, btl.book AS book_id
+                       FROM books_tags_link btl
+                       JOIN books b ON b.id = btl.book
+                       LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+                      WHERE json_type(mo.overrides, '$.subjects') IS NULL
+                     UNION
+                     SELECT t2.id, b.id
+                       FROM books b
+                       JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+                       JOIN json_each(mo.overrides, '$.subjects') je
+                       JOIN tags t2 ON t2.name = je.value COLLATE NOCASE
+                      WHERE json_type(mo.overrides, '$.subjects') IS NOT NULL
+                   ) e ON e.entity_id = t.id"
             }
         }
     }
@@ -299,8 +359,15 @@ impl EntityRow {
     }
 }
 
-/// Fetch every row of `entity`'s table, folding the one-row-per-linked-book
-/// result of [`MergeEntity::sql`] into one [`EntityRow`] per distinct id.
+/// Fetch every row of `entity`'s table that at least one book effectively
+/// carries, folding the one-row-per-linked-book result of
+/// [`MergeEntity::sql`] into one [`EntityRow`] per distinct id.
+///
+/// Entities with no effective book are dropped rather than returned with an
+/// empty set — the same `book_count > 0` invariant the browse indexes hold.
+/// An author or tag nothing links to is invisible everywhere else in the app,
+/// so offering to merge or delete it reads as being asked to clean up
+/// something that is already gone.
 async fn fetch_entity_rows(
     pool: &SqlitePool,
     entity: MergeEntity,
@@ -319,7 +386,10 @@ async fn fetch_entity_rows(
             row.book_ids.insert(book_id);
         }
     }
-    Ok(rows.into_values().collect())
+    Ok(rows
+        .into_values()
+        .filter(|row| !row.book_ids.is_empty())
+        .collect())
 }
 
 /// Shared merge-detection body: Tier-0 GROUP-BY on the normalized key, then
@@ -588,39 +658,83 @@ fn tag_split_suggestion(
 // Book-title cruft detection
 // ---------------------------------------------------------------------------
 
-/// Leading-prefix patterns stripped from a book title, tried in order (the
-/// first match wins). All Tier 0 — unambiguous filename artifacts.
+/// Leading-prefix patterns stripped from a book title, re-tried as a set
+/// until none matches (see [`strip_title_cruft`]). All Tier 0 — unambiguous
+/// filename artifacts.
+///
+/// Each pattern is deliberately strict about its separator, because the cost
+/// of a loose one is a mangled real title rather than a missed suggestion.
+/// The author pattern requires name-shaped characters either side of the
+/// comma and a *spaced* ` - `: an earlier `^[^,]+,\s*[^-]+-\s*` matched "The
+/// Life of Charles Dickens, Vol. I-" and proposed "III, Complete" for it.
+/// The series-index pattern requires the index to be zero-padded or to carry
+/// an explicit `Book`/`#` marker, which is what keeps it off a real title
+/// ending in a number ("Apollo 13 - The Untold Story").
 const TITLE_PREFIX_PATTERNS: &[&str] = &[
-    r"^[^,]+,\s*[^-]+-\s*",       // "Maas, Sarah J - "
-    r"^\[[^\]]+\s+\d+\]\s*",      // "[Mistborn 01] "
-    r"^[\w .]+#\d+\s*",           // "Mistborn #1 "
-    r"^[A-Za-z]{2,8}\d{1,3}-\s*", // "ToG04-"
+    // "Maas, Sarah J - "
+    r"^\p{Lu}[\p{L}'\u{2019}.\- ]{0,48},\s*[\p{L}'\u{2019}.\- ]{1,48}\s+-\s+",
+    // "[Mistborn 01] "
+    r"^\[[^\]]+\s+\d+\]\s*",
+    // "Mistborn #1 "
+    r"^[\w .]+#\d+\s*",
+    // "ToG04-"
+    r"^[A-Za-z]{2,8}\d{1,3}-\s*",
+    // "Mistborn 01 - ", "Mistborn Book 1 - "
+    r"^[\p{L}\d'\u{2019}.: ]{2,60}?\s+(?:[Bb]ook\s+\d{1,3}|#\s*\d{1,3}|0\d{1,2})\s+-\s+",
 ];
 
+/// Separators a stripped prefix can leave stranded at the front of the
+/// remainder — "Mistborn #1 - The Final Empire" loses "Mistborn #1 " to the
+/// hash pattern and keeps "- The Final Empire".
+const TITLE_LEADING_SEPARATORS: &[char] = &['-', '\u{2013}', '\u{2014}', ':'];
+
 /// Trailing parenthetical (edition/series note) stripped from a book
-/// title. Tier 1 — lower confidence than the leading-cruft patterns
-/// because a legitimate title can end in a parenthetical.
+/// title, applied repeatedly. Tier 1 — lower confidence than the leading-cruft
+/// patterns because a legitimate title can end in a parenthetical.
 const TITLE_SUFFIX_PATTERN: &str = r"\s*\([^()]*\)\s*$";
+
+/// Bound on how many times [`strip_title_cruft`] re-applies its prefix and
+/// suffix passes. Every hit consumes at least one character, so this is a
+/// belt-and-braces guard rather than a real limit on how much cruft a title
+/// may carry.
+const TITLE_STRIP_MAX_ROUNDS: usize = 8;
 
 /// Apply the leading-prefix (Tier 0) and trailing-parenthetical (Tier 1)
 /// patterns to `title`. Returns the winning tier and the stripped title, or
 /// `None` if neither pattern matched or the result is empty/unchanged.
+///
+/// Both passes run to a fixpoint rather than stopping at the first hit,
+/// because real filename cruft stacks: "Sanderson, Brandon - Mistborn 01 -
+/// The Final Empire" carries an author segment *and* a series segment, and
+/// one round of stripping leaves the series in the proposed title. A scene
+/// release stacks the other way — "Berserk v01 (2003) (Digital)
+/// (danke-Empire)" needs three trailing parentheticals gone, not one.
 fn strip_title_cruft(title: &str, prefixes: &[Regex], suffix: &Regex) -> Option<(Tier, String)> {
     let mut stripped = title;
     let mut tier0_hit = false;
-    for re in prefixes {
-        if let Some(m) = re.find(stripped) {
-            stripped = &stripped[m.end()..];
-            tier0_hit = true;
+    for _ in 0..TITLE_STRIP_MAX_ROUNDS {
+        let Some(end) = prefixes
+            .iter()
+            .find_map(|re| re.find(stripped).map(|m| m.end()))
+        else {
             break;
-        }
+        };
+        stripped = &stripped[end..];
+        tier0_hit = true;
     }
-    let tier1_hit = if let Some(m) = suffix.find(stripped) {
-        stripped = &stripped[..m.start()];
-        true
-    } else {
-        false
-    };
+    if tier0_hit {
+        stripped = stripped.trim_start_matches(|c: char| {
+            c.is_whitespace() || TITLE_LEADING_SEPARATORS.contains(&c)
+        });
+    }
+    let mut tier1_hit = false;
+    for _ in 0..TITLE_STRIP_MAX_ROUNDS {
+        let Some(start) = suffix.find(stripped).map(|m| m.start()) else {
+            break;
+        };
+        stripped = &stripped[..start];
+        tier1_hit = true;
+    }
     let proposed = stripped.trim();
     if proposed.is_empty() || proposed == title || (!tier0_hit && !tier1_hit) {
         return None;

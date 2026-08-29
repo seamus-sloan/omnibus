@@ -30,6 +30,10 @@ pub(super) fn content_routes() -> Router<AppState> {
             "/api/settings/registration",
             post(settings::post_registration),
         )
+        .route(
+            "/api/settings/mcp",
+            get(settings::get_mcp).post(settings::post_mcp),
+        )
         .route("/api/reindex", post(settings::post_reindex))
         .route("/api/scan-library", post(settings::post_scan_library))
         .route("/api/fts/rebuild", post(settings::post_rebuild_fts))

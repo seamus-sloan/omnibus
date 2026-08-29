@@ -343,6 +343,7 @@ actor OfflineStore {
                 series_index REAL NOT NULL DEFAULT 0,
                 added_at     TEXT NOT NULL DEFAULT '',
                 modified     TEXT NOT NULL DEFAULT '',
+                last_interacted TEXT NOT NULL DEFAULT '',
                 formats      TEXT NOT NULL DEFAULT '',
                 search_text  TEXT NOT NULL DEFAULT '',
                 payload      BLOB NOT NULL
@@ -366,11 +367,21 @@ actor OfflineStore {
                 series_index REAL NOT NULL DEFAULT 0,
                 added_at     TEXT NOT NULL DEFAULT '',
                 modified     TEXT NOT NULL DEFAULT '',
+                last_interacted TEXT NOT NULL DEFAULT '',
                 formats      TEXT NOT NULL DEFAULT '',
                 search_text  TEXT NOT NULL DEFAULT '',
                 payload      BLOB NOT NULL
             )
             """)
+        // Additive, and deliberately applied to both tables in lockstep: the
+        // staging swap is a positional `INSERT INTO books SELECT * FROM
+        // books_staging`, so the two schemas must stay column-for-column
+        // aligned. A mirror written before this column existed carries the
+        // empty default, which sorts last under the axis's descending default
+        // — the same place the server's NULL puts a book nobody has touched.
+        for table in ["books", "books_staging"] where !hasColumn(table, "last_interacted") {
+            exec("ALTER TABLE \(table) ADD COLUMN last_interacted TEXT NOT NULL DEFAULT ''")
+        }
     }
 
     /// Rebuild a pre-`kind` download registry in place.
@@ -752,6 +763,7 @@ actor OfflineStore {
         var seriesIndex: Double
         var addedAt: String
         var modified: String
+        var lastInteracted: String
         var formats: String
         var searchText: String
         var payload: Data
@@ -787,12 +799,13 @@ actor OfflineStore {
         let sql = """
             INSERT INTO books_staging
               (uuid, title, author, series, series_index, added_at, modified,
-               formats, search_text, payload)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               last_interacted, formats, search_text, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(uuid) DO UPDATE SET
               title = excluded.title, author = excluded.author,
               series = excluded.series, series_index = excluded.series_index,
               added_at = excluded.added_at, modified = excluded.modified,
+              last_interacted = excluded.last_interacted,
               formats = excluded.formats, search_text = excluded.search_text,
               payload = excluded.payload
             """
@@ -808,9 +821,10 @@ actor OfflineStore {
             sqlite3_bind_double(stmt, 5, row.seriesIndex)
             bind(stmt, 6, row.addedAt)
             bind(stmt, 7, row.modified)
-            bind(stmt, 8, row.formats)
-            bind(stmt, 9, row.searchText)
-            bind(stmt, 10, row.payload)
+            bind(stmt, 8, row.lastInteracted)
+            bind(stmt, 9, row.formats)
+            bind(stmt, 10, row.searchText)
+            bind(stmt, 11, row.payload)
             sqlite3_step(stmt)
             sqlite3_reset(stmt)
         }

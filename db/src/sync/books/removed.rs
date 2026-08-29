@@ -1,10 +1,18 @@
 //! Removed bucket: every uuid whose file disappeared keeps its `books` row. One
 //! chunked DELETE drops only the book's own native `book_files` rows — a row
 //! still backed by a `merged_uuids` entry is a cross-format attachment and
-//! survives — and one chunked UPDATE flags each book missing. Idempotent: a
-//! re-run on an already-fileless row deletes nothing and the flag UPDATE no-ops.
+//! survives — then two chunked UPDATEs flag each book missing and clear its
+//! `has_cover`, keeping the flag consistent with the cover file the
+//! post-commit reconcile unlinks. Idempotent: a re-run on an already-fileless
+//! row deletes nothing and both UPDATEs no-op via their guards.
 
 use sqlx::Transaction;
+
+/// `"?, ?, …"` for an `IN (…)` list of `n` binds. Every statement in this
+/// module is chunked over a slice of ids, so they all need one.
+fn placeholders(n: usize) -> String {
+    std::iter::repeat_n("?", n).collect::<Vec<_>>().join(", ")
+}
 
 /// Mark a batch of removed books' files missing. The file is gone, but the
 /// `books` row — its metadata, taxonomy links, FTS row, and every soft-ref
@@ -40,6 +48,7 @@ pub(super) async fn sync_removed(
         }
         delete_removed_book_files(tx, &ids).await?;
         flag_books_missing(tx, &ids).await?;
+        clear_has_cover(tx, &ids).await?;
     }
     if missing > 0 {
         // These rows are flagged missing (F10); `missing_files::gc_books_missing_files`
@@ -55,10 +64,9 @@ async fn resolve_removed_book_ids(
     library_id: i64,
     chunk: &[String],
 ) -> Result<Vec<i64>, sqlx::Error> {
-    let placeholders = std::iter::repeat_n("?", chunk.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let id_sql = format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
+    let uuid_placeholders = placeholders(chunk.len());
+    let id_sql =
+        format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({uuid_placeholders})");
     let mut q = sqlx::query_scalar::<_, i64>(&id_sql).bind(library_id);
     for uuid in chunk {
         q = q.bind(uuid);
@@ -77,9 +85,7 @@ async fn delete_removed_book_files(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     ids: &[i64],
 ) -> Result<(), sqlx::Error> {
-    let id_placeholders = std::iter::repeat_n("?", ids.len())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let id_placeholders = placeholders(ids.len());
     let delete_sql = format!(
         "DELETE FROM book_files
           WHERE book_id IN ({id_placeholders})
@@ -98,6 +104,33 @@ async fn delete_removed_book_files(
     Ok(())
 }
 
+/// One UPDATE per chunk: clear `has_cover` for the books whose cover files the
+/// post-commit reconcile is about to unlink (`delete_cover_files_for`, called
+/// with every removed uuid). Leaving the flag set strands the book with
+/// `has_cover = 1` and no file on disk, which nothing repairs: `get_cover`
+/// trusts the flag and probes a path that is gone, `maybe_adopt_cover` returns
+/// early on `has_cover != 0` so a returning file never re-adopts, and
+/// `backfill_covers` selects on `has_cover = 0` so the re-extraction pass never
+/// sees it (#2321). Clearing it hands the book back to that pass, which
+/// re-extracts under the correct `books.uuid` once a file is present again.
+///
+/// The uploaded cover override is `metadata_overrides.has_cover_override`, a
+/// different column read through `find_override_cover_file`, and is untouched.
+async fn clear_has_cover(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    ids: &[i64],
+) -> Result<(), sqlx::Error> {
+    let id_placeholders = placeholders(ids.len());
+    let update_sql =
+        format!("UPDATE books SET has_cover = 0 WHERE id IN ({id_placeholders}) AND has_cover = 1");
+    let mut update_q = sqlx::query(&update_sql);
+    for id in ids {
+        update_q = update_q.bind(id);
+    }
+    update_q.execute(&mut **tx).await?;
+    Ok(())
+}
+
 /// One UPDATE per chunk: set the F10 missing flag + start the retention
 /// clock. The `is_missing_files = 0` guard preserves the original
 /// `missing_files_since` on a re-run; the `is_missing_files_override = 0`
@@ -110,9 +143,7 @@ async fn flag_books_missing(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     ids: &[i64],
 ) -> Result<(), sqlx::Error> {
-    let id_placeholders = std::iter::repeat_n("?", ids.len())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let id_placeholders = placeholders(ids.len());
     let update_sql = format!(
         "UPDATE books
             SET is_missing_files = 1, missing_files_since = unixepoch()

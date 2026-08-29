@@ -257,6 +257,10 @@ actor LibraryIndex {
             seriesIndex: Double(book.seriesIndex ?? "") ?? 0,
             addedAt: book.addedAt ?? "",
             modified: book.modified ?? book.addedAt ?? "",
+            // Empty when no one has ever touched the book — which sorts last
+            // under this axis's descending default, where the server's own
+            // NULL lands.
+            lastInteracted: book.lastInteractedAt ?? "",
             // Deduped: the hidden-formats predicate strips each hidden token
             // from the CSV once, so a duplicate would survive the strip and
             // read as "still visible". A physical copy rides as a pseudo-token
@@ -415,12 +419,16 @@ actor LibraryIndex {
         return (clauses.joined(separator: " AND "), bindings)
     }
 
-    private static func order(sort: SortKey, direction: SortDirection) -> String {
+    /// `ORDER BY` fragment for one sort axis. `internal` (not private) on the
+    /// same grounds as `predicate`: the ordering each axis produces is
+    /// testable as a pure function against a scratch table.
+    static func order(sort: SortKey, direction: SortDirection) -> String {
         let dir = direction == .asc ? "ASC" : "DESC"
         switch sort {
         case .title: return "title \(dir)"
         case .author: return "author \(dir), title ASC"
         case .series: return "series \(dir), series_index ASC, title ASC"
+        case .recentlyInteracted: return "last_interacted \(dir), title ASC"
         case .lastUpdated: return "modified \(dir), title ASC"
         case .newestAdded: return "added_at \(dir), title ASC"
         }

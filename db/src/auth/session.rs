@@ -2,8 +2,12 @@
 
 use sqlx::{Executor, Row, Sqlite, SqlitePool};
 
+use super::api_token::{is_api_token_shaped, lookup_api_token};
 use super::token::{generate_token, hash_token, parse_session_token};
-use super::{now_unix, AuthError, AuthResult, NewSession, Session, SessionKind, User};
+use super::{
+    build_user_from_joined_row, now_unix, AuthError, AuthResult, NewSession, Session, SessionKind,
+    User,
+};
 
 /// Only write `last_used_at` if the existing value is older than this many
 /// seconds. Avoids write-amplification on every authenticated request.
@@ -21,6 +25,23 @@ pub(crate) const SESSION_IDLE_TIMEOUT_SECS: i64 = 7 * 24 * 60 * 60;
 /// produce an unbounded REST response.
 pub const LIST_SESSIONS_LIMIT: i64 = 500;
 
+/// Maximum stored length of a captured `User-Agent`. Real headers run well
+/// under 200 chars; anything past this is truncated rather than rejected,
+/// because unlike `device_name` this string is incidental to the request —
+/// refusing an odd header would fail the login itself.
+pub const MAX_USER_AGENT_CHARS: usize = 512;
+
+/// Truncate a `User-Agent` to [`MAX_USER_AGENT_CHARS`] on a char boundary,
+/// mapping a blank header to `None` so the column holds either a usable value
+/// or nothing.
+fn clamp_user_agent(user_agent: Option<&str>) -> Option<String> {
+    let trimmed = user_agent?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(MAX_USER_AGENT_CHARS).collect())
+}
+
 /// Create a new session for `user_id`, returning the session record and the raw (unhashed) token.
 ///
 /// Accepts any `sqlx::Executor` so callers can pass either a `&SqlitePool` for
@@ -33,6 +54,7 @@ pub async fn create_session<'e, E>(
     device_id: Option<i64>,
     kind: SessionKind,
     ttl_secs: i64,
+    user_agent: Option<&str>,
 ) -> AuthResult<NewSession>
 where
     E: Executor<'e, Database = Sqlite>,
@@ -41,17 +63,19 @@ where
     let hash = hash_token(&raw);
     let now = now_unix();
     let expires = now + ttl_secs;
+    let user_agent = clamp_user_agent(user_agent);
 
     let row = sqlx::query(
-        "INSERT INTO sessions (token_hash, user_id, device_id, kind, expires_at)
-         VALUES (?, ?, ?, ?, ?)
-         RETURNING id, user_id, device_id, kind, created_at, last_used_at, expires_at",
+        "INSERT INTO sessions (token_hash, user_id, device_id, kind, expires_at, user_agent)
+         VALUES (?, ?, ?, ?, ?, ?)
+         RETURNING id, user_id, device_id, kind, created_at, last_used_at, expires_at, user_agent",
     )
     .bind(&hash)
     .bind(user_id)
     .bind(device_id)
     .bind(kind.as_str())
     .bind(expires)
+    .bind(user_agent)
     .fetch_one(executor)
     .await?;
 
@@ -63,6 +87,7 @@ where
         created_at: row.get("created_at"),
         last_used_at: row.get("last_used_at"),
         expires_at: row.get("expires_at"),
+        user_agent: row.get("user_agent"),
     };
 
     Ok(NewSession {
@@ -84,7 +109,7 @@ pub async fn lookup_session(pool: &SqlitePool, raw_token: &str) -> AuthResult<(U
     let session_id: i64 = row.get("s_id");
     let last_used_at: i64 = row.get("last_used_at");
 
-    let user = build_user_from_row(&row);
+    let user = build_user_from_joined_row(&row);
     let session = build_session_from_row(&row, session_id, last_used_at)?;
 
     if now - last_used_at >= SESSION_TOUCH_THRESHOLD_SECS {
@@ -99,7 +124,7 @@ pub async fn lookup_session(pool: &SqlitePool, raw_token: &str) -> AuthResult<(U
 async fn fetch_session_row(pool: &SqlitePool, hash: &[u8]) -> AuthResult<sqlx::sqlite::SqliteRow> {
     let row = sqlx::query(
         "SELECT s.id AS s_id, s.user_id, s.device_id, s.kind, s.created_at,
-                s.last_used_at, s.expires_at, s.revoked_at,
+                s.last_used_at, s.expires_at, s.revoked_at, s.user_agent,
                 u.id AS u_id, u.username, u.is_admin, u.can_upload, u.can_edit, u.can_download,
                 u.kindle_email, u.display_name, u.hidden_formats,
                 EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = u.id) AS has_avatar
@@ -136,22 +161,6 @@ fn check_session_validity(row: &sqlx::sqlite::SqliteRow, now: i64) -> AuthResult
     Ok(())
 }
 
-/// Build a `User` from the joined session+user query row.
-fn build_user_from_row(row: &sqlx::sqlite::SqliteRow) -> User {
-    User {
-        id: row.get("u_id"),
-        username: row.get("username"),
-        is_admin: row.get::<i64, _>("is_admin") != 0,
-        can_upload: row.get::<i64, _>("can_upload") != 0,
-        can_edit: row.get::<i64, _>("can_edit") != 0,
-        can_download: row.get::<i64, _>("can_download") != 0,
-        kindle_email: row.get("kindle_email"),
-        display_name: row.get("display_name"),
-        has_avatar: row.get::<i64, _>("has_avatar") != 0,
-        hidden_formats: crate::auth::parse_hidden_formats(row.get("hidden_formats")),
-    }
-}
-
 /// Build a `Session` from the joined query row. Returns `SessionNotFound` if
 /// the `kind` column holds an unrecognised value — the migration enforces the
 /// CHECK constraint, so an unknown kind means DB corruption or a hand-edited row.
@@ -175,6 +184,7 @@ fn build_session_from_row(
         created_at: row.get("created_at"),
         last_used_at,
         expires_at,
+        user_agent: row.get("user_agent"),
     })
 }
 
@@ -233,6 +243,9 @@ pub enum SessionAuthError {
 /// each caller does only the thin work of pulling the header strings out of
 /// its own request representation before delegating.
 ///
+/// Bearer values with the `omni_` prefix resolve as long-lived API tokens
+/// rather than sessions — see [`resolve_token`] for the routing.
+///
 /// * `None` token → [`SessionAuthError::Unauthenticated`].
 /// * [`AuthError::SessionNotFound`] → [`SessionAuthError::Unauthenticated`].
 /// * any other [`AuthError`] → [`SessionAuthError::Internal`].
@@ -244,11 +257,45 @@ pub async fn validate_session(
     let Some((token, _kind)) = parse_session_token(authorization, cookie_header) else {
         return Err(SessionAuthError::Unauthenticated);
     };
-    match lookup_session(pool, &token).await {
+    match resolve_token(pool, &token).await {
         Ok(pair) => Ok(pair),
         Err(AuthError::SessionNotFound) => Err(SessionAuthError::Unauthenticated),
         Err(e) => Err(SessionAuthError::Internal(e)),
     }
+}
+
+/// Resolve a raw token into `(User, Session)`, routing on the token's shape:
+/// an `omni_…` value of the exact minted length is an API token
+/// (`api_tokens` table, no expiry, revoked via the management UI), anything
+/// else is a session token. Shape routing (prefix **and** length — see
+/// [`is_api_token_shaped`]) means neither table is ever probed for the
+/// other's credentials, and a freak session token starting with `omni_`
+/// still resolves as a session.
+///
+/// An API token has no `sessions` row, so its principal is synthesized:
+/// `kind` is [`SessionKind::ApiToken`], `id` is the `0` sentinel (matching
+/// the OPDS Basic principal in `server::auth::basic` — real session ids
+/// start at 1, so the sentinel can never collide with one in "revoke all
+/// sessions except mine" sweeps), and `expires_at` is `i64::MAX` because
+/// revocation is the token's whole lifecycle.
+pub async fn resolve_token(pool: &SqlitePool, raw_token: &str) -> AuthResult<(User, Session)> {
+    if is_api_token_shaped(raw_token) {
+        let (user, token) = lookup_api_token(pool, raw_token).await?;
+        let session = Session {
+            id: 0,
+            user_id: user.id,
+            device_id: None,
+            kind: SessionKind::ApiToken,
+            created_at: token.created_at,
+            last_used_at: token.last_used_at.unwrap_or(token.created_at),
+            expires_at: i64::MAX,
+            // API tokens don't capture a login User-Agent — they have no
+            // login; the request's own UA is already in the trace span.
+            user_agent: None,
+        };
+        return Ok((user, session));
+    }
+    lookup_session(pool, raw_token).await
 }
 
 /// Revoke a single session by id, setting its `revoked_at` timestamp so `lookup_session` rejects it.
@@ -318,7 +365,7 @@ pub async fn list_sessions_for_user(pool: &SqlitePool, user_id: i64) -> AuthResu
     let now = now_unix();
     let idle_cutoff = now - SESSION_IDLE_TIMEOUT_SECS;
     let rows = sqlx::query(
-        "SELECT id, user_id, device_id, kind, created_at, last_used_at, expires_at
+        "SELECT id, user_id, device_id, kind, created_at, last_used_at, expires_at, user_agent
          FROM sessions
          WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? AND last_used_at >= ?
          ORDER BY last_used_at DESC
@@ -353,6 +400,7 @@ fn row_to_session(row: &sqlx::sqlite::SqliteRow) -> AuthResult<Session> {
         created_at: row.get("created_at"),
         last_used_at: row.get("last_used_at"),
         expires_at: row.get("expires_at"),
+        user_agent: row.get("user_agent"),
     })
 }
 

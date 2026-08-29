@@ -93,7 +93,11 @@ pub async fn require_auth(State(state): State<AppState>, req: Request, next: Nex
     let Some(token) = token else {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     };
-    match auth_db::lookup_session(state.pool(), &token).await {
+    // `resolve_token` routes `omni_…` bearers to the api_tokens table and
+    // everything else to sessions — the same routing the `AuthUser`
+    // extractors get via `validate_session`, so the boundary gate and the
+    // per-handler extractors can't disagree about what authenticates.
+    match auth_db::resolve_token(state.pool(), &token).await {
         Ok(_) => next.run(req).await,
         Err(auth_db::AuthError::SessionNotFound) => {
             if is_media {

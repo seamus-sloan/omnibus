@@ -2150,3 +2150,49 @@ fn sync_error_from_settings_error_returns_other_for_non_db_variants() {
         "expected Other, got {json:?}"
     );
 }
+
+/// The post-commit reconcile unlinks the cover file for every removed uuid, so
+/// leaving `has_cover = 1` strands the book with a flag the filesystem no
+/// longer backs. Both repair paths key on that flag — `maybe_adopt_cover`
+/// returns early on `has_cover != 0` and `backfill_covers` selects on
+/// `has_cover = 0` — so the book would never regain a cover (#2321).
+#[tokio::test]
+async fn removed_book_clears_has_cover_so_the_cover_backfill_can_re_extract() {
+    let _covers = CoversTempDir::new("sync_books_removed_has_cover");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let library_id = seed_scan_root(&pool).await;
+    let book_id = seed_book_with_file(&pool, library_id, "Old/book.epub").await;
+    sqlx::query("UPDATE books SET has_cover = 1 WHERE id = ?")
+        .bind(book_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let uuid: String = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(book_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            removed_uuids: vec![uuid],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (has_cover, is_missing): (i64, i64) =
+        sqlx::query_as("SELECT has_cover, is_missing_files FROM books WHERE id = ?")
+            .bind(book_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        has_cover, 0,
+        "the flag matches the cover file the reconcile unlinked"
+    );
+    assert_eq!(is_missing, 1, "the book is still flagged missing");
+}

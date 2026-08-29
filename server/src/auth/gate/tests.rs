@@ -44,7 +44,7 @@ async fn seed_bearer_token(pool: &sqlx::SqlitePool) -> String {
         .await
         .unwrap()
         .unwrap();
-    db::auth::create_session(pool, user.id, None, SessionKind::Bearer, 3600)
+    db::auth::create_session(pool, user.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap()
         .raw_token
@@ -176,7 +176,7 @@ async fn gated_api_with_bearer_passes() {
         .await
         .unwrap()
         .unwrap();
-    let issued = db::auth::create_session(&pool, user.id, None, SessionKind::Bearer, 3600)
+    let issued = db::auth::create_session(&pool, user.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
     let res = app
@@ -205,7 +205,7 @@ async fn gated_api_with_cookie_passes() {
         .await
         .unwrap()
         .unwrap();
-    let issued = db::auth::create_session(&pool, user.id, None, SessionKind::Cookie, 3600)
+    let issued = db::auth::create_session(&pool, user.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
     let res = app
@@ -234,7 +234,7 @@ async fn gated_api_with_revoked_session_is_401() {
         .await
         .unwrap()
         .unwrap();
-    let issued = db::auth::create_session(&pool, user.id, None, SessionKind::Bearer, 3600)
+    let issued = db::auth::create_session(&pool, user.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
     db::auth::revoke_session(&pool, issued.session.id)

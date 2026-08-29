@@ -312,6 +312,18 @@ mod server {
             // handler instead takes `AuthUser` directly, which 401s an
             // unauthenticated request the same way an `/api/*` route does.
             .merge(backend::opds_router(state.clone()))
+            // Hosted MCP endpoint (#2314). Also outside `/api/*` — the
+            // handler gates itself on the admin `mcp_enabled` setting (404
+            // when off) and authenticates the bearer per request; its tool
+            // calls loop back into this same server's REST surface at the
+            // bound port, so every permission gate stays enforced there.
+            .merge(omnibus::mcp_http::mcp_router(
+                state.clone(),
+                format!(
+                    "http://127.0.0.1:{}",
+                    dioxus::cli_config::server_port().unwrap_or(8080)
+                ),
+            ))
             .merge(
                 auth::auth_router(state).layer(axum::middleware::from_fn_with_state(
                     (limiters.auth.clone(), limiters.auth_prefixes.clone()),

@@ -129,22 +129,37 @@ pub(super) async fn find_attach_target(
 
 /// Return whether another file holds the `(book_id, format)` attachment slot.
 /// The incoming `scan_key` is excluded so re-attaching the same file proceeds.
+///
+/// Both tables are consulted because neither alone describes the slot:
+/// `merged_uuids` records attached files but never a book's own native file,
+/// so asking it alone let a second on-disk copy of one book evict the native
+/// file's `book_files` row and then trade the slot back on the following scan,
+/// restamping `books.last_modified` forever (#2320).
 pub(super) async fn slot_held_by_other(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     format: &str,
     scan_key: &str,
 ) -> Result<bool, sqlx::Error> {
-    let held: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM merged_uuids
-          WHERE book_id = ? AND format = ? AND scan_key <> ? LIMIT 1",
+    // Two `EXISTS` subqueries rather than a `UNION ALL … LIMIT 1`: each one
+    // short-circuits on its first hit without planning a compound query, and
+    // the ledger side — the common case — settles it before `book_files` is
+    // touched at all.
+    let held: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM merged_uuids
+                        WHERE book_id = ? AND format = ? AND scan_key <> ?)
+             OR EXISTS(SELECT 1 FROM book_files
+                        WHERE book_id = ? AND format = ? AND scan_key <> ?)",
     )
     .bind(book_id)
     .bind(format)
     .bind(scan_key)
-    .fetch_optional(&mut **tx)
+    .bind(book_id)
+    .bind(format)
+    .bind(scan_key)
+    .fetch_one(&mut **tx)
     .await?;
-    Ok(held.is_some())
+    Ok(held != 0)
 }
 
 /// Drop the `merged_uuids` row for `(library_path, scan_key)`. Called when a
