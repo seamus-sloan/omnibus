@@ -207,8 +207,10 @@ pub struct CreateApiTokenRequest {
 
 /// Response from `POST /api/auth/api-tokens`. `secret` is the raw `omni_…`
 /// token, shown to the client exactly once — the server keeps only its hash,
-/// so it is unrecoverable afterward.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// so it is unrecoverable afterward. Deliberately does not derive `Debug`,
+/// same as `LoginRequest`: a stray `tracing::debug!(?resp)` must not leak a
+/// long-lived credential.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateApiTokenResponse {
     pub token: ApiTokenView,
     pub secret: String,

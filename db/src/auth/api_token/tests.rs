@@ -35,6 +35,9 @@ async fn create_api_token_and_lookup_api_token_round_trip() {
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
     let nt = create_api_token(&p, u.id, "mcp laptop").await.unwrap();
     assert!(nt.raw_token.starts_with(API_TOKEN_PREFIX));
+    // Pins the minted length `is_api_token_shaped` routes on — a change to
+    // `generate_token`'s output length must fail here, not misroute auth.
+    assert_eq!(nt.raw_token.len(), API_TOKEN_RAW_LEN);
     assert_eq!(nt.token.name, "mcp laptop");
     assert!(nt.token.last_used_at.is_none());
 
@@ -111,10 +114,12 @@ async fn unknown_api_token_is_rejected() {
 async fn create_api_token_rejects_blank_and_oversized_names() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let err = create_api_token(&p, u.id, "   ").await.unwrap_err();
+    // `.err().unwrap()` rather than `.unwrap_err()` — NewApiToken has no
+    // Debug (deliberately, it carries the secret), which unwrap_err needs.
+    let err = create_api_token(&p, u.id, "   ").await.err().unwrap();
     assert!(matches!(err, AuthError::Validation(_)));
     let long = "x".repeat(MAX_API_TOKEN_NAME_CHARS + 1);
-    let err = create_api_token(&p, u.id, &long).await.unwrap_err();
+    let err = create_api_token(&p, u.id, &long).await.err().unwrap();
     assert!(matches!(err, AuthError::Validation(_)));
 }
 
@@ -172,6 +177,32 @@ async fn resolve_token_routes_omni_prefix_to_api_tokens() {
     assert_eq!(session.kind, SessionKind::ApiToken);
     assert_eq!(session.id, 0, "API-token principal uses the 0 sentinel");
     assert_eq!(session.expires_at, i64::MAX);
+}
+
+#[tokio::test]
+async fn resolve_token_routes_an_omni_prefixed_session_token_to_sessions() {
+    // Session tokens are 43-char base64url values whose alphabet includes
+    // `_`, so one can (astronomically rarely) begin with `omni_`. The length
+    // check in `is_api_token_shaped` must keep it on the sessions path.
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let raw = "omni_abcdefghijklmnopqrstuvwxyz0123456789AB";
+    assert_eq!(raw.len(), 43, "same length as a real session token");
+    let hash = crate::auth::hash_token(raw);
+    let expires = crate::auth::now_unix() + 3600;
+    sqlx::query(
+        "INSERT INTO sessions (token_hash, user_id, kind, expires_at) VALUES (?, ?, 'bearer', ?)",
+    )
+    .bind(&hash)
+    .bind(u.id)
+    .bind(expires)
+    .execute(&p)
+    .await
+    .unwrap();
+
+    let (user, session) = resolve_token(&p, raw).await.unwrap();
+    assert_eq!(user.id, u.id);
+    assert_eq!(session.kind, SessionKind::Bearer);
 }
 
 #[tokio::test]

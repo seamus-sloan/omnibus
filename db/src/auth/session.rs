@@ -2,7 +2,7 @@
 
 use sqlx::{Executor, Row, Sqlite, SqlitePool};
 
-use super::api_token::{lookup_api_token, API_TOKEN_PREFIX};
+use super::api_token::{is_api_token_shaped, lookup_api_token};
 use super::token::{generate_token, hash_token, parse_session_token};
 use super::{
     build_user_from_joined_row, now_unix, AuthError, AuthResult, NewSession, Session, SessionKind,
@@ -243,9 +243,12 @@ pub async fn validate_session(
 }
 
 /// Resolve a raw token into `(User, Session)`, routing on the token's shape:
-/// an `omni_…` value is an API token (`api_tokens` table, no expiry, revoked
-/// via the management UI), anything else is a session token. The prefix
-/// routing means neither table is ever probed for the other's credentials.
+/// an `omni_…` value of the exact minted length is an API token
+/// (`api_tokens` table, no expiry, revoked via the management UI), anything
+/// else is a session token. Shape routing (prefix **and** length — see
+/// [`is_api_token_shaped`]) means neither table is ever probed for the
+/// other's credentials, and a freak session token starting with `omni_`
+/// still resolves as a session.
 ///
 /// An API token has no `sessions` row, so its principal is synthesized:
 /// `kind` is [`SessionKind::ApiToken`], `id` is the `0` sentinel (matching
@@ -254,7 +257,7 @@ pub async fn validate_session(
 /// sessions except mine" sweeps), and `expires_at` is `i64::MAX` because
 /// revocation is the token's whole lifecycle.
 pub async fn resolve_token(pool: &SqlitePool, raw_token: &str) -> AuthResult<(User, Session)> {
-    if raw_token.starts_with(API_TOKEN_PREFIX) {
+    if is_api_token_shaped(raw_token) {
         let (user, token) = lookup_api_token(pool, raw_token).await?;
         let session = Session {
             id: 0,

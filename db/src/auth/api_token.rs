@@ -14,6 +14,20 @@ use super::{build_user_from_joined_row, now_unix, AuthError, AuthResult, User};
 /// for the other's credentials.
 pub const API_TOKEN_PREFIX: &str = "omni_";
 
+/// Length of a raw API token: the prefix plus the 43-char base64url body
+/// `generate_token` produces (32 bytes, unpadded). Pinned by a test so a
+/// token-generation change can't silently break [`is_api_token_shaped`].
+pub(crate) const API_TOKEN_RAW_LEN: usize = API_TOKEN_PREFIX.len() + 43;
+
+/// True when a raw bearer value has the exact shape of an API token —
+/// prefix *and* length. Session tokens are bare 43-char base64url values
+/// whose alphabet includes `_`, so an astronomically-unlucky session token
+/// can begin with `omni_`; the length check keeps such a token routing to
+/// the sessions table instead of failing auth against `api_tokens`.
+pub(crate) fn is_api_token_shaped(raw: &str) -> bool {
+    raw.len() == API_TOKEN_RAW_LEN && raw.starts_with(API_TOKEN_PREFIX)
+}
+
 /// Upper bound on the user-supplied token name, mirroring
 /// `MAX_DEVICE_NAME_CHARS` for devices.
 pub const MAX_API_TOKEN_NAME_CHARS: usize = 100;
@@ -40,7 +54,8 @@ pub struct ApiToken {
 
 /// Returned from [`create_api_token`]. Callers must show `raw_token` to the
 /// client exactly once — the server only keeps `SHA-256(raw_token)`.
-#[derive(Debug)]
+/// Deliberately no `Debug`, matching `NewSession`: `{:?}` must not be able to
+/// leak a long-lived credential into logs or test output.
 pub struct NewApiToken {
     pub token: ApiToken,
     pub raw_token: String,
