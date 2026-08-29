@@ -1,28 +1,8 @@
 //! Reading goals: the stored `reading_goals` targets for one reader, paired
-//! with progress measured the same way the rest of `db::stats` measures it.
-//!
-//! Two scopes share the table. An **annual** goal counts books finished in a
-//! calendar year, read onto [`StatsSummary::goal`]; a **daily** goal counts
-//! pages or minutes on the current day, read onto
-//! [`StatsSummary::daily_goals`]. Both are written through this module —
-//! [`set_goal`] and [`set_daily_goal`] — from the REST handlers and the web
-//! RPC alike.
-//!
-//! # Which day a daily goal is measured over
-//!
-//! Not the same one for both kinds, and that is deliberate rather than an
-//! oversight. **Minutes** use the reader's *local* day, from the capture-time
-//! offset each session recorded (migration `0080`) — the treatment
-//! [`super::patterns`] already gives the time-of-day strips, and the only
-//! honest one for a target that resets at midnight. **Pages** use the **UTC**
-//! day, because the forward-progress ledger (migration `0083`) buckets to a
-//! UTC date string and retains no timestamp to re-bucket from. The two can
-//! therefore name different days for the same moment, by up to the reader's
-//! offset. Closing that gap means teaching the ledger an offset, which moves
-//! the progress write path on both clients.
-//!
-//! [`StatsSummary::goal`]: omnibus_shared::StatsSummary::goal
-//! [`StatsSummary::daily_goals`]: omnibus_shared::StatsSummary::daily_goals
+//! with progress measured the way the rest of `db::stats` measures it. An
+//! annual goal counts books finished in a calendar year; a daily goal counts
+//! pages or minutes today. Read by `compute`, written by the `/api/stats/goal`
+//! handlers and the web RPC through [`set_goal`] and [`set_daily_goal`].
 
 use omnibus_shared::{
     DailyGoal, DailyGoalUpdate, DailyGoals, ReadingGoal, ReadingGoalUpdate, GOAL_KIND_BOOKS,
@@ -264,6 +244,19 @@ pub async fn set_daily_goal(
 /// two measurements are unrelated queries — one over the pages ledger, one
 /// over the session tables — and running the ledger scan for a reader who only
 /// set a minutes goal would be work with nowhere to go.
+///
+/// # Which day each kind is measured over
+///
+/// Not the same one, and that is deliberate rather than an oversight.
+/// **Minutes** use the reader's *local* day, from the capture-time offset each
+/// session recorded (migration `0080`) — the treatment [`super::patterns`]
+/// already gives the time-of-day strips, and the only honest one for a target
+/// that resets at midnight. **Pages** use the **UTC** day, because the
+/// forward-progress ledger (migration `0083`) buckets to a UTC date string and
+/// retains no timestamp to re-bucket from. The two can therefore name different
+/// days for the same moment, by up to the reader's offset; closing that gap
+/// means teaching the ledger an offset, which moves the progress write path on
+/// both clients.
 pub async fn daily_goals(pool: &SqlitePool, user_id: i64) -> Result<DailyGoals, StatsError> {
     let rows =
         sqlx::query("SELECT kind, target FROM reading_goals WHERE user_id = ? AND scope = 'day'")
@@ -355,24 +348,37 @@ async fn local_today(pool: &SqlitePool, user_id: i64) -> Result<String, StatsErr
 
 /// The reader's current UTC offset in minutes, from the most recent session
 /// carrying one. `None` when no session ever has.
+///
+/// One indexed probe per table, compared here, rather than one `ORDER BY` over
+/// a `UNION ALL` of both: SQLite cannot push the sort through the union, so
+/// that shape materialises and sorts a reader's whole offset-carrying session
+/// history on a read path that runs for every stats load. Each probe instead
+/// walks `idx_{reading,listening}_sessions_user_started` backwards and stops at
+/// the first row it wants.
 async fn current_offset_minutes(
     pool: &SqlitePool,
     user_id: i64,
 ) -> Result<Option<i64>, StatsError> {
-    Ok(sqlx::query_scalar(
-        "SELECT utc_offset_minutes FROM (
-             SELECT started_at, utc_offset_minutes FROM reading_sessions
-                 WHERE user_id = ? AND utc_offset_minutes IS NOT NULL
-             UNION ALL
-             SELECT started_at, utc_offset_minutes FROM listening_sessions
-                 WHERE user_id = ? AND utc_offset_minutes IS NOT NULL
-         )
-         ORDER BY started_at DESC LIMIT 1",
-    )
-    .bind(user_id)
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?)
+    let mut latest: Option<(i64, i64)> = None;
+    for table in ["reading_sessions", "listening_sessions"] {
+        // `table` is one of two fixed literals chosen here, never user input.
+        let sql = format!(
+            "SELECT started_at, utc_offset_minutes FROM {table}
+             WHERE user_id = ? AND utc_offset_minutes IS NOT NULL
+             ORDER BY started_at DESC LIMIT 1"
+        );
+        let Some(row) = sqlx::query(&sql).bind(user_id).fetch_optional(pool).await? else {
+            continue;
+        };
+        let candidate: (i64, i64) = (
+            row.try_get("started_at")?,
+            row.try_get("utc_offset_minutes")?,
+        );
+        if latest.is_none_or(|(seen, _)| candidate.0 > seen) {
+            latest = Some(candidate);
+        }
+    }
+    Ok(latest.map(|(_, offset)| offset))
 }
 
 /// `(placed_seconds, unzoned_seconds)` for the reader's day.
