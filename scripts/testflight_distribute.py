@@ -14,9 +14,10 @@ it (the first build of a marketing version does; later ones are usually waved
 through), optionally sets "What to Test", and adds the build to each named
 group.
 
-Idempotent by construction: a group already attached to the build is skipped and
-a build already submitted for review is left alone, so a re-run — or a retry
-after a half-finished run — is a no-op rather than a duplicate.
+Idempotent by construction: attaching a group is a set-semantics relationship
+add (re-adding an attached build is a 204 no-op) and a build already submitted
+for review is left alone, so a re-run — or a retry after a half-finished run —
+is a no-op rather than a duplicate.
 
 Reuses the App Store Connect API key the build-upload workflow already
 configures (`ASC_API_KEY_BASE64` / `ASC_KEY_ID` / `ASC_ISSUER_ID`); that key is
@@ -266,21 +267,21 @@ def set_whats_new(build_id):
 
 
 def add_to_groups(build_id, groups):
-    """Attach the build to each group it isn't already in."""
-    attached = {g["id"] for g in asc("GET", f"/v1/builds/{build_id}/betaGroups",
-                                     params={"limit": 200})["data"]}
-    todo = [g for g in groups if g["id"] not in attached]
-    for g in groups:
-        if g["id"] in attached:
-            print(f"group {g['attributes']['name']!r}: already attached")
-    if not todo:
-        return
-    names = ", ".join(repr(g["attributes"]["name"]) for g in todo)
+    """Attach the build to each group, from the group side.
+
+    Deliberately no membership pre-check: App Store Connect forbids reading a
+    build's `betaGroups` relationship (403 `GET_RELATED`; only CREATE/DELETE
+    are allowed), and the group-side relationship add is set-semantics —
+    re-adding an already-attached build answers 204 and changes nothing — so
+    posting unconditionally is what keeps the script idempotent.
+    """
+    names = ", ".join(repr(g["attributes"]["name"]) for g in groups)
     if DRY_RUN:
         print(f"groups: [dry] would attach to {names}")
         return
-    asc("POST", f"/v1/builds/{build_id}/relationships/betaGroups",
-        json={"data": [{"type": "betaGroups", "id": g["id"]} for g in todo]})
+    for g in groups:
+        asc("POST", f"/v1/betaGroups/{g['id']}/relationships/builds",
+            json={"data": [{"type": "builds", "id": build_id}]})
     print(f"groups: attached to {names}")
 
 
