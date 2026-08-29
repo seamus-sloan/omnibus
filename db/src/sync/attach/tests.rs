@@ -1004,13 +1004,33 @@ async fn attach_refuses_when_the_books_own_native_file_holds_the_slot() {
     .await
     .unwrap();
 
-    let incumbent: String =
-        sqlx::query_scalar("SELECT filename FROM book_files WHERE book_id = ? AND format = 'EPUB'")
-            .bind(book_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(incumbent, "yumi-a", "the native file keeps its own slot");
+    // Assert the slot's occupancy by count rather than reading one row back:
+    // a regression here produces a *second* `book_files` row, and an unordered
+    // `fetch_one` would pick between them arbitrarily — flaking, or masking the
+    // very failure this test exists to catch.
+    assert_eq!(
+        count(
+            &pool,
+            &format!(
+                "SELECT COUNT(*) FROM book_files WHERE book_id = {book_id} AND format = 'EPUB'"
+            )
+        )
+        .await,
+        1,
+        "the slot holds exactly one file"
+    );
+    assert_eq!(
+        count(
+            &pool,
+            &format!(
+                "SELECT COUNT(*) FROM book_files
+                  WHERE book_id = {book_id} AND format = 'EPUB' AND filename = 'yumi-a'"
+            )
+        )
+        .await,
+        1,
+        "the native file keeps its own slot"
+    );
     assert_eq!(
         count(
             &pool,

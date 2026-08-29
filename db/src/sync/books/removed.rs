@@ -8,6 +8,12 @@
 
 use sqlx::Transaction;
 
+/// `"?, ?, …"` for an `IN (…)` list of `n` binds. Every statement in this
+/// module is chunked over a slice of ids, so they all need one.
+fn placeholders(n: usize) -> String {
+    std::iter::repeat_n("?", n).collect::<Vec<_>>().join(", ")
+}
+
 /// Mark a batch of removed books' files missing. The file is gone, but the
 /// `books` row — its metadata, taxonomy links, FTS row, and every soft-ref
 /// user-data row — is **retained**; only the book's own native `book_files`
@@ -58,10 +64,9 @@ async fn resolve_removed_book_ids(
     library_id: i64,
     chunk: &[String],
 ) -> Result<Vec<i64>, sqlx::Error> {
-    let placeholders = std::iter::repeat_n("?", chunk.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let id_sql = format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
+    let uuid_placeholders = placeholders(chunk.len());
+    let id_sql =
+        format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({uuid_placeholders})");
     let mut q = sqlx::query_scalar::<_, i64>(&id_sql).bind(library_id);
     for uuid in chunk {
         q = q.bind(uuid);
@@ -80,9 +85,7 @@ async fn delete_removed_book_files(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     ids: &[i64],
 ) -> Result<(), sqlx::Error> {
-    let id_placeholders = std::iter::repeat_n("?", ids.len())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let id_placeholders = placeholders(ids.len());
     let delete_sql = format!(
         "DELETE FROM book_files
           WHERE book_id IN ({id_placeholders})
@@ -117,9 +120,7 @@ async fn clear_has_cover(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     ids: &[i64],
 ) -> Result<(), sqlx::Error> {
-    let id_placeholders = std::iter::repeat_n("?", ids.len())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let id_placeholders = placeholders(ids.len());
     let update_sql =
         format!("UPDATE books SET has_cover = 0 WHERE id IN ({id_placeholders}) AND has_cover = 1");
     let mut update_q = sqlx::query(&update_sql);
@@ -142,9 +143,7 @@ async fn flag_books_missing(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     ids: &[i64],
 ) -> Result<(), sqlx::Error> {
-    let id_placeholders = std::iter::repeat_n("?", ids.len())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let id_placeholders = placeholders(ids.len());
     let update_sql = format!(
         "UPDATE books
             SET is_missing_files = 1, missing_files_since = unixepoch()
