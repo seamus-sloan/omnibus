@@ -74,6 +74,13 @@ pub const WRITE_ALLOWLIST: &[&str] = &[
     // gates them on `can_edit` like the overrides write.
     "POST /api/metadata/editions/search",
     "POST /api/metadata/editions/hydrate",
+    // Book merge/undo — the strongest tier in this list: admin-gated on the
+    // server, library-wide (merge deletes the source `books` row and
+    // retargets every reader's state onto the target; undo restores it),
+    // and confirm-gated in the tools (`merge_books` / `undo_merge` refuse
+    // without an explicit `confirm: true`).
+    "POST /api/books/merge",
+    "POST /api/books/merge/undo",
 ];
 
 /// True when `method path` is covered by [`WRITE_ALLOWLIST`]. A `{param}`

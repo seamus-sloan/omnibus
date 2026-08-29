@@ -14,6 +14,7 @@ pub const CHAPTER_TEXT_MAX_CHARS: usize = 100_000;
 /// One chapter in the listing: the TOC title plus the spine index the text
 /// read is addressed by.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ChapterListEntry {
     /// TOC order, 0-based.
     pub ordinal: i64,
@@ -29,6 +30,7 @@ pub struct ChapterListEntry {
 /// `chapters`; its text is still addressable by spine index up to
 /// `spine_count`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ChapterListResponse {
     pub book_uuid: String,
     pub has_text: bool,
@@ -45,6 +47,7 @@ pub struct ChapterListResponse {
 /// [`CHAPTER_TEXT_MAX_CHARS`] promises. `has_text: false` mirrors the
 /// listing's no-text answer (with everything else zeroed).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ChapterTextResponse {
     pub book_uuid: String,
     pub has_text: bool,

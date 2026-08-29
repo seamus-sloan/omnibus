@@ -86,6 +86,8 @@ fn get_info_declares_tools_and_the_confirm_gated_write_surface() {
     assert!(instructions.contains("preview_shelf_rule"));
     assert!(instructions.contains("confirm: true"));
     assert!(instructions.contains("propose_metadata_changes"));
+    assert!(instructions.contains("merge_books"));
+    assert!(instructions.contains("search_book_content"));
 }
 
 /// Boot a stub instance serving shared-typed JSON and return a service
@@ -431,12 +433,10 @@ fn checkin_tools_router_lists_every_expected_tool_with_a_description() {
 }
 
 #[test]
-fn combined_router_carries_both_families_without_collisions() {
-    let combined = OmnibusMcp::read_tools() + OmnibusMcp::checkin_tools();
-    assert_eq!(
-        combined.list_all().len(),
-        EXPECTED_TOOLS.len() + EXPECTED_CHECKIN_TOOLS.len()
-    );
+fn combined_router_carries_every_family_without_collisions() {
+    // 21 read + 9 checkin + 6 shelf + 6 metadata + 2 merge + 3 content.
+    let combined = offline_server().tool_router;
+    assert_eq!(combined.list_all().len(), 47);
 }
 
 #[tokio::test]

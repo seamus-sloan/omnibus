@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// One content-search hit: a chapter-level citation plus a match excerpt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ContentSearchHit {
     /// Durable book identity (`books.uuid`).
     pub book_uuid: String,
@@ -21,6 +22,7 @@ pub struct ContentSearchHit {
 
 /// Response body for `GET /api/search/content`, best-ranked hit first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ContentSearchResults {
     pub hits: Vec<ContentSearchHit>,
 }
