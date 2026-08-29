@@ -402,30 +402,33 @@ async fn find_book_by_norm(
 /// Pass 3 of the norm rung: match on the article-stripped title and filter the
 /// rows down with [`authors_compatible`] rather than an SQL equality.
 ///
-/// The author test is split. Surname equality is selective and expressible in
-/// SQL, so it runs there and keeps the fetch window ([`LOOSE_FETCH_LIMIT`])
-/// meaningful. The initial comparison needs the *first* token of a key SQLite
-/// has no tidy way to split, so it runs in Rust — and the cap to
-/// [`MAX_CLOSE_MATCH_CANDIDATES`] is applied after that filter, never before,
-/// so a rejected row can't consume a slot the real match needed.
+/// The author test is split. Agreement on the key's **last token** is the
+/// selective half and is expressible in SQL, so it runs there and keeps the
+/// fetch window ([`LOOSE_FETCH_LIMIT`]) meaningful. The initial comparison
+/// needs the *first* token of a key SQLite has no tidy way to split, so it runs
+/// in Rust — and the cap to [`MAX_CLOSE_MATCH_CANDIDATES`] is applied after that
+/// filter, never before, so a rejected row can't consume a slot the real match
+/// needed.
 ///
-/// Rows are ordered exact-title-first so a book whose title needed no article
-/// stripping or subtitle tolerance leads the list.
+/// Rows are ordered on the *stripped* title key, so a row equal to it leads the
+/// ones that only matched it as a word-boundary prefix. Article stripping
+/// happens on both sides before that comparison and so does not affect the
+/// ranking.
 async fn query_loose_candidates(
     pool: &SqlitePool,
     title_norm: &str,
     author_norm: Option<&str>,
 ) -> Result<Vec<ScanBook>, sqlx::Error> {
     let title_bare = strip_leading_article(title_norm);
-    let surname = author_norm.map(|a| split_name(a).1);
+    let last_name = author_norm.map(|a| split_name(a).1);
     // Same word-boundary reasoning as `query_norm_candidates`: norm strings are
     // `[a-z0-9 ]` only, so neither bound value carries a LIKE wildcard.
     let pred = |title: &str, author: &str| {
         let bare = bare_title_sql(title);
         let title_pred =
             format!("({bare} = ?1 OR {bare} LIKE ?1 || ' %' OR ?1 LIKE {bare} || ' %')");
-        // Surname equality is the selective half of `authors_compatible`, so it
-        // runs in SQL — the fetch window is bounded, and leaving the whole
+        // Last-token equality is the selective half of `authors_compatible`, so
+        // it runs in SQL — the fetch window is bounded, and leaving the whole
         // author test to Rust lets a shelf of same-title strangers fill that
         // window and crowd the real match out of it. `IS NULL` keeps a library
         // book with no author key in play, matching the helper's "can't tell".
@@ -460,8 +463,8 @@ async fn query_loose_candidates(
         bare_title_sql("COALESCE(mo.title_norm, b.title_norm)"),
     );
     let mut query = sqlx::query(&sql).bind(&title_bare);
-    if let Some(surname) = surname {
-        query = query.bind(surname.to_string());
+    if let Some(last_name) = last_name {
+        query = query.bind(last_name.to_string());
     }
     let rows = query.fetch_all(pool).await?;
     Ok(rows
@@ -511,8 +514,13 @@ pub(super) fn strip_leading_article(title_norm: &str) -> String {
 }
 
 /// Whether a provider author key and a library author key are close enough to
-/// *offer* as a match: same surname, and first given names that agree on their
-/// initial (one a prefix of the other, so `"e"` matches `"edward"`).
+/// *offer* as a match: the same last token, and first tokens that agree on
+/// their initial (one a prefix of the other, so `"e"` matches `"edward"`).
+///
+/// Last token, not a parsed surname: a multi-word family name reduces to its
+/// final word (`"melissa de la cruz"` → `"cruz"`), which is fine here because
+/// *both* sides reduce the same way — but it is a token comparison, not name
+/// parsing, and extending this matcher should assume no more than that.
 ///
 /// Looser than the equality passes 1 and 2 use, because this one only ever
 /// feeds `ScanOutcome::CloseMatch` — a confirmation screen, never an
@@ -530,23 +538,25 @@ pub(super) fn authors_compatible(provider: Option<&str>, library: Option<&str>) 
     if provider == library {
         return true;
     }
-    let (provider_given, provider_surname) = split_name(provider);
-    let (library_given, library_surname) = split_name(library);
-    if provider_surname != library_surname {
+    let (provider_first, provider_last) = split_name(provider);
+    let (library_first, library_last) = split_name(library);
+    if provider_last != library_last {
         return false;
     }
-    match (provider_given, library_given) {
-        // A mononym on either side contradicts nothing the other asserts.
+    match (provider_first, library_first) {
+        // A single-token key on either side contradicts nothing the other
+        // asserts.
         (None, _) | (_, None) => true,
         (Some(a), Some(b)) => a.starts_with(b) || b.starts_with(a),
     }
 }
 
-/// Split a normalized author key into `(first given name, surname)`. A
-/// single-token key is all surname.
+/// Split a normalized author key into `(first token, last token)` — a
+/// positional split on spaces, not name parsing. A single-token key is all
+/// last token.
 fn split_name(author_norm: &str) -> (Option<&str>, &str) {
     match author_norm.rsplit_once(' ') {
-        Some((given, surname)) => (given.split(' ').next(), surname),
+        Some((head, last)) => (head.split(' ').next(), last),
         None => (None, author_norm),
     }
 }

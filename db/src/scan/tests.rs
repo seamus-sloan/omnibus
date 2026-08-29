@@ -672,8 +672,8 @@ async fn resolve_close_match_matches_on_title_when_the_provider_has_no_author() 
 }
 
 #[tokio::test]
-async fn resolve_norm_does_not_match_a_different_surname() {
-    // The loose pass widens the *given* name only. Two authors who share a
+async fn resolve_norm_does_not_match_a_different_last_name() {
+    // The loose pass widens the *first* token only. Two authors who share a
     // title and nothing else must not be offered as the same book.
     let pool = pool().await;
     seed_book(&pool, "u1", "Middlemarch", "George Eliot", None).await;
@@ -685,7 +685,7 @@ async fn resolve_norm_does_not_match_a_different_surname() {
         .unwrap();
     assert!(
         matches!(outcome, ScanOutcome::NotInLibrary { .. }),
-        "a different surname is not a close match"
+        "a different last name is not a close match"
     );
 }
 
@@ -784,7 +784,7 @@ fn authors_compatible_accepts_initial_and_expanded_forms_of_one_name() {
 }
 
 #[test]
-fn authors_compatible_rejects_a_different_surname_or_given_name() {
+fn authors_compatible_rejects_a_different_last_or_first_token() {
     for (provider, library) in [
         ("george orwell", "george eliot"),
         ("edmund forster", "morgan forster"),
