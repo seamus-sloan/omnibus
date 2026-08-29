@@ -10937,7 +10937,14 @@ html {
     radial-gradient(64% 78% at 18% 0%, color-mix(in oklch, var(--accent) 17%, transparent), transparent 62%),
     radial-gradient(52% 70% at 92% 12%, color-mix(in oklch, var(--accent) 9%, transparent), transparent 58%);
 }
-.lmq > * { position: relative; z-index: 1; }
+/* Lifts each section above the wash. Overlays flatten in as children here too
+   (Dioxus has no portal), and this rule ties them on specificity while winning
+   on source order — so without the exclusion it re-anchors a `position: fixed`
+   modal into the page column. Add any new fixed overlay mounted here to the list. */
+.lmq > *:not(.shelf-modal-overlay, .author-photo-modal-backdrop, .bulk-edit-bar) {
+  position: relative;
+  z-index: 1;
+}
 
 /* ── The stack: the open books, fanned ───────────────────────────── */
 .lmq-stack {
