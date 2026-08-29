@@ -212,6 +212,11 @@ pub async fn rpc_get_ebook(uuid: String) -> Result<Option<EbookMetadata>> {
 /// and the surviving uuid. Same-format files are allowed (e.g. merging
 /// five M4B books into one). Domain failures (`SameBook`, …) surface as
 /// their display strings so the dialog can render them directly.
+///
+/// Mirrored by the REST `POST /api/books/merge` handler in
+/// `server::backend::merge`, which repeats this `AdminUser` gate — the
+/// merge itself is shared (`db::merge_books`), but the gate is not, so
+/// changing one side's gate means changing the other.
 #[post("/api/rpc/merge-books", pool: PoolExt, admin: AdminUser)]
 pub async fn rpc_merge_books(source_uuid: String, target_uuid: String) -> Result<MergeBooksResult> {
     match db::merge_books(&pool.0, &source_uuid, &target_uuid, Some(admin.0.id)).await {
@@ -228,7 +233,9 @@ pub async fn rpc_merge_books(source_uuid: String, target_uuid: String) -> Result
 }
 
 /// Admin: reverse a merge recorded in `merge_log`. Returns the restored
-/// (source) book's uuid.
+/// (source) book's uuid. Mirrored by the REST `POST /api/books/merge/undo`
+/// handler in `server::backend::merge` — same gate-parity note as
+/// [`rpc_merge_books`].
 #[post("/api/rpc/merge-books/undo", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_undo_merge(merge_log_id: i64) -> Result<String> {
     match db::undo_merge(&pool.0, merge_log_id).await {

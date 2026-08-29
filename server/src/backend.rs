@@ -38,6 +38,7 @@ mod image_upload;
 mod journals;
 mod kindle;
 mod kobo;
+mod merge;
 mod metadata;
 mod opds;
 mod overrides;

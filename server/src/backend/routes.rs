@@ -14,9 +14,9 @@ use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 
 use super::{
     account, admin_health, admin_sessions, audiobooks, author_photos, authors, bookmarks, covers,
-    cross_format, ebooks, genres, highlights, journals, kindle, metadata, overrides, physical,
-    profile, progress, ratings, read_status, scan, search, series, settings, shelves, stats,
-    suggestions, summary, tags, uploads, users, AppState,
+    cross_format, ebooks, genres, highlights, journals, kindle, merge, metadata, overrides,
+    physical, profile, progress, ratings, read_status, scan, search, series, settings, shelves,
+    stats, suggestions, summary, tags, uploads, users, AppState,
 };
 
 /// Health check, settings, ebooks, and audiobook playback routes.
@@ -119,6 +119,7 @@ pub(super) fn data_routes(search_limiter: Arc<RateLimiter>) -> Router<AppState> 
     Router::new()
         .merge(metadata_override_routes())
         .merge(progress_routes())
+        .merge(merge_routes())
         .merge(highlight_routes())
         .merge(bookmark_routes())
         .merge(engagement_routes())
@@ -187,6 +188,18 @@ fn progress_routes() -> Router<AppState> {
             "/api/books/{uuid}/cross-format-follow",
             post(cross_format::post_cross_format_follow),
         )
+}
+
+/// Admin book merge/unmerge — mobile-facing REST. Web hits the analogous
+/// `/api/rpc/merge-books` and `/api/rpc/merge-books/undo` server fns in
+/// `omnibus_frontend::rpc::books`, which repeat these handlers' `AdminUser`
+/// gate: the merge transaction itself is shared (`db::merge_books` /
+/// `db::undo_merge`), but the gate and error mapping are not — change one
+/// side's gate or response shape and the other needs the same edit.
+fn merge_routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/books/merge", post(merge::post_merge_books))
+        .route("/api/books/merge/undo", post(merge::post_undo_merge))
 }
 
 /// F2.4b highlight annotations — mobile-facing REST. Web hits the analogous
