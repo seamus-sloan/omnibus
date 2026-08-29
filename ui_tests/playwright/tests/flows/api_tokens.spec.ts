@@ -184,6 +184,68 @@ test("shows an error and keeps the list unchanged when creation fails", async ({
   await expect(rowFor(page, name)).toHaveCount(0);
 });
 
+test("shows an error and keeps the row when rename fails", async ({ page }) => {
+  const name = `e2e rename-fail ${Date.now()}`;
+  await gotoReady(page, SETTINGS_API_TOKENS);
+  await createToken(page, name);
+  await page.getByTestId("api-token-secret-dismiss").click();
+
+  await page.route("**/api/rpc/api-tokens/rename", (route) =>
+    route.fulfill({ status: 500, body: "internal server error" }),
+  );
+  await rowFor(page, name).getByRole("button", { name: "Rename" }).click();
+  await page.getByTestId("api-token-rename-input").fill(`${name} v2`);
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/api-tokens/rename",
+      expectedStatus: 500,
+    },
+    async () => page.getByTestId("api-token-rename-save").click(),
+  );
+
+  // The error surfaces, the edit row stays open, and cancelling reveals the
+  // row still under its original name.
+  await expect(status(page)).toHaveClass(/error/);
+  await page.getByTestId("api-token-rename-cancel").click();
+  await expect(rowFor(page, name)).toBeVisible();
+
+  await page.unroute("**/api/rpc/api-tokens/rename");
+  await revokeToken(page, name);
+});
+
+test("shows an error and keeps the row when revoke fails", async ({ page }) => {
+  const name = `e2e revoke-fail ${Date.now()}`;
+  await gotoReady(page, SETTINGS_API_TOKENS);
+  await createToken(page, name);
+  await page.getByTestId("api-token-secret-dismiss").click();
+
+  await page.route("**/api/rpc/api-tokens/revoke", (route) =>
+    route.fulfill({ status: 500, body: "internal server error" }),
+  );
+  await rowFor(page, name).getByRole("button", { name: "Revoke" }).click();
+  const confirm = page.getByTestId("api-token-revoke-confirm");
+  await expect(confirm).toBeVisible();
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/api-tokens/revoke",
+      expectedStatus: 500,
+    },
+    async () => confirm.getByRole("button", { name: "Revoke token" }).click(),
+  );
+
+  // The error surfaces and the token survives — cancel back to the row.
+  await expect(status(page)).toHaveClass(/error/);
+  await page.getByTestId("api-token-revoke-cancel").click();
+  await expect(rowFor(page, name)).toBeVisible();
+
+  await page.unroute("**/api/rpc/api-tokens/revoke");
+  await revokeToken(page, name);
+});
+
 // ── Hosted MCP endpoint toggle (#2314) ──────────────────────────────
 // Renders in the same section, admin-only (the seeded user is an admin).
 // The toggle is instance-wide state: the action test flips it on and
@@ -249,4 +311,33 @@ test("enables and disables the MCP endpoint", async ({ page }) => {
       data: { enabled: false },
     });
   }
+});
+
+test("shows an error and keeps the switch state when the toggle fails", async ({
+  page,
+}) => {
+  await gotoReady(page, SETTINGS_API_TOKENS);
+  await expect(mcpToggle(page)).toBeEnabled();
+
+  // Fail only the POST — the card's status GET on mount shares the URL.
+  await page.route("**/api/settings/mcp", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 500, body: "internal server error" });
+    }
+    return route.continue();
+  });
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/settings/mcp",
+      expectedBody: { enabled: true },
+      expectedStatus: 500,
+    },
+    async () => mcpToggle(page).click(),
+  );
+
+  await expect(page.getByTestId("mcp-toggle-status")).toHaveClass(/error/);
+  await expect(mcpState(page)).toHaveText("disabled");
+  await expect(mcpToggle(page)).toHaveAttribute("aria-checked", "false");
 });
