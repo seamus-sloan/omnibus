@@ -86,6 +86,8 @@ fn get_info_declares_tools_and_the_confirm_gated_write_surface() {
     assert!(instructions.contains("preview_shelf_rule"));
     assert!(instructions.contains("confirm: true"));
     assert!(instructions.contains("propose_metadata_changes"));
+    assert!(instructions.contains("merge_books"));
+    assert!(instructions.contains("search_book_content"));
 }
 
 /// Boot a stub instance serving shared-typed JSON and return a service
@@ -431,12 +433,23 @@ fn checkin_tools_router_lists_every_expected_tool_with_a_description() {
 }
 
 #[test]
-fn combined_router_carries_both_families_without_collisions() {
-    let combined = OmnibusMcp::read_tools() + OmnibusMcp::checkin_tools();
-    assert_eq!(
-        combined.list_all().len(),
-        EXPECTED_TOOLS.len() + EXPECTED_CHECKIN_TOOLS.len()
-    );
+fn combined_router_carries_every_family_without_collisions() {
+    // Derived from the per-family routers, not hardcoded: a name collision
+    // between families would make the combined router smaller than the sum.
+    let per_family: usize = [
+        OmnibusMcp::read_tools().list_all().len(),
+        OmnibusMcp::checkin_tools().list_all().len(),
+        OmnibusMcp::shelf_tools().list_all().len(),
+        OmnibusMcp::metadata_tools().list_all().len(),
+        OmnibusMcp::merge_tools().list_all().len(),
+        OmnibusMcp::content_tools().list_all().len(),
+    ]
+    .iter()
+    .sum();
+    let combined = offline_server().tool_router;
+    assert_eq!(combined.list_all().len(), per_family);
+    // 21 read + 9 checkin + 6 shelf + 6 metadata + 2 merge + 3 content.
+    assert_eq!(per_family, 47);
 }
 
 #[tokio::test]

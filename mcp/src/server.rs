@@ -30,7 +30,9 @@ impl OmnibusMcp {
             tool_router: Self::read_tools()
                 + Self::checkin_tools()
                 + Self::shelf_tools()
-                + Self::metadata_tools(),
+                + Self::metadata_tools()
+                + Self::merge_tools()
+                + Self::content_tools(),
         }
     }
 }
@@ -59,7 +61,12 @@ impl ServerHandler for OmnibusMcp {
                  and search books, explore authors/series/tags/genres and shelves, and \
                  read the signed-in user's stats, progress, highlights, bookmarks, and \
                  journal entries; books are identified by the uuid field returned by \
-                 the listing and search tools. The physical-collection tools resolve \
+                 the listing and search tools. Book text is readable too: list_chapters \
+                 maps a book's chapters to spine indexes, read_chapter_text reads one \
+                 chapter as bounded plain-text slices (page via next_offset), and \
+                 search_book_content full-text-searches the library's book text — \
+                 distinct from search_books, which matches metadata only — citing each \
+                 hit back to a book and chapter. The physical-collection tools resolve \
                  ISBNs and title searches against the library and the external \
                  metadata providers (always relay which provider answered), check in \
                  physical copies, and manage the wishlist and copy notes; \
@@ -74,7 +81,12 @@ impl ServerHandler for OmnibusMcp {
                  apply_metadata_changes and revert_metadata_overrides write metadata \
                  overrides — library-wide state every user sees — and refuse to run \
                  until called with confirm: true after the user has approved the diff. \
-                 Settings and reading state are never modified."
+                 Duplicate resolution is admin-only and the strongest write here: \
+                 merge_books deletes the source book's row and retargets every reader's \
+                 state onto the target, undo_merge reverses a merge via its returned \
+                 merge_log_id, and both refuse to run without confirm: true — fetch both \
+                 books with get_book and present them to the user first. Settings and \
+                 reading state are never modified."
                     .to_string(),
             )
     }
