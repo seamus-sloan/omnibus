@@ -70,6 +70,14 @@ pub(super) fn content_routes() -> Router<AppState> {
         )
         .route("/api/ebooks", get(ebooks::get_ebooks))
         .route("/api/ebooks/{uuid}", get(ebooks::get_ebook_by_uuid))
+        .route(
+            "/api/ebooks/{uuid}/chapters",
+            get(ebooks::chapters::get_ebook_chapters),
+        )
+        .route(
+            "/api/ebooks/{uuid}/chapters/{spine_index}/text",
+            get(ebooks::chapters::get_ebook_chapter_text),
+        )
         .route("/api/ebooks/{uuid}/file", get(ebooks::get_ebook_file))
         .route(
             "/api/ebooks/{uuid}/pages/{page}",

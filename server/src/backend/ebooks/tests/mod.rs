@@ -4,6 +4,7 @@
 //! live here; the remaining endpoints are split into the sibling modules
 //! below.
 
+mod chapters;
 mod conditional;
 mod download;
 mod file;

@@ -18,6 +18,8 @@ use omnibus_shared::{EbookLibrary, SortDir, SortKey, ViewFilters};
 use serde::Deserialize;
 
 use super::conditional::{self, MEDIA_CACHE_CONTROL, MEDIA_VARY};
+
+pub(super) mod chapters;
 use super::{internal, with_pagination_headers, AppState};
 use crate::auth::{AuthUser, MediaAuthUser};
 
