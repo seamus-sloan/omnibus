@@ -1,8 +1,8 @@
 //  RecentlyInteractedSortTests.swift
 //  The "Recently interacted" sort axis on the native client: its place in the
 //  shared wire vocabulary and the picker, the `Book` field it reads, and the
-//  ordering the offline mirror produces for it — including where a book the
-//  reader has never touched lands.
+//  ordering the offline mirror produces for it — including where a book nobody
+//  has ever touched lands.
 
 import Foundation
 import SQLite3
@@ -70,7 +70,9 @@ struct LastInteractedRowTests {
 
     @Test func rowLeavesTheSignalEmptyWhenTheBookWasNeverTouched() {
         // Empty rather than absent: the column is NOT NULL, and an empty
-        // string is what sorts the book last under the axis's default.
+        // string is what sorts the book last under the axis's default — where
+        // the server's own NULL lands. The signal is library-wide, so this is
+        // "nobody has touched it", not "this reader hasn't".
         #expect(row(lastInteractedAt: nil).lastInteracted == "")
     }
 }
@@ -83,40 +85,64 @@ private func ordered(
     _ rows: [(uuid: String, lastInteracted: String, title: String)],
     direction: SortDirection
 ) -> [String] {
+    // Every SQLite step is guarded rather than `#expect`ed: a failed `#expect`
+    // reports and keeps going, and the next call would then run against a nil
+    // handle and take the whole test process down with it. Recording an issue
+    // and returning empty fails the caller's assertion with a readable signal.
     var db: OpaquePointer?
-    #expect(sqlite3_open(":memory:", &db) == SQLITE_OK)
+    guard sqlite3_open(":memory:", &db) == SQLITE_OK, db != nil else {
+        Issue.record("could not open an in-memory database")
+        return []
+    }
     defer { sqlite3_close(db) }
-    sqlite3_exec(
-        db,
-        """
-        CREATE TABLE books (
-            uuid TEXT NOT NULL,
-            last_interacted TEXT NOT NULL DEFAULT '',
-            title TEXT NOT NULL DEFAULT ''
-        )
-        """,
-        nil, nil, nil
-    )
+    guard
+        sqlite3_exec(
+            db,
+            """
+            CREATE TABLE books (
+                uuid TEXT NOT NULL,
+                last_interacted TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT ''
+            )
+            """,
+            nil, nil, nil
+        ) == SQLITE_OK
+    else {
+        Issue.record("could not create the scratch books table")
+        return []
+    }
+
     let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     for row in rows {
         var insert: OpaquePointer?
-        sqlite3_prepare_v2(
-            db, "INSERT INTO books (uuid, last_interacted, title) VALUES (?, ?, ?)",
-            -1, &insert, nil
-        )
+        guard
+            sqlite3_prepare_v2(
+                db, "INSERT INTO books (uuid, last_interacted, title) VALUES (?, ?, ?)",
+                -1, &insert, nil
+            ) == SQLITE_OK
+        else {
+            Issue.record("could not prepare the insert for \(row.uuid)")
+            return []
+        }
+        defer { sqlite3_finalize(insert) }
         sqlite3_bind_text(insert, 1, row.uuid, -1, transient)
         sqlite3_bind_text(insert, 2, row.lastInteracted, -1, transient)
         sqlite3_bind_text(insert, 3, row.title, -1, transient)
-        sqlite3_step(insert)
-        sqlite3_finalize(insert)
+        guard sqlite3_step(insert) == SQLITE_DONE else {
+            Issue.record("could not insert \(row.uuid)")
+            return []
+        }
     }
 
     let clause = LibraryIndex.order(sort: .recentlyInteracted, direction: direction)
     var stmt: OpaquePointer?
-    #expect(
+    guard
         sqlite3_prepare_v2(db, "SELECT uuid FROM books ORDER BY \(clause)", -1, &stmt, nil)
             == SQLITE_OK
-    )
+    else {
+        Issue.record("could not prepare a select ordered by: \(clause)")
+        return []
+    }
     defer { sqlite3_finalize(stmt) }
     var out: [String] = []
     while sqlite3_step(stmt) == SQLITE_ROW {
@@ -134,7 +160,7 @@ struct RecentlyInteractedOrderTests {
 
     @Test func descendingPutsTheLatestSignalFirstAndTheUntouchedBookLast() {
         // Descending is the axis's natural direction, and it is what makes an
-        // empty signal read as "never touched" rather than "touched first".
+        // empty signal read as "untouched" rather than "touched first".
         #expect(ordered(rows, direction: .desc) == ["newest", "old", "untouched"])
     }
 

@@ -257,8 +257,9 @@ actor LibraryIndex {
             seriesIndex: Double(book.seriesIndex ?? "") ?? 0,
             addedAt: book.addedAt ?? "",
             modified: book.modified ?? book.addedAt ?? "",
-            // Empty when the reader has never touched the book — which sorts
-            // last under this axis's descending default, matching the server.
+            // Empty when no one has ever touched the book — which sorts last
+            // under this axis's descending default, where the server's own
+            // NULL lands.
             lastInteracted: book.lastInteractedAt ?? "",
             // Deduped: the hidden-formats predicate strips each hidden token
             // from the CSV once, so a duplicate would survive the strip and

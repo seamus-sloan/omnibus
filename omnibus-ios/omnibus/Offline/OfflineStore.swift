@@ -378,7 +378,7 @@ actor OfflineStore {
         // books_staging`, so the two schemas must stay column-for-column
         // aligned. A mirror written before this column existed carries the
         // empty default, which sorts last under the axis's descending default
-        // — the same place the server puts a never-touched book.
+        // — the same place the server's NULL puts a book nobody has touched.
         for table in ["books", "books_staging"] where !hasColumn(table, "last_interacted") {
             exec("ALTER TABLE \(table) ADD COLUMN last_interacted TEXT NOT NULL DEFAULT ''")
         }
