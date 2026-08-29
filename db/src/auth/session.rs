@@ -21,6 +21,23 @@ pub(crate) const SESSION_IDLE_TIMEOUT_SECS: i64 = 7 * 24 * 60 * 60;
 /// produce an unbounded REST response.
 pub const LIST_SESSIONS_LIMIT: i64 = 500;
 
+/// Maximum stored length of a captured `User-Agent`. Real headers run well
+/// under 200 chars; anything past this is truncated rather than rejected,
+/// because unlike `device_name` this string is incidental to the request —
+/// refusing an odd header would fail the login itself.
+pub const MAX_USER_AGENT_CHARS: usize = 512;
+
+/// Truncate a `User-Agent` to [`MAX_USER_AGENT_CHARS`] on a char boundary,
+/// mapping a blank header to `None` so the column holds either a usable value
+/// or nothing.
+fn clamp_user_agent(user_agent: Option<&str>) -> Option<String> {
+    let trimmed = user_agent?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(MAX_USER_AGENT_CHARS).collect())
+}
+
 /// Create a new session for `user_id`, returning the session record and the raw (unhashed) token.
 ///
 /// Accepts any `sqlx::Executor` so callers can pass either a `&SqlitePool` for
@@ -33,6 +50,7 @@ pub async fn create_session<'e, E>(
     device_id: Option<i64>,
     kind: SessionKind,
     ttl_secs: i64,
+    user_agent: Option<&str>,
 ) -> AuthResult<NewSession>
 where
     E: Executor<'e, Database = Sqlite>,
@@ -41,17 +59,19 @@ where
     let hash = hash_token(&raw);
     let now = now_unix();
     let expires = now + ttl_secs;
+    let user_agent = clamp_user_agent(user_agent);
 
     let row = sqlx::query(
-        "INSERT INTO sessions (token_hash, user_id, device_id, kind, expires_at)
-         VALUES (?, ?, ?, ?, ?)
-         RETURNING id, user_id, device_id, kind, created_at, last_used_at, expires_at",
+        "INSERT INTO sessions (token_hash, user_id, device_id, kind, expires_at, user_agent)
+         VALUES (?, ?, ?, ?, ?, ?)
+         RETURNING id, user_id, device_id, kind, created_at, last_used_at, expires_at, user_agent",
     )
     .bind(&hash)
     .bind(user_id)
     .bind(device_id)
     .bind(kind.as_str())
     .bind(expires)
+    .bind(user_agent)
     .fetch_one(executor)
     .await?;
 
@@ -63,6 +83,7 @@ where
         created_at: row.get("created_at"),
         last_used_at: row.get("last_used_at"),
         expires_at: row.get("expires_at"),
+        user_agent: row.get("user_agent"),
     };
 
     Ok(NewSession {
@@ -99,7 +120,7 @@ pub async fn lookup_session(pool: &SqlitePool, raw_token: &str) -> AuthResult<(U
 async fn fetch_session_row(pool: &SqlitePool, hash: &[u8]) -> AuthResult<sqlx::sqlite::SqliteRow> {
     let row = sqlx::query(
         "SELECT s.id AS s_id, s.user_id, s.device_id, s.kind, s.created_at,
-                s.last_used_at, s.expires_at, s.revoked_at,
+                s.last_used_at, s.expires_at, s.revoked_at, s.user_agent,
                 u.id AS u_id, u.username, u.is_admin, u.can_upload, u.can_edit, u.can_download,
                 u.kindle_email, u.display_name, u.hidden_formats,
                 EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = u.id) AS has_avatar
@@ -175,6 +196,7 @@ fn build_session_from_row(
         created_at: row.get("created_at"),
         last_used_at,
         expires_at,
+        user_agent: row.get("user_agent"),
     })
 }
 
@@ -318,7 +340,7 @@ pub async fn list_sessions_for_user(pool: &SqlitePool, user_id: i64) -> AuthResu
     let now = now_unix();
     let idle_cutoff = now - SESSION_IDLE_TIMEOUT_SECS;
     let rows = sqlx::query(
-        "SELECT id, user_id, device_id, kind, created_at, last_used_at, expires_at
+        "SELECT id, user_id, device_id, kind, created_at, last_used_at, expires_at, user_agent
          FROM sessions
          WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? AND last_used_at >= ?
          ORDER BY last_used_at DESC
@@ -353,6 +375,7 @@ fn row_to_session(row: &sqlx::sqlite::SqliteRow) -> AuthResult<Session> {
         created_at: row.get("created_at"),
         last_used_at: row.get("last_used_at"),
         expires_at: row.get("expires_at"),
+        user_agent: row.get("user_agent"),
     })
 }
 

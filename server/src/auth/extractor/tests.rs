@@ -38,7 +38,7 @@ async fn me_with_bearer_returns_user() {
         .await
         .unwrap()
         .unwrap();
-    let issued = db::auth::create_session(&pool, user.id, None, SessionKind::Bearer, 3600)
+    let issued = db::auth::create_session(&pool, user.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
     let res = app
@@ -72,7 +72,7 @@ async fn me_with_cookie_returns_user() {
         .await
         .unwrap()
         .unwrap();
-    let issued = db::auth::create_session(&pool, user.id, None, SessionKind::Cookie, 3600)
+    let issued = db::auth::create_session(&pool, user.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
     let res = app
@@ -140,7 +140,7 @@ async fn seed_session(pool: &sqlx::SqlitePool, username: &str, kind: SessionKind
         .await
         .unwrap()
         .unwrap();
-    db::auth::create_session(pool, user.id, None, kind, 3600)
+    db::auth::create_session(pool, user.id, None, kind, 3600, None)
         .await
         .unwrap()
         .raw_token

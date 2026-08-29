@@ -106,6 +106,13 @@ pub struct SessionView {
     pub device_id: Option<i64>,
     /// `"cookie"` or `"bearer"`.
     pub kind: String,
+    /// Human-readable name of the client holding this session — the registered
+    /// device's name for a native client ("Seamus's iPhone"), otherwise a label
+    /// derived from the captured `User-Agent` ("Firefox on macOS"). Derived
+    /// server-side so the raw header never reaches a page; falls back to
+    /// `"Unknown client"` for a session minted before migration `0088`.
+    #[serde(default)]
+    pub client: String,
     pub created_at: i64,
     pub last_used_at: i64,
     pub expires_at: i64,

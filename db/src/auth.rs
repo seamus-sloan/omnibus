@@ -28,7 +28,7 @@ pub use session::{
     create_session, list_sessions_for_user, lookup_session, prune_expired_sessions,
     revoke_all_sessions_for_user, revoke_all_sessions_for_user_except, revoke_session,
     revoke_session_checked, revoke_session_for_user, validate_session, SessionAuthError,
-    LIST_SESSIONS_LIMIT,
+    LIST_SESSIONS_LIMIT, MAX_USER_AGENT_CHARS,
 };
 pub use session_key::{get_session_key, load_or_create_session_key, put_session_key};
 pub use token::{
@@ -124,6 +124,10 @@ pub struct Session {
     pub created_at: i64,
     pub last_used_at: i64,
     pub expires_at: i64,
+    /// The `User-Agent` this session was issued to, truncated to
+    /// [`MAX_USER_AGENT_CHARS`]. `None` for sessions minted before migration
+    /// `0088`, and for callers that send no header.
+    pub user_agent: Option<String>,
 }
 
 /// How a session's credential travels: a browser cookie, a mobile bearer
