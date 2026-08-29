@@ -510,9 +510,11 @@ pub fn upgrade_cover_url(url: &str) -> Option<String> {
     pairs.clear();
     for (key, value) in parsed.query_pairs() {
         match key.as_ref() {
-            "zoom" => {
-                pairs.append_pair("zoom", COVER_ZOOM_ORIGINAL);
-            }
+            // Every `zoom` is dropped here and exactly one re-appended below.
+            // The URL is client-supplied, so a request carrying two of them
+            // would otherwise rewrite to two — leaving which one applies up to
+            // whichever end of the query Google happens to read.
+            "zoom" => {}
             // A page-curl graphic composited into the bitmap. Harmless on a
             // 128px thumbnail, but it has no place in a stored library cover.
             "edge" => {}
@@ -521,9 +523,7 @@ pub fn upgrade_cover_url(url: &str) -> Option<String> {
             }
         }
     }
-    if !parsed.query_pairs().any(|(key, _)| key == "zoom") {
-        pairs.append_pair("zoom", COVER_ZOOM_ORIGINAL);
-    }
+    pairs.append_pair("zoom", COVER_ZOOM_ORIGINAL);
     drop(pairs);
     Some(upgraded.to_string())
 }
