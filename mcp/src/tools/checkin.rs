@@ -212,7 +212,7 @@ impl OmnibusMcp {
             let req = ResolveRequest { isbn: isbn.clone() };
             match self
                 .client
-                .write_json::<_, ScanOutcome>(Method::POST, "/api/scan/resolve", &req)
+                .write_json::<_, ScanOutcome>(Method::POST, "/api/scan/resolve", Some(&req))
                 .await
             {
                 Ok(outcome) => results.push(resolution(isbn, outcome)),
@@ -242,7 +242,7 @@ impl OmnibusMcp {
         let req = ScanSearchRequest { query: p.query };
         Ok(Json(
             self.client
-                .write_json(Method::POST, "/api/scan/search", &req)
+                .write_json(Method::POST, "/api/scan/search", Some(&req))
                 .await
                 .map_err(write_error)?,
         ))
@@ -259,7 +259,7 @@ impl OmnibusMcp {
         let req = ResolveMetaRequest { meta: p.meta };
         let outcome: ScanOutcome = self
             .client
-            .write_json(Method::POST, "/api/scan/resolve-meta", &req)
+            .write_json(Method::POST, "/api/scan/resolve-meta", Some(&req))
             .await
             .map_err(write_error)?;
         Ok(Json(resolution(isbn, outcome)))
@@ -288,7 +288,7 @@ impl OmnibusMcp {
         };
         Ok(Json(
             self.client
-                .write_json(Method::POST, "/api/scan/check-in", &req)
+                .write_json(Method::POST, "/api/scan/check-in", Some(&req))
                 .await
                 .map_err(write_error)?,
         ))
@@ -323,7 +323,7 @@ impl OmnibusMcp {
         };
         Ok(Json(
             self.client
-                .write_json(Method::POST, "/api/scan/wishlist", &req)
+                .write_json(Method::POST, "/api/scan/wishlist", Some(&req))
                 .await
                 .map_err(write_error)?,
         ))
@@ -369,7 +369,7 @@ impl OmnibusMcp {
         let req = UpdateCopyNoteRequest { note: p.note };
         Ok(Json(
             self.client
-                .write_json(Method::PATCH, &path, &req)
+                .write_json(Method::PATCH, &path, Some(&req))
                 .await
                 .map_err(write_error)?,
         ))

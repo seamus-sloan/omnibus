@@ -1,4 +1,4 @@
-# Standalone read-only MCP (Model Context Protocol) stdio server. Talks plain
+# Standalone MCP (Model Context Protocol) stdio server. Talks plain
 # HTTP to any Omnibus instance's `/api/*` REST surface — deliberately NOT a
 # route inside `server/`, so it works against a remote instance unchanged and
 # owns no transport beyond stdio. Out of the workspace default-members (like

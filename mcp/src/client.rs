@@ -61,6 +61,19 @@ pub const WRITE_ALLOWLIST: &[&str] = &[
     // Not a mutation at all — rule 08 calls this one out as "a read wearing
     // POST": it evaluates a candidate smart rule and creates nothing.
     "POST /api/shelves/preview",
+    // Metadata overrides sit in rule 08's "library-wide, every user sees it"
+    // tier — excluded from any offline queue for exactly that reason. They
+    // are permitted here only as live, per-uuid, confirm-gated tool calls
+    // (`apply_metadata_changes` / `revert_metadata_overrides` refuse without
+    // an explicit `confirm: true`), and the server re-gates them on
+    // `can_edit`.
+    "POST /api/ebooks/{uuid}/overrides",
+    "DELETE /api/ebooks/{uuid}/overrides",
+    // Reads wearing POST (the `/api/shelves/preview` shape): they mutate
+    // nothing, but spend outbound metadata-provider calls, so the server
+    // gates them on `can_edit` like the overrides write.
+    "POST /api/metadata/editions/search",
+    "POST /api/metadata/editions/hydrate",
 ];
 
 /// True when `method path` is covered by [`WRITE_ALLOWLIST`]. A `{param}`
@@ -373,18 +386,16 @@ impl OmnibusClient {
         }
     }
 
-    /// Send an allowlisted write with a JSON body and decode the success
-    /// response as `T`. Non-success statuses become
+    /// Send an allowlisted write (with an optional JSON body) and decode the
+    /// success response as `T`. Non-success statuses become
     /// [`ClientError::WriteStatus`] with the server's error body.
     pub async fn write_json<B: Serialize + ?Sized, T: DeserializeOwned>(
         &self,
         method: Method,
         path: &str,
-        body: &B,
+        body: Option<&B>,
     ) -> Result<T, ClientError> {
-        let resp = self
-            .write_with_relogin(method.clone(), path, Some(body))
-            .await?;
+        let resp = self.write_with_relogin(method.clone(), path, body).await?;
         if !resp.status().is_success() {
             return Err(Self::write_status_error(&method, path, resp).await);
         }

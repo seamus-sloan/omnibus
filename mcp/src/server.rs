@@ -21,13 +21,16 @@ pub struct OmnibusMcp {
 impl OmnibusMcp {
     /// Build the service around an authenticated client.
     ///
-    /// Later issues add write-tool families as further
+    /// Later issues add further tool families as
     /// `#[tool_router(router = <name>)]` impl blocks under `crate::tools`
     /// and combine them here.
     pub fn new(client: Arc<OmnibusClient>) -> Self {
         Self {
             client,
-            tool_router: Self::read_tools() + Self::checkin_tools() + Self::shelf_tools(),
+            tool_router: Self::read_tools()
+                + Self::checkin_tools()
+                + Self::shelf_tools()
+                + Self::metadata_tools(),
         }
     }
 }
@@ -66,8 +69,12 @@ impl ServerHandler for OmnibusMcp {
                  shelves for the signed-in user: iterate a smart rule with \
                  preview_shelf_rule (which creates nothing) before create_shelf, and \
                  delete_shelf requires confirm=true after explicit user confirmation. \
-                 Digital library content, settings, and reading state are never \
-                 modified."
+                 Metadata repair follows a dry-run workflow: propose_metadata_changes \
+                 computes a per-book before/after diff without writing; \
+                 apply_metadata_changes and revert_metadata_overrides write metadata \
+                 overrides — library-wide state every user sees — and refuse to run \
+                 until called with confirm: true after the user has approved the diff. \
+                 Settings and reading state are never modified."
                     .to_string(),
             )
     }

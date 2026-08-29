@@ -145,7 +145,7 @@ impl OmnibusMcp {
         };
         let preview: RulePreview = self
             .client
-            .write_json(Method::POST, "/api/shelves/preview", &req)
+            .write_json(Method::POST, "/api/shelves/preview", Some(&req))
             .await
             .map_err(write_error)?;
         Ok(Json(preview))
@@ -175,7 +175,7 @@ impl OmnibusMcp {
             .map_err(|msg| ErrorData::invalid_params(msg, None))?;
         let shelf: Shelf = self
             .client
-            .write_json(Method::POST, "/api/shelves", &req)
+            .write_json(Method::POST, "/api/shelves", Some(&req))
             .await
             .map_err(write_error)?;
         Ok(Json(shelf))
@@ -199,7 +199,7 @@ impl OmnibusMcp {
         let path = format!("/api/shelves/{}", p.id);
         let shelf: Shelf = self
             .client
-            .write_json(Method::PATCH, &path, &req)
+            .write_json(Method::PATCH, &path, Some(&req))
             .await
             .map_err(write_error)?;
         Ok(Json(shelf))
