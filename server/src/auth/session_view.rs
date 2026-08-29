@@ -8,13 +8,8 @@
 use std::collections::HashMap;
 
 use omnibus_db::auth::{AuthResult, Session};
-use omnibus_shared::SessionView;
+use omnibus_shared::{SessionView, UNKNOWN_CLIENT};
 use sqlx::SqlitePool;
-
-/// Shown when neither a device registration nor a `User-Agent` identifies the
-/// client — a session minted before migration `0088`, or a caller that sent no
-/// header.
-const UNKNOWN: &str = "Unknown client";
 
 /// Project `sessions` onto their wire views, resolving each one's client name.
 ///
@@ -71,7 +66,7 @@ pub fn client_label(device_name: Option<&str>, user_agent: Option<&str>) -> Stri
         (Some(browser), Some(os)) => format!("{browser} on {os}"),
         (Some(browser), None) => browser.to_string(),
         (None, Some(os)) => os.to_string(),
-        (None, None) => UNKNOWN.to_string(),
+        (None, None) => UNKNOWN_CLIENT.to_string(),
     }
 }
 

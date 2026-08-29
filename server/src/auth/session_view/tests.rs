@@ -45,8 +45,11 @@ fn client_label_ignores_a_blank_device_name() {
 
 #[test]
 fn client_label_falls_back_to_unknown_without_a_device_or_user_agent() {
-    assert_eq!(client_label(None, None), UNKNOWN.to_string());
-    assert_eq!(client_label(None, Some("curl/8.7.1")), UNKNOWN.to_string());
+    assert_eq!(client_label(None, None), UNKNOWN_CLIENT.to_string());
+    assert_eq!(
+        client_label(None, Some("curl/8.7.1")),
+        UNKNOWN_CLIENT.to_string()
+    );
 }
 
 #[test]
