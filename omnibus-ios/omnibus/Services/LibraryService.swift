@@ -428,6 +428,44 @@ enum LibraryService {
     static func fullCoverURL(uuid: String) async -> URL? {
         await APIClient.shared.absoluteURL("/api/covers/\(uuid)")
     }
+
+    /// Upload a replacement cover, already JPEG-encoded by the caller.
+    /// Returns the merged record the server answers with — its
+    /// `hasCoverOverride`/`coverURL` are what the editor renders next, and a
+    /// book that had no art needs the fresh `hasCover` before any thumbnail
+    /// request is made at all.
+    static func uploadCover(uuid: String, jpegData: Data) async throws -> Book {
+        let updated: Book = try await APIClient.shared.upload(
+            "/api/ebooks/\(uuid)/cover",
+            fileData: jpegData,
+            fileName: "cover.jpg",
+            fieldName: "cover",
+            mimeType: "image/jpeg"
+        )
+        await invalidateCoverCaches(uuid: uuid)
+        return updated
+    }
+
+    /// Revert an overridden cover to the scanned original.
+    static func revertCover(uuid: String) async throws -> Book {
+        let updated: Book = try await APIClient.shared.delete("/api/ebooks/\(uuid)/cover")
+        await invalidateCoverCaches(uuid: uuid)
+        return updated
+    }
+
+    /// Drop every cached image a cover write invalidates. The paths don't
+    /// change when the bytes do, so without this the old art keeps rendering
+    /// from `ImageCache` until its revalidation window elapses — every thumb
+    /// size, including the ones the current screen isn't showing, plus the
+    /// full-size cover the readers fetch. The cached book record goes too:
+    /// its `has_cover_override` predates the write.
+    private static func invalidateCoverCaches(uuid: String) async {
+        for size in [ThumbSize.sm, .md, .lg] {
+            await ImageCache.shared.invalidate("/api/thumbs/\(uuid)/\(size.rawValue)")
+        }
+        await ImageCache.shared.invalidate("/api/covers/\(uuid)")
+        await OfflineStore.shared.cacheDelete(CacheKey.book(uuid))
+    }
 }
 
 /// Mirrors `db::thumbs::ThumbSize` — the server serves exactly these three and

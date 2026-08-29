@@ -170,25 +170,15 @@ struct ProfileEditSheet: View {
         // Re-encoding can fail on a pathological image. Say so and keep the
         // previous selection — silently dropping it leaves Save disabled with
         // no explanation for a photo the user just picked.
-        guard let encoded = Self.encodeAvatar(image) else {
+        // 512px: an avatar is never drawn larger than ~72pt, so anything
+        // bigger is bytes nobody sees.
+        guard let encoded = UploadImageEncoder.jpeg(image, maxDimension: 512) else {
             error = "That image couldn't be prepared for upload."
             return
         }
         error = nil
         draft.pickedImage = encoded
         removedAvatar = false
-    }
-
-    /// Downscale to at most 512pt on the long edge and JPEG-encode. An avatar
-    /// is never drawn larger than ~72pt, so anything bigger is bytes nobody
-    /// sees.
-    static func encodeAvatar(_ image: UIImage, maxDimension: CGFloat = 512) -> Data? {
-        let longest = max(image.size.width, image.size.height)
-        let scale = longest > maxDimension ? maxDimension / longest : 1
-        let target = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: target)
-        let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: target)) }
-        return resized.jpegData(compressionQuality: 0.85)
     }
 
     private func save() async {
