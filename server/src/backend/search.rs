@@ -1,8 +1,10 @@
-//! `GET /api/search` handler.
+//! `GET /api/search` family: metadata search, book-content search, and the
+//! command palette.
 //!
-//! Cookie-gated FTS5 search across the configured libraries. Returns a capped
-//! result vec plus the full hit count via `X-Total-Count` / `X-Total-Cap`
-//! headers; mounted on a sub-router that carries its own rate limit.
+//! Cookie-gated FTS5 search across the configured libraries. The metadata
+//! search returns a capped result vec plus the full hit count via
+//! `X-Total-Count` / `X-Total-Cap` headers; all three routes are mounted on
+//! a sub-router that carries its own per-IP rate limit.
 
 use axum::{
     extract::{Query, State},
@@ -75,6 +77,35 @@ pub(super) async fn get_search(
     })
     .into_response();
     with_pagination_headers(body, total)
+}
+
+/// `GET /api/search/content` — full-text search over indexed EPUB chapter
+/// text (`book_content_fts`, #2282). Hits cite `(book_uuid, spine_index)`
+/// plus an FTS5 `snippet()` excerpt; an unconfigured library or an empty
+/// query yields an empty hit list rather than an error.
+pub(super) async fn get_search_content(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Query(params): Query<SearchQuery>,
+) -> Response {
+    if let Some(rejection) = reject_if_over_length(&params.q) {
+        return rejection;
+    }
+    let settings = match db::get_settings(&state.pool).await {
+        Ok(s) => s,
+        Err(error) => return internal("read settings", error),
+    };
+    let paths = db::collect_paths(
+        settings.ebook_library_path.as_deref(),
+        settings.audiobook_library_path.as_deref(),
+    );
+    if paths.is_empty() {
+        return Json(omnibus_shared::ContentSearchResults::default()).into_response();
+    }
+    match db::search_content_for_paths(&state.pool, &paths, &params.q).await {
+        Ok(hits) => Json(omnibus_shared::ContentSearchResults { hits }).into_response(),
+        Err(error) => internal("search content", error),
+    }
 }
 
 pub(super) async fn get_search_palette(

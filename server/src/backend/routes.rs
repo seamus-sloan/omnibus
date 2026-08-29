@@ -492,6 +492,7 @@ fn kindle_routes() -> Router<AppState> {
 fn search_router(limiter: Arc<RateLimiter>) -> Router<AppState> {
     Router::new()
         .route("/api/search", get(search::get_search))
+        .route("/api/search/content", get(search::get_search_content))
         .route("/api/search/palette", get(search::get_search_palette))
         .layer(axum::middleware::from_fn_with_state(
             limiter,
