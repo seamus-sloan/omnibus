@@ -314,6 +314,9 @@ struct MetadataEditView: View {
             .background(Circle().fill(palette.bg1Color.opacity(0.92)))
             .overlay(Circle().strokeBorder(palette.line2.color, lineWidth: 0.5))
             .offset(x: 6, y: 6)
+            // Purely decorative — without this VoiceOver announces it as an
+            // extra element inside the picker control.
+            .accessibilityHidden(true)
     }
 
     private func group<Content: View>(
