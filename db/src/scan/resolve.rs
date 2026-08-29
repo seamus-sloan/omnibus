@@ -358,29 +358,197 @@ async fn find_book_by_isbn(
 /// rung — is the only bridge between a scanned physical copy and an existing
 /// ebook.
 ///
-/// Two passes:
+/// Three passes, each run only when the one before it found nothing, so the
+/// strictest match always wins:
 /// 1. **Exact** effective-norm equality on both title and author.
-/// 2. **Subtitle-tolerant** fallback (only when the exact pass found nothing):
-///    author still exact, but one effective title may be a word-boundary prefix
-///    of the other — so `"the name of the wind"` matches
+/// 2. **Subtitle-tolerant**: author still exact, but one effective title may be
+///    a word-boundary prefix of the other — so `"the name of the wind"` matches
 ///    `"the name of the wind the kingkiller chronicle book 1"`.
+/// 3. **Name-form-tolerant** ([`query_loose_candidates`]): a leading article is
+///    dropped from both titles before the pass-2 comparison, and the author is
+///    no longer an equality test but [`authors_compatible`]. Print editions of
+///    one book disagree constantly on both — Open Library indexes *A Room with
+///    a View* as `"Room with a View"`, and its authors run "E. M. Forster",
+///    "E. Forster" and "Edward Morgan Forster" across editions — and every one
+///    of those disagreements defeats passes 1 and 2 outright.
+///
+/// A provider record with **no** author skips straight to pass 3, which then
+/// matches on title alone: an unusable author is not a reason to discard a
+/// perfectly good title (Open Library edition records can carry an empty
+/// `authors` array, and its `by_ref` hydrate path always does).
 async fn find_book_by_norm(
     pool: &SqlitePool,
     meta: &ExternalBookMeta,
 ) -> Result<Option<(ScanBook, Vec<ScanBook>)>, sqlx::Error> {
-    let (Some(title_norm), Some(author_norm)) = (
-        normalize_title(&meta.title),
-        meta.authors.first().and_then(|a| normalize_author(a)),
-    ) else {
+    let Some(title_norm) = normalize_title(&meta.title) else {
         return Ok(None);
     };
+    let author_norm = meta.authors.first().and_then(|a| normalize_author(a));
 
-    let mut candidates = query_norm_candidates(pool, &title_norm, &author_norm, false).await?;
+    let mut candidates = Vec::new();
+    if let Some(author_norm) = &author_norm {
+        candidates = query_norm_candidates(pool, &title_norm, author_norm, false).await?;
+        if candidates.is_empty() {
+            candidates = query_norm_candidates(pool, &title_norm, author_norm, true).await?;
+        }
+    }
     if candidates.is_empty() {
-        candidates = query_norm_candidates(pool, &title_norm, &author_norm, true).await?;
+        candidates = query_loose_candidates(pool, &title_norm, author_norm.as_deref()).await?;
     }
     let mut candidates = candidates.into_iter();
     Ok(candidates.next().map(|first| (first, candidates.collect())))
+}
+
+/// Pass 3 of the norm rung: match on the article-stripped title and filter the
+/// rows down with [`authors_compatible`] rather than an SQL equality.
+///
+/// The author test is split. Surname equality is selective and expressible in
+/// SQL, so it runs there and keeps the fetch window ([`LOOSE_FETCH_LIMIT`])
+/// meaningful. The initial comparison needs the *first* token of a key SQLite
+/// has no tidy way to split, so it runs in Rust — and the cap to
+/// [`MAX_CLOSE_MATCH_CANDIDATES`] is applied after that filter, never before,
+/// so a rejected row can't consume a slot the real match needed.
+///
+/// Rows are ordered exact-title-first so a book whose title needed no article
+/// stripping or subtitle tolerance leads the list.
+async fn query_loose_candidates(
+    pool: &SqlitePool,
+    title_norm: &str,
+    author_norm: Option<&str>,
+) -> Result<Vec<ScanBook>, sqlx::Error> {
+    let title_bare = strip_leading_article(title_norm);
+    let surname = author_norm.map(|a| split_name(a).1);
+    // Same word-boundary reasoning as `query_norm_candidates`: norm strings are
+    // `[a-z0-9 ]` only, so neither bound value carries a LIKE wildcard.
+    let pred = |title: &str, author: &str| {
+        let bare = bare_title_sql(title);
+        let title_pred =
+            format!("({bare} = ?1 OR {bare} LIKE ?1 || ' %' OR ?1 LIKE {bare} || ' %')");
+        // Surname equality is the selective half of `authors_compatible`, so it
+        // runs in SQL — the fetch window is bounded, and leaving the whole
+        // author test to Rust lets a shelf of same-title strangers fill that
+        // window and crowd the real match out of it. `IS NULL` keeps a library
+        // book with no author key in play, matching the helper's "can't tell".
+        let author_pred = match author_norm {
+            Some(_) => format!("({author} IS NULL OR {author} = ?2 OR {author} LIKE '% ' || ?2)"),
+            None => "1".to_string(),
+        };
+        format!("{title_pred} AND {author_pred}")
+    };
+    let books_pred = pred("b.title_norm", "b.author_norm");
+    let effective_pred = pred(
+        "COALESCE(mo.title_norm, b.title_norm)",
+        "COALESCE(mo.author_norm, b.author_norm)",
+    );
+    // The union is wrapped rather than ordered in place: SQLite only accepts a
+    // bare result column in a compound SELECT's ORDER BY, never an expression.
+    let sql = format!(
+        "SELECT * FROM (
+           SELECT {CANDIDATE_COLS}, b.author_norm AS match_author_norm,
+                  {} AS match_title_norm
+             FROM books b
+            WHERE {books_pred}
+              AND NOT EXISTS (SELECT 1 FROM metadata_overrides mo WHERE mo.book_uuid = b.uuid)
+           UNION ALL
+           SELECT {CANDIDATE_COLS}, COALESCE(mo.author_norm, b.author_norm) AS match_author_norm,
+                  {} AS match_title_norm
+             FROM books b
+             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+            WHERE {effective_pred})
+          ORDER BY (match_title_norm <> ?1), uuid LIMIT {LOOSE_FETCH_LIMIT}",
+        bare_title_sql("b.title_norm"),
+        bare_title_sql("COALESCE(mo.title_norm, b.title_norm)"),
+    );
+    let mut query = sqlx::query(&sql).bind(&title_bare);
+    if let Some(surname) = surname {
+        query = query.bind(surname.to_string());
+    }
+    let rows = query.fetch_all(pool).await?;
+    Ok(rows
+        .into_iter()
+        .filter(|r| {
+            let library = r.get::<Option<String>, _>("match_author_norm");
+            authors_compatible(author_norm, library.as_deref())
+        })
+        .take(MAX_CLOSE_MATCH_CANDIDATES)
+        .map(row_to_candidate)
+        .collect())
+}
+
+/// How many rows pass 3 fetches before [`authors_compatible`] thins them.
+///
+/// Five times the candidate cap: a title selective enough to be worth offering
+/// on rarely has more than a handful of library rows, and anything past this
+/// window is a pathological match the picker could not present anyway.
+pub(super) const LOOSE_FETCH_LIMIT: usize = MAX_CLOSE_MATCH_CANDIDATES * 5;
+
+/// A SQL expression stripping a leading English article off `title`, mirroring
+/// [`strip_leading_article`]. Interpolated into the query, so `title` must be a
+/// static column expression and never user input.
+fn bare_title_sql(title: &str) -> String {
+    format!(
+        "(CASE WHEN {title} LIKE 'the %' THEN substr({title}, 5)
+               WHEN {title} LIKE 'an %'  THEN substr({title}, 4)
+               WHEN {title} LIKE 'a %'   THEN substr({title}, 3)
+               ELSE {title} END)"
+    )
+}
+
+/// Drop a leading `a` / `an` / `the` from a normalized title.
+///
+/// English only, deliberately: these keys are ASCII-folded and the providers
+/// that disagree about the article are indexing English titles. A title that is
+/// *only* an article keeps it, so the key never normalizes to nothing.
+pub(super) fn strip_leading_article(title_norm: &str) -> String {
+    for article in ["the ", "an ", "a "] {
+        if let Some(rest) = title_norm.strip_prefix(article) {
+            if !rest.is_empty() {
+                return rest.to_string();
+            }
+        }
+    }
+    title_norm.to_string()
+}
+
+/// Whether a provider author key and a library author key are close enough to
+/// *offer* as a match: same surname, and first given names that agree on their
+/// initial (one a prefix of the other, so `"e"` matches `"edward"`).
+///
+/// Looser than the equality passes 1 and 2 use, because this one only ever
+/// feeds `ScanOutcome::CloseMatch` — a confirmation screen, never an
+/// auto-applied write, so a wrong suggestion costs a tap while a missed one
+/// costs a duplicate physical-only book. The strict key stays where a false
+/// positive is silent and permanent: `sync::attach`.
+///
+/// `None` on either side means *can't tell*, which is not the same as *doesn't
+/// match* — a provider record with no author, or a library book whose
+/// position-0 creator is blocklisted, is still worth offering on its title.
+pub(super) fn authors_compatible(provider: Option<&str>, library: Option<&str>) -> bool {
+    let (Some(provider), Some(library)) = (provider, library) else {
+        return true;
+    };
+    if provider == library {
+        return true;
+    }
+    let (provider_given, provider_surname) = split_name(provider);
+    let (library_given, library_surname) = split_name(library);
+    if provider_surname != library_surname {
+        return false;
+    }
+    match (provider_given, library_given) {
+        // A mononym on either side contradicts nothing the other asserts.
+        (None, _) | (_, None) => true,
+        (Some(a), Some(b)) => a.starts_with(b) || b.starts_with(a),
+    }
+}
+
+/// Split a normalized author key into `(first given name, surname)`. A
+/// single-token key is all surname.
+fn split_name(author_norm: &str) -> (Option<&str>, &str) {
+    match author_norm.rsplit_once(' ') {
+        Some((given, surname)) => (given.split(' ').next(), surname),
+        None => (None, author_norm),
+    }
 }
 
 /// Run one pass of the norm rung, returning every matching book up to
@@ -423,24 +591,13 @@ async fn query_norm_candidates(
             "COALESCE(mo.title_norm, b.title_norm) = ?1",
         )
     };
-    let candidate_cols = "b.uuid, b.title, b.has_cover,
-                (SELECT group_concat(a.name, ', ')
-                   FROM books_authors_link bal JOIN authors a ON a.id = bal.author
-                  WHERE bal.book = b.id ORDER BY bal.position) AS authors,
-                EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid) AS has_physical,
-                (SELECT REPLACE(REPLACE(bi2.value, '-', ''), ' ', '')
-                   FROM book_identifiers bi2
-                  WHERE bi2.book_id = b.id AND bi2.scheme LIKE '%isbn%'
-                    AND REPLACE(REPLACE(bi2.value, '-', ''), ' ', '')
-                        GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
-                  ORDER BY bi2.rowid LIMIT 1) AS isbn";
     let sql = format!(
-        "SELECT {candidate_cols}
+        "SELECT {CANDIDATE_COLS}
            FROM books b
           WHERE {title_pred_books} AND b.author_norm = ?2
             AND NOT EXISTS (SELECT 1 FROM metadata_overrides mo WHERE mo.book_uuid = b.uuid)
          UNION ALL
-         SELECT {candidate_cols}
+         SELECT {CANDIDATE_COLS}
            FROM books b
            JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
           WHERE {title_pred_effective} AND COALESCE(mo.author_norm, b.author_norm) = ?2
@@ -451,13 +608,27 @@ async fn query_norm_candidates(
         .bind(author_norm)
         .fetch_all(pool)
         .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| {
-            let isbn = r.get::<Option<String>, _>("isbn").filter(|s| !s.is_empty());
-            row_to_scan_book(r, isbn)
-        })
-        .collect())
+    Ok(rows.into_iter().map(row_to_candidate).collect())
+}
+
+/// The `ScanBook` projection every norm pass selects, plus the 13-digit ISBN
+/// the confirm screen shows beside the scanned one.
+const CANDIDATE_COLS: &str = "b.uuid, b.title, b.has_cover,
+                (SELECT group_concat(a.name, ', ')
+                   FROM books_authors_link bal JOIN authors a ON a.id = bal.author
+                  WHERE bal.book = b.id ORDER BY bal.position) AS authors,
+                EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid) AS has_physical,
+                (SELECT REPLACE(REPLACE(bi2.value, '-', ''), ' ', '')
+                   FROM book_identifiers bi2
+                  WHERE bi2.book_id = b.id AND bi2.scheme LIKE '%isbn%'
+                    AND REPLACE(REPLACE(bi2.value, '-', ''), ' ', '')
+                        GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+                  ORDER BY bi2.rowid LIMIT 1) AS isbn";
+
+/// One [`CANDIDATE_COLS`] row as a [`ScanBook`], dropping an empty ISBN.
+fn row_to_candidate(r: sqlx::sqlite::SqliteRow) -> ScanBook {
+    let isbn = r.get::<Option<String>, _>("isbn").filter(|s| !s.is_empty());
+    row_to_scan_book(r, isbn)
 }
 
 fn row_to_scan_book(r: sqlx::sqlite::SqliteRow, isbn: Option<String>) -> ScanBook {
