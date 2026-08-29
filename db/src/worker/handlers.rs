@@ -99,6 +99,13 @@ fn convert_outcome(
 /// The insert relies on the table's `UNIQUE (kind, action, payload_json)`
 /// constraint (`INSERT OR IGNORE`), so re-running detection after nothing
 /// changed inserts nothing new. Returns the count of newly-inserted rows.
+///
+/// The pass is subtractive as well as additive: pending rows of the kinds it
+/// covered that it did not re-emit are retired via
+/// [`crate::cleanup::prune_undetected`]. Without that, a suggestion detected
+/// once outlives whatever made it true — an author whose books have all since
+/// had their creators overridden away is still named by a pending card, and
+/// no amount of re-running detection removes it.
 async fn run_cleanup_detection(
     pool: &SqlitePool,
     kind: Option<CleanupKind>,
@@ -134,6 +141,16 @@ async fn run_cleanup_detection(
             inserted += 1;
         }
     }
+    let covered = match kind {
+        Some(kind) => vec![kind],
+        None => vec![
+            CleanupKind::Author,
+            CleanupKind::Series,
+            CleanupKind::Tag,
+            CleanupKind::BookTitle,
+        ],
+    };
+    crate::cleanup::prune_undetected(pool, &covered, &suggestions).await?;
     Ok(inserted)
 }
 
