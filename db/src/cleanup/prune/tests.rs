@@ -190,6 +190,44 @@ async fn prune_stale_suggestions_leaves_a_payload_it_cannot_read() {
 }
 
 #[tokio::test]
+async fn prune_stale_suggestions_leaves_a_merge_payload_missing_its_source_ids() {
+    // A payload with a canonical but no `source_ids` array reads as "no
+    // surviving source" to `json_each`, which would delete it as stale — the
+    // silent destruction of an unreadable row this module promises not to do.
+    let pool = new_pool().await;
+    let kept = insert_author(&pool, "Kept").await;
+    sqlx::query(
+        "INSERT INTO dedup_suggestions (kind, action, payload_json)
+         VALUES ('author', 'merge', json_object('type', 'merge', 'canonical_id', ?))",
+    )
+    .bind(kept)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(prune_stale_suggestions(&pool).await.unwrap(), 0);
+    assert_eq!(pending_count(&pool).await, 1);
+}
+
+#[tokio::test]
+async fn prune_stale_suggestions_leaves_a_merge_whose_source_ids_is_not_an_array() {
+    let pool = new_pool().await;
+    let kept = insert_author(&pool, "Kept").await;
+    sqlx::query(
+        "INSERT INTO dedup_suggestions (kind, action, payload_json)
+         VALUES ('author', 'merge',
+                 json_object('type', 'merge', 'canonical_id', ?, 'source_ids', 'nonsense'))",
+    )
+    .bind(kept)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(prune_stale_suggestions(&pool).await.unwrap(), 0);
+    assert_eq!(pending_count(&pool).await, 1);
+}
+
+#[tokio::test]
 async fn prune_stale_suggestions_retires_a_delete_for_an_author_already_deleted() {
     let pool = new_pool().await;
     let junk = insert_author(&pool, "calibre (0.7.23)").await;

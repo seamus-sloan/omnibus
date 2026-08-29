@@ -46,6 +46,12 @@ pub async fn prune_stale_suggestions(pool: &SqlitePool) -> Result<u64, sqlx::Err
 /// deleted, which is what leaves the queue offering to merge away an author
 /// that is already gone.
 ///
+/// Both keys are guarded, not just the canonical: a payload carrying a
+/// `canonical_id` but no `source_ids` *array* would otherwise read as "no
+/// surviving source" — `json_each` over a missing or non-array path yields
+/// nothing to survive — and be deleted as stale, which is exactly the silent
+/// destruction of an unreadable row this module promises not to do.
+///
 /// `table` is [`MergeEntity`]'s own constant, never caller text.
 async fn prune_missing_merge(pool: &SqlitePool, entity: MergeEntity) -> Result<u64, sqlx::Error> {
     let table = entity.table();
@@ -53,6 +59,7 @@ async fn prune_missing_merge(pool: &SqlitePool, entity: MergeEntity) -> Result<u
         "DELETE FROM dedup_suggestions
           WHERE decision = 'pending' AND kind = ? AND action = 'merge'
             AND json_extract(payload_json, '$.canonical_id') IS NOT NULL
+            AND json_type(payload_json, '$.source_ids') = 'array'
             AND (NOT EXISTS (SELECT 1 FROM {table} t
                               WHERE t.id = json_extract(payload_json, '$.canonical_id'))
                  OR NOT EXISTS (SELECT 1 FROM json_each(payload_json, '$.source_ids') s
