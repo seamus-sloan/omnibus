@@ -10,7 +10,7 @@ use crate::helpers::ids_json;
 
 use super::{
     apply_book_title_override, apply_delete_author, apply_merge_authors, apply_merge_series,
-    apply_merge_tags, apply_tag_split, CleanupApplyError, CleanupPayload,
+    apply_merge_tags, apply_tag_split, prune_stale_suggestions, CleanupApplyError, CleanupPayload,
 };
 
 #[cfg(test)]
@@ -57,9 +57,15 @@ type RawRow = (i64, String, String, String, String, i64);
 
 /// Per-kind review-state counts, in [`CleanupKind`]'s own declaration order so
 /// a caller's rows never reshuffle between refreshes.
+///
+/// Retires stale rows first so the pending count can't promise cards
+/// [`review_queue`] would then decline to show. It is the same prune that
+/// function runs, and both are idempotent — the write in a read path is what
+/// keeps the dashboard honest for an admin who has never run detection.
 pub async fn review_counts(
     pool: &SqlitePool,
 ) -> Result<Vec<(CleanupKind, CleanupCounts)>, CleanupStoreError> {
+    prune_stale_suggestions(pool).await?;
     let rows: Vec<(String, String, i64)> = sqlx::query_as(
         "SELECT kind, decision, COUNT(*) FROM dedup_suggestions GROUP BY kind, decision",
     )
@@ -100,11 +106,15 @@ pub async fn review_counts(
 /// clamped to `[1, REVIEW_QUEUE_MAX]` — hydration costs one small count query
 /// per card, which is why the queue is paged rather than returning the whole
 /// backlog.
+///
+/// Stale rows are retired before the read, so a card never names an author,
+/// series, or tag that has since been deleted.
 pub async fn review_queue(
     pool: &SqlitePool,
     kind: CleanupKind,
     limit: i64,
 ) -> Result<Vec<SuggestionCard>, CleanupStoreError> {
+    prune_stale_suggestions(pool).await?;
     let rows: Vec<RawRow> = sqlx::query_as(
         "SELECT id, kind, action, decision, payload_json, created_at
            FROM dedup_suggestions

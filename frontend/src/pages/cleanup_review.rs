@@ -9,6 +9,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{CleanupAction, CleanupKind, Decision, SuggestionCard};
 
 use crate::data::{self, CLEANUP_QUEUE_PAGE};
+use crate::focus_after_paint::focus_after_paint;
 use crate::{use_is_admin, use_server_url};
 
 /// Signals the queue reducer owns, threaded together so the handlers below
@@ -46,6 +47,12 @@ pub fn CleanupReviewPage(kind: String) -> Element {
             "data-testid": "cleanup-review",
             tabindex: "0",
             autofocus: true,
+            // `autofocus` only fires for markup the browser parsed at page
+            // load. This page is reached by a router `Link` from the settings
+            // dashboard, so the section is created after that — the attribute
+            // does nothing, focus stays on the link, and the hotkeys below
+            // never receive a keydown until somebody clicks the card.
+            onmounted: move |evt: MountedEvent| focus_after_paint(&evt),
             onkeydown: move |evt: KeyboardEvent| {
                 on_review_key(evt, server_url.clone(), state);
             },

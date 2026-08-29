@@ -193,7 +193,11 @@ test("renders one card at a time and accepts it with the Y hotkey", async ({
       expectedStatus: 200,
     },
     async () => {
-      await page.getByTestId("cleanup-review").focus();
+      // Deliberately no `.focus()` first. `openAuthorReview` arrives here by
+      // clicking the dashboard's Review link, so the section is created after
+      // page load and its `autofocus` attribute does nothing — the page has to
+      // take focus itself on mount or the hotkeys are dead on arrival.
+      await expect(page.getByTestId("cleanup-review")).toBeFocused();
       await page.keyboard.press("y");
     },
   );
