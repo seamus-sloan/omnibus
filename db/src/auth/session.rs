@@ -2,8 +2,12 @@
 
 use sqlx::{Executor, Row, Sqlite, SqlitePool};
 
+use super::api_token::{lookup_api_token, API_TOKEN_PREFIX};
 use super::token::{generate_token, hash_token, parse_session_token};
-use super::{now_unix, AuthError, AuthResult, NewSession, Session, SessionKind, User};
+use super::{
+    build_user_from_joined_row, now_unix, AuthError, AuthResult, NewSession, Session, SessionKind,
+    User,
+};
 
 /// Only write `last_used_at` if the existing value is older than this many
 /// seconds. Avoids write-amplification on every authenticated request.
@@ -84,7 +88,7 @@ pub async fn lookup_session(pool: &SqlitePool, raw_token: &str) -> AuthResult<(U
     let session_id: i64 = row.get("s_id");
     let last_used_at: i64 = row.get("last_used_at");
 
-    let user = build_user_from_row(&row);
+    let user = build_user_from_joined_row(&row);
     let session = build_session_from_row(&row, session_id, last_used_at)?;
 
     if now - last_used_at >= SESSION_TOUCH_THRESHOLD_SECS {
@@ -134,22 +138,6 @@ fn check_session_validity(row: &sqlx::sqlite::SqliteRow, now: i64) -> AuthResult
     }
 
     Ok(())
-}
-
-/// Build a `User` from the joined session+user query row.
-fn build_user_from_row(row: &sqlx::sqlite::SqliteRow) -> User {
-    User {
-        id: row.get("u_id"),
-        username: row.get("username"),
-        is_admin: row.get::<i64, _>("is_admin") != 0,
-        can_upload: row.get::<i64, _>("can_upload") != 0,
-        can_edit: row.get::<i64, _>("can_edit") != 0,
-        can_download: row.get::<i64, _>("can_download") != 0,
-        kindle_email: row.get("kindle_email"),
-        display_name: row.get("display_name"),
-        has_avatar: row.get::<i64, _>("has_avatar") != 0,
-        hidden_formats: crate::auth::parse_hidden_formats(row.get("hidden_formats")),
-    }
 }
 
 /// Build a `Session` from the joined query row. Returns `SessionNotFound` if
@@ -233,6 +221,9 @@ pub enum SessionAuthError {
 /// each caller does only the thin work of pulling the header strings out of
 /// its own request representation before delegating.
 ///
+/// Bearer values with the `omni_` prefix resolve as long-lived API tokens
+/// rather than sessions — see [`resolve_token`] for the routing.
+///
 /// * `None` token → [`SessionAuthError::Unauthenticated`].
 /// * [`AuthError::SessionNotFound`] → [`SessionAuthError::Unauthenticated`].
 /// * any other [`AuthError`] → [`SessionAuthError::Internal`].
@@ -244,11 +235,39 @@ pub async fn validate_session(
     let Some((token, _kind)) = parse_session_token(authorization, cookie_header) else {
         return Err(SessionAuthError::Unauthenticated);
     };
-    match lookup_session(pool, &token).await {
+    match resolve_token(pool, &token).await {
         Ok(pair) => Ok(pair),
         Err(AuthError::SessionNotFound) => Err(SessionAuthError::Unauthenticated),
         Err(e) => Err(SessionAuthError::Internal(e)),
     }
+}
+
+/// Resolve a raw token into `(User, Session)`, routing on the token's shape:
+/// an `omni_…` value is an API token (`api_tokens` table, no expiry, revoked
+/// via the management UI), anything else is a session token. The prefix
+/// routing means neither table is ever probed for the other's credentials.
+///
+/// An API token has no `sessions` row, so its principal is synthesized:
+/// `kind` is [`SessionKind::ApiToken`], `id` is the `0` sentinel (matching
+/// the OPDS Basic principal in `server::auth::basic` — real session ids
+/// start at 1, so the sentinel can never collide with one in "revoke all
+/// sessions except mine" sweeps), and `expires_at` is `i64::MAX` because
+/// revocation is the token's whole lifecycle.
+pub async fn resolve_token(pool: &SqlitePool, raw_token: &str) -> AuthResult<(User, Session)> {
+    if raw_token.starts_with(API_TOKEN_PREFIX) {
+        let (user, token) = lookup_api_token(pool, raw_token).await?;
+        let session = Session {
+            id: 0,
+            user_id: user.id,
+            device_id: None,
+            kind: SessionKind::ApiToken,
+            created_at: token.created_at,
+            last_used_at: token.last_used_at.unwrap_or(token.created_at),
+            expires_at: i64::MAX,
+        };
+        return Ok((user, session));
+    }
+    lookup_session(pool, raw_token).await
 }
 
 /// Revoke a single session by id, setting its `revoked_at` timestamp so `lookup_session` rejects it.

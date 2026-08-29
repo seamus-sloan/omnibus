@@ -4,6 +4,7 @@
 //! validation, first-user-admin creation, per-account lockout, and
 //! SHA-256-hashed session tokens with absolute + idle expiry.
 
+mod api_token;
 mod avatars;
 mod device;
 mod login;
@@ -13,6 +14,10 @@ mod session_key;
 mod token;
 mod users;
 
+pub use api_token::{
+    create_api_token, list_api_tokens_for_user, lookup_api_token, revoke_api_token_for_user,
+    ApiToken, NewApiToken, API_TOKEN_PREFIX, LIST_API_TOKENS_LIMIT, MAX_API_TOKEN_NAME_CHARS,
+};
 pub use avatars::{
     backfill_avatar_thumbs, delete_user_avatar, get_user_avatar, get_user_avatar_variant,
     upsert_user_avatar, AvatarVariant, UserAvatar,
@@ -25,7 +30,7 @@ pub use device::{
 pub use login::verify_login;
 pub use password::{hash_password, validate_password, validate_username, verify_password};
 pub use session::{
-    create_session, list_sessions_for_user, lookup_session, prune_expired_sessions,
+    create_session, list_sessions_for_user, lookup_session, prune_expired_sessions, resolve_token,
     revoke_all_sessions_for_user, revoke_all_sessions_for_user_except, revoke_session,
     revoke_session_checked, revoke_session_for_user, validate_session, SessionAuthError,
     LIST_SESSIONS_LIMIT,
@@ -62,6 +67,8 @@ pub enum AuthError {
     SessionNotFound,
     #[error("device not found")]
     DeviceNotFound,
+    #[error("api token not found")]
+    ApiTokenNotFound,
     #[error("account is temporarily locked")]
     AccountLocked { until_unix: i64 },
     #[error("registration is disabled")]
@@ -127,7 +134,7 @@ pub struct Session {
 }
 
 /// How a session's credential travels: a browser cookie, a mobile bearer
-/// token, or per-request HTTP Basic.
+/// token, per-request HTTP Basic, or a long-lived `omni_…` API token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
     Cookie,
@@ -136,15 +143,21 @@ pub enum SessionKind {
     /// no `sessions` row is minted for it, so this value never round-trips
     /// through SQL — it only labels the in-memory principal.
     Basic,
+    /// A long-lived API token (`api_tokens` table, `omni_…` prefix). Like
+    /// `Basic`, never persisted in `sessions` — it only labels the in-memory
+    /// principal so logs and handlers can tell it from a session bearer.
+    ApiToken,
 }
 
 impl SessionKind {
-    /// Wire/SQL representation: `"cookie"`, `"bearer"`, or `"basic"`.
+    /// Wire/SQL representation: `"cookie"`, `"bearer"`, `"basic"`, or
+    /// `"api_token"` (the last two are never written to the `sessions` table).
     pub fn as_str(self) -> &'static str {
         match self {
             SessionKind::Cookie => "cookie",
             SessionKind::Bearer => "bearer",
             SessionKind::Basic => "basic",
+            SessionKind::ApiToken => "api_token",
         }
     }
 }
@@ -166,6 +179,24 @@ pub struct Device {
 pub struct NewSession {
     pub session: Session,
     pub raw_token: String,
+}
+
+/// Build a `User` from a joined credential+user query row whose user columns
+/// carry the `u_id` alias — shared by the session and API-token lookups so
+/// the two joins can't drift on which user fields they hydrate.
+pub(crate) fn build_user_from_joined_row(row: &sqlx::sqlite::SqliteRow) -> User {
+    User {
+        id: row.get("u_id"),
+        username: row.get("username"),
+        is_admin: row.get::<i64, _>("is_admin") != 0,
+        can_upload: row.get::<i64, _>("can_upload") != 0,
+        can_edit: row.get::<i64, _>("can_edit") != 0,
+        can_download: row.get::<i64, _>("can_download") != 0,
+        kindle_email: row.get("kindle_email"),
+        display_name: row.get("display_name"),
+        has_avatar: row.get::<i64, _>("has_avatar") != 0,
+        hidden_formats: parse_hidden_formats(row.get("hidden_formats")),
+    }
 }
 
 pub(crate) fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {

@@ -33,6 +33,15 @@ pub fn auth_router(state: AppState) -> Router {
         .route("/api/auth/me", get(me_handler))
         .route("/api/auth/sessions", get(get_sessions_handler))
         .route("/api/auth/sessions/{id}", delete(delete_session_handler))
+        .route(
+            "/api/auth/api-tokens",
+            get(super::api_tokens::get_api_tokens_handler)
+                .post(super::api_tokens::post_api_token_handler),
+        )
+        .route(
+            "/api/auth/api-tokens/{id}",
+            delete(super::api_tokens::delete_api_token_handler),
+        )
         .with_state(state)
         // `AuthUser` reads the pool from `Extension<SqlitePool>` so it stays
         // state-agnostic. Keep this layer here so the router is usable
@@ -101,6 +110,11 @@ fn auth_error_to_response(e: AuthError) -> Response {
         // Not reachable from login/register/logout/sessions; the admin
         // device-revoke surface (`backend::admin_sessions`) owns this.
         AuthError::DeviceNotFound => (StatusCode::NOT_FOUND, "device not found").into_response(),
+        // Not reachable from these handlers either; the API-token surface
+        // (`auth::api_tokens`) owns this.
+        AuthError::ApiTokenNotFound => {
+            (StatusCode::NOT_FOUND, "api token not found").into_response()
+        }
         AuthError::Internal(e) => internal("auth error", e),
         AuthError::Crypto(e) => internal("auth crypto error", e),
     }

@@ -186,6 +186,34 @@ pub struct LoginResponse {
     pub token: Option<String>,
 }
 
+/// One live API token in the management listing (`GET /api/auth/api-tokens`).
+/// Never carries the secret — that appears exactly once, in
+/// [`CreateApiTokenResponse::secret`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApiTokenView {
+    pub id: i64,
+    pub name: String,
+    pub created_at: i64,
+    /// `None` until the token first authenticates a request.
+    #[serde(default)]
+    pub last_used_at: Option<i64>,
+}
+
+/// Body of `POST /api/auth/api-tokens`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateApiTokenRequest {
+    pub name: String,
+}
+
+/// Response from `POST /api/auth/api-tokens`. `secret` is the raw `omni_…`
+/// token, shown to the client exactly once — the server keeps only its hash,
+/// so it is unrecoverable afterward.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateApiTokenResponse {
+    pub token: ApiTokenView,
+    pub secret: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
