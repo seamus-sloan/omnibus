@@ -44,11 +44,28 @@ struct ReadStatusAutoTrackerTests {
         var writes: [ReadStatus] = []
     }
 
-    private func tracker(stored: ReadStatus?, log: Log) -> ReadStatusAuto {
+    private func tracker(
+        stored: ReadStatus?, log: Log, online: Bool = true
+    ) -> ReadStatusAuto {
         ReadStatusAuto(
             fetch: { stored },
-            write: { log.writes.append($0) }
+            write: { log.writes.append($0) },
+            isOnline: { online }
         )
+    }
+
+    /// A device whose connection and whose answer both move during a test:
+    /// the offline open that learns nothing, and the moment one of the two
+    /// comes back. Counts fetches, so "does not ask again" is assertable.
+    private final class Device {
+        var online = false
+        var answer: ReadStatus?
+        private(set) var fetches = 0
+
+        func fetch() -> ReadStatus? {
+            fetches += 1
+            return answer
+        }
     }
 
     @Test("opening an unread book writes reading once")
@@ -121,5 +138,136 @@ struct ReadStatusAutoTrackerTests {
         await auto.positionChanged(atEnd: false)
         await auto.positionChanged(atEnd: true)
         #expect(log.writes == [.finished])
+    }
+
+    @Test("a status that could not be fetched at open is written once it can be")
+    func unknownStatusIsRetriedNotLatched() async {
+        // The reported case: the whole read happened offline, so the opening
+        // fetch had no server to ask and no replica row to fall back on.
+        // Latching there left a book read to 10% with no status at all (#2289).
+        let log = Log()
+        let device = Device()
+        let auto = ReadStatusAuto(
+            fetch: { device.fetch() },
+            write: { log.writes.append($0) },
+            isOnline: { device.online }
+        )
+
+        await auto.bookOpened()
+        #expect(log.writes.isEmpty)
+
+        // Turning pages offline must not cost a request per page.
+        await auto.positionChanged(atEnd: false)
+        await auto.positionChanged(atEnd: false)
+        #expect(device.fetches == 1)
+
+        device.online = true
+        device.answer = .unread
+        await auto.positionChanged(atEnd: false)
+        #expect(log.writes == [.reading])
+
+        // Having settled, it stops asking.
+        await auto.positionChanged(atEnd: false)
+        #expect(device.fetches == 2)
+    }
+
+    /// Lets a test reach back into the tracker from inside its own `fetch`,
+    /// which is the one place a second observation can interleave with a
+    /// request that is still in flight.
+    private final class Reentry {
+        var tracker: ReadStatusAuto?
+        var armed = true
+    }
+
+    @Test("an answer that lands after the status settled does not overwrite it")
+    func lateFetchDoesNotClobberASettledStatus() async {
+        // Every relocate drives the tracker now, so two of them can sit in
+        // `fetch` at once. Here the reader reaches the end — and finishes the
+        // book — while the opening request is still out. That request's answer
+        // predates the write, so adopting it on arrival would replay the
+        // transition and write `finished` twice.
+        let log = Log()
+        let reentry = Reentry()
+        let auto = ReadStatusAuto(
+            fetch: {
+                if reentry.armed {
+                    reentry.armed = false
+                    await reentry.tracker?.positionChanged(atEnd: true)
+                }
+                return .unread
+            },
+            write: { log.writes.append($0) },
+            isOnline: { true }
+        )
+        reentry.tracker = auto
+
+        await auto.bookOpened()
+        #expect(log.writes == [.finished])
+    }
+
+    @Test("reaching the end retries the status even while offline")
+    func endRetriesEvenWhileOffline() async {
+        // Unlike the open transition, finishing cannot downgrade anything, so
+        // it is worth an attempt whatever the connection is doing — offline
+        // the replica may answer it, which a queued write makes authoritative.
+        let log = Log()
+        let device = Device()
+        let auto = ReadStatusAuto(
+            fetch: { device.fetch() },
+            write: { log.writes.append($0) },
+            isOnline: { device.online }
+        )
+
+        await auto.bookOpened()
+        await auto.positionChanged(atEnd: false)
+        #expect(device.fetches == 1)
+
+        device.answer = .reading
+        await auto.positionChanged(atEnd: true)
+        #expect(device.fetches == 2)
+        #expect(log.writes == [.finished])
+    }
+}
+
+/// The wire contract the auto transitions decide against.
+///
+/// `GET /api/read-status/{uuid}` answers `200 null` for a book nobody has
+/// marked, which is an answer and not a failure. Decoding the record
+/// non-optionally collapsed the two, so an unmarked book never reached the
+/// replica however often it was read online — and the readers, which fall back
+/// to that replica when the server can't be asked, had nothing to decide
+/// against offline (#2289).
+@Suite("Read-status wire contract")
+struct ReadStatusRecordCodecTests {
+    private let decoder = JSONDecoder()
+
+    @Test("a null body decodes as no row rather than a decode failure")
+    func nullDecodesToNoRow() throws {
+        let record = try decoder.decode(
+            ReadStatusRecord?.self, from: Data("null".utf8)
+        )
+        #expect(record == nil)
+    }
+
+    @Test("no row stands for unread, with both clocks unset")
+    func noRowIsUnread() {
+        let record = ReadStatusRecord.unmarked(uuid: "book-1")
+        #expect(record.status == .unread)
+        #expect(record.bookUUID == "book-1")
+        #expect(record.updatedAt == 0)
+        #expect(record.finishedAt == nil)
+    }
+
+    @Test("a real row decodes over the server's snake_case keys")
+    func rowDecodes() throws {
+        let json = """
+        {"book_uuid":"book-1","status":"reading","updated_at":1700000000,
+         "finished_at":null}
+        """
+        let record = try decoder.decode(
+            ReadStatusRecord?.self, from: Data(json.utf8)
+        )
+        #expect(record?.status == .reading)
+        #expect(record?.updatedAt == 1_700_000_000)
     }
 }

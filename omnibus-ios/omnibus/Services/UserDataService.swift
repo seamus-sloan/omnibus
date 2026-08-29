@@ -242,23 +242,30 @@ enum UserDataService {
 
     // MARK: - Read status
 
+    /// A book's read state, replica first.
+    ///
+    /// `null` — no row — is an answer, not a failure: it says nobody has
+    /// marked this book, which is `unread`. Decoding the record non-optionally
+    /// made the two fail alike, so an unmarked book could never reach the
+    /// replica however often it was read online. That is what left the readers
+    /// with nothing to decide against offline (#2289).
     static func readStatus(
         uuid: String
     ) -> AsyncThrowingStream<CacheRead<ReadStatusRecord>, Error> {
         Cache.live(CacheKey.readStatus(uuid)) {
-            try await APIClient.shared.get("/api/read-status/\(uuid)")
+            let record: ReadStatusRecord? = try await APIClient.shared.get(
+                "/api/read-status/\(uuid)"
+            )
+            return record ?? .unmarked(uuid: uuid)
         }
     }
 
     /// The stored status the readers' auto transitions decide against.
     ///
     /// The replica answers when a queued write makes it the newest truth, and
-    /// again when the server can't be asked; otherwise the server does, where
-    /// `null` is a real answer — a book nobody has marked is `unread`. (The
-    /// `readStatus` stream can't carry that distinction: it decodes the record
-    /// non-optionally, so "no row" and "no answer" fail alike.) `nil` here
-    /// means nothing is known, and the caller must stay inert — acting on a
-    /// guess could downgrade an unfetched `finished`.
+    /// again when the server can't be asked; otherwise the server does. `nil`
+    /// here means nothing is known, and the caller must stay inert — acting on
+    /// a guess could downgrade an unfetched `finished`.
     static func storedReadStatus(uuid: String) async -> ReadStatus? {
         let key = CacheKey.readStatus(uuid)
         let cached: ReadStatusRecord? = await Cache.cachedOnly(key)
