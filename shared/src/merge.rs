@@ -11,16 +11,14 @@ pub struct MergeBooksResult {
     pub target_uuid: String,
 }
 
-/// Request body for the REST merge endpoint: merge `source_uuid` into
-/// `target_uuid` (the target survives).
+/// Request body for `POST /api/books/merge`: merge the source book into the target.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MergeBooksRequest {
     pub source_uuid: String,
     pub target_uuid: String,
 }
 
-/// Request body for the REST unmerge endpoint, naming the `merge_log`
-/// entry to reverse — the undo handle a merge response carried.
+/// Request body for `POST /api/books/merge/undo`: the `merge_log` id to reverse.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UndoMergeRequest {
     pub merge_log_id: i64,
