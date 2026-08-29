@@ -164,14 +164,27 @@ pub enum ClientError {
     /// Transport-level failure (connection refused, TLS, timeout, …).
     #[error(transparent)]
     Http(#[from] reqwest::Error),
+    /// A fixed-token client (the hosted `/mcp` loopback) saw its bearer
+    /// rejected. There are no credentials to re-login with, so the failure
+    /// surfaces instead of retrying — the caller's token was revoked or
+    /// expired mid-session.
+    #[error("bearer token rejected by the instance (HTTP 401); create a new API token")]
+    TokenRejected,
+}
+
+/// The username/password pair a stdio-configured client re-logs-in with.
+/// Absent on the hosted `/mcp` loopback client, which holds only the
+/// caller's own bearer and must never mint sessions of its own.
+struct Credentials {
+    username: String,
+    password: String,
 }
 
 /// One authenticated Omnibus instance. Cheap to share behind an `Arc`.
 pub struct OmnibusClient {
     http: reqwest::Client,
     base_url: String,
-    username: String,
-    password: String,
+    credentials: Option<Credentials>,
     token: RwLock<Option<String>>,
     // Serializes logins so N racing tool calls produce one session, not N.
     login_lock: Mutex<()>,
@@ -185,9 +198,27 @@ impl OmnibusClient {
         Ok(Self {
             http,
             base_url: config.base_url,
-            username: config.username,
-            password: config.password,
+            credentials: Some(Credentials {
+                username: config.username,
+                password: config.password,
+            }),
             token: RwLock::new(None),
+            login_lock: Mutex::new(()),
+        })
+    }
+
+    /// Build a client that speaks with a fixed, caller-supplied bearer and
+    /// holds no credentials — the hosted `/mcp` loopback shape. The caller
+    /// already authenticated the token; this client passes it through
+    /// verbatim, never logs in, and surfaces a 401 as
+    /// [`ClientError::TokenRejected`] instead of re-logging-in.
+    pub fn with_bearer(base_url: String, token: String) -> Result<Self, ClientError> {
+        let http = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+        Ok(Self {
+            http,
+            base_url,
+            credentials: None,
+            token: RwLock::new(Some(token)),
             login_lock: Mutex::new(()),
         })
     }
@@ -195,9 +226,13 @@ impl OmnibusClient {
     /// The one allowlisted write: `POST /api/auth/login` for a bearer
     /// session. Stores and returns the fresh token.
     async fn login(&self) -> Result<String, ClientError> {
+        // A fixed-token client has nothing to log in with — its 401 is final.
+        let Some(credentials) = &self.credentials else {
+            return Err(ClientError::TokenRejected);
+        };
         let body = LoginRequest {
-            username: self.username.clone(),
-            password: self.password.clone(),
+            username: credentials.username.clone(),
+            password: credentials.password.clone(),
             // `bearer` puts the token in the JSON body instead of a cookie;
             // together with `device_name` it registers a dedicated device row.
             client_kind: Some("bearer".to_string()),
@@ -219,7 +254,7 @@ impl OmnibusClient {
         let token = login.token.ok_or(ClientError::NoToken)?;
         *self.token.write().await = Some(token.clone());
         // Username only — never the password or token.
-        tracing::info!(username = %self.username, "logged in to omnibus");
+        tracing::info!(username = %credentials.username, "logged in to omnibus");
         Ok(token)
     }
 

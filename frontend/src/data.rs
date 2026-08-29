@@ -49,6 +49,10 @@ mod cross_format;
 mod kobo;
 #[cfg(not(feature = "mobile"))]
 mod logs;
+// Hosted /mcp endpoint toggle (#2314) — web (gloo REST) + SSR stubs; the
+// admin card is web-only, so there's no mobile transport.
+#[cfg(not(feature = "mobile"))]
+mod mcp;
 mod metadata_search;
 mod physical;
 mod profile;
@@ -106,6 +110,8 @@ pub use kindle::*;
 pub use kobo::*;
 #[cfg(not(feature = "mobile"))]
 pub use logs::*;
+#[cfg(not(feature = "mobile"))]
+pub use mcp::*;
 pub use metadata_search::*;
 pub use physical::*;
 pub use profile::*;

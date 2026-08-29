@@ -1101,3 +1101,26 @@ async fn get_settings_propagates_db_error_when_pool_is_closed() {
     let err = get_settings(&pool).await.unwrap_err();
     assert!(matches!(err, SettingsError::Db(_)));
 }
+
+// ── Hosted /mcp endpoint toggle (#2314) ──────────────────────────────
+
+#[tokio::test]
+async fn mcp_enabled_defaults_off_and_round_trips() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    // Default OFF: a fresh install exposes no MCP surface.
+    assert!(!mcp_enabled(&pool).await.unwrap());
+
+    set_mcp_enabled(&pool, true).await.unwrap();
+    assert!(mcp_enabled(&pool).await.unwrap());
+
+    set_mcp_enabled(&pool, false).await.unwrap();
+    assert!(!mcp_enabled(&pool).await.unwrap());
+}
+
+#[tokio::test]
+async fn mcp_enabled_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    assert!(mcp_enabled(&pool).await.is_err());
+    assert!(set_mcp_enabled(&pool, true).await.is_err());
+}

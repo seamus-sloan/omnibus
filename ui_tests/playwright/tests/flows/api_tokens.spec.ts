@@ -109,3 +109,55 @@ test("shows an error and keeps the list unchanged when creation fails", async ({
   await expect(secretField(page)).toHaveCount(0);
   await expect(rowFor(page, name)).toHaveCount(0);
 });
+
+// ── Hosted MCP endpoint toggle (#2314) ──────────────────────────────
+// Renders in the same section, admin-only (the seeded user is an admin).
+// The toggle is instance-wide state: the action test flips it on and
+// restores it off (the shipped default) before finishing, and nothing else
+// in the suite reads it — no other spec touches /mcp.
+
+const mcpToggle = (page: Page) => page.getByTestId("mcp-toggle");
+const mcpState = (page: Page) => page.getByTestId("mcp-toggle-state");
+
+test("renders the MCP endpoint toggle card for an admin", async ({ page }) => {
+  await gotoReady(page, SETTINGS_API_TOKENS);
+
+  await expect(page.getByTestId("mcp-toggle-card")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Hosted MCP endpoint" }),
+  ).toBeVisible();
+  await expect(mcpState(page)).toBeVisible();
+  // The card waits for the status read before offering the switch.
+  await expect(mcpToggle(page)).toBeEnabled();
+});
+
+test("enables and disables the MCP endpoint", async ({ page }) => {
+  await gotoReady(page, SETTINGS_API_TOKENS);
+  await expect(mcpToggle(page)).toBeEnabled();
+
+  // The dev instance ships with the toggle off; flip on, then restore.
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/settings/mcp",
+      expectedBody: { enabled: true },
+      expectedStatus: 204,
+    },
+    async () => mcpToggle(page).click(),
+  );
+  await expect(page.getByTestId("mcp-toggle-status")).toHaveClass(/success/);
+  await expect(mcpState(page)).toContainText("Enabled");
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/settings/mcp",
+      expectedBody: { enabled: false },
+      expectedStatus: 204,
+    },
+    async () => mcpToggle(page).click(),
+  );
+  await expect(mcpState(page)).toContainText("Disabled");
+});
