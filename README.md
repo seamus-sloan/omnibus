@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="frontend/assets/omnibus-stoat.png" alt="Omnibus" width="120" />
+<img src="docs/screenshots/hero.png" alt="Omnibus — self-hosted ebook &amp; audiobook library, shown on web and iOS" width="100%" />
 
 # Omnibus
 
@@ -18,11 +18,6 @@ and browse a collection that belongs entirely to you.
 
 </div>
 
-<!-- Hero shot: swap this for the wide screenshot. -->
-<div align="center">
-<img src="docs/screenshots/library.png" alt="Omnibus library — cover grid" width="100%" />
-</div>
-
 ### [**→ Take the tour at seamus-sloan.github.io/omnibus**](https://seamus-sloan.github.io/omnibus/)
 
 Cover-art grid or dense metadata table, smart shelves, an in-browser EPUB
@@ -30,12 +25,6 @@ reader, an HLS audiobook player, Kobo and Kindle delivery, physical-copy
 tracking, and a native iOS app — all over one SQLite database and your own
 files, untouched. The [site](https://seamus-sloan.github.io/omnibus/) has the
 screenshots and the full feature tour.
-
-> [!NOTE]
-> **This is in active development.** Foundations and browse/discovery have
-> shipped; reading/listening is in progress. See the
-> [roadmap](https://github.com/users/seamus-sloan/projects/2/views/9) for
-> what's next.
 
 ## Quick start
 
@@ -66,6 +55,7 @@ the [Docker guide](docs/docker.md).
 | [**Local development**](docs/local-development.md) | Nix shells, `just` recipes, tests, mobile builds, project layout |
 | [**Architecture**](docs/architecture.md) | Crate and module maps, request flows, mobile auth |
 | [**Configuration reference**](.env.example) | Every supported environment variable, annotated |
+| [**Roadmap**](https://github.com/users/seamus-sloan/projects/2/views/9) | What's shipped and what's next |
 
 ## License
 
