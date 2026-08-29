@@ -274,9 +274,10 @@ impl OmnibusMcp {
     ) -> Result<Json<BookRef>, ErrorData> {
         if !p.confirm {
             return Err(ErrorData::invalid_params(
-                "confirm must be true: check-in files a physical copy AND permanently binds the \
-                 ISBN to this book for future lookups. Resolve the ISBN, show the user the \
-                 matched book, and pass confirm=true once they approve.",
+                "confirm must be true: check-in files a library-wide physical copy, and when \
+                 an isbn is passed it is permanently bound to this book for future \
+                 exact-identifier lookups. Show the user the matched book, and pass \
+                 confirm=true once they approve.",
                 None,
             ));
         }
