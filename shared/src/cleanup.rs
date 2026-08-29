@@ -152,6 +152,17 @@ pub struct SuggestionCard {
     /// exactly one (a two-way merge). `None` for splits with several
     /// resulting names, or book-title normalization.
     pub secondary_name: Option<String>,
+    /// Every name a merge would fold into `primary_name`. Empty for the
+    /// actions that fold nothing. `secondary_name` is the two-way special
+    /// case of this list and stays for the callers that only ever wanted
+    /// "the other one".
+    #[serde(default)]
+    pub source_names: Vec<String>,
+    /// What a split would produce, in the order the atoms were parsed. Empty
+    /// for every other action. Without it a split card can only show the
+    /// scanned tag twice, which reads as a rename that changes nothing.
+    #[serde(default)]
+    pub proposed_parts: Vec<String>,
     /// How many library books are affected if the suggestion is applied.
     pub book_count: i64,
     /// Relative URL to a cached author/series photo, when `kind` has one.

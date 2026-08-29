@@ -325,6 +325,65 @@ async fn review_queue_reports_a_malformed_payload_rather_than_skipping_the_row()
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+async fn review_queue_names_every_record_a_merge_folds_away() {
+    // A three-way group has no single "other" name, so `secondary_name` is
+    // None — the card has to carry the whole list or it can only say "some
+    // records".
+    let pool = new_pool().await;
+    let authors = seed_authors_with_books(&pool, 3).await;
+    seed_suggestion(
+        &pool,
+        CleanupKind::Author,
+        CleanupAction::Merge,
+        &merge_payload(&[authors[0], authors[1]], authors[2]),
+        Decision::Pending,
+    )
+    .await;
+
+    let cards = review_queue(&pool, CleanupKind::Author, 50).await.unwrap();
+    assert_eq!(cards[0].secondary_name, None);
+    assert_eq!(
+        cards[0].source_names,
+        vec!["Source 1".to_string(), "Source 2".to_string()]
+    );
+    assert!(cards[0].proposed_parts.is_empty());
+}
+
+#[tokio::test]
+async fn review_queue_carries_the_atoms_a_split_would_write() {
+    // Without them the card shows the scanned tag on both sides, which reads
+    // as a change that isn't one.
+    let pool = new_pool().await;
+    let tag: i64 = sqlx::query_scalar("INSERT INTO tags (name) VALUES ('a;b') RETURNING id")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let payload = serde_json::json!({
+        "type": "split",
+        "source_id": tag,
+        "source_name": "a;b",
+        "atoms": ["a", "b"],
+        "delimiter": ";",
+    })
+    .to_string();
+    seed_suggestion(
+        &pool,
+        CleanupKind::Tag,
+        CleanupAction::Split,
+        &payload,
+        Decision::Pending,
+    )
+    .await;
+
+    let cards = review_queue(&pool, CleanupKind::Tag, 50).await.unwrap();
+    assert_eq!(
+        cards[0].proposed_parts,
+        vec!["a".to_string(), "b".to_string()]
+    );
+    assert!(cards[0].source_names.is_empty());
+}
+
+#[tokio::test]
 async fn decide_suggestion_applies_the_merge_and_stamps_an_accepted_row() {
     let pool = new_pool().await;
     let authors = seed_authors_with_books(&pool, 2).await;
@@ -338,7 +397,7 @@ async fn decide_suggestion_applies_the_merge_and_stamps_an_accepted_row() {
     )
     .await;
 
-    decide_suggestion(&pool, id, Decision::Accepted, admin_id)
+    decide_suggestion(&pool, id, Decision::Accepted, admin_id, None)
         .await
         .unwrap();
 
@@ -366,7 +425,7 @@ async fn decide_suggestion_stamps_a_rejected_row_without_applying_anything() {
     )
     .await;
 
-    decide_suggestion(&pool, id, Decision::Rejected, admin_id)
+    decide_suggestion(&pool, id, Decision::Rejected, admin_id, None)
         .await
         .unwrap();
 
@@ -387,10 +446,188 @@ async fn decide_suggestion_stamps_a_rejected_row_without_applying_anything() {
     assert_eq!(remaining, 2);
 }
 
+/// Seed a book plus a pending rename suggestion naming it, returning
+/// `(uuid, suggestion_id)`.
+async fn seed_rename(pool: &SqlitePool) -> (String, i64) {
+    let uuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_string();
+    let lib_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scan_roots (path, display_name) VALUES ('/rename-lib', 'lib') RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title)
+         VALUES (?, 'f.epub', ?, '/rename-lib/f.epub', 'Shelley, Mary - Frankenstein')
+         RETURNING id",
+    )
+    .bind(&uuid)
+    .bind(lib_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let payload = serde_json::json!({
+        "type": "rename",
+        "book_id": book_id,
+        "book_uuid": uuid,
+        "current_title": "Shelley, Mary - Frankenstein",
+        "proposed_title": "Frankenstein",
+    })
+    .to_string();
+    let id = seed_suggestion(
+        pool,
+        CleanupKind::BookTitle,
+        CleanupAction::Rename,
+        &payload,
+        Decision::Pending,
+    )
+    .await;
+    (uuid, id)
+}
+
+/// The title override a book ended up carrying, if any.
+async fn stored_title_override(pool: &SqlitePool, uuid: &str) -> Option<String> {
+    sqlx::query_scalar(
+        "SELECT json_extract(overrides, '$.title') FROM metadata_overrides WHERE book_uuid = ?",
+    )
+    .bind(uuid)
+    .fetch_optional(pool)
+    .await
+    .unwrap()
+    .flatten()
+}
+
+#[tokio::test]
+async fn decide_suggestion_writes_the_reviewers_wording_over_the_proposal() {
+    let pool = new_pool().await;
+    let admin_id = seed_reviewer(&pool).await;
+    let (uuid, id) = seed_rename(&pool).await;
+
+    decide_suggestion(
+        &pool,
+        id,
+        Decision::Accepted,
+        admin_id,
+        Some("Frankenstein; or, The Modern Prometheus"),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        stored_title_override(&pool, &uuid).await.as_deref(),
+        Some("Frankenstein; or, The Modern Prometheus")
+    );
+}
+
+#[tokio::test]
+async fn decide_suggestion_writes_the_detected_proposal_when_nothing_was_edited() {
+    let pool = new_pool().await;
+    let admin_id = seed_reviewer(&pool).await;
+    let (uuid, id) = seed_rename(&pool).await;
+
+    decide_suggestion(&pool, id, Decision::Accepted, admin_id, None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        stored_title_override(&pool, &uuid).await.as_deref(),
+        Some("Frankenstein")
+    );
+}
+
+#[tokio::test]
+async fn decide_suggestion_trims_the_reviewers_wording() {
+    let pool = new_pool().await;
+    let admin_id = seed_reviewer(&pool).await;
+    let (uuid, id) = seed_rename(&pool).await;
+
+    decide_suggestion(
+        &pool,
+        id,
+        Decision::Accepted,
+        admin_id,
+        Some("  Frankenstein  "),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        stored_title_override(&pool, &uuid).await.as_deref(),
+        Some("Frankenstein")
+    );
+}
+
+#[tokio::test]
+async fn decide_suggestion_refuses_an_empty_edited_title_without_stamping_the_row() {
+    let pool = new_pool().await;
+    let admin_id = seed_reviewer(&pool).await;
+    let (uuid, id) = seed_rename(&pool).await;
+
+    let err = decide_suggestion(&pool, id, Decision::Accepted, admin_id, Some("   "))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, CleanupStoreError::Refused(m) if m.contains("cannot be empty")));
+    assert_eq!(stored_decision(&pool, id).await, "pending");
+    assert_eq!(stored_title_override(&pool, &uuid).await, None);
+}
+
+#[tokio::test]
+async fn decide_suggestion_refuses_an_edit_for_a_kind_whose_apply_cannot_carry_one() {
+    // Applying the detector's proposal while reporting success on the
+    // reviewer's would write a value nobody chose.
+    let pool = new_pool().await;
+    let authors = seed_authors_with_books(&pool, 2).await;
+    let admin_id = seed_reviewer(&pool).await;
+    let id = seed_suggestion(
+        &pool,
+        CleanupKind::Author,
+        CleanupAction::Merge,
+        &merge_payload(&[authors[0]], authors[1]),
+        Decision::Pending,
+    )
+    .await;
+
+    let err = decide_suggestion(
+        &pool,
+        id,
+        Decision::Accepted,
+        admin_id,
+        Some("Someone Else"),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, CleanupStoreError::Refused(m) if m.contains("cannot be edited")));
+    assert_eq!(stored_decision(&pool, id).await, "pending");
+    let survived: Option<i64> = sqlx::query_scalar("SELECT id FROM authors WHERE id = ?")
+        .bind(authors[0])
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    assert_eq!(survived, Some(authors[0]), "the merge must not have run");
+}
+
+#[tokio::test]
+async fn decide_suggestion_ignores_an_edited_value_on_a_reject() {
+    // A reject applies nothing, so there is no value for the edit to conflict
+    // with — refusing it would block a reviewer who typed then changed course.
+    let pool = new_pool().await;
+    let admin_id = seed_reviewer(&pool).await;
+    let (uuid, id) = seed_rename(&pool).await;
+
+    decide_suggestion(&pool, id, Decision::Rejected, admin_id, Some("Anything"))
+        .await
+        .unwrap();
+
+    assert_eq!(stored_decision(&pool, id).await, "rejected");
+    assert_eq!(stored_title_override(&pool, &uuid).await, None);
+}
+
 #[tokio::test]
 async fn decide_suggestion_refuses_a_pending_decision() {
     let pool = new_pool().await;
-    let err = decide_suggestion(&pool, 1, Decision::Pending, 1)
+    let err = decide_suggestion(&pool, 1, Decision::Pending, 1, None)
         .await
         .unwrap_err();
     assert!(
@@ -402,7 +639,7 @@ async fn decide_suggestion_refuses_a_pending_decision() {
 #[tokio::test]
 async fn decide_suggestion_reports_not_found_for_an_unknown_id() {
     let pool = new_pool().await;
-    let err = decide_suggestion(&pool, 4242, Decision::Accepted, 1)
+    let err = decide_suggestion(&pool, 4242, Decision::Accepted, 1, None)
         .await
         .unwrap_err();
     assert!(
@@ -422,7 +659,7 @@ async fn decide_suggestion_refuses_a_row_that_was_already_reviewed() {
         Decision::Rejected,
     )
     .await;
-    let err = decide_suggestion(&pool, id, Decision::Accepted, 1)
+    let err = decide_suggestion(&pool, id, Decision::Accepted, 1, None)
         .await
         .unwrap_err();
     assert!(
@@ -451,7 +688,7 @@ async fn decide_suggestion_reports_unsupported_for_a_kind_action_pair_with_no_pr
         Decision::Pending,
     )
     .await;
-    let err = decide_suggestion(&pool, id, Decision::Accepted, 1)
+    let err = decide_suggestion(&pool, id, Decision::Accepted, 1, None)
         .await
         .unwrap_err();
     assert!(
@@ -475,7 +712,7 @@ async fn decide_suggestion_propagates_an_apply_failure_without_stamping_the_row(
         Decision::Pending,
     )
     .await;
-    let err = decide_suggestion(&pool, id, Decision::Accepted, admin_id)
+    let err = decide_suggestion(&pool, id, Decision::Accepted, admin_id, None)
         .await
         .unwrap_err();
     assert!(matches!(err, CleanupStoreError::Apply(_)));
@@ -495,7 +732,7 @@ async fn decide_suggestion_reports_an_unrecognized_token_in_a_stored_row() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let err = decide_suggestion(&pool, id, Decision::Accepted, 1)
+    let err = decide_suggestion(&pool, id, Decision::Accepted, 1, None)
         .await
         .unwrap_err();
     assert!(matches!(err, CleanupStoreError::UnknownToken(t) if t == "publisher"));

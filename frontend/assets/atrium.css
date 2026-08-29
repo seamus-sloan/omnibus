@@ -10286,6 +10286,96 @@ html {
 .cleanup-kind-count { font-size: 12px; color: var(--ink-1); }
 .cleanup-actions { display: flex; gap: 10px; margin-top: 14px; }
 
+/* ── Library cleanup review, redesigned (.crx-*) ─────────────────────────
+   The card is one idea: what was scanned, what would replace it, and a field
+   the reviewer can type over. The .mes-* edition-picker anatomy above is
+   reused verbatim where this surface borrows it. */
+.crx-root { width: 100%; padding-bottom: 24px; }
+.crx-crumb { margin-bottom: 14px; }
+.crx-column { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.crx-column:focus { outline: none; }
+.crx-column:focus-visible { outline: 2px solid var(--accent); outline-offset: 6px; border-radius: var(--r-lg); }
+
+.crx-head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.crx-head-title { font-family: var(--serif); font-size: 30px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.crx-progress { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.crx-progress-text { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.crx-dots { display: flex; gap: 3px; }
+.crx-dot { width: 5px; height: 5px; border-radius: 999px; background: var(--bg-3); }
+.crx-dot.done { background: var(--ink-3); }
+.crx-dot.on { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 22%, transparent); }
+
+.crx-kindline { display: flex; flex-wrap: wrap; gap: 6px; }
+.crx-kindchip {
+  display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+  padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line-2);
+  background: var(--bg-1); font-size: 12.5px; color: var(--ink-2); cursor: pointer;
+  text-decoration: none;
+}
+.crx-kindchip:hover { color: var(--ink-0); border-color: var(--line); }
+.crx-kindchip.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
+.crx-kind-count { font-family: var(--mono); font-size: 10px; opacity: .75; }
+
+.crx-card { padding: 22px 24px; }
+/* Scoped under .crx-card so these beat `.atrium p { margin: 0 }`, which is
+   one class + one type and would otherwise win on specificity and flatten
+   the card's vertical rhythm. */
+.crx-card .crx-action-line { font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-2); margin: 0 0 20px; }
+.crx-detected { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; color: var(--ink-3); letter-spacing: .06em; }
+
+.crx-proposal { display: grid; grid-template-columns: 1fr 34px 1fr; gap: 14px; align-items: start; }
+.crx-side-label { font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; display: flex; align-items: baseline; gap: 8px; }
+.crx-current { padding: 11px 14px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg-2); color: var(--ink-2); font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
+.crx-current.crx-strike { text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--bad) 70%, transparent); }
+.crx-arrow { display: grid; place-items: center; color: var(--ink-3); font-size: 16px; padding-top: 38px; }
+.crx-proposed-wrap { position: relative; }
+.crx-proposed {
+  width: 100%; padding: 11px 14px; border-radius: 10px;
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, transparent);
+  background: color-mix(in oklch, var(--accent) 7%, var(--bg-1));
+  color: var(--ink-0); font-family: var(--serif); font-size: 19px; font-weight: 600;
+  line-height: 1.35; outline: none; overflow-wrap: anywhere;
+}
+.crx-proposed:focus { border-color: var(--accent); }
+/* The non-editable arm: same box, no caret affordance, so a reviewer doesn't
+   keep clicking a field this kind can't yet carry an edit for. */
+.crx-proposed-static { background: var(--bg-2); border-color: var(--line-2); }
+.crx-edited-tag { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+.crx-card .crx-hint { margin: 14px 0 0; font-size: 11.5px; color: var(--ink-3); }
+.crx-hint kbd { font-family: var(--mono); font-size: 10.5px; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 4px; padding: 1px 5px; color: var(--ink-2); }
+
+/* Merge sources and split atoms: the scanned side of a card can hold several
+   values, so both are lists rather than a single box. */
+.crx-merge-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.crx-merge-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg-2); font-size: 13px; color: var(--ink-1); }
+.crx-merge-name { flex: 1; min-width: 0; color: var(--ink-0); overflow-wrap: anywhere; }
+.crx-merge-name.crx-strike { text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--bad) 70%, transparent); }
+.crx-parts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 9px; border-radius: 10px; border: 1px solid color-mix(in oklch, var(--accent) 40%, transparent); background: color-mix(in oklch, var(--accent) 5%, var(--bg-1)); }
+.crx-part { white-space: nowrap; }
+
+.crx-decide {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 14px 24px; border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  background: color-mix(in oklch, var(--bg-1) 92%, transparent);
+}
+.crx-decide .btn { white-space: nowrap; }
+.crx-decide-spacer { margin-left: auto; }
+.crx-decide-note { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+
+.crx-card-done { display: flex; flex-direction: column; gap: 16px; }
+.crx-tally { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; }
+.crx-tally li { display: flex; align-items: baseline; gap: 10px; padding: 8px 12px; border-radius: 9px; background: var(--bg-2); border: 1px solid var(--line-2); }
+.crx-tally-n { font-family: var(--mono); font-size: 15px; color: var(--accent); min-width: 16px; }
+.crx-tally-l { font-size: 12.5px; color: var(--ink-1); }
+
+@media (max-width: 720px) {
+  /* The arrow between the two values only reads as one when they sit side by
+     side; stacked, the order alone carries it. */
+  .crx-proposal { grid-template-columns: 1fr; }
+  .crx-arrow { display: none; }
+  .crx-tally { grid-template-columns: 1fr; }
+}
+
 .cleanup-review { max-width: 560px; }
 /* The review surface is focusable so Y / N / Space reach its keydown handler;
    the focus ring would otherwise frame the whole card on every keypress. */
