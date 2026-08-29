@@ -10940,8 +10940,10 @@ html {
 /* Lifts each section above the wash. Overlays flatten in as children here too
    (Dioxus has no portal), and this rule ties them on specificity while winning
    on source order — so without the exclusion it re-anchors a `position: fixed`
-   modal into the page column. Add any new fixed overlay mounted here to the list. */
-.lmq > *:not(.shelf-modal-overlay, .author-photo-modal-backdrop, .bulk-edit-bar) {
+   modal into the page column. Add any new fixed overlay mounted here to the list.
+   `:where()` keeps this at (0,1,0): a bare `:not()` takes its most specific
+   argument, which would outrank `.lmq-edge`'s own later `position: fixed`. */
+.lmq > *:where(:not(.shelf-modal-overlay, .author-photo-modal-backdrop, .bulk-edit-bar)) {
   position: relative;
   z-index: 1;
 }

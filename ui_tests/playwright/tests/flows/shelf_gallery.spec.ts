@@ -453,6 +453,11 @@ test("resume stays reachable as an edge ribbon once the stack scrolls away", asy
   await expect(ribbon).toBeAttached();
   await expect(root).not.toHaveClass(/lmq--past/);
   await expect(ribbon).toHaveCSS("opacity", "0");
+  // Pinned to the viewport, not to the column. `.lmq > *` also matches the
+  // ribbon and is only outranked because it stays at (0,1,0) — a `:not()`
+  // there that forgets its `:where()` wrapper silently drops it into the flow,
+  // where the assertions below still pass or fail on scroll position alone.
+  await expect(ribbon).toHaveCSS("position", "fixed");
 
   await page.evaluate(() => window.scrollTo(0, 600));
   await expect(root).toHaveClass(/lmq--past/);
