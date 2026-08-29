@@ -42,7 +42,12 @@ const WEEKDAY_LABELS: [&str; WEEKDAYS] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sa
 /// checkpoints back into whole sittings must not reattribute a sitting's whole
 /// duration to the hour it *started* in — that would quietly pile a 90-minute
 /// evening onto 21:00 and leave 22:00 empty.
-const SESSION_LOCAL_ROWS: &str = "\
+///
+/// Shared with [`super::goals`], which buckets the same rows into a local
+/// *day* for the daily minutes goal. One union rather than two so the goal and
+/// the time-pattern strips can never come to describe different sets of
+/// sessions.
+pub(super) const SESSION_LOCAL_ROWS: &str = "\
     SELECT started_at, utc_offset_minutes, seconds_read AS secs FROM reading_sessions \
         WHERE user_id = ? AND started_at >= ? \
     UNION ALL \

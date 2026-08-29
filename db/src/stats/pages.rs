@@ -269,6 +269,40 @@ pub(super) async fn pages_read_bounded(
         .await?)
 }
 
+/// Pages covered on one UTC `YYYY-MM-DD`, for the daily pages goal.
+///
+/// Zero rather than `None` when nothing resolves, which is the one place this
+/// module deliberately departs from [`pages_read`]: that function's `None` is
+/// the tile's em-dash, telling "nothing measurable" apart from "nothing read".
+/// A goal has no such state — a reader who has not opened a book today is at
+/// zero of their target, and an em-dash there would read as the goal being
+/// broken rather than as the day being young.
+///
+/// **UTC, not the reader's local day.** The ledger buckets to a UTC date
+/// string and keeps no timestamp to re-bucket from, so this is the only
+/// calendar available to it; [`omnibus_shared::DailyGoal`] documents what that
+/// costs. Bind order is `user_id, day`.
+pub(super) async fn pages_read_on_day(
+    pool: &SqlitePool,
+    user_id: i64,
+    day: &str,
+) -> Result<i64, StatsError> {
+    let sql = format!(
+        "SELECT COALESCE(
+                    CAST(ROUND(SUM(CAST(d.percent_gained AS REAL) * p.pages) / 100.0) AS INTEGER),
+                    0)
+         FROM reading_progress_daily d
+         JOIN ({}) p ON p.uuid = d.book_uuid
+         WHERE d.user_id = ? AND d.day = ? AND p.pages IS NOT NULL",
+        book_pages_source()
+    );
+    Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .bind(day)
+        .fetch_one(pool)
+        .await?)
+}
+
 /// Everything the Pages tile needs beyond its headline: the per-day series
 /// behind it, which books it could and could not measure, and the day the
 /// ledger started.

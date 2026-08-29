@@ -660,6 +660,11 @@ pub struct StatsSummary {
     /// [`StatsRange`] and a period switch never moves it.
     #[serde(default)]
     pub goal: Option<ReadingGoal>,
+    /// The caller's standing daily goals and today's progress toward them.
+    /// Not windowed either, and for the same reason as `goal`: a daily target
+    /// recurs, so it reads the same whichever [`StatsRange`] the page shows.
+    #[serde(default)]
+    pub daily_goals: DailyGoals,
     /// What `pages_read` could and could not see in this window, plus the day
     /// the ledger behind it started. Server-owned so the web tile and the iOS
     /// tile cannot disagree about which empty state a window is in.
@@ -697,10 +702,31 @@ impl StatsSummary {
     }
 }
 
-/// The only goal kind today: distinct books finished in the calendar year.
-/// The wire carries the string so a later pages/minutes goal is an added
-/// value rather than a breaking shape change.
+/// The annual goal kind: distinct books finished in the calendar year. The
+/// wire carries the string so a further kind is an added value rather than a
+/// breaking shape change.
 pub const GOAL_KIND_BOOKS: &str = "books";
+
+/// Daily goal kind — estimated pages covered, read off the forward-progress
+/// ledger. `books` has no daily analogue worth offering: a book-a-day target
+/// is not what a daily goal is for, and the ledger measures the same reading
+/// far more finely.
+pub const GOAL_KIND_PAGES: &str = "pages";
+
+/// Daily goal kind — minutes spent reading *and* listening, the same union
+/// every other time figure on [`StatsSummary`] sums.
+pub const GOAL_KIND_MINUTES: &str = "minutes";
+
+/// Inclusive upper bound on a daily pages target. Like [`MAX_GOAL_TARGET`]
+/// this is not a judgement about how much anyone can read — it exists so the
+/// progress bar's arithmetic stays bounded by something other than what a
+/// client happened to send.
+pub const MAX_DAILY_PAGES: i64 = 2_000;
+
+/// Inclusive upper bound on a daily minutes target — the number of minutes in
+/// a day. Unlike the pages bound this one is not arbitrary: a larger target
+/// could not be met by a reader who did nothing else.
+pub const MAX_DAILY_MINUTES: i64 = 1_440;
 
 /// Inclusive upper bound on a stored goal target. Not a judgement about how
 /// much anyone can read — it exists so the progress bar's arithmetic and the
@@ -756,6 +782,157 @@ impl ReadingGoal {
     /// Whether the reader has reached the target.
     pub fn is_met(&self) -> bool {
         self.current >= self.target
+    }
+}
+
+/// One reader's standing daily goal for one kind, paired with today's progress
+/// toward it.
+///
+/// Recurring rather than year-bound, so there is no `year` here: the target
+/// stands until it is changed, and `day` names the day `current` was measured
+/// over rather than the day the goal belongs to.
+///
+/// # Which day
+///
+/// **Kind-dependent, and deliberately so.** A minutes goal is measured over the
+/// reader's *local* day, from the capture-time offset each session recorded
+/// (migration `0080`) — the same treatment
+/// [`StatsSummary::hour_of_day`] gets, and the only honest one for a target
+/// that resets at midnight. A pages goal is measured over the **UTC** day,
+/// because the forward-progress ledger buckets to a UTC `YYYY-MM-DD` and keeps
+/// no timestamp to re-bucket from. So the two can name different days for the
+/// same moment, by up to the reader's offset. `day` is per-goal rather than
+/// shared for exactly that reason — a single day string on the parent would
+/// have to be wrong for one of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DailyGoal {
+    /// What is being counted — [`GOAL_KIND_PAGES`] or [`GOAL_KIND_MINUTES`].
+    pub kind: String,
+    /// The target the reader set. Always `>= 1`; a cleared goal is an absent
+    /// [`DailyGoal`], never a zero target.
+    pub target: i64,
+    /// Progress toward `target` on `day`. May exceed it, for the reason
+    /// [`ReadingGoal::current`] may.
+    pub current: i64,
+    /// The day `current` was measured over, `YYYY-MM-DD`. See the type docs
+    /// for which calendar that is — it is not the same for both kinds.
+    pub day: String,
+}
+
+impl DailyGoal {
+    /// Progress as a 0..=100 percentage, clamped for rendering. Use
+    /// [`Self::current`] against [`Self::target`] for the honest ratio; this is
+    /// only the bar's width.
+    pub fn percent(&self) -> i64 {
+        if self.target <= 0 {
+            return 0;
+        }
+        let pct = self.current.saturating_mul(100) / self.target;
+        pct.clamp(0, 100)
+    }
+
+    /// Pages or minutes still to go, `0` once the goal is met or passed.
+    pub fn remaining(&self) -> i64 {
+        (self.target - self.current).max(0)
+    }
+
+    /// Whether the reader has reached today's target.
+    pub fn is_met(&self) -> bool {
+        self.current >= self.target
+    }
+}
+
+/// A reader's daily goals — at most one per kind, each independent of the
+/// other and of the annual [`ReadingGoal`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DailyGoals {
+    /// The pages goal, `None` when unset.
+    pub pages: Option<DailyGoal>,
+    /// The minutes goal, `None` when unset.
+    pub minutes: Option<DailyGoal>,
+    /// Seconds recorded today by sessions carrying no capture-time offset,
+    /// which the minutes goal therefore could not place on a local day.
+    ///
+    /// The same disclosure [`StatsSummary::unzoned_seconds`] makes, narrowed to
+    /// the goal's own window: those seconds are real reading that `minutes`
+    /// does not include, and a goal that silently under-reports is worse than
+    /// one that says what it could not see. Always `0` when no minutes goal is
+    /// set — there is nothing to disclose against.
+    #[serde(default)]
+    pub unzoned_seconds: i64,
+}
+
+impl DailyGoals {
+    /// Whether the reader has any daily goal at all, driving the band's invite
+    /// state.
+    pub fn is_empty(&self) -> bool {
+        self.pages.is_none() && self.minutes.is_none()
+    }
+}
+
+/// Write payload for `PUT /api/stats/goal/daily`.
+///
+/// Its own route and its own type rather than a `scope` on
+/// [`ReadingGoalUpdate`]: that route answers with an `Option<ReadingGoal>` that
+/// the iOS client already decodes, and widening its response to carry a daily
+/// goal too would break every shipped build. The two write paths stay
+/// independent on the wire and meet in `db::stats`.
+///
+/// `kind` is required — unlike the annual update there is no single sensible
+/// default, since a reader may be setting either of two goals. An absent
+/// `target` **clears** that kind, on the same grounds
+/// [`ReadingGoalUpdate::target`] does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DailyGoalUpdate {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<i64>,
+}
+
+impl DailyGoalUpdate {
+    /// A set-this-daily-goal update.
+    pub fn set(kind: &str, target: i64) -> Self {
+        Self {
+            kind: kind.to_string(),
+            target: Some(target),
+        }
+    }
+
+    /// A clear-this-daily-goal update.
+    pub fn clear(kind: &str) -> Self {
+        Self {
+            kind: kind.to_string(),
+            target: None,
+        }
+    }
+
+    /// The inclusive upper bound for a kind, `None` when the kind is not a
+    /// daily one. The bound is per-kind because the units are: 2,000 is a
+    /// generous day of pages and an impossible day of minutes.
+    pub fn max_target(kind: &str) -> Option<i64> {
+        match kind {
+            GOAL_KIND_PAGES => Some(MAX_DAILY_PAGES),
+            GOAL_KIND_MINUTES => Some(MAX_DAILY_MINUTES),
+            _ => None,
+        }
+    }
+
+    /// Reject an unsupported kind or an out-of-range target. Handlers
+    /// translate `Err(_)` into 400; the db layer re-checks the same bounds,
+    /// since it is also reachable from the RPC.
+    pub fn validate(&self) -> Result<(), String> {
+        let Some(max) = Self::max_target(&self.kind) else {
+            return Err(format!("unsupported daily goal kind: {}", self.kind));
+        };
+        if let Some(target) = self.target {
+            if !(1..=max).contains(&target) {
+                return Err(format!("{} target must be between 1 and {max}", self.kind));
+            }
+        }
+        Ok(())
     }
 }
 
