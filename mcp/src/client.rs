@@ -5,7 +5,7 @@
 //! and token are held in memory and never logged.
 
 use serde::de::DeserializeOwned;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use omnibus_shared::{LoginRequest, LoginResponse};
 
@@ -72,6 +72,8 @@ pub struct OmnibusClient {
     username: String,
     password: String,
     token: RwLock<Option<String>>,
+    // Serializes logins so N racing tool calls produce one session, not N.
+    login_lock: Mutex<()>,
 }
 
 impl OmnibusClient {
@@ -85,6 +87,7 @@ impl OmnibusClient {
             username: config.username,
             password: config.password,
             token: RwLock::new(None),
+            login_lock: Mutex::new(()),
         })
     }
 
@@ -119,12 +122,27 @@ impl OmnibusClient {
         Ok(token)
     }
 
+    /// Log in unless another task already did while we waited for the
+    /// lock: `stale` is the token the caller just saw rejected (`None`
+    /// when it held none), so a held token that differs from it is fresh
+    /// and is returned as-is. Concurrent tool calls racing from the same
+    /// expired session thus perform one login, not one each.
+    async fn login_once(&self, stale: Option<&str>) -> Result<String, ClientError> {
+        let _guard = self.login_lock.lock().await;
+        if let Some(current) = self.token.read().await.clone() {
+            if stale != Some(current.as_str()) {
+                return Ok(current);
+            }
+        }
+        self.login().await
+    }
+
     /// Current bearer token, logging in first if none is held yet.
     async fn bearer(&self) -> Result<String, ClientError> {
         if let Some(token) = self.token.read().await.clone() {
             return Ok(token);
         }
-        self.login().await
+        self.login_once(None).await
     }
 
     async fn send_get(
@@ -155,7 +173,7 @@ impl OmnibusClient {
         if resp.status() != reqwest::StatusCode::UNAUTHORIZED {
             return Ok(resp);
         }
-        let token = self.login().await?;
+        let token = self.login_once(Some(&token)).await?;
         self.send_get(path, query, &token).await
     }
 

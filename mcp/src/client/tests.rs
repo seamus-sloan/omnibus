@@ -127,6 +127,29 @@ async fn get_json_relogs_in_transparently_when_the_session_expired() {
 }
 
 #[tokio::test]
+async fn get_json_races_share_one_relogin_after_expiry() {
+    let (client, stub) = stub_client().await;
+    let client = Arc::new(client);
+
+    let _: Payload = client.get_json("/api/thing", &[]).await.unwrap();
+    // Simulate the idle expiry, then race ten tool calls in from the same
+    // dead session: the login singleflight means one fresh login serves
+    // them all instead of ten sessions piling up on the instance.
+    stub.revoke_all();
+
+    let handles: Vec<_> = (0..10)
+        .map(|_| {
+            let c = client.clone();
+            tokio::spawn(async move { c.get_json::<Payload>("/api/thing", &[]).await })
+        })
+        .collect();
+    for handle in handles {
+        assert_eq!(handle.await.unwrap().unwrap(), Payload { value: 42 });
+    }
+    assert_eq!(stub.logins.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn get_json_returns_login_failed_for_rejected_credentials() {
     let stub = Arc::new(Stub::default());
     let app = Router::new()
