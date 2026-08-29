@@ -167,6 +167,12 @@ impl OmnibusMcp {
             rules: p.rules.unwrap_or_default(),
             book_uuids: p.book_uuids.unwrap_or_default(),
         };
+        // Enforce the kind-specific invariants (smart needs match_mode +
+        // rules, manual takes neither, the system Wishlist kind is never
+        // creatable) locally, so the model gets the message without a
+        // round-trip the server would 422.
+        req.validate()
+            .map_err(|msg| ErrorData::invalid_params(msg, None))?;
         let shelf: Shelf = self
             .client
             .write_json(Method::POST, "/api/shelves", &req)
@@ -222,7 +228,8 @@ impl OmnibusMcp {
         &self,
         Parameters(p): Parameters<RemoveBookParams>,
     ) -> Result<Json<WriteAck>, ErrorData> {
-        let path = format!("/api/shelves/{}/books/{}", p.id, p.uuid);
+        let uuid = crate::tools::path_segment(&p.uuid, "uuid")?;
+        let path = format!("/api/shelves/{}/books/{uuid}", p.id);
         self.client
             .write_no_content::<()>(Method::DELETE, &path, None)
             .await

@@ -336,13 +336,14 @@ impl OmnibusMcp {
         &self,
         Parameters(p): Parameters<BookUuid>,
     ) -> Result<Json<Ack>, ErrorData> {
-        let path = format!("/api/physical/{}/wishlist", p.uuid);
+        let uuid = crate::tools::path_segment(&p.uuid, "uuid")?;
+        let path = format!("/api/physical/{uuid}/wishlist");
         self.client
             .write_no_content::<()>(Method::DELETE, &path, None)
             .await
             .map_err(write_error)?;
         Ok(Json(Ack {
-            message: format!("removed {} from the wishlist", p.uuid),
+            message: format!("removed {uuid} from the wishlist"),
         }))
     }
 

@@ -1011,3 +1011,65 @@ async fn update_shelf_surfaces_a_403_naming_the_ownership_rule() {
         err.message
     );
 }
+
+#[tokio::test]
+async fn remove_book_from_shelf_rejects_a_uuid_that_is_not_one_path_segment() {
+    // A slash-bearing "uuid" would otherwise split the request path into
+    // extra segments and trip the WRITE_ALLOWLIST assert — a panic, not an
+    // error. The guard must answer invalid params before any request forms.
+    let service = offline_server();
+    let err = match service
+        .remove_book_from_shelf(Parameters(RemoveBookParams {
+            id: 5,
+            uuid: "uuid-a/../../settings".into(),
+        }))
+        .await
+    {
+        Err(e) => e,
+        Ok(_) => panic!("expected an invalid-params error"),
+    };
+    assert!(err.message.contains("uuid"), "message: {}", err.message);
+}
+
+#[tokio::test]
+async fn remove_from_wishlist_rejects_a_uuid_that_is_not_one_path_segment() {
+    let service = offline_server();
+    let err = match service
+        .remove_from_wishlist(Parameters(crate::tools::checkin::BookUuid {
+            uuid: "a/b".into(),
+        }))
+        .await
+    {
+        Err(e) => e,
+        Ok(_) => panic!("expected an invalid-params error"),
+    };
+    assert!(err.message.contains("uuid"), "message: {}", err.message);
+}
+
+#[tokio::test]
+async fn create_shelf_rejects_invalid_kind_combinations_locally() {
+    // A smart shelf without rules fails CreateShelfRequest::validate before
+    // any request leaves the client (offline_server has no instance behind
+    // it, so reaching the network would surface a transport error instead).
+    let service = offline_server();
+    let err = match service
+        .create_shelf(Parameters(CreateShelfParams {
+            kind: ShelfKind::Smart,
+            name: "Broken".into(),
+            description: None,
+            visibility: None,
+            match_mode: None,
+            rules: None,
+            book_uuids: None,
+        }))
+        .await
+    {
+        Err(e) => e,
+        Ok(_) => panic!("expected a validation error"),
+    };
+    assert!(
+        err.message.contains("match mode"),
+        "message: {}",
+        err.message
+    );
+}
