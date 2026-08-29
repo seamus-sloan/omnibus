@@ -7,8 +7,10 @@ tracks the shipped implementation rather than a hand-copied duplicate) and only
 its two I/O primitives — `asc_raw` and `asc_jwt` — are stubbed. Each scenario
 declares what the API would answer, then asserts which writes the script makes.
 Which writes it *doesn't* make is the point of half of them: the run is meant to
-be re-runnable, so an already-attached group or an already-submitted review must
-produce no POST at all.
+be re-runnable, so an already-submitted review must produce no POST at all.
+Group attachment is the exception by design: it always posts, because the
+group-side relationship add is a set-semantics no-op on re-run and App Store
+Connect forbids reading a build's groups to check first.
 
 Usage: scripts/tests/testflight-distribute.test.py
 """
@@ -58,17 +60,20 @@ class FakeASC:
 
     `build_states` is consumed one entry per *processing poll* — the
     version-filtered `GET /v1/builds` — so a scenario can say "PROCESSING, then
-    VALID" and exercise the poll rather than only its happy last iteration. The
-    membership probe shares that path but is answered from `attached_groups` and
-    consumes nothing, so adding groups to a scenario cannot shift its states.
+    VALID" and exercise the poll rather than only its happy last iteration.
+
+    Deliberately no stub for `GET /v1/builds/{id}/betaGroups` or any other
+    membership read: App Store Connect refuses them (the relationship is
+    write-only), so a regression back to a pre-check read trips the
+    unstubbed-request assertion here rather than 403ing in production —
+    which is how it shipped the first time.
     """
 
     def __init__(self, build_states, external_state="READY_FOR_BETA_SUBMISSION",
-                 attached_groups=(), localizations=(), groups=((GROUP_ID, GROUP_NAME),),
+                 localizations=(), groups=((GROUP_ID, GROUP_NAME),),
                  review_status=201, listed_version=None):
         self.build_states = list(build_states)
         self.external_state = external_state
-        self.attached_groups = list(attached_groups)
         self.localizations = list(localizations)
         self.groups = list(groups)
         self.review_status = review_status
@@ -76,7 +81,6 @@ class FakeASC:
         # under; None matches whatever is asked for.
         self.listed_version = listed_version
         self.build_queries = []  # every preReleaseVersion.version filter tried
-        self.membership_probes = []  # every (build, group) membership question asked
         self.writes = []  # (method, path, body) for every mutating call
 
     def __call__(self, method, path, **kw):
@@ -93,15 +97,6 @@ class FakeASC:
                 for gid, name in self.groups]})
 
         if path == "/v1/builds":
-            # Two different questions share this path. A membership probe
-            # carries filter[betaGroups]; the processing poll carries the
-            # version filter. Routing on the params rather than the path is
-            # what keeps `build_queries` a record of the poll alone.
-            if "filter[betaGroups]" in kw["params"]:
-                self.membership_probes.append(
-                    (kw["params"]["filter[id]"], kw["params"]["filter[betaGroups]"]))
-                in_group = kw["params"]["filter[betaGroups]"] in self.attached_groups
-                return Resp(payload={"data": [{"id": BUILD_ID}] if in_group else []})
             asked = kw["params"]["filter[preReleaseVersion.version]"]
             self.build_queries.append(asked)
             if self.listed_version is not None and asked != self.listed_version:
@@ -128,7 +123,7 @@ class FakeASC:
         if path.startswith("/v1/betaBuildLocalizations/"):
             return Resp(payload={})
 
-        if path == f"/v1/builds/{BUILD_ID}/relationships/betaGroups":
+        if path.startswith("/v1/betaGroups/") and path.endswith("/relationships/builds"):
             return Resp(status_code=204, payload={})
 
         raise AssertionError(f"unstubbed request: {method} {path}")
@@ -180,45 +175,40 @@ check("happy path exits 0", 0, code)
 check("happy path submits for beta review", 1,
       len(writes_to(fake, "/v1/betaAppReviewSubmissions")))
 check("happy path attaches the group", 1,
-      len(writes_to(fake, "/relationships/betaGroups")))
+      len(writes_to(fake, "/relationships/builds")))
 
-# Re-running the same distribution must not attach a second time.
-code, fake = run(FakeASC(["VALID"], external_state="IN_BETA_TESTING",
-                         attached_groups=[GROUP_ID]))
+# Re-running the same distribution re-posts the attach — deliberately: the
+# group-side relationship add is a set-semantics 204 no-op, and the build-side
+# membership read this used to skip on is forbidden by App Store Connect.
+code, fake = run(FakeASC(["VALID"], external_state="IN_BETA_TESTING"))
 check("re-run exits 0", 0, code)
-check("re-run does not re-attach an attached group", 0,
-      len(writes_to(fake, "/relationships/betaGroups")))
+check("re-run re-posts the attach as a set-add no-op", 1,
+      len(writes_to(fake, "/relationships/builds")))
 check("re-run does not resubmit for review", 0,
       len(writes_to(fake, "/v1/betaAppReviewSubmissions")))
 
-# Membership is asked from the builds side, filtered to the one (build, group)
-# pair. `GET /v1/builds/{id}/betaGroups` reads naturally and is refused by App
-# Store Connect — that relationship is write-only — so a regression to it now
-# trips FakeASC's unstubbed-request assertion rather than passing here and 403ing
-# in production, which is how it shipped the first time.
-code, fake = run(FakeASC(["VALID"]))
-check("membership is probed once per group", [(BUILD_ID, GROUP_ID)], fake.membership_probes)
-check("the membership probe is not a version query", ["0.14.3"], fake.build_queries)
-
-# Two groups, one of which already holds the build: the attach must carry only
-# the other one, so a re-run after a partial attach finishes the job instead of
-# repeating it.
+# Two groups: one attach POST per group, each addressed to its own group's
+# relationship endpoint — a re-run after a partial attach finishes the job
+# because the already-attached group's re-add is a 204 no-op.
 SECOND_ID = "group-2"
 code, fake = run(FakeASC(["VALID"], external_state="IN_BETA_TESTING",
-                         groups=[(GROUP_ID, GROUP_NAME), (SECOND_ID, "Beta Crew")],
-                         attached_groups=[GROUP_ID]),
+                         groups=[(GROUP_ID, GROUP_NAME), (SECOND_ID, "Beta Crew")]),
                  BETA_GROUPS=f"{GROUP_NAME},Beta Crew")
-check("a partly-attached build exits 0", 0, code)
-attach = writes_to(fake, "/relationships/betaGroups")
-check("only the missing group is attached", 1, len(attach))
-check("the attach names just that group", [{"type": "betaGroups", "id": SECOND_ID}],
-      attach[0][2]["data"])
+check("two groups exit 0", 0, code)
+attach = writes_to(fake, "/relationships/builds")
+check("each group gets its own attach", 2, len(attach))
+check("attaches address each group's endpoint",
+      [f"/v1/betaGroups/{GROUP_ID}/relationships/builds",
+       f"/v1/betaGroups/{SECOND_ID}/relationships/builds"],
+      [w[1] for w in attach])
+check("each attach names the build", True,
+      all(w[2]["data"] == [{"type": "builds", "id": BUILD_ID}] for w in attach))
 
 # A build already awaiting review still needs attaching — the two are separate
 # facts, and treating "submitted" as "distributed" is the original bug.
 code, fake = run(FakeASC(["VALID"], external_state="WAITING_FOR_BETA_REVIEW"))
 check("awaiting-review build is still attached", 1,
-      len(writes_to(fake, "/relationships/betaGroups")))
+      len(writes_to(fake, "/relationships/builds")))
 check("awaiting-review build is not resubmitted", 0,
       len(writes_to(fake, "/v1/betaAppReviewSubmissions")))
 
@@ -259,7 +249,7 @@ check("no whats-new leaves localizations alone", 0,
 code, fake = run(FakeASC(["VALID"], listed_version="0.15"), MARKETING_VERSION="0.15.0")
 check("a X.Y.0 release is found under its X.Y listing", 0, code)
 check("a X.Y.0 release is still attached", 1,
-      len(writes_to(fake, "/relationships/betaGroups")))
+      len(writes_to(fake, "/relationships/builds")))
 check("both version spellings are tried", ["0.15.0", "0.15"], fake.build_queries)
 
 # The reverse spelling, and the ordinary case that must not grow a second query.

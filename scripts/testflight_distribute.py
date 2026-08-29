@@ -14,9 +14,10 @@ it (the first build of a marketing version does; later ones are usually waved
 through), optionally sets "What to Test", and adds the build to each named
 group.
 
-Idempotent by construction: a group already attached to the build is skipped and
-a build already submitted for review is left alone, so a re-run — or a retry
-after a half-finished run — is a no-op rather than a duplicate.
+Idempotent by construction: attaching a group is a set-semantics relationship
+add (re-adding an attached build is a 204 no-op) and a build already submitted
+for review is left alone, so a re-run — or a retry after a half-finished run —
+is a no-op rather than a duplicate.
 
 Reuses the App Store Connect API key the build-upload workflow already
 configures (`ASC_API_KEY_BASE64` / `ASC_KEY_ID` / `ASC_ISSUER_ID`); that key is
@@ -265,40 +266,24 @@ def set_whats_new(build_id):
     print(f"what to test: set for {len(existing) or 1} localization(s)")
 
 
-def already_in_group(build_id, group_id):
-    """Whether this build is already one of that group's builds.
-
-    Asked from the *builds* side, filtered down to the one pair in question.
-    The obvious read — `GET /v1/builds/{id}/betaGroups` — is refused: App Store
-    Connect answers `FORBIDDEN_ERROR: the relationship 'betaGroups' does not
-    allow 'GET_RELATED'`, because that relationship is write-only (CREATE and
-    DELETE). It served this script for months and then stopped, and because the
-    check runs ahead of the attach it took distribution down with it: a build
-    was uploaded, given its What to Test and submitted for review, and then
-    handed to no group at all — the exact silence this script exists to break.
-    """
-    return bool(asc("GET", "/v1/builds", params={
-        "filter[id]": build_id,
-        "filter[betaGroups]": group_id,
-        "limit": 1,
-    })["data"])
-
-
 def add_to_groups(build_id, groups):
-    """Attach the build to each group it isn't already in."""
-    attached = {g["id"] for g in groups if already_in_group(build_id, g["id"])}
-    todo = [g for g in groups if g["id"] not in attached]
-    for g in groups:
-        if g["id"] in attached:
-            print(f"group {g['attributes']['name']!r}: already attached")
-    if not todo:
-        return
-    names = ", ".join(repr(g["attributes"]["name"]) for g in todo)
+    """Attach the build to each group, from the group side.
+
+    Deliberately no membership pre-check: App Store Connect forbids reading a
+    build's `betaGroups` relationship (403 `GET_RELATED`; only CREATE/DELETE
+    are allowed), and the group-side relationship add is set-semantics —
+    re-adding an already-attached build answers 204 and changes nothing — so
+    posting unconditionally is what keeps the script idempotent. This
+    supersedes the `filter[betaGroups]` pre-check #2309 hotfixed in: one write
+    per group, no reads, and no filter for Apple to retire next.
+    """
+    names = ", ".join(repr(g["attributes"]["name"]) for g in groups)
     if DRY_RUN:
         print(f"groups: [dry] would attach to {names}")
         return
-    asc("POST", f"/v1/builds/{build_id}/relationships/betaGroups",
-        json={"data": [{"type": "betaGroups", "id": g["id"]} for g in todo]})
+    for g in groups:
+        asc("POST", f"/v1/betaGroups/{g['id']}/relationships/builds",
+            json={"data": [{"type": "builds", "id": build_id}]})
     print(f"groups: attached to {names}")
 
 
