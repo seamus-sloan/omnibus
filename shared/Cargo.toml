@@ -7,6 +7,15 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+# JSON Schema derivation for the wire types, consumed by `omnibus-mcp` to
+# publish MCP tool schemas that track what the server actually serializes.
+# Optional so the web/mobile/server builds never compile it.
+schemars = { version = "1", optional = true }
+
+[features]
+# Derive `schemars::JsonSchema` on the read-surface wire types (MCP tool
+# result schemas). Off by default; only `omnibus-mcp` turns it on.
+schemars = ["dep:schemars"]
 
 [dev-dependencies]
 # Serde round-trip assertions for the wire types (e.g. `DiscoveryPrefs`).

@@ -400,11 +400,20 @@ mod server {
         router.layer(
             tower_http::trace::TraceLayer::new_for_http()
                 .make_span_with(|req: &axum::http::Request<_>| {
+                    // `user_agent` is what separates MCP traffic
+                    // (`omnibus-mcp/<ver>`) from web and iOS requests in the
+                    // log; headers never carry credentials, unlike the query
+                    // string this span deliberately drops.
                     tracing::info_span!(
                         "request",
                         method = %req.method(),
                         path = %redact_path(req.uri().path()),
                         version = ?req.version(),
+                        user_agent = req
+                            .headers()
+                            .get(axum::http::header::USER_AGENT)
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or(""),
                     )
                 })
                 .on_response(

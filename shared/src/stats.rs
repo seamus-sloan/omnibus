@@ -18,6 +18,7 @@ pub const STATS_TTL_SECS: i64 = 60;
 /// Reporting window for the stats page. Serializes as a compact snake-case
 /// string so the wire shape stays stable across the RPC boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum StatsRange {
     /// The rolling last 7 days (start of day, 6 days ago .. now).
@@ -64,6 +65,7 @@ impl StatsRange {
 /// One heatmap cell: a calendar day (UTC `YYYY-MM-DD`) and the total active
 /// seconds recorded that day across reading and listening.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct DayActivity {
     pub day: String,
     pub seconds: i64,
@@ -71,6 +73,7 @@ pub struct DayActivity {
 
 /// A ranked entity (author or tag) by total active seconds in the window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RankedEntity {
     pub name: String,
     pub seconds: i64,
@@ -86,6 +89,7 @@ pub struct RankedEntity {
 /// book or that the book has no sitting worth reporting yet, both driving the
 /// stop's quiet empty state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct BookInsights {
     /// Unix seconds of the earliest recorded session (reading or listening).
     pub started_at: i64,
@@ -127,6 +131,7 @@ pub struct BookInsights {
 /// The server sends every genre, not a top-N, so the donut can size its
 /// "Other" fold over the real tail instead of over a silently truncated one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct GenreShare {
     pub name: String,
     pub books: i64,
@@ -136,6 +141,7 @@ pub struct GenreShare {
 /// read-status `finished`. `finished_at` is the most recent such moment
 /// (unix secs).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct FinishedBook {
     pub book_uuid: String,
     pub title: String,
@@ -153,6 +159,7 @@ pub struct FinishedBook {
 
 /// One month's finished-book count in the trailing-12-month trend chart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct MonthCount {
     /// UTC calendar month, `YYYY-MM`.
     pub month: String,
@@ -163,6 +170,7 @@ pub struct MonthCount {
 /// `YYYY-MM-DD` or a month `YYYY-MM`, depending on the series) and the
 /// metric's value over that period.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct TrendPoint {
     pub label: String,
     pub value: f64,
@@ -175,6 +183,7 @@ pub struct TrendPoint {
 /// halve it, or a 5-star rating reads as a 10-point scale. `stars()` is that
 /// conversion, so no surface reimplements it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RatingBucket {
     pub half_stars: i64,
     pub books: i64,
@@ -200,6 +209,7 @@ impl RatingBucket {
 /// audiobook has no page analogue, and silently omitting it reports a
 /// distribution over fewer books than the window contains.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct LengthBucket {
     pub label: String,
     pub books: i64,
@@ -213,6 +223,7 @@ pub struct LengthBucket {
 /// nothing has been measured at all, which the surfaces render as an empty
 /// state rather than a zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct MeasuredTotal {
     pub total: i64,
     /// Books that contributed to `total`. Always `<= LibrarySize::books`.
@@ -276,6 +287,7 @@ impl LibrarySize {
 /// [`StatsSummary::hour_of_day`] always carries all 24, ascending, zeros
 /// included.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HourBucket {
     pub hour: i64,
     pub seconds: i64,
@@ -290,6 +302,7 @@ pub struct HourBucket {
 /// every column one place out. [`StatsSummary::day_of_week`] always carries
 /// all 7, Monday first, zeros included.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct WeekdayBucket {
     pub weekday: i64,
     pub label: String,
@@ -314,6 +327,7 @@ pub const FASTEST_READ_MIN_SECS: i64 = 1800;
 /// superlatives, seconds for the longest sit, days for the fastest read — and
 /// each is documented on [`Superlatives`]. Renderers must not guess.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct BookSuperlative {
     pub book_uuid: String,
     pub title: String,
@@ -329,6 +343,7 @@ pub struct BookSuperlative {
 /// a reader who finished one book has no "shortest", and a "longest" that is
 /// also the only book is noise dressed as a finding.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Superlatives {
     /// The longest book finished in the window, in **pages** as resolved by
     /// the shared length ladder (`db::stats::pages`). Absent when nothing
@@ -389,6 +404,7 @@ impl Superlatives {
 /// three into an em-dash tells a reader who listened all week that the server
 /// has no idea what they did.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PagesReadDetail {
     /// UTC `YYYY-MM-DD` the forward-progress ledger began recording. Reading
     /// before it left no position trail to difference and is unrecoverable, so
@@ -444,6 +460,7 @@ impl PagesReadDetail {
 /// rather than against the whole of it. `Default` (all zero / `None`) for
 /// [`StatsRange::AllTime`], which has no prior window to compare against.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PeriodComparison {
     pub books_finished: i64,
     pub avg_stars: Option<f64>,
@@ -468,6 +485,7 @@ pub struct PeriodComparison {
 /// `pages_read` is pointedly **not** one of them. It measures ground covered,
 /// not books completed, and sources from the forward-progress ledger instead.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct StatsSummary {
     pub range: StatsRange,
     pub reading_seconds: i64,
@@ -704,6 +722,7 @@ pub const MAX_GOAL_YEAR: i64 = 2999;
 /// bounded to the goal's own year, so raising this year's target never moves
 /// last year's number.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ReadingGoal {
     /// What is being counted — [`GOAL_KIND_BOOKS`] today.
     pub kind: String,
@@ -944,6 +963,7 @@ impl LibraryComposition {
 /// and reporting it as one or the other would name a format the reader didn't
 /// spend the whole sitting in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum SessionFormat {
     Reading,
@@ -970,6 +990,7 @@ impl SessionFormat {
 /// it recorded, and the recorded figure is the one every other stats surface
 /// reports.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SessionLogEntry {
     pub book_uuid: String,
     pub title: String,
@@ -1000,6 +1021,7 @@ impl SessionLogEntry {
 /// the same second, and a cursor carrying only `started_at` either drops the
 /// tie's remainder (`<`) or repeats it forever (`<=`).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SessionCursor {
     pub started_at: i64,
     pub book_uuid: String,
@@ -1029,6 +1051,7 @@ impl SessionCursor {
 
 /// One page of the reading-session log, newest first.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SessionLogPage {
     pub entries: Vec<SessionLogEntry>,
     /// The cursor for the next page, or `None` at the end of the log. Encoded

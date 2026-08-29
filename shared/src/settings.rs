@@ -277,6 +277,7 @@ pub enum KindleSendStatus {
 /// caller-provided extension list so the UI can render a predictable summary
 /// line.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct LibrarySection {
     pub path: Option<String>,
     pub total_files: usize,
@@ -286,6 +287,7 @@ pub struct LibrarySection {
 
 /// Response payload for `GET /api/library`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct LibraryContents {
     pub ebooks: LibrarySection,
     pub audiobooks: LibrarySection,

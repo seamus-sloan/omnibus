@@ -1,6 +1,6 @@
 # Architecture
 
-Cargo workspace with five crates:
+Cargo workspace with six crates:
 
 - **`shared/`** (`omnibus-shared`) — serde types shared across every target (`Settings`, `ValueResponse`, `LibraryContents`, `LibrarySection`). No Dioxus / axum / sqlx deps.
 - **`db/`** (`omnibus-db`) — server-side data layer: SQL migrations, SQLite pool init, the normalized query layer, and the indexing pipeline (scanner → ebook metadata extraction → atomic per-library upsert). Consumed by both `server/` (REST handlers) and `frontend/` (server-function bodies). Holds all sqlx / tokio / epub / anyhow dependencies on the server side.
@@ -10,8 +10,9 @@ Cargo workspace with five crates:
   - `server` — SSR/native build; pulls in `omnibus-db` and compiles server-function bodies. Name is hardcoded by the dioxus_fullstack_macro — can't be renamed.
 - **`server/`** (`omnibus`) — **unified Dioxus fullstack binary**. Built twice by `dx serve`: once native (feature `server`) for the axum backend + SSR, once WASM (feature `web`) for the hydrated client. Hosts the hand-written `/api/*` REST router for mobile. Depends directly on `omnibus-db`.
 - **`mobile/`** (`omnibus-mobile`) — thin Dioxus Native shell that seeds the reactive `ServerUrl` context from `data::server_url_store` and launches `omnibus_frontend::App`. Android-only: nothing builds this crate for iOS anymore — the iOS surface is the native `omnibus-ios/` app below.
+- **`mcp/`** (`omnibus-mcp`) — standalone **read-only MCP stdio server**: logs in to any Omnibus instance over `POST /api/auth/login` (bearer session, `--url`/`--username`/`--password` or `OMNIBUS_MCP_*` env vars, transparent re-login on idle expiry) and exposes the library/search/discovery/shelf/stats/progress/annotation reads as MCP tools. Depends only on `omnibus-shared` (with its `schemars` feature, so tool result schemas derive from the wire types) plus `rmcp`/`reqwest`. The write policy lives as `WRITE_ALLOWLIST` in `mcp/src/client.rs`; new tool families are added as `#[tool_router(router = …)]` impl blocks under `mcp/src/tools/` and combined in `OmnibusMcp::new`.
 
-Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mobile is excluded via workspace `default-members` because its `mobile` feature is mutually exclusive with `web`; build it explicitly: `cargo build -p omnibus-mobile`.
+Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mobile is excluded via workspace `default-members` because its `mobile` feature is mutually exclusive with `web`; build it explicitly: `cargo build -p omnibus-mobile`. `mcp` is likewise excluded (a client binary daily server work never compiles): `cargo build -p omnibus-mcp`.
 
 **Web request flow (fullstack):** browser → axum serves SSR'd HTML + WASM bundle → hydration → signal effects call Dioxus server functions (`#[get]`/`#[post]` in `frontend/src/rpc/`) at `/api/rpc/*` → same handlers execute server-side against the SQLite pool via an `axum::Extension<SqlitePool>` layer.
 
@@ -266,6 +267,24 @@ checks the `ServerUrl` context first, redirecting to `/connect` when it's
 empty — see the Server URL (mobile) note above). At-rest protection is the
 iOS sandbox + Data Protection / Android's per-app UID sandbox + the `0o600`
 perms; **TODO**: harden with iOS Keychain / Android Keystore.
+
+## mcp/src/
+
+```
+main.rs        — stdio entry point: config parse, stderr-only tracing, serve until disconnect
+lib.rs         — crate docs: write policy + configuration table
+config.rs      — Config from CLI flags / OMNIBUS_MCP_* env (flags win); redacting Debug
+client.rs      — OmnibusClient: lazy bearer login, transparent re-login on 401,
+                 GET-only public surface, WRITE_ALLOWLIST constant
+server.rs      — OmnibusMcp service struct + ServerHandler (tool_handler) glue
+tools/read.rs  — the read tool family: one #[tool] per GET /api/* endpoint,
+                 deserializing into omnibus_shared wire types
+```
+
+MCP sessions are separable everywhere: `User-Agent: omnibus-mcp/<ver>` on every
+request (logged by the server's request span), and login sends
+`client_kind: "bearer"` + `device_name: "omnibus-mcp"` so a dedicated device
+row shows in `/api/auth/sessions`.
 
 ## omnibus-ios/
 

@@ -40,7 +40,7 @@ Do not use Chrome DevTools MCP or Claude in Chrome for routine agent verificatio
 
 ## Architecture
 
-Five-crate Cargo workspace: `shared/` (serde types), `db/` (data layer + indexer), `frontend/` (Dioxus UI + server functions), `server/` (fullstack binary + REST router), `mobile/` (thin native shell, Android-only).
+Six-crate Cargo workspace: `shared/` (serde types), `db/` (data layer + indexer), `frontend/` (Dioxus UI + server functions), `server/` (fullstack binary + REST router), `mobile/` (thin native shell, Android-only), `mcp/` (read-only MCP stdio server speaking the `/api/*` REST surface; out of default-members like `mobile/`).
 
 Alongside it, `omnibus-ios/` is a native SwiftUI client — an Xcode project, not a Cargo crate; `just ios-build` / `ios-test` / `ios-test-ui` / `ios-sim` wrap xcodebuild + simctl for it (no cargo target touches it). It is the iOS surface; `mobile/` is the Android shell (nothing builds the `mobile/` crate for iOS anymore). It speaks the same `/api/*` REST surface.
 
@@ -113,6 +113,10 @@ just ios-test                                               # omnibusTests unit 
 just ios-test-ui                                            # omnibusUITests
 just ios-release-guard                                      # DEBUG-only hooks absent from a Release build
 just ios-sim                                                # boot newest iPhone sim, build, install, launch
+
+# MCP stdio server (mcp/ crate — out of default-members, build explicitly)
+cargo build -p omnibus-mcp
+cargo test -p omnibus-mcp
 
 # Hybrid mobile shell (mobile/ crate — Android surface)
 cargo build -p omnibus-mobile

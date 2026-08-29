@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 /// when the contributor was loaded from a m2m join; `None` for contributors
 /// created by the EPUB parser before indexing.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Contributor {
     pub name: String,
     pub role: Option<String>,
@@ -23,6 +24,7 @@ pub struct Contributor {
 
 /// A typed identifier from the OPF, e.g. `{ scheme: "ISBN", value: "…" }`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Identifier {
     pub value: String,
     pub scheme: Option<String>,
@@ -41,6 +43,7 @@ pub struct Identifier {
 /// indistinguishable on read — a separate wire field would always serialize
 /// as empty.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct EbookMetadata {
     pub id: i64,
     pub filename: String,
@@ -179,6 +182,7 @@ impl EbookMetadata {
 /// One `book_files` row — a single physical file on disk. Exposed to the
 /// frontend so the format switcher can offer a file picker when N > 1.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct BookFileInfo {
     pub id: i64,
     pub format: String,
