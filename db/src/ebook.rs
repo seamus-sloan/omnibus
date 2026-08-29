@@ -12,6 +12,8 @@ mod accent;
 mod cover;
 mod parse;
 mod stat;
+mod strip;
+pub mod text;
 pub mod toc;
 mod wordcount;
 

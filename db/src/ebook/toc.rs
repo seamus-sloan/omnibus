@@ -83,6 +83,17 @@ pub fn extract_structure<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Option<EpubStr
     Some(EpubStructure { spine, chapters })
 }
 
+/// [`extract_structure`] straight from an EPUB file on disk — the
+/// read-side fallback for a book scanned but not yet backfilled into the
+/// structure tables. `Err` when the archive won't open; the inner `Option`
+/// keeps [`extract_structure`]'s "no usable spine" semantics.
+pub fn extract_structure_from_path(
+    path: &std::path::Path,
+) -> anyhow::Result<Option<EpubStructure>> {
+    let mut doc = EpubDoc::new(path).with_context(|| format!("open epub {}", path.display()))?;
+    Ok(extract_structure(&mut doc))
+}
+
 /// Map raw `(title, href)` TOC entries onto the measured spine. Entries
 /// that resolve to no spine item are dropped rather than guessed at.
 fn resolve_chapters(spine: &[SpineStat], raw: Vec<(String, String)>) -> Vec<TocChapter> {

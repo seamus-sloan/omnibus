@@ -4,6 +4,7 @@
 //! in `metadata_overrides.overrides` and merged on read. Re-exports flatten so
 //! callers keep `omnibus_shared::EbookMetadata`.
 
+mod chapters;
 mod metadata;
 mod overrides;
 mod validator;
@@ -11,6 +12,9 @@ mod validator;
 #[cfg(test)]
 mod tests;
 
+pub use chapters::{
+    ChapterListEntry, ChapterListResponse, ChapterTextResponse, CHAPTER_TEXT_MAX_CHARS,
+};
 pub use metadata::{BookFileInfo, Contributor, EbookMetadata, Identifier};
 pub use overrides::{BulkMetadataEdit, BulkRewriteError, BulkRewriteSummary, MetadataOverrides};
 pub use validator::{
