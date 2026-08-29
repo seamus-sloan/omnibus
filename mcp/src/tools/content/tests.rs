@@ -263,6 +263,28 @@ async fn search_book_content_answers_no_match_with_an_empty_hit_list() {
 }
 
 #[tokio::test]
+async fn read_chapter_text_rejects_a_negative_spine_index_locally() {
+    // The params are i64 to match the shared wire types; a negative never
+    // becomes a URL the server's unsigned parse would opaquely 400.
+    let service = stub_service().await;
+    let err = expect_err(
+        service
+            .read_chapter_text(Parameters(ChapterTextParams {
+                book_uuid: "uuid-frank".into(),
+                spine_index: -1,
+                offset: None,
+                limit: None,
+            }))
+            .await,
+    );
+    assert!(
+        err.message.contains("non-negative"),
+        "message: {}",
+        err.message
+    );
+}
+
+#[tokio::test]
 async fn read_chapter_text_rejects_a_uuid_that_is_not_one_path_segment() {
     // A slash-bearing "uuid" would splice extra segments into the request
     // path; the shared guard answers invalid params before any request forms.

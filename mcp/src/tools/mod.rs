@@ -1,11 +1,8 @@
-//! Tool implementations, one module per family. Each module contributes a
-//! `#[tool_router(router = <name>)]` impl block on
-//! [`crate::server::OmnibusMcp`]; `OmnibusMcp::new` combines the routers.
-//! Read tools live in [`read`], the check-in / wishlist / physical-collection
-//! family in [`checkin`], shelf authoring in [`shelves`], the confirm-gated
-//! metadata repair family in [`metadata`], the admin-gated merge/undo pair in
-//! [`merge`], and the chapter-text + content-search reads in [`content`] —
-//! all subject to the allowlist policy in [`crate::client`].
+//! Tool implementations, one module per family: reads in [`read`], check-in /
+//! wishlist / physical in [`checkin`], shelf authoring in [`shelves`],
+//! metadata repair in [`metadata`], admin merge/undo in [`merge`], and the
+//! chapter/content-search reads in [`content`]. Each is a `#[tool_router]`
+//! impl block combined in `OmnibusMcp::new`, per [`crate::client`]'s allowlist.
 
 pub mod checkin;
 pub mod content;

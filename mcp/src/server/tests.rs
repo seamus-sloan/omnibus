@@ -434,9 +434,22 @@ fn checkin_tools_router_lists_every_expected_tool_with_a_description() {
 
 #[test]
 fn combined_router_carries_every_family_without_collisions() {
-    // 21 read + 9 checkin + 6 shelf + 6 metadata + 2 merge + 3 content.
+    // Derived from the per-family routers, not hardcoded: a name collision
+    // between families would make the combined router smaller than the sum.
+    let per_family: usize = [
+        OmnibusMcp::read_tools().list_all().len(),
+        OmnibusMcp::checkin_tools().list_all().len(),
+        OmnibusMcp::shelf_tools().list_all().len(),
+        OmnibusMcp::metadata_tools().list_all().len(),
+        OmnibusMcp::merge_tools().list_all().len(),
+        OmnibusMcp::content_tools().list_all().len(),
+    ]
+    .iter()
+    .sum();
     let combined = offline_server().tool_router;
-    assert_eq!(combined.list_all().len(), 47);
+    assert_eq!(combined.list_all().len(), per_family);
+    // 21 read + 9 checkin + 6 shelf + 6 metadata + 2 merge + 3 content.
+    assert_eq!(per_family, 47);
 }
 
 #[tokio::test]

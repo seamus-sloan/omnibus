@@ -19,19 +19,34 @@ pub struct ListChaptersParams {
     pub book_uuid: String,
 }
 
-/// Parameters for the bounded chapter-text read.
+/// Parameters for the bounded chapter-text read. The numeric fields are
+/// `i64` to match the shared wire types (`ChapterListEntry::spine_index`,
+/// `ChapterTextResponse::next_offset`) so a schema-driven client round-trips
+/// them without signed/unsigned coercion; negatives are rejected up front.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ChapterTextParams {
     /// The book's uuid.
     pub book_uuid: String,
     /// The chapter's spine index, from list_chapters (valid indexes are
     /// `0..spine_count`).
-    pub spine_index: u64,
+    pub spine_index: i64,
     /// Char offset to start from — pass a previous slice's `next_offset`
     /// to continue. Defaults to 0.
-    pub offset: Option<u64>,
+    pub offset: Option<i64>,
     /// Slice size in chars; server-clamped to at most 100000.
-    pub limit: Option<u64>,
+    pub limit: Option<i64>,
+}
+
+/// Reject a negative value before it is formatted into a URL the server's
+/// unsigned parses would answer with an opaque 400.
+fn non_negative(value: i64, what: &str) -> Result<i64, ErrorData> {
+    if value < 0 {
+        return Err(ErrorData::invalid_params(
+            format!("{what} must be non-negative: got {value}"),
+            None,
+        ));
+    }
+    Ok(value)
 }
 
 /// Parameters for the content search.
@@ -66,14 +81,14 @@ impl OmnibusMcp {
         Parameters(p): Parameters<ChapterTextParams>,
     ) -> Result<Json<ChapterTextResponse>, ErrorData> {
         let uuid = crate::tools::path_segment(&p.book_uuid, "book_uuid")?;
-        let spine_index = p.spine_index;
+        let spine_index = non_negative(p.spine_index, "spine_index")?;
         let path = format!("/api/ebooks/{uuid}/chapters/{spine_index}/text");
         let mut query: Vec<(&str, String)> = Vec::new();
         if let Some(offset) = p.offset {
-            query.push(("offset", offset.to_string()));
+            query.push(("offset", non_negative(offset, "offset")?.to_string()));
         }
         if let Some(limit) = p.limit {
-            query.push(("limit", limit.to_string()));
+            query.push(("limit", non_negative(limit, "limit")?.to_string()));
         }
         let text: Option<ChapterTextResponse> = self.client.get_json_opt(&path, &query).await?;
         text.map(Json).ok_or_else(|| {
