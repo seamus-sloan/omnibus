@@ -12,10 +12,12 @@ use rmcp::{tool_handler, ErrorData, ServerHandler};
 
 use crate::client::{ClientError, OmnibusClient};
 
-/// The Omnibus stoat mark, embedded at compile time. A `data:` URI is the one
-/// icon source that works on both transports: stdio has no origin to serve
-/// from, and `/mcp`'s bearer gate would block a client UI's anonymous fetch.
-const STOAT_PNG: &[u8] = include_bytes!("../../frontend/assets/omnibus-stoat.png");
+/// The Omnibus stoat mark (a vendored copy of `frontend/assets/
+/// omnibus-stoat.png` — in-crate so `cargo package` works), embedded at
+/// compile time. A `data:` URI is the one icon source that works on both
+/// transports: stdio has no origin to serve from, and `/mcp`'s bearer gate
+/// would block a client UI's anonymous fetch.
+const STOAT_PNG: &[u8] = include_bytes!("../assets/omnibus-stoat.png");
 
 /// The server icon advertised in `initialize`'s `serverInfo.icons`, encoded
 /// once per process.
