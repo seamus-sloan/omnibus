@@ -41,7 +41,8 @@ pub fn auth_router(state: AppState) -> Router {
         )
         .route(
             "/api/auth/api-tokens/{id}",
-            delete(super::api_tokens::delete_api_token_handler),
+            delete(super::api_tokens::delete_api_token_handler)
+                .patch(super::api_tokens::patch_api_token_handler),
         )
         .with_state(state)
         // `AuthUser` reads the pool from `Extension<SqlitePool>` so it stays

@@ -5229,6 +5229,113 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .kobo-warning-title { font-weight: 600; color: #f87171; }
 .kobo-warning code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.8rem; }
 
+/* ── Settings · API Tokens redesign (.tkx-*) ────────────────────────
+   Ported from the Claude Design "Omnibus" project (tokens-redux.css).
+   The design's page scaffold (.tkx-root/.tkx-stage/.tkx-column) is
+   replaced by .tkx-tokens — the settings shell already provides the
+   page chrome. Design variable names map 1:1 onto the Atrium tokens
+   above (--accent/--accent-soft/--accent-ink, --bg-0..3, --ink-0..3,
+   --line/--line-2, --ok/--warn/--bad, --serif/--mono, --r-lg). */
+.tkx-tokens { display: flex; flex-direction: column; gap: 16px; }
+.tkx-tokens .btn { white-space: nowrap; }
+
+/* head + the capability line, so the blast radius is stated up front */
+.tkx-head { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
+/* Serif display face at page-title scale — deliberate, this h2 is the
+   section's title, not a card heading. */
+.tkx-title { font-family: var(--serif); font-size: 30px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.tkx-lede { margin: 8px 0 0; font-size: 13.5px; line-height: 1.6; color: var(--ink-2); max-width: 62ch; }
+.tkx-count { margin-left: auto; font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); white-space: nowrap; }
+.tkx-scope { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg-2); }
+.tkx-scope-who { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-1); }
+.tkx-scope-avatar { width: 22px; height: 22px; border-radius: 999px; background: var(--bg-3); display: grid; place-items: center; font-family: var(--mono); font-size: 9px; font-weight: 700; color: var(--ink-1); }
+.tkx-scope-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-left: auto; }
+.tkx-scope-chip { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+
+/* create row */
+.tkx-create { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.tkx-create .settings-field { flex: 1; min-width: 240px; }
+.tkx-create-hint { margin: 8px 0 0; font-size: 11.5px; color: var(--ink-3); }
+
+/* the one-time secret */
+.tkx-secret { border: 1px solid color-mix(in oklch, var(--accent) 55%, transparent); background: color-mix(in oklch, var(--accent) 8%, var(--bg-1)); border-radius: var(--r-lg); padding: 20px 22px; }
+.tkx-secret-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.tkx-secret-head h3 { margin: 0; font-size: 16px; font-weight: 600; color: var(--ink-0); }
+.tkx-secret-once { font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+.tkx-secret-sub { margin: 0 0 14px; font-size: 12.5px; color: var(--ink-2); }
+.tkx-copyrow { display: flex; gap: 8px; align-items: stretch; }
+/* user-select: all — one click selects the whole credential, the field
+   is a hand-off surface, not prose. */
+.tkx-copyfield { flex: 1; min-width: 0; display: flex; align-items: center; padding: 10px 14px; border: 1px dashed var(--line-2); border-radius: 10px; background: color-mix(in oklch, var(--bg-2) 70%, transparent); font-family: var(--mono); font-size: 12.5px; color: var(--ink-1); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: default; user-select: all; }
+.tkx-secret-next { margin-top: 16px; padding-top: 14px; border-top: 1px solid color-mix(in oklch, var(--accent) 22%, transparent); }
+.tkx-secret-next .label { margin-bottom: 8px; display: block; }
+.tkx-cmd { display: flex; gap: 8px; align-items: flex-start; }
+.tkx-cmd code { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg-2); font-family: var(--mono); font-size: 11.5px; line-height: 1.6; color: var(--ink-1); overflow-wrap: anywhere; }
+.tkx-secret-done { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.tkx-secret-done .mono { font-size: 10.5px; color: var(--ink-3); }
+
+/* token list */
+.tkx-list-head { display: grid; grid-template-columns: minmax(0, 1.4fr) 104px 132px 132px 150px; gap: 12px; padding: 0 14px 8px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.tkx-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.tkx-row { display: grid; grid-template-columns: minmax(0, 1.4fr) 104px 132px 132px 150px; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg-2); }
+.tkx-row:hover { border-color: var(--line); }
+.tkx-row-name { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tkx-row-title { font-size: 14px; font-weight: 500; color: var(--ink-0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tkx-row-id { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.tkx-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line-2); font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); white-space: nowrap; justify-self: start; }
+.tkx-pill::before { content: ''; width: 5px; height: 5px; border-radius: 999px; background: currentColor; }
+.tkx-pill-active { color: var(--ok); border-color: color-mix(in oklch, var(--ok) 35%, transparent); }
+.tkx-pill-idle { color: var(--warn); border-color: color-mix(in oklch, var(--warn) 35%, transparent); }
+.tkx-pill-unused { color: var(--ink-3); }
+.tkx-cell { font-size: 12.5px; color: var(--ink-1); min-width: 0; }
+.tkx-cell .mono { display: block; font-size: 10px; color: var(--ink-3); }
+.tkx-row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* revoke confirmation / rename form, in place of the row */
+.tkx-row-confirm { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border: 1px solid color-mix(in oklch, var(--bad) 45%, transparent); border-radius: 10px; background: color-mix(in oklch, var(--bad) 8%, var(--bg-2)); }
+.tkx-confirm-text { flex: 1; min-width: 220px; font-size: 12.5px; color: var(--ink-1); }
+.tkx-confirm-text b { color: var(--ink-0); }
+/* Rename reuses the confirm row's shape but not its hazard tint — editing a
+   name is benign, so the border shifts to the accent family. */
+.tkx-row-edit { border-color: color-mix(in oklch, var(--accent) 40%, transparent); background: color-mix(in oklch, var(--accent) 6%, var(--bg-2)); }
+.tkx-rename-form { flex: 1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tkx-rename-form input { flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg-1); color: var(--ink-0); font-size: 13px; }
+.tkx-rename-form input:focus { outline: none; border-color: var(--accent); }
+.btn.bad { color: var(--bad); border-color: color-mix(in oklch, var(--bad) 45%, transparent); }
+.btn.bad:hover { background: color-mix(in oklch, var(--bad) 12%, transparent); }
+
+/* empty state */
+.tkx-empty { display: flex; flex-direction: column; gap: 16px; }
+.tkx-empty-title { margin: 0; font-size: 16px; }
+.tkx-steps { list-style: none; counter-reset: tkx; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.tkx-steps li { counter-increment: tkx; display: grid; grid-template-columns: 22px 1fr; gap: 12px; align-items: baseline; font-size: 13px; color: var(--ink-1); line-height: 1.55; }
+.tkx-steps li::before { content: counter(tkx); font-family: var(--mono); font-size: 10px; color: var(--accent); border: 1px solid color-mix(in oklch, var(--accent) 40%, transparent); border-radius: 999px; width: 22px; height: 22px; display: grid; place-items: center; }
+.tkx-steps li > span { min-width: 0; }
+.tkx-steps code { display: inline; font-family: var(--mono); font-size: 11.5px; color: var(--ink-1); overflow-wrap: anywhere; }
+
+/* MCP endpoint panel */
+.tkx-mcp { display: flex; flex-direction: column; gap: 12px; }
+.tkx-mcp-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tkx-mcp-head h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink-0); }
+.tkx-admin-tag { font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 999px; padding: 2px 8px; }
+.tkx-switch { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.tkx-switch-state { font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); }
+/* The track is a real <button role="switch">, so zero out the .btn-less
+   button UA styles it would otherwise carry. */
+.tkx-track { width: 40px; height: 22px; border-radius: 999px; background: var(--bg-3); border: 1px solid var(--line-2); position: relative; cursor: pointer; flex: none; padding: 0; }
+.tkx-track.on { background: color-mix(in oklch, var(--accent) 45%, transparent); border-color: transparent; }
+.tkx-track:disabled { cursor: default; opacity: 0.6; }
+.tkx-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 999px; background: var(--ink-1); transition: left .15s; }
+.tkx-track.on .tkx-knob { left: 20px; background: var(--accent-ink); }
+.tkx-mcp-note { margin: 0; font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
+
+/* Below the grid's comfortable width, rows fall back to a stacked card. */
+@media (max-width: 860px) {
+  .tkx-list-head { display: none; }
+  .tkx-row { grid-template-columns: 1fr; gap: 8px; }
+  .tkx-pill, .tkx-row-actions { justify-self: start; justify-content: flex-start; }
+}
+
 /* F5.1 per-library metadata-source precedence editor (#972). */
 .metadata-precedence-list {
   display: flex;

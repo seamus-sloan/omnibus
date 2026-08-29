@@ -109,6 +109,110 @@ async fn create_list_revoke_round_trip() {
     assert!(listed.is_empty());
 }
 
+fn patch_req(uri: &str, bearer: &str, body: serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .method("PATCH")
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn rename_updates_the_listed_name() {
+    let (app, pool) = app().await;
+    let user = create_user(&pool, "alice").await;
+    let session = bearer_token(&pool, user.id).await;
+    let minted = db::auth::create_api_token(&pool, user.id, "old name")
+        .await
+        .unwrap();
+
+    let res = app
+        .clone()
+        .oneshot(patch_req(
+            &format!("/api/auth/api-tokens/{}", minted.token.id),
+            &session,
+            json!({"name": "new name"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    let res = app
+        .oneshot(get_req("/api/auth/api-tokens", &session))
+        .await
+        .unwrap();
+    let listed: Vec<ApiTokenView> = body_json(res).await;
+    assert_eq!(listed[0].name, "new name");
+}
+
+#[tokio::test]
+async fn rename_rejects_blank_name_with_400() {
+    let (app, pool) = app().await;
+    let user = create_user(&pool, "alice").await;
+    let session = bearer_token(&pool, user.id).await;
+    let minted = db::auth::create_api_token(&pool, user.id, "mcp")
+        .await
+        .unwrap();
+    let res = app
+        .oneshot(patch_req(
+            &format!("/api/auth/api-tokens/{}", minted.token.id),
+            &session,
+            json!({"name": "  "}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn rename_of_another_users_token_is_404() {
+    let (app, pool) = app().await;
+    let alice = create_user(&pool, "alice").await;
+    let bob = create_user(&pool, "bob").await;
+    let bobs = db::auth::create_api_token(&pool, bob.id, "bobs")
+        .await
+        .unwrap();
+    let session = bearer_token(&pool, alice.id).await;
+    let res = app
+        .oneshot(patch_req(
+            &format!("/api/auth/api-tokens/{}", bobs.token.id),
+            &session,
+            json!({"name": "stolen"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn create_response_and_listing_carry_the_suffix() {
+    // AC4: a fresh token's view exposes the raw secret's last 4 chars.
+    let (app, pool) = app().await;
+    let user = create_user(&pool, "alice").await;
+    let session = bearer_token(&pool, user.id).await;
+    let res = app
+        .clone()
+        .oneshot(post_req(
+            "/api/auth/api-tokens",
+            &session,
+            json!({"name": "mcp"}),
+        ))
+        .await
+        .unwrap();
+    let created: CreateApiTokenResponse = body_json(res).await;
+    let expected = &created.secret[created.secret.len() - 4..];
+    assert_eq!(created.token.suffix.as_deref(), Some(expected));
+
+    let res = app
+        .oneshot(get_req("/api/auth/api-tokens", &session))
+        .await
+        .unwrap();
+    let listed: Vec<ApiTokenView> = body_json(res).await;
+    assert_eq!(listed[0].suffix.as_deref(), Some(expected));
+}
+
 #[tokio::test]
 async fn api_token_routes_reject_anonymous_requests() {
     let (app, _pool) = app().await;
@@ -127,6 +231,12 @@ async fn api_token_routes_reject_anonymous_requests() {
             .uri("/api/auth/api-tokens/1")
             .method("DELETE")
             .body(Body::empty())
+            .unwrap(),
+        Request::builder()
+            .uri("/api/auth/api-tokens/1")
+            .method("PATCH")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"name": "x"}).to_string()))
             .unwrap(),
     ] {
         let res = app.clone().oneshot(req).await.unwrap();
