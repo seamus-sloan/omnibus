@@ -10,6 +10,7 @@ use crate::scan::SEARCH_QUERY_MAX_LEN;
 /// Which external provider a lookup resolved against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum MetadataProvider {
     OpenLibrary,
     GoogleBooks,
@@ -100,6 +101,7 @@ pub struct GoogleBooksKeyStatus {
 /// they carry. `cover_url` is a provider-hosted image the caller fetches only
 /// when a book/wishlist entry is actually created, not at lookup time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ExternalBookMeta {
     /// The normalized ISBN-13 that resolved (always 13 digits, no hyphens).
     pub isbn13: String,
