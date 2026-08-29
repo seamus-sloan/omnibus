@@ -14,6 +14,7 @@ use super::metadata::Contributor;
 /// M2M fields (`creators`, `subjects`, `genres`) replace entirely when
 /// present — a tag list override replaces, not appends.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct MetadataOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,

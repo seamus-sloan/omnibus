@@ -84,6 +84,8 @@ fn get_info_declares_tools_and_the_confirm_gated_write_surface() {
     assert!(instructions.contains("Read-only"));
     assert!(instructions.contains("confirm=true"));
     assert!(instructions.contains("preview_shelf_rule"));
+    assert!(instructions.contains("confirm: true"));
+    assert!(instructions.contains("propose_metadata_changes"));
 }
 
 /// Boot a stub instance serving shared-typed JSON and return a service

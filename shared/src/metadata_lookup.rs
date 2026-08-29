@@ -200,6 +200,7 @@ impl ExternalBookMeta {
 /// from the client, and keeping its contract frozen is worth more than the
 /// reuse. Convert with `From` where a check-in-shaped value is wanted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ProviderEdition {
     pub source: MetadataProvider,
     /// Opaque, provider-scoped handle for re-fetching this candidate in full
@@ -416,6 +417,7 @@ impl TryFrom<ProviderEdition> for ExternalBookMeta {
 /// collapsing them makes an outage read as a miss.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum ProviderSearchStatus {
     /// The provider answered. `count` is how many of its candidates reached
     /// the returned list — post-cap, so it never overstates what is there.
@@ -441,6 +443,7 @@ pub enum ProviderSearchStatus {
 
 /// One row of the per-source status table returned alongside the candidates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ProviderSearchSource {
     pub provider: MetadataProvider,
     pub display_name: String,
@@ -449,6 +452,7 @@ pub struct ProviderSearchSource {
 
 /// Body for `POST /api/metadata/editions/search`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct EditionSearchRequest {
     /// The query as free text — what the reader sees in the search box, and
     /// the whole request from a client that sends nothing else.
@@ -541,6 +545,7 @@ impl EditionSearchRequest {
 /// `provider_ref` is echoed back exactly as the search handed it over;
 /// Omnibus never parses it, so it is capped rather than validated for shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct EditionHydrateRequest {
     pub source: MetadataProvider,
     pub provider_ref: String,
@@ -596,6 +601,7 @@ impl EditionHydrateRequest {
 /// skipped or failed, which is why a caller can render "Hardcover: couldn't
 /// reach it" instead of quietly showing a shorter list.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct EditionSearchResponse {
     pub editions: Vec<ProviderEdition>,
     pub sources: Vec<ProviderSearchSource>,

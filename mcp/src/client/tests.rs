@@ -334,7 +334,7 @@ async fn write_json_sends_the_body_with_bearer_and_decodes_the_response() {
     let (client, stub) = stub_client().await;
     let body = serde_json::json!({ "isbn": "9780306406157" });
     let answer: Payload = client
-        .write_json(Method::POST, "/api/scan/resolve", &body)
+        .write_json(Method::POST, "/api/scan/resolve", Some(&body))
         .await
         .unwrap();
     assert_eq!(answer, Payload { value: 42 });
@@ -348,13 +348,13 @@ async fn write_json_relogs_in_transparently_when_the_session_expired() {
     let (client, stub) = stub_client().await;
     let body = serde_json::json!({ "isbn": "9780306406157" });
     let _: Payload = client
-        .write_json(Method::POST, "/api/scan/resolve", &body)
+        .write_json(Method::POST, "/api/scan/resolve", Some(&body))
         .await
         .unwrap();
     // Simulate the 7-day idle expiry: the server no longer knows the token.
     stub.revoke_all();
     let answer: Payload = client
-        .write_json(Method::POST, "/api/scan/resolve", &body)
+        .write_json(Method::POST, "/api/scan/resolve", Some(&body))
         .await
         .unwrap();
     assert_eq!(answer, Payload { value: 42 });
@@ -366,7 +366,7 @@ async fn write_json_returns_write_status_carrying_the_server_message() {
     let (client, _stub) = stub_client().await;
     let body = serde_json::json!({ "query": "" });
     let err = client
-        .write_json::<_, Payload>(Method::POST, "/api/scan/search", &body)
+        .write_json::<_, Payload>(Method::POST, "/api/scan/search", Some(&body))
         .await
         .unwrap_err();
     match err {
@@ -412,7 +412,7 @@ async fn write_json_panics_on_a_path_outside_the_allowlist() {
     let (client, _stub) = stub_client().await;
     let body = serde_json::json!({});
     let _: Result<Payload, _> = client
-        .write_json(Method::POST, "/api/settings", &body)
+        .write_json(Method::POST, "/api/settings", Some(&body))
         .await;
 }
 
