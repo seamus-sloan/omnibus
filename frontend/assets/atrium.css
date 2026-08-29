@@ -5701,6 +5701,12 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-size: 12px;
   padding: 4px 8px;
   height: 28px;
+  /* A floor, not a preference: the intrinsic width a `<select>` derives from
+     its options leaves the longest label ("Recently Interacted", uppercased
+     and letter-spaced by the `.lmq` skin below) with zero slack, and engines
+     that measure the dropdown indicator or the tracking differently clip it.
+     Sized for that label so the widest option always fits. */
+  min-width: 192px;
 }
 .lib-sort-select:focus { outline: none; border-color: var(--accent); }
 .lib-sort-dir {
