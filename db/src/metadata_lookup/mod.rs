@@ -18,7 +18,7 @@ pub mod throttle;
 mod tests;
 
 pub use config::{MetadataLookupConfig, ProviderKeys};
-pub use cover::{provider_cover_image_config, MAX_COVER_REDIRECTS};
+pub use cover::{fetch_provider_cover, provider_cover_image_config, MAX_COVER_REDIRECTS};
 pub use hydrate::hydrate_edition;
 pub use providers::{all_cover_hosts, catalog, cover_hosts, openlibrary_enrich, OlEnrichment};
 pub use query::SearchQuery;
