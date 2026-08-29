@@ -951,6 +951,13 @@ struct ReadStatusRecord: Codable, Sendable {
     var updatedAt: Int64
     var finishedAt: Int64?
 
+    /// The record for a book nobody has marked — what the server means by the
+    /// `null` body it answers with when there is no row. Both clocks are zero
+    /// because no write has ever happened.
+    static func unmarked(uuid: String) -> ReadStatusRecord {
+        ReadStatusRecord(bookUUID: uuid, status: .unread, updatedAt: 0, finishedAt: nil)
+    }
+
     enum CodingKeys: String, CodingKey {
         case status
         case bookUUID = "book_uuid"

@@ -310,7 +310,15 @@ private struct HeroCard: View {
             }
             return "In progress"
         }
-        return "Reading"
+        // Not a read status, though it sat exactly where one reads like one:
+        // this slot is the audio branch's counterpart and answers "where am
+        // I", while the eyebrow above already says the book is being read. A
+        // bare "Reading" here beside a progress bar made the card look like it
+        // was contradicting the detail screen's Status row (#2289).
+        if let fraction {
+            return "\(Int((fraction * 100).rounded()))% read"
+        }
+        return "In progress"
     }
 
     private var lastOpenedLabel: String {

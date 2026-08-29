@@ -7,34 +7,40 @@ import Foundation
 
 /// One book's automatic transitions, owned by the reader that has it open.
 ///
-/// The stored status is fetched once per open, and `nil` — the fetch failed —
-/// keeps every transition inert: a decision is never made against a guessed
-/// status, because writing `reading` over an unfetched `finished` would be a
-/// downgrade. Writes take the same outbox path as the detail screen's manual
-/// chip (`UserDataService.setReadStatus`), so they queue offline like any
-/// other content-state write.
+/// A decision is never made against a guessed status — writing `reading` over
+/// an unfetched `finished` would be a downgrade — so an unknown status keeps
+/// every transition inert. It is retried on later observations rather than
+/// settled once at open, because the opening fetch is exactly what a book
+/// opened offline loses. Writes take the same outbox path as the detail
+/// screen's manual chip (`UserDataService.setReadStatus`), so they queue
+/// offline like any other content-state write.
 @MainActor
 final class ReadStatusAuto {
-    /// `nil` until the fetch lands — and stays `nil` when it fails.
+    /// `nil` until a fetch lands — the tracker knows nothing, and every
+    /// transition stays inert until it does.
     private var status: ReadStatus?
     private var atEnd = false
     private let fetch: () async -> ReadStatus?
     private let write: (ReadStatus) async -> Void
+    private let isOnline: () -> Bool
 
     /// The production wiring for one book, over `UserDataService`.
     convenience init(uuid: String) {
         self.init(
             fetch: { await UserDataService.storedReadStatus(uuid: uuid) },
-            write: { await UserDataService.setReadStatus(uuid: uuid, status: $0) }
+            write: { await UserDataService.setReadStatus(uuid: uuid, status: $0) },
+            isOnline: { Connectivity.shared.isOnline }
         )
     }
 
     init(
         fetch: @escaping () async -> ReadStatus?,
-        write: @escaping (ReadStatus) async -> Void
+        write: @escaping (ReadStatus) async -> Void,
+        isOnline: @escaping () -> Bool = { true }
     ) {
         self.fetch = fetch
         self.write = write
+        self.isOnline = isOnline
     }
 
     /// The status to write for a book whose stored state is `current`,
@@ -63,18 +69,23 @@ final class ReadStatusAuto {
         await applyIfNeeded()
     }
 
-    /// Tell the tracker whether the reader is at the book's end position.
-    /// Cheap on every relocate or page turn; an end observed before the fetch
-    /// lands is applied when it does.
+    /// Tell the tracker where the reader is. Cheap on every relocate or page
+    /// turn; an end observed before the fetch lands is applied when it does.
+    ///
+    /// An unknown status is retried here rather than latched at open. The
+    /// opening fetch is the one every book opened offline loses — the replica
+    /// has no row to fall back on for a book nobody has marked — and giving up
+    /// on it there is what left a book read cover to cover on a plane with no
+    /// status at all (#2289).
     func positionChanged(atEnd: Bool) async {
-        guard atEnd != self.atEnd else { return }
         self.atEnd = atEnd
-        // Reaching the end is the one observation worth a second round trip
-        // when the opening fetch failed or never ran: unlike the open
-        // transition it cannot downgrade anything, and dropping it loses the
-        // strongest completion signal the app gets. The audio player relies
-        // on this — it finishes books it was never asked to open.
-        if atEnd, status == nil {
+        // Reaching the end retries whatever the connection is doing: unlike
+        // the open transition it cannot downgrade anything, and dropping it
+        // loses the strongest completion signal the app gets. The audio player
+        // relies on that — it finishes books it was never asked to open. An
+        // ordinary relocate only retries when there is a server to ask, so
+        // reading offline costs nothing until the device is back.
+        if status == nil, atEnd || isOnline() {
             status = await fetch()
         }
         await applyIfNeeded()

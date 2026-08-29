@@ -610,10 +610,10 @@
   }
 
   function reportSectionLocation(result) {
-    if (result && result.then && rendition && rendition.reportLocation) {
-      result.then(rendition.reportLocation.bind(rendition));
-    } else if (rendition && rendition.reportLocation) {
-      rendition.reportLocation();
+    if (result && result.then) {
+      result.then(reportTurnCommitted, reportTurnCommitted);
+    } else {
+      reportTurnCommitted();
     }
   }
 
@@ -677,6 +677,14 @@
     var runTurn = function () {
       return dir > 0 ? manager.next() : manager.prev();
     };
+    // The View Transition snapshots the destination the moment its update
+    // callback settles. The manager resolves when the incoming section has
+    // *laid out*, which is a frame before it has painted — snapshotting there
+    // is what showed a blank frame mid-turn through the front matter, where
+    // every page is its own spine item (#2295).
+    var runTurnPainted = function () {
+      return Promise.resolve(runTurn()).then(afterPaint);
+    };
 
     // A same-document View Transition captures the old iframe before
     // manager.prev()/next() synchronously clears it, waits for the returned
@@ -692,7 +700,7 @@
       document.documentElement.classList.add(turnClass);
       var transition = null;
       try {
-        transition = document.startViewTransition(runTurn);
+        transition = document.startViewTransition(runTurnPainted);
       } catch (e) {
         document.documentElement.classList.remove(turnClass);
       }
@@ -700,7 +708,7 @@
         var updated = transition.updateCallbackDone;
         if (updated && updated.then) {
           updated.then(function () {
-            if (rendition && rendition.reportLocation) rendition.reportLocation();
+            reportTurnCommitted();
           }, function () {
             /* manager failure is reported by epub.js */
           });
@@ -1394,6 +1402,55 @@
     c.scrollLeft = Math.max(0, Math.min(maxScroll(c), base - px));
     setViewOffset(c, 0);
     armViews(c, false);
+    reportTurnCommitted();
+  }
+
+  // The page counter is a readout of the page in front of the reader, so it
+  // has to land when the turn does. An animated within-section turn scrolls
+  // the container itself rather than going through `rendition.next()`, which
+  // left the report to epub.js's own scroll listener and then to the 400ms
+  // coalescing window on top — so the label sat a whole turn behind the page
+  // (#2295). Every such turn ends here, which is the moment the position is
+  // settled and there is exactly one of them to report.
+  function reportTurnCommitted() {
+    if (!rendition) return;
+    if (rendition.reportLocation) rendition.reportLocation();
+    flushRelocate();
+  }
+
+  // Emit the settled position now instead of at the end of the coalescing
+  // window. Only for a committed turn: there is one position to report and no
+  // burst to coalesce, and re-stating a position the host already holds is
+  // free (it keys its persist on the CFI actually changing).
+  function flushRelocate() {
+    if (relocateTimer) {
+      clearTimeout(relocateTimer);
+      relocateTimer = null;
+    }
+    var loc = rendition && rendition.currentLocation
+      ? rendition.currentLocation()
+      : null;
+    // Guarded on `start` rather than truthiness: `currentLocation` answers
+    // with a promise while no view is displayed, and a promise has none.
+    if (loc && loc.start) emitRelocate(loc);
+  }
+
+  // One rendering opportunity, bounded. WKWebView can stop scheduling frames
+  // outright, and this is awaited inside a View Transition's update callback
+  // — a rAF that never fires would hold the screen frozen on the old snapshot.
+  function afterPaint() {
+    return new Promise(function (resolve) {
+      var settled = false;
+      var settle = function () {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      setTimeout(settle, 120);
+      requestAnimationFrame(function () {
+        requestAnimationFrame(settle);
+      });
+    });
   }
 
   function cancelTurnAnim() {

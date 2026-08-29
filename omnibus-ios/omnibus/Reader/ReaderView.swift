@@ -221,8 +221,13 @@ struct ReaderView: View {
             guard old != nil, controller.location?.isMovement == true else { return }
             Task { await persist(force: false) }
         }
-        .onChange(of: controller.location?.atEnd) { _, atEnd in
-            Task { await autoStatus?.positionChanged(atEnd: atEnd ?? false) }
+        // Every relocate, not only an end-of-book transition. The tracker's
+        // opening status fetch is the one a book opened offline always loses,
+        // and it retries from here — so a reader who reconnects mid-book still
+        // has the book marked before they close it (#2289).
+        .onChange(of: controller.location?.cfi) { _, _ in
+            let atEnd = controller.location?.atEnd ?? false
+            Task { await autoStatus?.positionChanged(atEnd: atEnd) }
         }
         // A handle drag ends when the finger lifts — unless the selection goes
         // out from under it first, which a re-pagination does (the glue drops
