@@ -49,11 +49,10 @@
   var dir = stored !== null && has(DIRS, stored) ? stored : 'dark';
 
   /* Shots with a shots/sepia/ counterpart. Anything absent here keeps its
-     dark render in both directions rather than 404ing mid-toggle —
-     checkin-scan deliberately so: the scanner screen is the same design in
-     both directions. */
+     dark render in both directions rather than 404ing mid-toggle. */
   var SEPIA_SHOTS = {
     'omnibus-android-library': 1, 'omnibus-book-detail': 1,
+    'omnibus-checkin-scan': 1,
     'omnibus-checkin-success': 1, 'omnibus-ios-book-detail': 1,
     'omnibus-library-home': 1, 'omnibus-metadata-edit': 1,
     'omnibus-player': 1, 'omnibus-reader-quote-card': 1,
