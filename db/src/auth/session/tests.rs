@@ -11,7 +11,7 @@ use crate::auth::users::create_user;
 async fn create_session_and_lookup_session_round_trips_a_cookie_session() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
     let (user2, sess2) = lookup_session(&p, &ns.raw_token).await.unwrap();
@@ -26,7 +26,7 @@ async fn session_lookup_hashes_token() {
     // directly and ensure NO row has the raw token as its hash column.
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
     let raw_as_hash: Option<i64> =
@@ -42,7 +42,7 @@ async fn session_lookup_hashes_token() {
 async fn expired_session_is_rejected() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
     // Simulate expiry by rewriting the row.
@@ -61,7 +61,7 @@ async fn session_idle_expired_after_threshold() {
     // older than `SESSION_IDLE_TIMEOUT_SECS` — must be rejected.
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60, None)
         .await
         .unwrap();
     let stale = now_unix() - SESSION_IDLE_TIMEOUT_SECS - 1;
@@ -80,7 +80,7 @@ async fn session_idle_just_below_threshold_is_accepted() {
     // A session touched right before the idle cutoff stays valid.
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60, None)
         .await
         .unwrap();
     let fresh = now_unix() - SESSION_IDLE_TIMEOUT_SECS + 60;
@@ -98,7 +98,7 @@ async fn session_idle_just_below_threshold_is_accepted() {
 async fn revoked_session_is_rejected() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+    let ns = create_session(&p, u.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
     revoke_session(&p, ns.session.id).await.unwrap();
@@ -110,7 +110,7 @@ async fn revoked_session_is_rejected() {
 async fn lookup_session_touches_last_used_when_past_threshold() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60, None)
         .await
         .unwrap();
     // Past the touch threshold but well within the idle window -> still valid.
@@ -137,7 +137,7 @@ async fn lookup_session_touches_last_used_when_past_threshold() {
 async fn lookup_session_skips_touch_within_threshold() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60, None)
         .await
         .unwrap();
     // Touched recently (inside the threshold): lookup must not rewrite it.
@@ -169,7 +169,7 @@ async fn touch_update_does_not_bump_revoked_session() {
     // exact guarded statement lookup_session issues.
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+    let ns = create_session(&p, u.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
     revoke_session(&p, ns.session.id).await.unwrap();
@@ -210,10 +210,10 @@ async fn touch_update_does_not_bump_revoked_session() {
 async fn revoke_all_sessions_for_user_revokes_every_active_session() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let a = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+    let a = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
-    let b = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+    let b = create_session(&p, u.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
 
@@ -239,10 +239,10 @@ async fn revoke_all_sessions_for_user_is_scoped_to_the_target_user() {
         .await
         .unwrap();
     let bob = create_user(&p, "bob", "bunker9-longer-pass").await.unwrap();
-    let alices = create_session(&p, alice.id, None, SessionKind::Cookie, 3600)
+    let alices = create_session(&p, alice.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
-    let bobs = create_session(&p, bob.id, None, SessionKind::Cookie, 3600)
+    let bobs = create_session(&p, bob.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
 
@@ -262,13 +262,13 @@ async fn revoke_all_sessions_for_user_is_scoped_to_the_target_user() {
 async fn revoke_all_sessions_for_user_except_preserves_only_the_named_session() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let keep = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+    let keep = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
-    let drop_a = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+    let drop_a = create_session(&p, u.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
-    let drop_b = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+    let drop_b = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
 
@@ -301,7 +301,7 @@ async fn unknown_token_is_rejected() {
 async fn validate_session_resolves_bearer_token() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+    let ns = create_session(&p, u.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
     let auth = format!("Bearer {}", ns.raw_token);
@@ -315,7 +315,7 @@ async fn validate_session_resolves_bearer_token() {
 async fn validate_session_resolves_cookie_token() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
     let cookie = format!("{}={}", SESSION_COOKIE_NAME, ns.raw_token);
@@ -346,7 +346,7 @@ async fn validate_session_unknown_token_is_unauthenticated() {
 async fn validate_session_expired_is_unauthenticated() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET expires_at = 1 WHERE id = ?")
@@ -365,10 +365,10 @@ async fn validate_session_prefers_bearer_over_cookie() {
     // when a (different) cookie is also present.
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let bearer = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+    let bearer = create_session(&p, u.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
-    let cookie_sess = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+    let cookie_sess = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
     let auth = format!("Bearer {}", bearer.raw_token);
@@ -386,7 +386,7 @@ async fn prune_removes_expired_revoked_and_idle_keeps_live() {
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
 
     // (a) Expired: still un-revoked, but past its absolute expiry.
-    let expired = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+    let expired = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET expires_at = 1 WHERE id = ?")
@@ -396,7 +396,7 @@ async fn prune_removes_expired_revoked_and_idle_keeps_live() {
         .unwrap();
 
     // (b) Revoked: still within its expiry window, but soft-revoked.
-    let revoked = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+    let revoked = create_session(&p, u.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
     revoke_session(&p, revoked.session.id).await.unwrap();
@@ -404,7 +404,7 @@ async fn prune_removes_expired_revoked_and_idle_keeps_live() {
     // (c) Idle-expired: un-revoked and inside its absolute window, but
     // `last_used_at` is older than SESSION_IDLE_TIMEOUT_SECS, so
     // lookup_session would reject it. The prune must match that.
-    let idle = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+    let idle = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60, None)
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET last_used_at = 1 WHERE id = ?")
@@ -414,7 +414,7 @@ async fn prune_removes_expired_revoked_and_idle_keeps_live() {
         .unwrap();
 
     // (d) Live: un-revoked, inside its absolute window, recently used.
-    let live = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+    let live = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60, None)
         .await
         .unwrap();
 
@@ -448,15 +448,15 @@ async fn list_sessions_for_user_returns_only_live_sessions_for_that_user() {
         .unwrap();
     let bob = create_user(&p, "bob", "bunker9-longer-pass").await.unwrap();
 
-    let live = create_session(&p, alice.id, None, SessionKind::Cookie, 3600)
+    let live = create_session(&p, alice.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
-    let revoked = create_session(&p, alice.id, None, SessionKind::Bearer, 3600)
+    let revoked = create_session(&p, alice.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
     revoke_session(&p, revoked.session.id).await.unwrap();
     // Expired but not revoked — must also be excluded.
-    let expired = create_session(&p, alice.id, None, SessionKind::Cookie, 3600)
+    let expired = create_session(&p, alice.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET expires_at = 1 WHERE id = ?")
@@ -468,9 +468,16 @@ async fn list_sessions_for_user_returns_only_live_sessions_for_that_user() {
     // older than `SESSION_IDLE_TIMEOUT_SECS`) — mirrors `lookup_session`'s
     // idle rejection, so a listing can't show a session that would no
     // longer actually authenticate.
-    let idle_expired = create_session(&p, alice.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
-        .await
-        .unwrap();
+    let idle_expired = create_session(
+        &p,
+        alice.id,
+        None,
+        SessionKind::Cookie,
+        30 * 24 * 60 * 60,
+        None,
+    )
+    .await
+    .unwrap();
     let stale = now_unix() - SESSION_IDLE_TIMEOUT_SECS - 1;
     sqlx::query("UPDATE sessions SET last_used_at = ? WHERE id = ?")
         .bind(stale)
@@ -479,7 +486,7 @@ async fn list_sessions_for_user_returns_only_live_sessions_for_that_user() {
         .await
         .unwrap();
     // Bob's session must never show up in Alice's listing.
-    create_session(&p, bob.id, None, SessionKind::Cookie, 3600)
+    create_session(&p, bob.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
 
@@ -502,7 +509,7 @@ async fn list_sessions_for_user_caps_response_at_list_sessions_limit() {
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
     let over_cap = LIST_SESSIONS_LIMIT + 5;
     for _ in 0..over_cap {
-        create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+        create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
             .await
             .unwrap();
     }
@@ -518,7 +525,7 @@ async fn revoke_session_for_user_revokes_only_when_owned_by_that_user() {
         .await
         .unwrap();
     let bob = create_user(&p, "bob", "bunker9-longer-pass").await.unwrap();
-    let alices = create_session(&p, alice.id, None, SessionKind::Cookie, 3600)
+    let alices = create_session(&p, alice.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
 
@@ -561,7 +568,7 @@ async fn revoke_session_for_user_returns_internal_when_pool_closed() {
 async fn revoke_session_checked_revokes_any_users_session() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
     revoke_session_checked(&p, ns.session.id).await.unwrap();
@@ -627,4 +634,55 @@ async fn prune_revoked_delete_uses_revoked_index() {
         plan.contains("idx_sessions_revoked_at"),
         "revoked-prune delete should use idx_sessions_revoked_at, got plan:\n{plan}"
     );
+}
+
+#[tokio::test]
+async fn create_session_stores_the_user_agent_it_was_issued_to() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15) Firefox/133.0";
+    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600, Some(ua))
+        .await
+        .unwrap();
+    assert_eq!(ns.session.user_agent.as_deref(), Some(ua));
+
+    let listed = list_sessions_for_user(&p, u.id).await.unwrap();
+    assert_eq!(listed[0].user_agent.as_deref(), Some(ua));
+
+    let (_user, looked_up) = lookup_session(&p, &ns.raw_token).await.unwrap();
+    assert_eq!(looked_up.user_agent.as_deref(), Some(ua));
+}
+
+#[tokio::test]
+async fn create_session_stores_no_user_agent_when_the_header_is_absent_or_blank() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+
+    let absent = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
+        .await
+        .unwrap();
+    assert_eq!(absent.session.user_agent, None);
+
+    let blank = create_session(&p, u.id, None, SessionKind::Cookie, 3600, Some("   "))
+        .await
+        .unwrap();
+    assert_eq!(blank.session.user_agent, None);
+}
+
+#[tokio::test]
+async fn create_session_truncates_an_oversized_user_agent() {
+    // The header is attacker-controlled on an unauthenticated route, so an
+    // absurd one is clamped rather than rejected — a weird browser must still
+    // be able to log in.
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let ua = "é".repeat(MAX_USER_AGENT_CHARS * 2);
+    let ns = create_session(&p, u.id, None, SessionKind::Bearer, 3600, Some(&ua))
+        .await
+        .unwrap();
+    let stored = ns
+        .session
+        .user_agent
+        .expect("a long header is kept, clamped");
+    assert_eq!(stored.chars().count(), MAX_USER_AGENT_CHARS);
 }

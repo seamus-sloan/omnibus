@@ -139,7 +139,7 @@ async fn admin_lists_a_target_users_sessions_and_devices() {
     let target = auth_test_support::create_user(&pool, "bob").await;
     // Bob's own session (independent of any admin session).
     let bobs_session =
-        omnibus_db::auth::create_session(&pool, target.id, None, SessionKind::Cookie, 3600)
+        omnibus_db::auth::create_session(&pool, target.id, None, SessionKind::Cookie, 3600, None)
             .await
             .unwrap();
     omnibus_db::auth::register_device(&pool, target.id, "Bob's Kobo", "web", None)
@@ -301,6 +301,7 @@ async fn admin_revokes_a_users_device_and_its_live_session() {
         Some(device.id),
         SessionKind::Bearer,
         3600,
+        None,
     )
     .await
     .unwrap();

@@ -370,10 +370,10 @@ async fn change_password_keeps_callers_own_session_but_revokes_others() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
 
-    let callers_session = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+    let callers_session = create_session(&p, u.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
-    let other_session = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+    let other_session = create_session(&p, u.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
 
@@ -586,10 +586,10 @@ async fn admin_set_password_revokes_all_sessions_for_target_user() {
         .await
         .unwrap();
 
-    let bobs_cookie = create_session(&p, bob.id, None, SessionKind::Cookie, 3600)
+    let bobs_cookie = create_session(&p, bob.id, None, SessionKind::Cookie, 3600, None)
         .await
         .unwrap();
-    let bobs_bearer = create_session(&p, bob.id, None, SessionKind::Bearer, 3600)
+    let bobs_bearer = create_session(&p, bob.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
 

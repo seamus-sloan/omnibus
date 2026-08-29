@@ -209,7 +209,7 @@ async fn resolve_token_routes_an_omni_prefixed_session_token_to_sessions() {
 async fn resolve_token_still_resolves_plain_session_tokens() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    let ns = crate::auth::create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+    let ns = crate::auth::create_session(&p, u.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
     let (user, session) = resolve_token(&p, &ns.raw_token).await.unwrap();

@@ -385,7 +385,7 @@ async fn logout_revokes_session_and_next_me_is_401() {
         .await
         .unwrap()
         .unwrap();
-    let issued = db::auth::create_session(&pool, user.id, None, SessionKind::Bearer, 3600)
+    let issued = db::auth::create_session(&pool, user.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
 
@@ -621,9 +621,10 @@ async fn get_sessions_lists_only_the_callers_own_sessions_and_flags_current() {
     let token = crate::auth::test_support::bearer_token(&pool, alice.id).await;
     // A second live session for alice, plus an unrelated session for bob —
     // neither should be omitted-or-leaked incorrectly.
-    let other_alice = db::auth::create_session(&pool, alice.id, None, SessionKind::Bearer, 3600)
-        .await
-        .unwrap();
+    let other_alice =
+        db::auth::create_session(&pool, alice.id, None, SessionKind::Bearer, 3600, None)
+            .await
+            .unwrap();
     let _bob_session = crate::auth::test_support::bearer_token(&pool, bob.id).await;
 
     let res = app
@@ -651,7 +652,7 @@ async fn delete_session_revokes_a_non_current_session_and_subsequent_auth_fails(
     let (app, pool) = app().await;
     let alice = crate::auth::test_support::create_user(&pool, "alice").await;
     let token = crate::auth::test_support::bearer_token(&pool, alice.id).await;
-    let other = db::auth::create_session(&pool, alice.id, None, SessionKind::Bearer, 3600)
+    let other = db::auth::create_session(&pool, alice.id, None, SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
 
@@ -708,9 +709,10 @@ async fn delete_session_returns_404_for_another_users_session() {
     let alice = crate::auth::test_support::create_user(&pool, "alice").await;
     let bob = crate::auth::test_support::create_user(&pool, "bob").await;
     let alice_token = crate::auth::test_support::bearer_token(&pool, alice.id).await;
-    let bobs_session = db::auth::create_session(&pool, bob.id, None, SessionKind::Bearer, 3600)
-        .await
-        .unwrap();
+    let bobs_session =
+        db::auth::create_session(&pool, bob.id, None, SessionKind::Bearer, 3600, None)
+            .await
+            .unwrap();
 
     let res = app
         .clone()
@@ -741,4 +743,107 @@ async fn delete_session_returns_404_for_unknown_id() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_sessions_names_the_client_from_the_login_user_agent() {
+    let (app, pool) = app().await;
+    crate::auth::test_support::create_user_with_password(&pool, "alice", "correct horse battery")
+        .await;
+
+    let mut login = json_req(
+        "/api/auth/login",
+        "POST",
+        json!({
+            "username": "alice",
+            "password": "correct horse battery",
+            "client_kind": "bearer",
+        }),
+    );
+    login.headers_mut().insert(
+        header::USER_AGENT,
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0"
+            .parse()
+            .unwrap(),
+    );
+    let res = app.clone().oneshot(login).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let issued: omnibus_shared::LoginResponse = serde_json::from_slice(&bytes).unwrap();
+    let token = issued
+        .token
+        .expect("client_kind bearer must return a token");
+
+    let res = app
+        .oneshot(bearer_req("GET", "/api/auth/sessions", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let sessions: Vec<omnibus_shared::SessionView> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].client, "Firefox on macOS");
+}
+
+#[tokio::test]
+async fn get_sessions_names_the_client_from_the_registered_device_when_one_exists() {
+    let (app, pool) = app().await;
+    crate::auth::test_support::create_user_with_password(&pool, "alice", "correct horse battery")
+        .await;
+
+    // A native client sends its own device name; that beats whatever the HTTP
+    // stack happened to put in `User-Agent`.
+    let mut login = json_req(
+        "/api/auth/login",
+        "POST",
+        json!({
+            "username": "alice",
+            "password": "correct horse battery",
+            "client_kind": "ios",
+            "device_name": "Alice's iPhone",
+        }),
+    );
+    login.headers_mut().insert(
+        header::USER_AGENT,
+        "omnibus/12 CFNetwork/1568.100.1 Darwin/24.1.0"
+            .parse()
+            .unwrap(),
+    );
+    let res = app.clone().oneshot(login).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let issued: omnibus_shared::LoginResponse = serde_json::from_slice(&bytes).unwrap();
+    let token = issued.token.expect("client_kind ios must return a token");
+
+    let res = app
+        .oneshot(bearer_req("GET", "/api/auth/sessions", &token))
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let sessions: Vec<omnibus_shared::SessionView> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(sessions[0].client, "Alice's iPhone");
+}
+
+#[tokio::test]
+async fn get_sessions_falls_back_to_unknown_without_a_device_or_user_agent() {
+    let (app, pool) = app().await;
+    let alice = crate::auth::test_support::create_user(&pool, "alice").await;
+    let token = crate::auth::test_support::bearer_token(&pool, alice.id).await;
+
+    let res = app
+        .oneshot(bearer_req("GET", "/api/auth/sessions", &token))
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let sessions: Vec<omnibus_shared::SessionView> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(sessions[0].client, "Unknown client");
 }

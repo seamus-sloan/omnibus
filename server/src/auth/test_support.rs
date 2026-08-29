@@ -91,19 +91,31 @@ pub async fn create_user_with_password(pool: &SqlitePool, username: &str, passwo
 /// Issue a bearer session for `user_id`. Returns the raw token (no `Bearer `
 /// prefix) — call sites format it as `format!("Bearer {token}")`.
 pub async fn bearer_token(pool: &SqlitePool, user_id: i64) -> String {
-    let issued: NewSession =
-        db::auth::create_session(pool, user_id, None, SessionKind::Bearer, BEARER_TTL_SECS)
-            .await
-            .expect("create_session should succeed");
+    let issued: NewSession = db::auth::create_session(
+        pool,
+        user_id,
+        None,
+        SessionKind::Bearer,
+        BEARER_TTL_SECS,
+        None,
+    )
+    .await
+    .expect("create_session should succeed");
     issued.raw_token
 }
 
 /// Issue a cookie session for `user_id`. Returns the full `name=value` pair
 /// suitable for the `Cookie` request header.
 pub async fn cookie_value(pool: &SqlitePool, user_id: i64) -> String {
-    let issued: NewSession =
-        db::auth::create_session(pool, user_id, None, SessionKind::Cookie, COOKIE_TTL_SECS)
-            .await
-            .expect("create_session should succeed");
+    let issued: NewSession = db::auth::create_session(
+        pool,
+        user_id,
+        None,
+        SessionKind::Cookie,
+        COOKIE_TTL_SECS,
+        None,
+    )
+    .await
+    .expect("create_session should succeed");
     format!("{}={}", SESSION_COOKIE, issued.raw_token)
 }

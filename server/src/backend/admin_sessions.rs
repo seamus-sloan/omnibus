@@ -11,28 +11,11 @@ use axum::{
     Json,
 };
 use omnibus_db::{self as db, auth::AuthError};
-use omnibus_shared::{DeviceView, SessionView};
+use omnibus_shared::DeviceView;
 
 use super::{internal, AppState};
+use crate::auth::session_view::session_views;
 use crate::auth::AdminUser;
-
-/// Project a db session row to its wire view. `is_current` is always `false`
-/// here — this admin listing never *sets* the flag (unlike the self-service
-/// listing in `auth::handlers`), not because the viewed row can never be the
-/// admin's own session: an admin listing their own account can land on the
-/// exact session their request authenticated with, same as any other row.
-/// See [`SessionView`] docs.
-fn to_session_view(s: db::auth::Session) -> SessionView {
-    SessionView {
-        id: s.id,
-        device_id: s.device_id,
-        kind: s.kind.as_str().to_string(),
-        created_at: s.created_at,
-        last_used_at: s.last_used_at,
-        expires_at: s.expires_at,
-        is_current: false,
-    }
-}
 
 fn to_device_view(d: db::auth::Device) -> DeviceView {
     DeviceView {
@@ -46,13 +29,23 @@ fn to_device_view(d: db::auth::Device) -> DeviceView {
 }
 
 /// `GET /api/admin/users/{id}/sessions` — list a target user's live sessions.
+///
+/// `is_current` comes back `false` on every row: this listing passes no current
+/// session id (unlike the self-service one in `auth::handlers`), not because
+/// the viewed row can never be the admin's own session — an admin listing their
+/// own account can land on the exact session their request authenticated with,
+/// same as any other row. See [`omnibus_shared::SessionView`] docs.
 pub(super) async fn get_user_sessions(
     _admin: AdminUser,
     State(state): State<AppState>,
     Path(user_id): Path<i64>,
 ) -> Response {
-    match db::auth::list_sessions_for_user(&state.pool, user_id).await {
-        Ok(rows) => Json(rows.into_iter().map(to_session_view).collect::<Vec<_>>()).into_response(),
+    let rows = match db::auth::list_sessions_for_user(&state.pool, user_id).await {
+        Ok(rows) => rows,
+        Err(e) => return internal("admin list user sessions", e),
+    };
+    match session_views(&state.pool, user_id, rows, None).await {
+        Ok(views) => Json(views).into_response(),
         Err(e) => internal("admin list user sessions", e),
     }
 }
