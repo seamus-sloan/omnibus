@@ -30,6 +30,7 @@ pub const MAX_PREVIEW_RULES: usize = 50;
 
 /// Kind of shelf, fixed at creation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ShelfKind {
     Smart,
@@ -50,6 +51,7 @@ impl ShelfKind {
 
 /// Who can see a shelf. `Private` = owner + admins; `Public` = every user.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
     #[default]
@@ -59,6 +61,7 @@ pub enum Visibility {
 
 /// How smart conditions combine: `Any` = OR, `All` = AND.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum MatchMode {
     Any,
@@ -68,6 +71,7 @@ pub enum MatchMode {
 /// A field a smart rule can match on. Mirrors the advanced-search query vocabulary plus
 /// the acquisition-date fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum RuleField {
     Tag,
@@ -87,6 +91,7 @@ pub enum RuleField {
 
 /// A comparison operator for a smart rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum RuleOp {
     Is,
@@ -194,6 +199,7 @@ impl RuleField {
 /// `0034`'s comment predates the author/series id→name switch and is frozen once
 /// applied; this doc is the source of truth.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ShelfRule {
     pub field: RuleField,
     pub op: RuleOp,
@@ -224,6 +230,7 @@ impl ShelfRule {
 
 /// Compact shelf row for the rail: identity, kind, visibility, accent, count.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ShelfSummary {
     pub id: i64,
     pub owner_user_id: i64,
@@ -243,6 +250,7 @@ pub struct ShelfSummary {
 
 /// Full shelf detail: the summary fields plus description, rule, and match mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Shelf {
     pub id: i64,
     pub owner_user_id: i64,

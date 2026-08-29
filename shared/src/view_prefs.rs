@@ -20,6 +20,7 @@ pub enum ViewMode {
 
 /// Sortable axes exposed in the toolbar / table headers.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum SortKey {
     #[default]
@@ -67,6 +68,7 @@ impl SortKey {
 
 /// Ascending or descending sort direction for a [`SortKey`].
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum SortDir {
     #[default]

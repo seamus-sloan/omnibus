@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// Valid highlight palette colors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum HighlightColor {
     Amber,
@@ -49,6 +50,7 @@ impl std::fmt::Display for HighlightColor {
 
 /// A persisted highlight annotation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Highlight {
     pub id: i64,
     pub book_uuid: String,

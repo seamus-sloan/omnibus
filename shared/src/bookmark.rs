@@ -9,6 +9,7 @@ use crate::highlight::CreateHighlight;
 
 /// A persisted bookmark.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Bookmark {
     pub id: i64,
     pub book_uuid: String,

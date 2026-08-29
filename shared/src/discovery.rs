@@ -10,6 +10,7 @@ use crate::ebook::EbookMetadata;
 
 /// Response payload for `GET /api/ebooks` and `rpc_get_ebooks`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct EbookLibrary {
     pub path: Option<String>,
     pub books: Vec<EbookMetadata>,
@@ -83,6 +84,7 @@ pub struct LibraryPage {
 /// Author detail payload for `GET /api/authors/:id` and `rpc_get_author`.
 /// Contains the author row plus every book by that author.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct AuthorDetail {
     pub id: i64,
     pub name: String,
@@ -110,6 +112,7 @@ pub struct AuthorPhotoScanResult {
 /// Series detail payload for `GET /api/series/:id` and `rpc_get_series`.
 /// Books are ordered by `series_index`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SeriesDetail {
     pub id: i64,
     pub name: String,
@@ -120,6 +123,7 @@ pub struct SeriesDetail {
 
 /// Single tag with its book count, for the tag cloud.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct TagWeight {
     pub name: String,
     pub count: usize,
@@ -129,6 +133,7 @@ pub struct TagWeight {
 /// [`TagWeight`], kept a distinct type so `/api/genres` and `/api/tags`
 /// don't share a wire name for two different vocabularies.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct GenreWeight {
     pub name: String,
     pub count: usize,
@@ -138,6 +143,7 @@ pub struct GenreWeight {
 /// card needs — no joined book list. The detail page (`AuthorDetail`) is
 /// fetched on click.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct AuthorSummary {
     pub id: i64,
     pub name: String,
@@ -161,6 +167,7 @@ pub struct AuthorSummary {
 /// author of the series (first book's first creator) so the card can
 /// render the by-line without a second fetch.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SeriesSummary {
     pub id: i64,
     pub name: String,

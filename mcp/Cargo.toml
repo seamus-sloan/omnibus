@@ -1,0 +1,38 @@
+# Standalone read-only MCP (Model Context Protocol) stdio server. Talks plain
+# HTTP to any Omnibus instance's `/api/*` REST surface — deliberately NOT a
+# route inside `server/`, so it works against a remote instance unchanged and
+# owns no transport beyond stdio. Out of the workspace default-members (like
+# `mobile/`): build explicitly with `cargo build -p omnibus-mcp`.
+
+[package]
+name = "omnibus-mcp"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
+# Official Rust MCP SDK: stdio transport + tool router macros. `server` and
+# `macros` are default features; `transport-io` adds the stdio server side.
+rmcp = { version = "3.1", features = ["transport-io"] }
+# `query` on top of the workspace baseline: the read tools encode their
+# parameters as query strings.
+reqwest = { workspace = true, features = ["query"] }
+# Same major as rmcp's own schemars dependency, so the `JsonSchema` derives
+# behind `omnibus-shared/schemars` satisfy rmcp's output-schema bounds.
+schemars = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+tracing = { workspace = true }
+# Stderr-only logging: stdout belongs to the MCP stdio transport.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+omnibus-shared = { path = "../shared", features = ["schemars"] }
+
+[dev-dependencies]
+# Stub Omnibus instance for the auth/re-login tests. Same version as
+# `server/`'s axum so cargo unifies on one build.
+axum = "0.8"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "sync", "time"] }

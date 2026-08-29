@@ -13,6 +13,7 @@ mod tests;
 /// string (`"unread"` / `"reading"` / `"finished"`) matching the
 /// `book_read_status.status` CHECK constraint.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ReadStatus {
     /// Never opened, or explicitly cleared. Also the meaning of a missing row.
@@ -83,6 +84,7 @@ impl SetReadStatus {
 /// `updated_at` is unix seconds (SQLite `strftime('%s')`); `finished_at` is the
 /// moment the book most recently became `finished` (`None` otherwise).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ReadStatusRecord {
     pub book_uuid: String,
     pub status: ReadStatus,

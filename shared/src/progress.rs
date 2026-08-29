@@ -48,6 +48,7 @@ pub fn parse_comic_page_anchor(anchor: &str) -> Option<usize> {
 /// / [`ProgressRecord`] / [`SessionReport`]. Serializes as a plain
 /// lowercase string (`"epub"` / `"audio"`) so the wire shape stays compact.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ProgressFormat {
     Epub,
@@ -181,6 +182,7 @@ impl ProgressUpdate {
 /// to server now for a client with a fast clock; defaulted to server now
 /// when the write carried none).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ProgressRecord {
     pub book_uuid: String,
     pub format: ProgressFormat,
@@ -203,6 +205,7 @@ pub struct ProgressRecord {
 
 /// "Pick up where you left off" entry returned by `GET /api/progress/recent` and `rpc_recent_progress`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ResumePoint {
     pub record: ProgressRecord,
     pub book: EbookMetadata,
