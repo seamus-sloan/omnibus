@@ -56,9 +56,11 @@ class Resp:
 class FakeASC:
     """A scripted App Store Connect.
 
-    `build_states` is consumed one entry per `GET /v1/builds`, so a scenario can
-    say "PROCESSING, then VALID" and exercise the poll rather than only its
-    happy last iteration.
+    `build_states` is consumed one entry per *processing poll* — the
+    version-filtered `GET /v1/builds` — so a scenario can say "PROCESSING, then
+    VALID" and exercise the poll rather than only its happy last iteration. The
+    membership probe shares that path but is answered from `attached_groups` and
+    consumes nothing, so adding groups to a scenario cannot shift its states.
     """
 
     def __init__(self, build_states, external_state="READY_FOR_BETA_SUBMISSION",
@@ -74,6 +76,7 @@ class FakeASC:
         # under; None matches whatever is asked for.
         self.listed_version = listed_version
         self.build_queries = []  # every preReleaseVersion.version filter tried
+        self.membership_probes = []  # every (build, group) membership question asked
         self.writes = []  # (method, path, body) for every mutating call
 
     def __call__(self, method, path, **kw):
@@ -90,6 +93,15 @@ class FakeASC:
                 for gid, name in self.groups]})
 
         if path == "/v1/builds":
+            # Two different questions share this path. A membership probe
+            # carries filter[betaGroups]; the processing poll carries the
+            # version filter. Routing on the params rather than the path is
+            # what keeps `build_queries` a record of the poll alone.
+            if "filter[betaGroups]" in kw["params"]:
+                self.membership_probes.append(
+                    (kw["params"]["filter[id]"], kw["params"]["filter[betaGroups]"]))
+                in_group = kw["params"]["filter[betaGroups]"] in self.attached_groups
+                return Resp(payload={"data": [{"id": BUILD_ID}] if in_group else []})
             asked = kw["params"]["filter[preReleaseVersion.version]"]
             self.build_queries.append(asked)
             if self.listed_version is not None and asked != self.listed_version:
@@ -102,9 +114,6 @@ class FakeASC:
                 "included": [{"type": "buildBetaDetails",
                               "attributes": {"externalBuildState": self.external_state}}],
             })
-
-        if path == f"/v1/builds/{BUILD_ID}/betaGroups":
-            return Resp(payload={"data": [{"id": g} for g in self.attached_groups]})
 
         if path == "/v1/betaAppReviewSubmissions":
             return Resp(status_code=self.review_status, payload={})
@@ -181,6 +190,29 @@ check("re-run does not re-attach an attached group", 0,
       len(writes_to(fake, "/relationships/betaGroups")))
 check("re-run does not resubmit for review", 0,
       len(writes_to(fake, "/v1/betaAppReviewSubmissions")))
+
+# Membership is asked from the builds side, filtered to the one (build, group)
+# pair. `GET /v1/builds/{id}/betaGroups` reads naturally and is refused by App
+# Store Connect — that relationship is write-only — so a regression to it now
+# trips FakeASC's unstubbed-request assertion rather than passing here and 403ing
+# in production, which is how it shipped the first time.
+code, fake = run(FakeASC(["VALID"]))
+check("membership is probed once per group", [(BUILD_ID, GROUP_ID)], fake.membership_probes)
+check("the membership probe is not a version query", ["0.14.3"], fake.build_queries)
+
+# Two groups, one of which already holds the build: the attach must carry only
+# the other one, so a re-run after a partial attach finishes the job instead of
+# repeating it.
+SECOND_ID = "group-2"
+code, fake = run(FakeASC(["VALID"], external_state="IN_BETA_TESTING",
+                         groups=[(GROUP_ID, GROUP_NAME), (SECOND_ID, "Beta Crew")],
+                         attached_groups=[GROUP_ID]),
+                 BETA_GROUPS=f"{GROUP_NAME},Beta Crew")
+check("a partly-attached build exits 0", 0, code)
+attach = writes_to(fake, "/relationships/betaGroups")
+check("only the missing group is attached", 1, len(attach))
+check("the attach names just that group", [{"type": "betaGroups", "id": SECOND_ID}],
+      attach[0][2]["data"])
 
 # A build already awaiting review still needs attaching — the two are separate
 # facts, and treating "submitted" as "distributed" is the original bug.

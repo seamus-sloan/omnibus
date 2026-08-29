@@ -265,10 +265,28 @@ def set_whats_new(build_id):
     print(f"what to test: set for {len(existing) or 1} localization(s)")
 
 
+def already_in_group(build_id, group_id):
+    """Whether this build is already one of that group's builds.
+
+    Asked from the *builds* side, filtered down to the one pair in question.
+    The obvious read — `GET /v1/builds/{id}/betaGroups` — is refused: App Store
+    Connect answers `FORBIDDEN_ERROR: the relationship 'betaGroups' does not
+    allow 'GET_RELATED'`, because that relationship is write-only (CREATE and
+    DELETE). It served this script for months and then stopped, and because the
+    check runs ahead of the attach it took distribution down with it: a build
+    was uploaded, given its What to Test and submitted for review, and then
+    handed to no group at all — the exact silence this script exists to break.
+    """
+    return bool(asc("GET", "/v1/builds", params={
+        "filter[id]": build_id,
+        "filter[betaGroups]": group_id,
+        "limit": 1,
+    })["data"])
+
+
 def add_to_groups(build_id, groups):
     """Attach the build to each group it isn't already in."""
-    attached = {g["id"] for g in asc("GET", f"/v1/builds/{build_id}/betaGroups",
-                                     params={"limit": 200})["data"]}
+    attached = {g["id"] for g in groups if already_in_group(build_id, g["id"])}
     todo = [g for g in groups if g["id"] not in attached]
     for g in groups:
         if g["id"] in attached:
