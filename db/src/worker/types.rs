@@ -120,6 +120,16 @@ pub enum Task {
     /// already fresh, so a re-scan of an unchanged library does no
     /// re-encoding.
     BackfillThumbs { library_path: String },
+    /// (Re)index EPUB chapter text into `book_content_chapters` /
+    /// `book_content_fts` (migration `0087`) for every book whose stored
+    /// `(mtime_epoch, size_bytes)` snapshot no longer matches its served
+    /// EPUB — Added books have no rows and Changed files a stale snapshot,
+    /// so both fall out of one predicate (rule 09). Posted by the
+    /// [`Task::Scan`] handler on success, *after* [`Task::BackfillThumbs`],
+    /// because text extraction is the heaviest follow-up and the shared
+    /// resource key runs same-library tasks in post order. Keyed on
+    /// `library_path`; does not consume the scan semaphore.
+    BackfillContentFts { library_path: String },
     /// Rebuild the entire `books_fts` search index from `books` via
     /// `crate::sync::rebuild_all_fts`. Admin-triggered repair for any drift
     /// left by a failed post-commit FTS refresh. Keyed on a fixed resource
@@ -209,6 +219,7 @@ impl Task {
             Task::BackfillEpubStructure { library_path } => Some(library_path.clone()),
             Task::BackfillCovers { library_path } => Some(library_path.clone()),
             Task::BackfillThumbs { library_path } => Some(library_path.clone()),
+            Task::BackfillContentFts { library_path } => Some(library_path.clone()),
             Task::RebuildFtsIndex => Some("rebuild-fts".into()),
             Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
             Task::KepubConvert { book_id } => Some(format!("kepub:{book_id}")),
@@ -239,6 +250,7 @@ impl Task {
             Task::BackfillEpubStructure { .. } => false,
             Task::BackfillCovers { .. } => false,
             Task::BackfillThumbs { .. } => false,
+            Task::BackfillContentFts { .. } => false,
             Task::RebuildFtsIndex => false,
             Task::ResolveSuggestions { .. } => false,
             Task::KepubConvert { .. } => false,
@@ -285,6 +297,7 @@ impl Task {
             Task::BackfillEpubStructure { .. } => "backfill_epub_structure",
             Task::BackfillCovers { .. } => "backfill_covers",
             Task::BackfillThumbs { .. } => "backfill_thumbs",
+            Task::BackfillContentFts { .. } => "backfill_content_fts",
             Task::RebuildFtsIndex => "rebuild_fts_index",
             Task::ResolveSuggestions { .. } => "resolve_suggestions",
             Task::KepubConvert { .. } => "kepub_convert",
@@ -323,6 +336,9 @@ impl Task {
             // "Generating thumbnail" / "Thumbnail generation" label already
             // wired in `frontend::components::worker_status` (AC4).
             Task::BackfillThumbs { .. } => TaskKind::GenerateThumbs,
+            // Reuse Scan kind — a scan-follow-up with no dedicated progress
+            // widget, mirroring BackfillWordCounts above.
+            Task::BackfillContentFts { .. } => TaskKind::Scan,
             // Reuse Scan kind for UI display until a dedicated HLS progress
             // widget is added.
             Task::HlsTranscode { .. } => TaskKind::Scan,

@@ -213,6 +213,9 @@ impl Worker {
             Task::BackfillThumbs { library_path } => {
                 self.handle_backfill_thumbs(library_path, id).await
             }
+            Task::BackfillContentFts { library_path } => {
+                self.handle_backfill_content_fts(library_path, id).await
+            }
             Task::RebuildFtsIndex => anyhow_outcome(
                 "FTS rebuild",
                 crate::sync::rebuild_all_fts(&self.pool).await,
@@ -398,6 +401,26 @@ impl Worker {
         )
     }
 
+    /// `Task::BackfillContentFts`: (re)index EPUB chapter text for search
+    /// wherever the stored snapshot no longer matches the served file.
+    async fn handle_backfill_content_fts(
+        self: &Arc<Self>,
+        library_path: String,
+        id: TaskId,
+    ) -> TaskOutcome {
+        anyhow_outcome(
+            "content index backfill",
+            crate::content_fts::backfill_content_fts(
+                &self.pool,
+                &library_path,
+                |processed, total, item| {
+                    self.report_item_progress(id, processed, total, item);
+                },
+            )
+            .await,
+        )
+    }
+
     /// `Task::ResolveSuggestions`: resolve "readers also enjoyed" for one book.
     async fn handle_resolve_suggestions(
         self: &Arc<Self>,
@@ -520,8 +543,9 @@ impl Worker {
     }
 
     /// Reindex an ebook library, then (on success) post the follow-up
-    /// word-count, page-count, cover re-extract, and thumbnail-warm-up
-    /// backfill tasks for any rows this library still needs them for, plus a
+    /// word-count, page-count, cover re-extract, thumbnail-warm-up, and
+    /// content-FTS backfill tasks for any rows this library still needs
+    /// them for, plus a
     /// library-cleanup detection pass so fresh dedup suggestions appear after
     /// an import without any admin action. All of them share the scan's
     /// resource key except `DetectCleanup`, which runs under its own
@@ -553,7 +577,12 @@ impl Worker {
                 self.post(Task::BackfillCovers {
                     library_path: library_path.clone(),
                 });
-                self.post(Task::BackfillThumbs { library_path });
+                self.post(Task::BackfillThumbs {
+                    library_path: library_path.clone(),
+                });
+                // Last among the same-key follow-ups: text extraction is the
+                // heaviest, so the visible ones (covers, thumbs) finish first.
+                self.post(Task::BackfillContentFts { library_path });
                 self.post(Task::DetectCleanup { kind: None });
                 TaskOutcome::Ok(warning.map(TaskSuccessDetail::GhostFiles))
             }
