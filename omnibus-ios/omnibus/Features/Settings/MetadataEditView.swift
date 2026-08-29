@@ -7,6 +7,7 @@
 //  used each field's placeholder as its only label, so a filled row lost its
 //  name — "en" with nothing to say it meant Language.
 
+import PhotosUI
 import SwiftUI
 
 struct MetadataEditView: View {
@@ -49,6 +50,19 @@ struct MetadataEditView: View {
     @State private var canFetch = false
     @State private var showFetch = false
 
+    /// The reader's own replacement cover, picked from the photo library.
+    /// A cover write lands immediately and outside the draft — same contract
+    /// as the fetch sheet's from-URL apply — so these live beside the draft
+    /// state, never in it.
+    @State private var coverPhotoItem: PhotosPickerItem?
+    @State private var coverStatus: String?
+    @State private var isCoverBusy = false
+    /// Bumped after a cover write so the previews re-read: the thumb path
+    /// doesn't change across a replacement, so a fresh `book` alone would
+    /// still be served the cached bytes.
+    @State private var coverRevision = 0
+    private var connectivity = Connectivity.shared
+
     /// Autocomplete pools for the chip and series fields, filled best-effort
     /// while the editor is up — an empty pool just means no dropdown.
     @State private var authorPool: [SuggestionItem] = []
@@ -89,6 +103,9 @@ struct MetadataEditView: View {
         .task { await loadSuggestionPools() }
         .task { await checkProviders() }
         .sheet(isPresented: $showFetch) { fetchSheet }
+        .onChange(of: coverPhotoItem) { _, item in
+            Task { await uploadPickedCover(item) }
+        }
     }
 
     /// Presented rather than pushed: finding an edition is a detour off the
@@ -110,7 +127,10 @@ struct MetadataEditView: View {
                 // its `hasCover` is what gates the thumbnail request at all.
                 // Deliberately not touching `draft`/`loaded` — a cover is not
                 // a draft change and must not register as one.
-                onCoverApplied: { book = $0 }
+                onCoverApplied: {
+                    book = $0
+                    coverRevision += 1
+                }
             )
         }
     }
@@ -205,6 +225,12 @@ struct MetadataEditView: View {
                     }
                 }
 
+                if let book {
+                    group("Cover") {
+                        Plate { coverSection(book) }
+                    }
+                }
+
                 if let error {
                     Text(error)
                         .font(.ui(13))
@@ -232,6 +258,7 @@ struct MetadataEditView: View {
     private func header(_ book: Book) -> some View {
         HStack(spacing: Spacing.md) {
             BookCover(identity: CoverIdentity(book), size: .sm, cornerRadius: 4)
+                .id(coverRevision)
                 .frame(width: 48)
                 .coverShadow(0.6)
 
@@ -332,6 +359,62 @@ struct MetadataEditView: View {
         }
         .buttonStyle(PressableStyle())
         .accessibilityIdentifier("metadata-fetch-open")
+    }
+
+    /// The cover as an immediate-write control — the iOS face of the web
+    /// editor's Cover card (`cover_editor.rs`). Picking a photo uploads it on
+    /// the spot; there is no staged state to save, which is why this renders
+    /// its own status line instead of joining the draft.
+    private func coverSection(_ book: Book) -> some View {
+        HStack(alignment: .top, spacing: Spacing.md) {
+            BookCover(identity: CoverIdentity(book), size: .md, cornerRadius: 5)
+                .id(coverRevision)
+                .frame(width: 84)
+                .coverShadow(0.6)
+
+            VStack(alignment: .leading, spacing: 9) {
+                Text(coverHint(book))
+                    .font(.monoUI(10, weight: .medium))
+                    .tracking(0.7)
+                    .textCase(.uppercase)
+                    .foregroundStyle(
+                        book.hasCoverOverride ? palette.accentColor : palette.ink3Color
+                    )
+
+                PhotosPicker(selection: $coverPhotoItem, matching: .images) {
+                    Text("Replace cover")
+                        .font(.ui(14, weight: .medium))
+                }
+                .disabled(isCoverBusy || !connectivity.isOnline)
+                .accessibilityIdentifier("cover-replace")
+
+                if book.hasCoverOverride {
+                    Button("Revert to scanned cover") { Task { await revertCover() } }
+                        .font(.ui(14))
+                        .foregroundStyle(palette.ink2Color)
+                        .disabled(isCoverBusy || !connectivity.isOnline)
+                        .accessibilityIdentifier("cover-revert")
+                }
+
+                if let coverStatus {
+                    Text(coverStatus)
+                        .font(.ui(12.5))
+                        .foregroundStyle(palette.ink2Color)
+                        .accessibilityIdentifier("cover-status")
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
+    /// Where the current art came from — same three states the web editor's
+    /// hint line reports.
+    private func coverHint(_ book: Book) -> String {
+        if book.coverURL == nil { return "No cover available" }
+        return book.hasCoverOverride ? "Custom upload" : "Extracted from file"
     }
 
     private var revertButton: some View {
@@ -523,6 +606,75 @@ struct MetadataEditView: View {
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    // MARK: - Cover writes
+
+    /// Upload the picked photo as the book's cover. Metadata overrides are
+    /// library-wide configuration (rule 08), so this calls straight through
+    /// and reports failure inline — never queued for replay.
+    private func uploadPickedCover(_ item: PhotosPickerItem?) async {
+        guard let item else { return }
+        // Cleared so picking the same photo again re-fires the selection.
+        defer { coverPhotoItem = nil }
+        // Claimed before the read/re-encode, not after: that work is async,
+        // and a second pick landing during it would otherwise start a second
+        // concurrent upload.
+        guard !isCoverBusy else { return }
+        isCoverBusy = true
+        coverStatus = "Uploading cover\u{2026}"
+        defer { isCoverBusy = false }
+        guard let raw = try? await item.loadTransferable(type: Data.self),
+            let image = UIImage(data: raw)
+        else {
+            coverStatus = "That image couldn't be read."
+            Haptics.warning()
+            return
+        }
+        // 1600px long edge: covers render at most a phone screen tall, and
+        // the server regenerates every thumb from what lands here — while a
+        // camera-roll original could blow the route's 10 MiB cap.
+        guard let encoded = UploadImageEncoder.jpeg(image, maxDimension: 1600) else {
+            coverStatus = "That image couldn't be prepared for upload."
+            Haptics.warning()
+            return
+        }
+        do {
+            let updated = try await LibraryService.uploadCover(uuid: uuid, jpegData: encoded)
+            applyCoverWrite(updated, status: "Cover updated.")
+        } catch {
+            reportCoverFailure(error)
+        }
+    }
+
+    private func revertCover() async {
+        guard !isCoverBusy else { return }
+        Haptics.warning()
+        isCoverBusy = true
+        coverStatus = "Reverting\u{2026}"
+        defer { isCoverBusy = false }
+        do {
+            let updated = try await LibraryService.revertCover(uuid: uuid)
+            applyCoverWrite(updated, status: "Reverted to scanned cover.")
+        } catch {
+            reportCoverFailure(error)
+        }
+    }
+
+    /// Fold the record a cover write returned into the screen. The record is
+    /// the point, not a courtesy: a book that had no art has `hasCover ==
+    /// false`, and `BookCover` gates its whole image layer on it — while the
+    /// revision bump is what makes the unchanged thumb path re-fetch.
+    private func applyCoverWrite(_ updated: Book, status: String) {
+        book = updated
+        coverRevision += 1
+        coverStatus = status
+        Haptics.success()
+    }
+
+    private func reportCoverFailure(_ error: Error) {
+        coverStatus = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        Haptics.warning()
     }
 }
 
