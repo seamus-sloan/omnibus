@@ -22,6 +22,13 @@ pub async fn create_api_token(name: String) -> Result<CreateApiTokenResponse, Da
         .map_err(note_server_fn_err)
 }
 
+/// Rename one of the caller's API tokens.
+pub async fn rename_api_token(id: i64, name: String) -> Result<(), DataError> {
+    crate::rpc::rpc_rename_api_token(id, name)
+        .await
+        .map_err(note_server_fn_err)
+}
+
 /// Revoke one of the caller's API tokens.
 pub async fn revoke_api_token(id: i64) -> Result<(), DataError> {
     crate::rpc::rpc_revoke_api_token(id)
