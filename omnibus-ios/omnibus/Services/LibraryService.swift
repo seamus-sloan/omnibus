@@ -8,10 +8,14 @@
 
 import Foundation
 
+/// Declaration order is the picker's order, and mirrors the web toolbar's
+/// `SORT_KEYS`. Raw values are the shared wire vocabulary
+/// (`shared/src/view_prefs.rs`), so a new case must be added there first.
 enum SortKey: String, CaseIterable, Codable, Sendable {
     case title
     case author
     case series
+    case recentlyInteracted = "recently_interacted"
     case lastUpdated = "last_updated"
     case newestAdded = "newest_added"
 
@@ -20,6 +24,7 @@ enum SortKey: String, CaseIterable, Codable, Sendable {
         case .title: "Title"
         case .author: "Author"
         case .series: "Series"
+        case .recentlyInteracted: "Recently interacted"
         case .lastUpdated: "Last updated"
         case .newestAdded: "Newest added"
         }

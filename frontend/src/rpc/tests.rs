@@ -49,7 +49,7 @@ async fn seed_session(pool: &SqlitePool, username: &str, kind: SessionKind) -> S
         .await
         .unwrap()
         .unwrap();
-    auth_db::create_session(pool, user.id, None, kind, 3600)
+    auth_db::create_session(pool, user.id, None, kind, 3600, None)
         .await
         .unwrap()
         .raw_token

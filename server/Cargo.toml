@@ -73,6 +73,13 @@ omnibus-frontend = { path = "../frontend" }
 # frontend) since main.rs and backend.rs call init_db/get_settings/etc.
 # straight. Optional so the `web` (WASM) build doesn't try to drag it in.
 omnibus-db = { path = "../db", optional = true }
+# MCP tool + client layer (library only — the stdio binary stays a separate
+# artifact) for the hosted `/mcp` endpoint. `http` turns on rmcp's
+# streamable-HTTP server transport. Optional for the same WASM reason.
+omnibus-mcp = { path = "../mcp", features = ["http"], optional = true }
+# The rmcp SDK itself, for the transport types `mcp_http` wires into axum.
+# Version + features unified with `omnibus-mcp`'s own dependency.
+rmcp = { version = "3.1", features = ["transport-streamable-http-server"], optional = true }
 
 [dev-dependencies]
 tower = "0.5"
@@ -122,6 +129,8 @@ server = [
     "dep:anyhow",
     "dep:tempfile",
     "dep:omnibus-db",
+    "dep:omnibus-mcp",
+    "dep:rmcp",
     "dioxus/server",
     "omnibus-frontend/server",
 ]

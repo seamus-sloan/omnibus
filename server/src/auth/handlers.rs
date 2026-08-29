@@ -14,10 +14,11 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use omnibus_db::auth::{self as auth_db, AuthError, NewSession, SessionKind};
 use omnibus_shared::{
-    LoginRequest, LoginResponse, RegisterRequest, RegistrationStatus, SessionView, UserSummary,
+    LoginRequest, LoginResponse, RegisterRequest, RegistrationStatus, UserSummary,
 };
 
 use super::extractor::{extract_token, AuthUser};
+use super::session_view::session_views;
 use super::{session_cookie_name, BEARER_TTL_SECS, COOKIE_TTL_SECS};
 use crate::backend::AppState;
 use crate::http_errors::internal;
@@ -33,6 +34,15 @@ pub fn auth_router(state: AppState) -> Router {
         .route("/api/auth/me", get(me_handler))
         .route("/api/auth/sessions", get(get_sessions_handler))
         .route("/api/auth/sessions/{id}", delete(delete_session_handler))
+        .route(
+            "/api/auth/api-tokens",
+            get(super::api_tokens::get_api_tokens_handler)
+                .post(super::api_tokens::post_api_token_handler),
+        )
+        .route(
+            "/api/auth/api-tokens/{id}",
+            delete(super::api_tokens::delete_api_token_handler),
+        )
         .with_state(state)
         // `AuthUser` reads the pool from `Extension<SqlitePool>` so it stays
         // state-agnostic. Keep this layer here so the router is usable
@@ -101,6 +111,11 @@ fn auth_error_to_response(e: AuthError) -> Response {
         // Not reachable from login/register/logout/sessions; the admin
         // device-revoke surface (`backend::admin_sessions`) owns this.
         AuthError::DeviceNotFound => (StatusCode::NOT_FOUND, "device not found").into_response(),
+        // Not reachable from these handlers either; the API-token surface
+        // (`auth::api_tokens`) owns this.
+        AuthError::ApiTokenNotFound => {
+            (StatusCode::NOT_FOUND, "api token not found").into_response()
+        }
         AuthError::Internal(e) => internal("auth error", e),
         AuthError::Crypto(e) => internal("auth crypto error", e),
     }
@@ -160,6 +175,7 @@ fn cleared_cookie() -> Cookie<'static> {
 async fn register_handler(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> Response {
     let user = match auth_db::create_user(state.pool(), &req.username, &req.password).await {
@@ -173,8 +189,16 @@ async fn register_handler(
         req.client_kind,
         req.device_name,
         req.client_version,
+        request_user_agent(&headers),
     )
     .await
+}
+
+/// The request's `User-Agent`, or `None` when absent or not valid UTF-8. The
+/// header is how a web session — which registers no device — is later named in
+/// the sessions listing.
+fn request_user_agent(headers: &HeaderMap) -> Option<&str> {
+    headers.get(header::USER_AGENT)?.to_str().ok()
 }
 
 /// `GET /api/auth/registration` — whether self-registration is open.
@@ -194,6 +218,7 @@ async fn registration_handler(State(state): State<AppState>) -> Response {
 async fn login_handler(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Response {
     let user = match auth_db::verify_login(state.pool(), &req.username, &req.password).await {
@@ -207,10 +232,12 @@ async fn login_handler(
         req.client_kind,
         req.device_name,
         req.client_version,
+        request_user_agent(&headers),
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn issue_session(
     state: &AppState,
     jar: CookieJar,
@@ -218,6 +245,7 @@ async fn issue_session(
     client_kind: Option<String>,
     device_name: Option<String>,
     client_version: Option<String>,
+    user_agent: Option<&str>,
 ) -> Response {
     let bearer = want_bearer(client_kind.as_deref());
 
@@ -235,6 +263,7 @@ async fn issue_session(
         client_version.as_deref(),
         kind,
         ttl,
+        user_agent,
     )
     .await
     {
@@ -263,6 +292,7 @@ async fn issue_session(
 /// single `sqlx::Transaction`. If either write — or the commit — fails, the
 /// transaction rolls back on drop so a device row never lingers without its
 /// matching session.
+#[allow(clippy::too_many_arguments)]
 async fn persist_session(
     state: &AppState,
     user_id: i64,
@@ -271,6 +301,7 @@ async fn persist_session(
     client_version: Option<&str>,
     kind: SessionKind,
     ttl: i64,
+    user_agent: Option<&str>,
 ) -> Result<NewSession, AuthError> {
     let mut tx = state.pool().begin().await?;
 
@@ -282,7 +313,8 @@ async fn persist_session(
         None
     };
 
-    let issued = auth_db::create_session(&mut *tx, user_id, device_id, kind, ttl).await?;
+    let issued =
+        auth_db::create_session(&mut *tx, user_id, device_id, kind, ttl, user_agent).await?;
     tx.commit().await?;
     Ok(issued)
 }
@@ -313,29 +345,15 @@ async fn me_handler(user: AuthUser) -> Response {
     Json(user.summary()).into_response()
 }
 
-/// Project a db session row to its wire view, flagging the caller's own
-/// session so the client can grey out (or hide) its revoke control (AC2).
-fn to_session_view(s: auth_db::Session, current_session_id: i64) -> SessionView {
-    SessionView {
-        id: s.id,
-        device_id: s.device_id,
-        kind: s.kind.as_str().to_string(),
-        created_at: s.created_at,
-        last_used_at: s.last_used_at,
-        expires_at: s.expires_at,
-        is_current: s.id == current_session_id,
-    }
-}
-
 /// `GET /api/auth/sessions` — list the caller's own live sessions (AC2).
+/// Flags the caller's own row so the client can hide its revoke control.
 async fn get_sessions_handler(user: AuthUser, State(state): State<AppState>) -> Response {
-    match auth_db::list_sessions_for_user(state.pool(), user.id).await {
-        Ok(rows) => Json(
-            rows.into_iter()
-                .map(|s| to_session_view(s, user.session_id))
-                .collect::<Vec<_>>(),
-        )
-        .into_response(),
+    let rows = match auth_db::list_sessions_for_user(state.pool(), user.id).await {
+        Ok(rows) => rows,
+        Err(e) => return internal("list own sessions", e),
+    };
+    match session_views(state.pool(), user.id, rows, Some(user.session_id)).await {
+        Ok(views) => Json(views).into_response(),
         Err(e) => internal("list own sessions", e),
     }
 }

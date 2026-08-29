@@ -9,6 +9,10 @@ mod account;
 // a mobile surface, same shape as `errors`/`logs`.
 #[cfg(not(feature = "mobile"))]
 mod admin_health;
+// Per-user API tokens (#2313) — web (server-fn); the Settings management
+// card is web-only, so there's no mobile transport, same shape as `kobo`.
+#[cfg(not(feature = "mobile"))]
+mod api_tokens;
 // Admin device & session management (F5.4, #910) — web (gloo REST) + SSR
 // stubs; no mobile surface.
 #[cfg(not(feature = "mobile"))]
@@ -45,6 +49,10 @@ mod cross_format;
 mod kobo;
 #[cfg(not(feature = "mobile"))]
 mod logs;
+// Hosted /mcp endpoint toggle (#2314) — web (gloo REST) + SSR stubs; the
+// admin card is web-only, so there's no mobile transport.
+#[cfg(not(feature = "mobile"))]
+mod mcp;
 mod metadata_search;
 mod physical;
 mod profile;
@@ -79,6 +87,8 @@ pub use account::*;
 pub use admin_health::*;
 #[cfg(not(feature = "mobile"))]
 pub use admin_sessions::*;
+#[cfg(not(feature = "mobile"))]
+pub use api_tokens::*;
 #[cfg(any(feature = "web", feature = "mobile", feature = "server"))]
 pub use auth::*;
 pub use authors::*;
@@ -100,6 +110,8 @@ pub use kindle::*;
 pub use kobo::*;
 #[cfg(not(feature = "mobile"))]
 pub use logs::*;
+#[cfg(not(feature = "mobile"))]
+pub use mcp::*;
 pub use metadata_search::*;
 pub use physical::*;
 pub use profile::*;

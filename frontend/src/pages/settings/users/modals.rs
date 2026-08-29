@@ -394,11 +394,11 @@ fn render_session_list(
             for s in rows {
                 {
                     let id = s.id;
-                    let kind = s.kind.clone();
+                    let client = s.client.clone();
                     let last_used = super::fmt_date(s.last_used_at);
                     rsx! {
                         li { key: "{id}", class: "users-session-row", "data-testid": "user-session-row",
-                            span { "{kind} \u{00b7} last used {last_used}" }
+                            span { "{client} \u{00b7} last used {last_used}" }
                             button {
                                 r#type: "button",
                                 class: "btn ghost danger sm",

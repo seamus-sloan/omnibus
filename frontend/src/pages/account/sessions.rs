@@ -1,8 +1,9 @@
-//! Self-service "Your sessions" card in the web Account section. Lists the
-//! caller's own live sessions with a per-row Revoke action; the session
-//! authenticating this page has no Revoke button — the server refuses that
-//! revoke anyway, so the control is hidden rather than offered and rejected.
-//! Signals start empty so SSR and the first WASM paint agree.
+//! Self-service "Your sessions" card in the web Account section. Tabulates the
+//! caller's own live sessions — which client holds each one, when it was
+//! signed in, when it was last used — with a per-row Revoke action; the
+//! session authenticating this page has no Revoke button, because the server
+//! refuses that revoke anyway and the control is better hidden than offered
+//! and rejected. Signals start empty so SSR and the first WASM paint agree.
 
 use dioxus::prelude::*;
 use omnibus_shared::SessionView;
@@ -73,7 +74,7 @@ pub fn SessionsCard() -> Element {
     }
 }
 
-/// The session list, or an empty-state line. Should never actually be empty
+/// The session table, or an empty-state line. Should never actually be empty
 /// (the request itself always holds one live session), but the loading
 /// window before the effect resolves renders the same empty state as SSR.
 fn render_session_list(
@@ -87,38 +88,49 @@ fn render_session_list(
         };
     }
     rsx! {
-        ul { class: "kobo-device-list", "data-testid": "account-sessions-list",
-            for s in rows.iter().cloned() {
-                SessionRow {
-                    key: "{s.id}",
-                    session: s,
-                    disabled: busy_id.is_some(),
-                    on_revoke,
+        table { class: "users-table", "data-testid": "account-sessions-list",
+            thead {
+                tr {
+                    th { "Client" }
+                    th { "Signed in" }
+                    th { "Last used" }
+                    th { class: "users-col-actions", "Actions" }
+                }
+            }
+            tbody {
+                for s in rows.iter().cloned() {
+                    SessionRow {
+                        key: "{s.id}",
+                        session: s,
+                        disabled: busy_id.is_some(),
+                        on_revoke,
+                    }
                 }
             }
         }
     }
 }
 
-/// One session row: kind + last-used timestamp, and a Revoke button — hidden
-/// on the current session (AC2).
+/// One session row: which client holds it, when it was created, when it was
+/// last used, and a Revoke button — hidden on the current session (AC2).
 #[component]
 fn SessionRow(session: SessionView, disabled: bool, on_revoke: Callback<i64>) -> Element {
     let id = session.id;
     rsx! {
-        li { class: "kobo-device-row", "data-testid": "account-session-row",
-            div { class: "kobo-device-head",
-                span { class: "kobo-device-name", "{session.kind}" }
+        tr { "data-testid": "account-session-row",
+            td {
+                span { class: "users-name", "{session.client}" }
                 if session.is_current {
                     span { class: "users-self-tag", " (this device)" }
                 }
             }
-            p { class: "subtitle", "Last used {fmt_timestamp(session.last_used_at)}" }
-            if !session.is_current {
-                div { class: "settings-actions",
+            td { "{fmt_timestamp(session.created_at)}" }
+            td { "{fmt_timestamp(session.last_used_at)}" }
+            td { class: "users-col-actions",
+                if !session.is_current {
                     button {
                         r#type: "button",
-                        class: "btn ghost danger",
+                        class: "btn ghost danger sm",
                         disabled,
                         "data-testid": "account-session-revoke-{id}",
                         onclick: move |_| on_revoke.call(id),

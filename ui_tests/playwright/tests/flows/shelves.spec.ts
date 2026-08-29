@@ -55,6 +55,28 @@ test("renders the shelf gallery on the library page", async ({ page }) => {
   await expectNavVisible(page);
 });
 
+test("floats the create-shelf modal above the page, not in the book column", async ({
+  page,
+}) => {
+  await gotoReady(page, "/");
+
+  await page.getByTestId("new-shelf").click();
+  const modal = page.getByTestId("create-shelf-modal");
+  await expect(modal).toBeVisible();
+
+  // The modal flattens into the landing column, where `.lmq > *` lifts each
+  // section — a rule that ties `.shelf-modal-overlay` on specificity. Losing
+  // that tie re-anchors the overlay into the flow, where it renders as a
+  // block between the shelves row and the book grid instead of over them.
+  await expect
+    .poll(() => modal.evaluate((el) => getComputedStyle(el).position))
+    .toBe("fixed");
+
+  // An in-flow overlay scrolls away with the column; a floating one does not.
+  await page.mouse.wheel(0, 600);
+  await expect.poll(async () => (await modal.boundingBox())?.y).toBe(0);
+});
+
 test("creates a hand-picked shelf and shows it in the gallery", async ({
   page,
 }) => {

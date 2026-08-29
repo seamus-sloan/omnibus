@@ -12,6 +12,8 @@ pub mod http_errors;
 #[cfg(feature = "server")]
 pub mod logging;
 #[cfg(feature = "server")]
+pub mod mcp_http;
+#[cfg(feature = "server")]
 pub mod metrics;
 #[cfg(feature = "server")]
 pub mod rate_limit;

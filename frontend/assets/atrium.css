@@ -4989,11 +4989,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 /* Unified settings: permission-gated left sidebar + a content column that
    holds the active section's card(s). (#1324) */
+/* The app shell (`.app-shell > main`) pads horizontally only, so — like
+   `.landing-col` — the page spaces itself off the sticky top bar. 1.5rem
+   matches `.settings-content`'s inter-card gap, so the run of cards is evenly
+   spaced from the first one on. */
 .settings-layout {
   display: grid;
   grid-template-columns: 232px 1fr;
   gap: 2rem;
   align-items: start;
+  padding-top: 1.5rem;
 }
 .settings-content {
   display: flex;
@@ -5696,6 +5701,12 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-size: 12px;
   padding: 4px 8px;
   height: 28px;
+  /* A floor, not a preference: the intrinsic width a `<select>` derives from
+     its options leaves the longest label ("Recently Interacted", uppercased
+     and letter-spaced by the `.lmq` skin below) with zero slack, and engines
+     that measure the dropdown indicator or the tracking differently clip it.
+     Sized for that label so the widest option always fits. */
+  min-width: 192px;
 }
 .lib-sort-select:focus { outline: none; border-color: var(--accent); }
 .lib-sort-dir {
@@ -10937,7 +10948,16 @@ html {
     radial-gradient(64% 78% at 18% 0%, color-mix(in oklch, var(--accent) 17%, transparent), transparent 62%),
     radial-gradient(52% 70% at 92% 12%, color-mix(in oklch, var(--accent) 9%, transparent), transparent 58%);
 }
-.lmq > * { position: relative; z-index: 1; }
+/* Lifts each section above the wash. Overlays flatten in as children here too
+   (Dioxus has no portal), and this rule ties them on specificity while winning
+   on source order — so without the exclusion it re-anchors a `position: fixed`
+   modal into the page column. Add any new fixed overlay mounted here to the list.
+   `:where()` keeps this at (0,1,0): a bare `:not()` takes its most specific
+   argument, which would outrank `.lmq-edge`'s own later `position: fixed`. */
+.lmq > *:where(:not(.shelf-modal-overlay, .author-photo-modal-backdrop, .bulk-edit-bar)) {
+  position: relative;
+  z-index: 1;
+}
 
 /* ── The stack: the open books, fanned ───────────────────────────── */
 .lmq-stack {

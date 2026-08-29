@@ -12,6 +12,7 @@ mod tests;
 
 mod account;
 mod admin_health;
+mod api_tokens;
 mod authors;
 mod background_tasks;
 mod bookmarks;
@@ -40,6 +41,7 @@ mod summary;
 
 pub use account::*;
 pub use admin_health::*;
+pub use api_tokens::*;
 pub use authors::*;
 pub use background_tasks::*;
 pub use bookmarks::*;

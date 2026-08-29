@@ -13,7 +13,7 @@ use omnibus_db::{
     self as db,
     worker::{Task, TaskOutcome},
 };
-use omnibus_shared::{RegistrationStatus, Settings};
+use omnibus_shared::{McpStatus, RegistrationStatus, Settings};
 
 use super::{internal, AppState};
 use crate::auth::AdminUser;
@@ -79,6 +79,30 @@ pub(super) async fn post_registration(
     match db::auth::set_registration_enabled(&state.pool, status.enabled).await {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
         Err(error) => internal("set registration enabled", error),
+    }
+}
+
+/// `GET /api/settings/mcp` — admin-only read of the hosted `/mcp` endpoint
+/// toggle (#2314). Admin-gated like every other instance setting; the `/mcp`
+/// route itself re-reads the flag per request.
+pub(super) async fn get_mcp(_admin: AdminUser, State(state): State<AppState>) -> Response {
+    match db::mcp_enabled(&state.pool).await {
+        Ok(enabled) => Json(McpStatus { enabled }).into_response(),
+        Err(error) => internal("read mcp enabled", error),
+    }
+}
+
+/// `POST /api/settings/mcp` — admin-only enable/disable of the hosted
+/// `/mcp` endpoint. `204` on success; takes effect on the next `/mcp`
+/// request, no restart.
+pub(super) async fn post_mcp(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+    Json(status): Json<McpStatus>,
+) -> Response {
+    match db::set_mcp_enabled(&state.pool, status.enabled).await {
+        Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Err(error) => internal("set mcp enabled", error),
     }
 }
 

@@ -1,8 +1,10 @@
-# Standalone MCP (Model Context Protocol) stdio server. Talks plain
-# HTTP to any Omnibus instance's `/api/*` REST surface — deliberately NOT a
-# route inside `server/`, so it works against a remote instance unchanged and
-# owns no transport beyond stdio. Out of the workspace default-members (like
-# `mobile/`): build explicitly with `cargo build -p omnibus-mcp`.
+# MCP (Model Context Protocol) tool layer + stdio binary. Talks plain HTTP
+# to any Omnibus instance's `/api/*` REST surface, so the stdio binary works
+# against a remote instance unchanged. `server/` depends on the *library*
+# half (with the `http` feature) to mount the same tools at the hosted
+# `/mcp` endpoint — one tool layer, two transports. Out of the workspace
+# default-members (like `mobile/`): build the binary explicitly with
+# `cargo build -p omnibus-mcp`.
 
 [package]
 name = "omnibus-mcp"
@@ -30,6 +32,11 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 omnibus-shared = { path = "../shared", features = ["schemars"] }
+
+[features]
+# Streamable-HTTP server transport for the hosted `/mcp` endpoint — enabled
+# by `server/`'s dependency on this crate; the stdio binary doesn't need it.
+http = ["rmcp/transport-streamable-http-server"]
 
 [dev-dependencies]
 # Stub Omnibus instance for the auth/re-login tests. Same version as

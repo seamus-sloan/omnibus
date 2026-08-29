@@ -918,3 +918,99 @@ async fn reopening_registration_through_the_api_lets_a_second_user_sign_up() {
         .await
         .expect("a second user must be able to self-register once reopened");
 }
+
+// ── GET/POST /api/settings/mcp (hosted /mcp endpoint switch, #2314) ──
+
+/// Build an authenticated `POST /api/settings/mcp` request.
+fn post_mcp_req(token: &str, enabled: bool) -> Request<Body> {
+    Request::builder()
+        .uri("/api/settings/mcp")
+        .method("POST")
+        .header("content-type", "application/json")
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(
+            serde_json::json!({ "enabled": enabled }).to_string(),
+        ))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn api_settings_mcp_round_trips_for_admin() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    // Default reads disabled.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/settings/mcp")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let status: omnibus_shared::McpStatus = serde_json::from_slice(&bytes).unwrap();
+    assert!(!status.enabled);
+
+    // Enable, then the setting row reflects it.
+    let res = app.oneshot(post_mcp_req(&token, true)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert!(omnibus_db::mcp_enabled(&pool).await.unwrap());
+}
+
+#[tokio::test]
+async fn api_settings_mcp_rejects_non_admin_and_anonymous() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .clone()
+        .oneshot(post_mcp_req(&token, true))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(
+        !omnibus_db::mcp_enabled(&pool).await.unwrap(),
+        "a rejected request must not have changed the setting"
+    );
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/settings/mcp")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "the read is admin-gated too"
+    );
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/settings/mcp")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "enabled": true }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}

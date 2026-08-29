@@ -84,6 +84,47 @@ async fn seed_authors_with_books(pool: &SqlitePool, count: i64) -> Vec<i64> {
     ids
 }
 
+/// Seed `count` series plus one book linked to each, returning the series ids.
+/// The sibling of [`seed_authors_with_books`] for the kinds whose suggestions
+/// must survive the staleness prune the read paths run.
+async fn seed_series_with_books(pool: &SqlitePool, count: i64) -> Vec<i64> {
+    let lib_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scan_roots (path, display_name) VALUES ('/series-lib', 'lib') RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let mut ids = Vec::new();
+    for n in 0..count {
+        let series_id: i64 =
+            sqlx::query_scalar("INSERT INTO series (name) VALUES (?) RETURNING id")
+                .bind(format!("Series {n}"))
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let book_id: i64 = sqlx::query_scalar(
+            "INSERT INTO books (uuid, scan_key, library_id, path, title)
+             VALUES (?, ?, ?, ?, ?) RETURNING id",
+        )
+        .bind(format!("series-uuid-{n}"))
+        .bind(format!("series-book-{n}.epub"))
+        .bind(lib_id)
+        .bind(format!("/series-lib/series-book-{n}.epub"))
+        .bind(format!("Series Book {n}"))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO books_series_link (book, series) VALUES (?, ?)")
+            .bind(book_id)
+            .bind(series_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        ids.push(series_id);
+    }
+    ids
+}
+
 /// `dedup_suggestions.decided_by` carries a real FK to `users`, so a decide
 /// test needs an actual reviewer row.
 async fn seed_reviewer(pool: &SqlitePool) -> i64 {
@@ -122,11 +163,15 @@ async fn review_counts_reports_every_kind_at_zero_when_nothing_is_detected() {
 #[tokio::test]
 async fn review_counts_buckets_rows_by_kind_and_decision() {
     let pool = new_pool().await;
+    // The pending row names real authors: `review_counts` prunes stale rows
+    // first, so a suggestion pointing at ids nothing backs would be retired
+    // before it could be counted.
+    let authors = seed_authors_with_books(&pool, 2).await;
     seed_suggestion(
         &pool,
         CleanupKind::Author,
         CleanupAction::Merge,
-        &merge_payload(&[1], 2),
+        &merge_payload(&[authors[0]], authors[1]),
         Decision::Pending,
     )
     .await;
@@ -210,12 +255,13 @@ async fn review_queue_returns_only_pending_rows_of_the_requested_kind() {
 #[tokio::test]
 async fn review_queue_clamps_the_row_limit_to_the_page_maximum() {
     let pool = new_pool().await;
-    for n in 0..3 {
+    let series = seed_series_with_books(&pool, 6).await;
+    for pair in series.chunks(2) {
         seed_suggestion(
             &pool,
             CleanupKind::Series,
             CleanupAction::Merge,
-            &merge_payload(&[n], n + 100),
+            &merge_payload(&[pair[0]], pair[1]),
             Decision::Pending,
         )
         .await;

@@ -60,6 +60,12 @@ test("selecting rows reveals the bulk edit bar and checkbox clicks do not naviga
 
   const bar = page.getByTestId("bulk-edit-bar");
   await expect(bar).toContainText("2 books selected");
+  // The bar flattens into the landing column, where `.lmq > *` lifts each
+  // section — a rule that ties the bar on specificity. Losing that tie drops
+  // it into the flow, far below the rows it reports on.
+  await expect
+    .poll(() => bar.evaluate((el) => getComputedStyle(el).position))
+    .toBe("fixed");
 
   await page.getByTestId("bulk-edit-clear").click();
   await expect(bar).toHaveCount(0);

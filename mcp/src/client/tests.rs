@@ -438,3 +438,51 @@ fn write_allowlisted_expands_param_segments_and_rejects_everything_else() {
     assert!(!write_allowlisted(&Method::POST, "/api/settings"));
     assert!(!write_allowlisted(&Method::POST, "/api/scan/resolve/extra"));
 }
+
+// ── Fixed-token loopback client (hosted /mcp, #2314) ─────────────────
+
+/// Boot a stub instance and return a fixed-token client seeded with `token`.
+async fn stub_bearer_client(token: &str) -> (OmnibusClient, Arc<Stub>) {
+    let stub = Arc::new(Stub::default());
+    let app = Router::new()
+        .route("/api/auth/login", post(login))
+        .route("/api/thing", get(protected))
+        .with_state(stub.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let client = OmnibusClient::with_bearer(format!("http://{addr}"), token.to_string()).unwrap();
+    (client, stub)
+}
+
+#[tokio::test]
+async fn with_bearer_passes_the_token_through_and_never_logs_in() {
+    let (client, stub) = stub_bearer_client("caller-token").await;
+    stub.valid
+        .lock()
+        .unwrap()
+        .insert("caller-token".to_string());
+
+    let body: Payload = client.get_json("/api/thing", &[]).await.unwrap();
+    assert_eq!(body, Payload { value: 42 });
+    assert_eq!(stub.logins.load(Ordering::SeqCst), 0, "no login may occur");
+    let (auth, _ua) = stub.last_get_headers.lock().unwrap().clone().unwrap();
+    assert_eq!(auth.as_deref(), Some("Bearer caller-token"));
+}
+
+#[tokio::test]
+async fn with_bearer_surfaces_a_401_as_token_rejected_instead_of_relogin() {
+    // The caller's token was revoked mid-session: the fixed-token client
+    // must not try to mint itself a session (it holds no credentials) —
+    // the 401 surfaces as `TokenRejected` and the login count stays 0.
+    let (client, stub) = stub_bearer_client("revoked-token").await;
+
+    let err = client
+        .get_json::<Payload>("/api/thing", &[])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ClientError::TokenRejected), "got: {err}");
+    assert_eq!(stub.logins.load(Ordering::SeqCst), 0);
+}

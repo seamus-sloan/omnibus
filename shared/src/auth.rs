@@ -95,6 +95,20 @@ pub struct SetPasswordRequest {
     pub password: String,
 }
 
+/// Stands in for a session whose holder can't be named — one minted before
+/// migration `0088`, or a caller that sent no `User-Agent`. Lives beside the
+/// wire type rather than beside the labelling logic in `server::auth` because
+/// [`SessionView::client`]'s serde default needs it too, and one literal can't
+/// drift from itself.
+pub const UNKNOWN_CLIENT: &str = "Unknown client";
+
+/// Serde default for [`SessionView::client`]. A bare `#[serde(default)]` would
+/// decode a payload without the field to `""` — a blank cell in the UI, and a
+/// contradiction of the field's own contract.
+fn unknown_client() -> String {
+    UNKNOWN_CLIENT.to_string()
+}
+
 /// A session row as shown to its owner or an admin (device & session
 /// management, F5.4). Never exposes the token hash — only enough to
 /// identify and revoke the row. Shared by the self-service
@@ -106,6 +120,13 @@ pub struct SessionView {
     pub device_id: Option<i64>,
     /// `"cookie"` or `"bearer"`.
     pub kind: String,
+    /// Human-readable name of the client holding this session — the registered
+    /// device's name for a native client ("Seamus's iPhone"), otherwise a label
+    /// derived from the captured `User-Agent` ("Firefox on macOS"). Derived
+    /// server-side so the raw header never reaches a page; falls back to
+    /// [`UNKNOWN_CLIENT`] for a session minted before migration `0088`.
+    #[serde(default = "unknown_client")]
+    pub client: String,
     pub created_at: i64,
     pub last_used_at: i64,
     pub expires_at: i64,
@@ -186,6 +207,36 @@ pub struct LoginResponse {
     pub token: Option<String>,
 }
 
+/// One live API token in the management listing (`GET /api/auth/api-tokens`).
+/// Never carries the secret — that appears exactly once, in
+/// [`CreateApiTokenResponse::secret`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApiTokenView {
+    pub id: i64,
+    pub name: String,
+    pub created_at: i64,
+    /// `None` until the token first authenticates a request.
+    #[serde(default)]
+    pub last_used_at: Option<i64>,
+}
+
+/// Body of `POST /api/auth/api-tokens`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateApiTokenRequest {
+    pub name: String,
+}
+
+/// Response from `POST /api/auth/api-tokens`. `secret` is the raw `omni_…`
+/// token, shown to the client exactly once — the server keeps only its hash,
+/// so it is unrecoverable afterward. Deliberately does not derive `Debug`,
+/// same as `LoginRequest`: a stray `tracing::debug!(?resp)` must not leak a
+/// long-lived credential.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateApiTokenResponse {
+    pub token: ApiTokenView,
+    pub secret: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +251,18 @@ mod tests {
         )
         .unwrap();
         assert!(v.hidden_formats.is_empty());
+    }
+
+    // Payloads from a pre-0088 server lack `client`. The default must name the
+    // absence rather than leaving `""`, which would render a blank cell where
+    // the field's contract promises a client name.
+    #[test]
+    fn session_view_deserializes_payload_missing_client_as_unknown() {
+        let v: SessionView = serde_json::from_str(
+            r#"{"id":1,"kind":"cookie","created_at":0,
+                "last_used_at":0,"expires_at":0}"#,
+        )
+        .unwrap();
+        assert_eq!(v.client, UNKNOWN_CLIENT);
     }
 }
