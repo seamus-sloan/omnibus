@@ -1,10 +1,13 @@
 //! Authenticated HTTP client for one Omnibus instance. Logs in over
-//! `POST /api/auth/login` for a bearer token, sends every read as a `GET`
-//! with that token, and re-logs-in transparently when a session idle-expires
-//! mid-run (7 days of inactivity — `SESSION_IDLE_TIMEOUT_SECS`). The password
-//! and token are held in memory and never logged.
+//! `POST /api/auth/login` for a bearer token, sends reads as `GET`s and the
+//! allowlisted writes with that token, and re-logs-in transparently when a
+//! session idle-expires mid-run (7 days of inactivity —
+//! `SESSION_IDLE_TIMEOUT_SECS`). The password and token are held in memory
+//! and never logged.
 
+use reqwest::Method;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 
 use omnibus_shared::{LoginRequest, LoginResponse};
@@ -20,10 +23,64 @@ use crate::config::Config;
 /// lands here as it ships. **Instance configuration** (`/api/settings`, API
 /// keys, SMTP, registration) and **commands** (`/api/reindex`,
 /// `/api/scan-library`, `/api/fts/rebuild`, `/api/kindle/send`) are never
-/// added. Enforcement matches the statement: [`OmnibusClient`]'s public
-/// surface builds only `GET` requests, and the one `POST` lives in the
-/// private `login` path below.
-pub const WRITE_ALLOWLIST: &[&str] = &["POST /api/auth/login"];
+/// added. Enforcement matches the statement: [`OmnibusClient`]'s public read
+/// surface builds only `GET` requests, and every non-`GET` routes through
+/// [`OmnibusClient::write_json`] / [`OmnibusClient::write_no_content`], which
+/// assert membership here (a `{param}` segment matches any single path
+/// segment) — a request outside the list is a bug in this crate and fails
+/// loudly before it reaches the instance.
+pub const WRITE_ALLOWLIST: &[&str] = &[
+    // The session itself (the one write the read-only crate shipped with).
+    "POST /api/auth/login",
+    // Reads wearing POST: the scan lookup ladder takes its argument in a
+    // JSON body, but none of these three mutates anything — resolve answers
+    // for one ISBN, search for a title query, resolve-meta for a picked
+    // search candidate.
+    "POST /api/scan/resolve",
+    "POST /api/scan/search",
+    "POST /api/scan/resolve-meta",
+    // Content state (rule 08 tier 3): which physical copies the household
+    // owns. Library-wide like a digital file, and an assertion ("we own this
+    // copy"), not a command. Check-in also binds the ISBN to the book on the
+    // exact-identifier rung, which is why the tool is confirm-gated.
+    "POST /api/scan/check-in",
+    "PATCH /api/physical/copies/{copy_id}",
+    "DELETE /api/physical/copies/{copy_id}",
+    // Content state (rule 08 tier 3): the caller's own wishlist rows. The
+    // scan-flow add covers both a library book (by uuid) and a fileless book
+    // from external meta; the remove is the per-book detail route.
+    "POST /api/scan/wishlist",
+    "DELETE /api/physical/{uuid}/wishlist",
+];
+
+/// True when `method path` is covered by [`WRITE_ALLOWLIST`]. A `{param}`
+/// segment in an entry matches exactly one non-empty path segment.
+fn write_allowlisted(method: &Method, path: &str) -> bool {
+    WRITE_ALLOWLIST.iter().any(|entry| {
+        entry
+            .split_once(' ')
+            .is_some_and(|(m, pattern)| m == method.as_str() && path_matches(pattern, path))
+    })
+}
+
+/// Segment-wise match of a concrete request path against an allowlist
+/// pattern, treating `{param}` segments as single-segment wildcards.
+fn path_matches(pattern: &str, path: &str) -> bool {
+    let mut pattern = pattern.split('/');
+    let mut path = path.split('/');
+    loop {
+        match (pattern.next(), path.next()) {
+            (None, None) => return true,
+            (Some(p), Some(s)) if p.starts_with('{') && p.ends_with('}') => {
+                if s.is_empty() {
+                    return false;
+                }
+            }
+            (Some(p), Some(s)) if p == s => {}
+            _ => return false,
+        }
+    }
+}
 
 /// `User-Agent` on every request, so MCP traffic is separable from web and
 /// iOS traffic in the instance's request log.
@@ -56,6 +113,17 @@ pub enum ClientError {
     /// already retried through.
     #[error("GET {path} failed: server answered HTTP {status}")]
     Status { path: String, status: u16 },
+    /// An allowlisted write (or a lookup the API models as `POST`) returned a
+    /// non-success status. Carries the server's plain-text error body — the
+    /// actionable detail (a 400's validation message, a 403's missing
+    /// permission) that tools surface instead of an opaque status code.
+    #[error("{method} {path} failed: server answered HTTP {status}: {message}")]
+    WriteStatus {
+        method: String,
+        path: String,
+        status: u16,
+        message: String,
+    },
     /// The response body did not match the `omnibus_shared` wire type — the
     /// drift signal this crate exists to surface loudly.
     #[error("GET {path} did not match the expected wire shape: {message}")]
@@ -230,6 +298,103 @@ impl OmnibusClient {
             Err(ClientError::Status { status: 404, .. }) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    async fn send_write<B: Serialize + ?Sized>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&B>,
+        token: &str,
+    ) -> Result<reqwest::Response, ClientError> {
+        let mut req = self
+            .http
+            .request(method, format!("{}{path}", self.base_url))
+            .bearer_auth(token);
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        Ok(req.send().await?)
+    }
+
+    /// `method path`, re-logging-in transparently on a 401 (same contract as
+    /// [`Self::get_with_relogin`]). Panics when the request is not covered by
+    /// [`WRITE_ALLOWLIST`] — that is a bug in this crate, and failing loudly
+    /// beats letting an unvetted write reach the instance.
+    async fn write_with_relogin<B: Serialize + ?Sized>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&B>,
+    ) -> Result<reqwest::Response, ClientError> {
+        assert!(
+            write_allowlisted(&method, path),
+            "{method} {path} is not in WRITE_ALLOWLIST"
+        );
+        let token = self.bearer().await?;
+        let resp = self.send_write(method.clone(), path, body, &token).await?;
+        if resp.status() != reqwest::StatusCode::UNAUTHORIZED {
+            return Ok(resp);
+        }
+        let token = self.login_once(Some(&token)).await?;
+        self.send_write(method, path, body, &token).await
+    }
+
+    /// Build the [`ClientError::WriteStatus`] for a failed write, carrying
+    /// (a bounded prefix of) the server's plain-text error body.
+    async fn write_status_error(
+        method: &Method,
+        path: &str,
+        resp: reqwest::Response,
+    ) -> ClientError {
+        let status = resp.status().as_u16();
+        let message: String = resp
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(500)
+            .collect();
+        ClientError::WriteStatus {
+            method: method.to_string(),
+            path: path.to_string(),
+            status,
+            message,
+        }
+    }
+
+    /// Send an allowlisted write with a JSON body and decode the success
+    /// response as `T`. Non-success statuses become
+    /// [`ClientError::WriteStatus`] with the server's error body.
+    pub async fn write_json<B: Serialize + ?Sized, T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: &B,
+    ) -> Result<T, ClientError> {
+        let resp = self
+            .write_with_relogin(method.clone(), path, Some(body))
+            .await?;
+        if !resp.status().is_success() {
+            return Err(Self::write_status_error(&method, path, resp).await);
+        }
+        let bytes = resp.bytes().await?;
+        serde_json::from_slice(&bytes).map_err(|e| ClientError::Decode {
+            path: path.to_string(),
+            message: e.to_string(),
+        })
+    }
+
+    /// Send an allowlisted body-less write whose success answer carries no
+    /// content (the `204` DELETE endpoints).
+    pub async fn write_no_content(&self, method: Method, path: &str) -> Result<(), ClientError> {
+        let resp = self
+            .write_with_relogin::<()>(method.clone(), path, None)
+            .await?;
+        if !resp.status().is_success() {
+            return Err(Self::write_status_error(&method, path, resp).await);
+        }
+        Ok(())
     }
 }
 

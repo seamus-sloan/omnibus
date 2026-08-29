@@ -10,6 +10,7 @@ use crate::physical::WishlistSource;
 /// A library book matched during scan resolution — just enough to display and
 /// act on it (the confirm/decision screens).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ScanBook {
     pub uuid: String,
     pub title: String,
@@ -29,6 +30,7 @@ pub struct ScanBook {
 /// picker rather than a reason to decline the match.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum ScanOutcome {
     /// Exact identifier hit; the book already has a physical copy.
     AlreadyOwned { book: ScanBook },
@@ -109,6 +111,7 @@ impl ScanSearchRequest {
 /// Title-search results: provider-resolved candidates for the reader to pick
 /// from, each complete enough to feed [`ResolveMetaRequest`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ScanSearchResponse {
     pub results: Vec<ExternalBookMeta>,
 }
@@ -236,6 +239,7 @@ impl WishlistAddRequest {
 
 /// The uuid of the book a check-in / add / wishlist write landed on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct BookRef {
     pub book_uuid: String,
 }

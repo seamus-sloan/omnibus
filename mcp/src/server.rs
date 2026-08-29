@@ -27,7 +27,7 @@ impl OmnibusMcp {
     pub fn new(client: Arc<OmnibusClient>) -> Self {
         Self {
             client,
-            tool_router: Self::read_tools(),
+            tool_router: Self::read_tools() + Self::checkin_tools(),
         }
     }
 }
@@ -52,11 +52,18 @@ impl ServerHandler for OmnibusMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(implementation)
             .with_instructions(
-                "Read-only access to an Omnibus ebook/audiobook library: browse and \
-                 search books, explore authors/series/tags/genres and shelves, and read \
-                 the signed-in user's stats, progress, highlights, bookmarks, and \
-                 journal entries. Books are identified by the uuid field returned by \
-                 the listing and search tools. No tool mutates the library."
+                "Access to an Omnibus ebook/audiobook library. Read-only tools browse \
+                 and search books, explore authors/series/tags/genres and shelves, and \
+                 read the signed-in user's stats, progress, highlights, bookmarks, and \
+                 journal entries; books are identified by the uuid field returned by \
+                 the listing and search tools. The physical-collection tools are the \
+                 only mutations: resolve ISBNs and title searches against the library \
+                 and the external metadata providers (always relay which provider \
+                 answered), check in physical copies, and manage the wishlist and copy \
+                 notes. check_in_physical_book and remove_physical_copy have lasting \
+                 effects, so they require confirm=true — resolve first, show the user \
+                 the target, and confirm only with their approval. Digital library \
+                 content, settings, and reading state are never modified."
                     .to_string(),
             )
     }

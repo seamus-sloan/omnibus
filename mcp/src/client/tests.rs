@@ -4,20 +4,22 @@ use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 
 use super::*;
 use crate::config::Config;
 
 /// Stub instance state: counts logins, remembers which tokens are live, and
-/// records the last login body + request headers for assertions.
+/// records the last login body + request headers / write body for assertions.
 #[derive(Default)]
 struct Stub {
     logins: AtomicUsize,
     valid: Mutex<HashSet<String>>,
     last_login_body: Mutex<Option<serde_json::Value>>,
     last_get_headers: Mutex<Option<(Option<String>, Option<String>)>>,
+    last_write_body: Mutex<Option<serde_json::Value>>,
+    deletes: AtomicUsize,
 }
 
 impl Stub {
@@ -70,12 +72,53 @@ struct Payload {
     value: i64,
 }
 
+/// Bearer check shared by the stub's write routes: `Ok(token)` when the
+/// header carries a live token, 401 otherwise.
+fn check_bearer(stub: &Stub, headers: &HeaderMap) -> Result<(), StatusCode> {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|a| a.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if !stub.valid.lock().unwrap().contains(token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(())
+}
+
+/// Allowlisted write route (`POST /api/scan/resolve`): records the body.
+async fn write_thing(
+    State(stub): State<Arc<Stub>>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_bearer(&stub, &headers)?;
+    *stub.last_write_body.lock().unwrap() = Some(body);
+    Ok(Json(serde_json::json!({ "value": 42 })))
+}
+
+/// Allowlisted 204 route (`DELETE /api/physical/{uuid}/wishlist`).
+async fn delete_thing(
+    State(stub): State<Arc<Stub>>,
+    headers: HeaderMap,
+) -> Result<StatusCode, StatusCode> {
+    check_bearer(&stub, &headers)?;
+    stub.deletes.fetch_add(1, Ordering::SeqCst);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Boot a stub instance and return `(client, stub)`.
 async fn stub_client() -> (OmnibusClient, Arc<Stub>) {
     let stub = Arc::new(Stub::default());
     let app = Router::new()
         .route("/api/auth/login", post(login))
         .route("/api/thing", get(protected))
+        .route("/api/scan/resolve", post(write_thing))
+        .route(
+            "/api/scan/search",
+            post(|| async { (StatusCode::BAD_REQUEST, "query is required") }),
+        )
+        .route("/api/physical/{uuid}/wishlist", delete(delete_thing))
         .with_state(stub.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -271,4 +314,103 @@ async fn get_json_opt_maps_404_to_none_and_success_to_some() {
     assert_eq!(missing, None);
     let found: Option<Payload> = client.get_json_opt("/api/thing", &[]).await.unwrap();
     assert_eq!(found, Some(Payload { value: 42 }));
+}
+
+#[tokio::test]
+async fn write_json_sends_the_body_with_bearer_and_decodes_the_response() {
+    let (client, stub) = stub_client().await;
+    let body = serde_json::json!({ "isbn": "9780306406157" });
+    let answer: Payload = client
+        .write_json(Method::POST, "/api/scan/resolve", &body)
+        .await
+        .unwrap();
+    assert_eq!(answer, Payload { value: 42 });
+    assert_eq!(stub.logins.load(Ordering::SeqCst), 1);
+    let recorded = stub.last_write_body.lock().unwrap().clone().unwrap();
+    assert_eq!(recorded, body);
+}
+
+#[tokio::test]
+async fn write_json_relogs_in_transparently_when_the_session_expired() {
+    let (client, stub) = stub_client().await;
+    let body = serde_json::json!({ "isbn": "9780306406157" });
+    let _: Payload = client
+        .write_json(Method::POST, "/api/scan/resolve", &body)
+        .await
+        .unwrap();
+    // Simulate the 7-day idle expiry: the server no longer knows the token.
+    stub.revoke_all();
+    let answer: Payload = client
+        .write_json(Method::POST, "/api/scan/resolve", &body)
+        .await
+        .unwrap();
+    assert_eq!(answer, Payload { value: 42 });
+    assert_eq!(stub.logins.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn write_json_returns_write_status_carrying_the_server_message() {
+    let (client, _stub) = stub_client().await;
+    let body = serde_json::json!({ "query": "" });
+    let err = client
+        .write_json::<_, Payload>(Method::POST, "/api/scan/search", &body)
+        .await
+        .unwrap_err();
+    match err {
+        ClientError::WriteStatus {
+            method,
+            path,
+            status,
+            message,
+        } => {
+            assert_eq!(method, "POST");
+            assert_eq!(path, "/api/scan/search");
+            assert_eq!(status, 400);
+            assert_eq!(message, "query is required");
+        }
+        other => panic!("expected WriteStatus, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn write_no_content_succeeds_on_a_204_delete() {
+    let (client, stub) = stub_client().await;
+    client
+        .write_no_content(Method::DELETE, "/api/physical/uuid-1/wishlist")
+        .await
+        .unwrap();
+    assert_eq!(stub.deletes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+#[should_panic(expected = "not in WRITE_ALLOWLIST")]
+async fn write_json_panics_on_a_path_outside_the_allowlist() {
+    let (client, _stub) = stub_client().await;
+    let body = serde_json::json!({});
+    let _: Result<Payload, _> = client
+        .write_json(Method::POST, "/api/settings", &body)
+        .await;
+}
+
+#[test]
+fn write_allowlisted_expands_param_segments_and_rejects_everything_else() {
+    // `{param}` matches exactly one non-empty segment.
+    assert!(write_allowlisted(&Method::PATCH, "/api/physical/copies/12"));
+    assert!(write_allowlisted(
+        &Method::DELETE,
+        "/api/physical/uuid-abc/wishlist"
+    ));
+    // Empty and extra segments do not satisfy a wildcard.
+    assert!(!write_allowlisted(
+        &Method::DELETE,
+        "/api/physical//wishlist"
+    ));
+    assert!(!write_allowlisted(
+        &Method::DELETE,
+        "/api/physical/a/b/wishlist"
+    ));
+    // Method mismatch and unlisted paths are refused.
+    assert!(!write_allowlisted(&Method::GET, "/api/scan/resolve"));
+    assert!(!write_allowlisted(&Method::POST, "/api/settings"));
+    assert!(!write_allowlisted(&Method::POST, "/api/scan/resolve/extra"));
 }

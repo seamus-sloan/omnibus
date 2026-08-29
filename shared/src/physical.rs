@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// A physical copy of a book, owned library-wide (shared by all users like a
 /// digital file). A book can have many; each is individually deletable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PhysicalCopy {
     pub id: i64,
     pub book_uuid: String,
@@ -27,6 +28,7 @@ pub struct PhysicalCopy {
 /// the reader at all (#2247).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum WishlistSource {
     /// Added after reading a barcode with the camera.
     Scan,
