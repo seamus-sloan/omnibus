@@ -90,6 +90,8 @@ fn suggestion_card_round_trips_through_json_with_optional_fields_present_and_abs
         decision: Decision::Pending,
         primary_name: "Ursula K. Le Guin".into(),
         secondary_name: Some("Ursula Le Guin".into()),
+        source_names: vec!["Ursula Le Guin".into()],
+        proposed_parts: Vec::new(),
         book_count: 12,
         photo_url: Some("/api/authors/1/photo".into()),
         created_at: 1_700_000_000,
@@ -106,4 +108,20 @@ fn suggestion_card_round_trips_through_json_with_optional_fields_present_and_abs
     let json = serde_json::to_string(&without_optionals).unwrap();
     let back: SuggestionCard = serde_json::from_str(&json).unwrap();
     assert_eq!(back, without_optionals);
+}
+
+#[test]
+fn suggestion_card_deserializes_a_payload_written_before_the_list_fields_existed() {
+    // `source_names` and `proposed_parts` carry `#[serde(default)]` so a card
+    // from a server that predates them still decodes — the two lists are
+    // additive, and a client on an older build must not fail the whole queue
+    // over their absence.
+    let json = r#"{
+        "id": 7, "kind": "tag", "action": "split", "decision": "pending",
+        "primary_name": "a;b", "secondary_name": null,
+        "book_count": 2, "photo_url": null, "created_at": 1700000000
+    }"#;
+    let card: SuggestionCard = serde_json::from_str(json).unwrap();
+    assert!(card.source_names.is_empty());
+    assert!(card.proposed_parts.is_empty());
 }

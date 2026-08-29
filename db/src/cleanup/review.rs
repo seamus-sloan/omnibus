@@ -142,11 +142,20 @@ pub async fn review_queue(
 /// as applied. [`Decision::Rejected`] only stamps (the row stays as the record
 /// that stops detection re-suggesting it). [`Decision::Pending`] is refused —
 /// this path cannot un-decide a row.
+///
+/// `edited_value` is the reviewer's own wording in place of the detector's
+/// proposal, which the review surface offers as an editable field. Only a
+/// book-title rename can honour it today — that apply primitive already takes
+/// an arbitrary title — so an edit on any other kind is *refused* rather than
+/// silently dropped: applying the detector's proposal while reporting success
+/// on the reviewer's would write a value nobody chose. It is ignored on a
+/// reject, which applies nothing.
 pub async fn decide_suggestion(
     pool: &SqlitePool,
     id: i64,
     decision: Decision,
     admin_id: i64,
+    edited_value: Option<&str>,
 ) -> Result<(), CleanupStoreError> {
     if decision == Decision::Pending {
         return Err(CleanupStoreError::Refused(
@@ -162,10 +171,29 @@ pub async fn decide_suggestion(
         ));
     }
     if decision == Decision::Accepted {
-        apply_suggestion(pool, &row, admin_id).await?;
+        apply_suggestion(pool, &row, admin_id, edited_value).await?;
     }
     record_decision(pool, id, decision, admin_id).await?;
     Ok(())
+}
+
+/// The title an accepted rename writes: the reviewer's wording when they typed
+/// over the proposal, the detector's otherwise. Trimmed, and empty is refused
+/// — a blank field is a slip, and adopting it would leave the book untitled.
+fn resolved_title<'a>(
+    proposed: &'a str,
+    edited_value: Option<&'a str>,
+) -> Result<&'a str, CleanupStoreError> {
+    let Some(edited) = edited_value else {
+        return Ok(proposed);
+    };
+    let trimmed = edited.trim();
+    if trimmed.is_empty() {
+        return Err(CleanupStoreError::Refused(
+            "the title cannot be empty".to_string(),
+        ));
+    }
+    Ok(trimmed)
 }
 
 /// Load one suggestion by id, or `None` when it doesn't exist.
@@ -216,6 +244,8 @@ async fn hydrate_card(
         decision: row.decision,
         primary_name,
         secondary_name,
+        source_names: card_source_names(&row.payload),
+        proposed_parts: card_proposed_parts(&row.payload),
         book_count: affected_book_count(pool, row).await?,
         photo_url: card_photo_url(pool, row).await?,
         created_at: row.created_at,
@@ -245,6 +275,24 @@ fn card_names(payload: &CleanupPayload) -> (String, Option<String>) {
             ..
         } => (current_title.clone(), Some(proposed_title.clone())),
         CleanupPayload::Delete { name, .. } => (name.clone(), None),
+    }
+}
+
+/// Every name a merge folds away, so a card can name all of them rather than
+/// only the two-way case's single "other".
+fn card_source_names(payload: &CleanupPayload) -> Vec<String> {
+    match payload {
+        CleanupPayload::Merge { source_names, .. } => source_names.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// The atoms a split would write. The scanned tag alone cannot stand in for
+/// them — shown on both sides of the card it reads as a change that isn't one.
+fn card_proposed_parts(payload: &CleanupPayload) -> Vec<String> {
+    match payload {
+        CleanupPayload::Split { atoms, .. } => atoms.clone(),
+        _ => Vec::new(),
     }
 }
 
@@ -327,9 +375,17 @@ async fn apply_suggestion(
     pool: &SqlitePool,
     row: &SuggestionRow,
     admin_id: i64,
+    edited_value: Option<&str>,
 ) -> Result<(), CleanupStoreError> {
     let id = Some(row.id);
     let by = Some(admin_id);
+    if edited_value.is_some()
+        && !(row.kind == CleanupKind::BookTitle && row.action == CleanupAction::Rename)
+    {
+        return Err(CleanupStoreError::Refused(
+            "this suggestion's value cannot be edited yet".to_string(),
+        ));
+    }
     match (row.kind, row.action, &row.payload) {
         (
             CleanupKind::Author,
@@ -376,7 +432,10 @@ async fn apply_suggestion(
                 proposed_title,
                 ..
             },
-        ) => apply_book_title_override(pool, book_uuid, proposed_title, id, admin_id).await?,
+        ) => {
+            let title = resolved_title(proposed_title, edited_value)?;
+            apply_book_title_override(pool, book_uuid, title, id, admin_id).await?
+        }
         (CleanupKind::Author, CleanupAction::Delete, CleanupPayload::Delete { entity_id, .. }) => {
             apply_delete_author(pool, *entity_id, id, by).await?
         }
