@@ -97,6 +97,10 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
     var formats: [String] = []
     var hasPhysical: Bool = false
     var addedAt: String?
+    /// Most recent reading signal on this book for the signed-in reader —
+    /// the axis behind the "Recently interacted" sort. Server-derived and
+    /// per-user, so it moves without the book's own metadata changing.
+    var lastInteractedAt: String?
     var error: String?
     var hasOverride: Bool = false
     var hasCoverOverride: Bool = false
@@ -121,6 +125,7 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
         case coverURL = "cover_url"
         case hasPhysical = "has_physical"
         case addedAt = "added_at"
+        case lastInteractedAt = "last_interacted_at"
         case hasOverride = "has_override"
         case hasCoverOverride = "has_cover_override"
         case bookFiles = "book_files"
