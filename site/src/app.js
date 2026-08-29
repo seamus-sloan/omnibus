@@ -41,14 +41,40 @@
 
   /* ── direction (dark / sepia) ─────────────────────────────────── */
   var DIRS = { dark: 1, sepia: 1 };
+  /* own-property check: localStorage and DOM attrs are user-controlled, and
+     bare indexing would accept prototype keys like "__proto__" */
+  function has(obj, key) { return Object.prototype.hasOwnProperty.call(obj, key); }
   var stored = null;
   try { stored = localStorage.getItem('omn.site.dir'); } catch (e) { /* private mode */ }
-  var dir = DIRS[stored] ? stored : 'dark';
+  var dir = stored !== null && has(DIRS, stored) ? stored : 'dark';
+
+  /* Shots with a shots/sepia/ counterpart. Anything absent here keeps its
+     dark render in both directions rather than 404ing mid-toggle. */
+  var SEPIA_SHOTS = {
+    'omnibus-android-library': 1, 'omnibus-book-detail': 1,
+    'omnibus-checkin-scan': 1, 'omnibus-ios-book-detail': 1,
+    'omnibus-library-home': 1, 'omnibus-metadata-edit': 1,
+    'omnibus-player': 1, 'omnibus-settings-library': 1,
+    'omnibus-shelf-kobo': 1, 'omnibus-sync-alignment': 1,
+    'omnibus-sync-continue-hero': 1, 'omnibus-themes-strip': 1,
+    'omnibus-wishlist-ios': 1
+  };
+
+  function retint(d) {
+    Array.prototype.forEach.call(document.querySelectorAll('img.shot'), function (img) {
+      var m = (img.getAttribute('src') || '').match(/^shots\/[^/]+\/(.+)\.webp$/);
+      if (!m) return;
+      var want = d === 'sepia' && has(SEPIA_SHOTS, m[1]) ? 'sepia' : 'dark';
+      var src = 'shots/' + want + '/' + m[1] + '.webp';
+      if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+    });
+  }
 
   function setDir(next) {
-    if (!DIRS[next]) return;
+    if (!has(DIRS, next)) return;
     dir = next;
     site.className = 'site dir-' + dir;
+    retint(dir);
     Array.prototype.forEach.call(document.querySelectorAll('.dirtog button'), function (b) {
       var on = b.getAttribute('data-dir') === dir;
       b.classList.toggle('on', on);

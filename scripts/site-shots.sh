@@ -35,7 +35,7 @@ for f in "$SRC"/omnibus-*.png; do
   # Desktop screens display at most ~1440 CSS px, so 1920 stays crisp on a 2x
   # display without shipping the full 2884px export. Phone frames cap at 820.
   case "$b" in
-    *ios*|*android*|*checkin-scan*|*wishlist*) W=820 ;;
+    *ios*|*android*|*checkin-*|*wishlist*) W=820 ;;
     *)                                         W=1920 ;;
   esac
   cwebp -quiet -q 78 -resize "$W" 0 -m 6 "$f" -o "$OUT/$b.webp"

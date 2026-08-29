@@ -6,6 +6,12 @@
       "runtimeExecutable": "nix",
       "runtimeArgs": ["develop", ".#web", "--command", "bash", "-c", "PORT=3030 OMNIBUS_PUBLIC_ORIGIN=http://localhost:3030,http://127.0.0.1:3030 exec dx serve --platform web --fullstack --port 3030 --package omnibus"],
       "port": 3030
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "3081", "--directory", "site/src"],
+      "port": 3081
     }
   ]
 }
