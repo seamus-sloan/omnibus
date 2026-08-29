@@ -167,7 +167,7 @@ body.flow{overflow:auto}
 .faq{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(18px,3vh,40px) clamp(28px,4vw,72px);max-width:1180px}
 .faq-q{font-family:var(--serif);font-size:clamp(19px,min(1.6vw,2.9vh),27px);line-height:1.12;letter-spacing:-0.01em;color:var(--pg-ink)}
 .faq-a{margin-top:9px;font-size:clamp(13px,min(1.02vw,1.75vh),15.5px);color:var(--pg-ink2);line-height:1.5;text-wrap:pretty;max-width:48ch}
-.faq-a code{font-family:var(--mono);font-size:.9em;color:var(--pg-ink)}
+.faq-a code,.pts code{font-family:var(--mono);font-size:.9em;color:var(--pg-ink)}
 
 /* close */
 .close-in{display:grid;justify-items:center;text-align:center;gap:clamp(16px,2.6vh,32px);max-width:900px;margin:0 auto}
