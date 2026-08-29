@@ -9,8 +9,8 @@ use omnibus_db as db;
 #[cfg(feature = "server")]
 use omnibus_shared::SessionCursor;
 use omnibus_shared::{
-    BookInsights, LibraryComposition, LibrarySize, ReadingGoal, ReadingGoalUpdate, SessionLogPage,
-    StatsRange, StatsSummary,
+    BookInsights, DailyGoalUpdate, DailyGoals, LibraryComposition, LibrarySize, ReadingGoal,
+    ReadingGoalUpdate, SessionLogPage, StatsRange, StatsSummary,
 };
 
 #[cfg(feature = "server")]
@@ -63,6 +63,20 @@ pub async fn rpc_set_reading_goal(update: ReadingGoalUpdate) -> Result<Option<Re
     Ok(db::stats::set_goal(&pool.0, user.id, &update)
         .await
         .map_err(|e| internal_rpc_error("set reading goal", e))?)
+}
+
+/// Set, change, or clear one of the current user's daily reading goals,
+/// returning **both** afterwards with today's progress recomputed.
+///
+/// Both rather than just the kind written, so the band redraws from one
+/// response — the two are independent, and a follow-up read to fetch the other
+/// could land on a different day. Account configuration under rule 08, so
+/// never queued by the offline outbox.
+#[post("/api/rpc/stats-goal-daily", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_set_daily_goal(update: DailyGoalUpdate) -> Result<DailyGoals> {
+    Ok(db::stats::set_daily_goal(&pool.0, user.id, &update)
+        .await
+        .map_err(|e| internal_rpc_error("set daily reading goal", e))?)
 }
 
 /// Fetch what the library is made of — its format, language, publisher,

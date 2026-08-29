@@ -11423,6 +11423,31 @@ html {
 .st-goal-offline { flex: 0 0 100%; margin: 0; font-size: 12.5px; color: var(--ink-3); }
 .st-goal-error { margin: 0; font-size: 12.5px; color: var(--bad); }
 
+/* Daily goals — the standing pages/minutes targets under the annual band.
+   Deliberately quieter than the annual figure above them: they share the
+   track and fill, but the numbers are captions rather than a headline, so the
+   card still reads as one goal with two supporting rows. */
+.st-daily {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-1);
+}
+.st-daily-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.st-daily-row { display: flex; flex-direction: column; gap: 6px; }
+.st-daily-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.st-daily-label { font-size: 13px; color: var(--ink-1); }
+.st-daily-figure { margin: 0; font-size: 15px; color: var(--ink-0); }
+.st-daily-invite { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+.st-daily-unzoned { margin: 0; font-size: 12.5px; color: var(--ink-3); max-width: 56ch; }
+
 @media (max-width: 720px) {
   .st-goal-figure { font-size: 26px; }
   .st-goal-input { width: 100%; }

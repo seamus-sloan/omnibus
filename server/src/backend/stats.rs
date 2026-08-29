@@ -1,7 +1,8 @@
 //! Reading-stats REST handlers for the mobile client: the `db::stats`
 //! aggregate (`GET /api/stats`, windowed by an optional snake_case `?range=`),
 //! the same data un-aggregated as the caller's own keyset-paginated session
-//! log (`GET /api/stats/sessions`), the annual goal (`PUT /api/stats/goal`),
+//! log (`GET /api/stats/sessions`), the annual goal (`PUT /api/stats/goal`)
+//! and the daily ones (`PUT /api/stats/goal/daily`),
 //! and the collection's own scale and mix (`GET /api/library-size`,
 //! `GET /api/library-composition` — the same for every reader).
 
@@ -12,7 +13,7 @@ use axum::{
     Json,
 };
 use omnibus_db::{self as db, stats::GoalError};
-use omnibus_shared::{ReadingGoalUpdate, SessionCursor, StatsRange};
+use omnibus_shared::{DailyGoalUpdate, ReadingGoalUpdate, SessionCursor, StatsRange};
 use serde::Deserialize;
 
 use super::{internal, AppState};
@@ -74,6 +75,39 @@ pub(super) async fn put_stats_goal(
         // `InvalidDailyTarget` is unreachable here — `set_goal` bounds against
         // the annual maximum — but it is a 400 wherever it does arise, so it is
         // answered rather than left to widen this match into a catch-all.
+        Err(
+            e @ (GoalError::UnsupportedKind(_)
+            | GoalError::InvalidTarget(_)
+            | GoalError::InvalidDailyTarget { .. }
+            | GoalError::InvalidYear(_)),
+        ) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+/// Set, change, or clear one of the caller's daily reading goals.
+///
+/// The body names its `kind` — `pages` or `minutes` — and an absent `target`
+/// clears that kind, leaving the other and the annual goal alone. Returns
+/// **both** daily goals with today's progress recomputed, so a client can
+/// redraw the whole band from one response rather than following a save with a
+/// read that could observe a different day.
+///
+/// Its own route rather than a widened `PUT /api/stats/goal`: that route
+/// answers with an `Option<ReadingGoal>` that shipped iOS builds already
+/// decode, and growing its response to carry a daily goal too would break every
+/// one of them.
+///
+/// Account configuration under rule 08, like the annual goal — never queued by
+/// an offline outbox.
+pub(super) async fn put_stats_daily_goal(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Json(update): Json<DailyGoalUpdate>,
+) -> Response {
+    match db::stats::set_daily_goal(&state.pool, user.id, &update).await {
+        Ok(goals) => Json(goals).into_response(),
+        Err(GoalError::Sqlx(e)) => internal("set_daily_reading_goal", e),
+        // As above: every other variant is a boundary check the payload failed.
         Err(
             e @ (GoalError::UnsupportedKind(_)
             | GoalError::InvalidTarget(_)
