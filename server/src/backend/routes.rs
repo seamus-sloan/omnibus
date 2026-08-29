@@ -254,6 +254,7 @@ fn engagement_routes() -> Router<AppState> {
         .route("/api/stats", get(stats::get_stats))
         .route("/api/stats/sessions", get(stats::get_session_log))
         .route("/api/stats/goal", put(stats::put_stats_goal))
+        .route("/api/stats/goal/daily", put(stats::put_stats_daily_goal))
         .route("/api/library-size", get(stats::get_library_size))
         .route(
             "/api/library-composition",

@@ -6,8 +6,8 @@
 //! carry the split.
 
 use omnibus_shared::{
-    LibraryComposition, LibrarySize, ReadingGoal, ReadingGoalUpdate, SessionLogPage, StatsRange,
-    StatsSummary,
+    DailyGoalUpdate, DailyGoals, LibraryComposition, LibrarySize, ReadingGoal, ReadingGoalUpdate,
+    SessionLogPage, StatsRange, StatsSummary,
 };
 
 #[cfg(not(feature = "mobile"))]
@@ -104,6 +104,40 @@ pub async fn save_reading_goal(
     update: &ReadingGoalUpdate,
 ) -> Result<Option<ReadingGoal>, DataError> {
     crate::rpc::rpc_set_reading_goal(update.clone())
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// PUT `/api/stats/goal/daily` — set, change, or clear one daily goal,
+/// answering with both.
+///
+/// Direct on both targets for the same reason [`save_reading_goal`] is: a goal
+/// is account configuration under rule 08 test 1, so it never enters the
+/// offline outbox.
+#[cfg(feature = "mobile")]
+pub async fn save_daily_goal(
+    server_url: &str,
+    update: &DailyGoalUpdate,
+) -> Result<DailyGoals, DataError> {
+    let url = format!("{server_url}/api/stats/goal/daily");
+    let response = with_bearer(http_client().put(&url))
+        .json(update)
+        .send()
+        .await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response.json::<DailyGoals>().await?)
+}
+
+/// Web/SSR `save_daily_goal` — proxies to `rpc_set_daily_goal`.
+#[cfg(not(feature = "mobile"))]
+pub async fn save_daily_goal(
+    _server_url: &str,
+    update: &DailyGoalUpdate,
+) -> Result<DailyGoals, DataError> {
+    crate::rpc::rpc_set_daily_goal(update.clone())
         .await
         .map_err(note_server_fn_err)
 }

@@ -5,7 +5,8 @@
 
 use dioxus::prelude::*;
 use omnibus_shared::{
-    LibraryComposition, LibrarySize, ReadingGoal, StatsRange, StatsSummary, STATS_TTL_SECS,
+    DailyGoals, LibraryComposition, LibrarySize, ReadingGoal, StatsRange, StatsSummary,
+    STATS_TTL_SECS,
 };
 
 use crate::components::{PageError, PageLoading, SessionLogList};
@@ -90,9 +91,12 @@ pub fn StatsPage() -> Element {
     // the summary: a save writes the server's answer back here, so the band
     // updates without waiting on a refetch.
     let goal: Signal<Option<ReadingGoal>> = use_signal(|| None);
+    // The daily goals, owned here for the same reason and seeded to the same
+    // empty value on every target (rule 07).
+    let daily: Signal<DailyGoals> = use_signal(DailyGoals::default);
 
     use_period_fetch_effect(server_url.clone(), range, period, error);
-    use_all_time_fetch_effect(server_url.clone(), all_time, loading, error, goal);
+    use_all_time_fetch_effect(server_url.clone(), all_time, loading, error, goal, daily);
     use_library_size_fetch_effect(server_url.clone(), library_size);
     use_library_composition_fetch_effect(server_url.clone(), library_composition);
 
@@ -117,7 +121,7 @@ pub fn StatsPage() -> Element {
         div { class: "st-page",
             StatsHeader { range, menu_open }
             if let Some(year) = goal_year {
-                GoalBand { goal, year, server_url: server_url.clone() }
+                GoalBand { goal, daily, year, server_url: server_url.clone() }
             }
             if empty {
                 StatsEmpty {}
@@ -230,6 +234,7 @@ fn use_all_time_fetch_effect(
     loading: Signal<bool>,
     error: Signal<Option<String>>,
     goal: Signal<Option<ReadingGoal>>,
+    daily: Signal<DailyGoals>,
 ) {
     let generation = crate::use_cache_generation();
     use_effect(move || {
@@ -240,10 +245,12 @@ fn use_all_time_fetch_effect(
         let mut loading = loading;
         let mut error = error;
         let mut goal = goal;
+        let mut daily = daily;
         spawn(async move {
             match data::fetch_stats(&url, StatsRange::AllTime).await {
                 Ok(summary) => {
                     goal.set(summary.goal.clone());
+                    daily.set(summary.daily_goals.clone());
                     all_time.set(Some(summary));
                 }
                 Err(e) => error.set(Some(e.to_string())),

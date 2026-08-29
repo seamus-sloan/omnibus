@@ -7,7 +7,9 @@ use axum::{
     body::{to_bytes, Body},
     http::{header::AUTHORIZATION, Request, StatusCode},
 };
-use omnibus_shared::{ReadingGoal, SessionFormat, SessionLogPage, StatsRange, StatsSummary};
+use omnibus_shared::{
+    DailyGoals, ReadingGoal, SessionFormat, SessionLogPage, StatsRange, StatsSummary,
+};
 use tower::ServiceExt;
 
 use crate::auth::test_support as auth_test_support;
@@ -378,6 +380,192 @@ async fn api_put_stats_goal_returns_500_when_db_fails() {
 
     let res = app
         .oneshot(put_goal_req(&token, serde_json::json!({ "target": 24 })))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+// --- PUT /api/stats/goal/daily -------------------------------------------
+
+fn put_daily_goal_req(token: &str, body: serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .uri("/api/stats/goal/daily")
+        .method("PUT")
+        .header("content-type", "application/json")
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+async fn daily_body(res: axum::response::Response) -> DailyGoals {
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn api_put_stats_daily_goal_requires_auth() {
+    let (app, _state, _pool) = fixture().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/stats/goal/daily")
+                .method("PUT")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "kind": "pages", "target": 30 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// The happy path: one write answers with both kinds, so the client can redraw
+/// the whole band without a follow-up read.
+#[tokio::test]
+async fn api_put_stats_daily_goal_saves_and_answers_with_both_kinds() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .clone()
+        .oneshot(put_daily_goal_req(
+            &token,
+            serde_json::json!({ "kind": "pages", "target": 30 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let goals = daily_body(res).await;
+    assert_eq!(goals.pages.as_ref().map(|g| g.target), Some(30));
+    assert_eq!(goals.pages.as_ref().map(|g| g.current), Some(0));
+    assert!(goals.minutes.is_none());
+
+    let res = app
+        .oneshot(put_daily_goal_req(
+            &token,
+            serde_json::json!({ "kind": "minutes", "target": 20 }),
+        ))
+        .await
+        .unwrap();
+    let goals = daily_body(res).await;
+    assert_eq!(
+        goals.pages.map(|g| g.target),
+        Some(30),
+        "untouched by the second write"
+    );
+    assert_eq!(goals.minutes.map(|g| g.target), Some(20));
+}
+
+/// AC5: an absent target clears that kind and leaves the other standing.
+#[tokio::test]
+async fn api_put_stats_daily_goal_with_a_null_target_clears_only_that_kind() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    for body in [
+        serde_json::json!({ "kind": "pages", "target": 30 }),
+        serde_json::json!({ "kind": "minutes", "target": 20 }),
+    ] {
+        app.clone()
+            .oneshot(put_daily_goal_req(&token, body))
+            .await
+            .unwrap();
+    }
+
+    let res = app
+        .oneshot(put_daily_goal_req(
+            &token,
+            serde_json::json!({ "kind": "pages", "target": null }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let goals = daily_body(res).await;
+    assert!(goals.pages.is_none());
+    assert_eq!(goals.minutes.map(|g| g.target), Some(20));
+}
+
+#[tokio::test]
+async fn api_put_stats_daily_goal_rejects_a_kind_with_no_daily_measurement() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .oneshot(put_daily_goal_req(
+            &token,
+            serde_json::json!({ "kind": "books", "target": 1 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+/// AC2, and the part a shared bound would get wrong: 1,500 is a legal day of
+/// pages and an impossible day of minutes, so the same target has to be
+/// accepted on one kind and refused on the other.
+#[tokio::test]
+async fn api_put_stats_daily_goal_bounds_each_kind_against_its_own_maximum() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .clone()
+        .oneshot(put_daily_goal_req(
+            &token,
+            serde_json::json!({ "kind": "pages", "target": 1500 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .clone()
+        .oneshot(put_daily_goal_req(
+            &token,
+            serde_json::json!({ "kind": "minutes", "target": 1500 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let res = app
+        .oneshot(put_daily_goal_req(
+            &token,
+            serde_json::json!({ "kind": "pages", "target": 0 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn api_put_stats_daily_goal_returns_500_when_db_fails() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE reading_goals")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+
+    let res = app
+        .oneshot(put_daily_goal_req(
+            &token,
+            serde_json::json!({ "kind": "pages", "target": 30 }),
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);

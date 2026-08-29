@@ -1103,6 +1103,150 @@ test("a failed goal save surfaces the error and leaves the goal unset", async ({
   await expect(page.getByTestId("stats-goal-progress")).toHaveCount(0);
 });
 
+/**
+ * Reset both of the shared user's daily goals so the daily tests start from
+ * the no-target state. Same reasoning as {@link clearReadingGoal}: the REST
+ * write invalidates that user's stats cache, so the page reads the cleared
+ * value immediately rather than after the TTL.
+ */
+async function clearDailyGoals(request: APIRequestContext) {
+  for (const kind of ["pages", "minutes"]) {
+    const resp = await request.put("/api/stats/goal/daily", {
+      data: { kind, target: null },
+    });
+    expect(resp.status(), `clearing the daily ${kind} goal failed`).toBe(200);
+  }
+}
+
+test("a daily goal row invites, saves, persists, and clears", async ({
+  page,
+  request,
+}) => {
+  await clearDailyGoals(request);
+  await gotoReady(page, "/stats");
+
+  // No target is an invitation, never a zero-of-zero bar — the same contract
+  // the annual band holds to.
+  await expect(page.getByTestId("stats-daily-goals")).toBeVisible();
+  await expect(page.getByTestId("stats-daily-pages-invite")).toBeVisible();
+  await expect(page.getByTestId("stats-daily-pages-progress")).toHaveCount(0);
+
+  await page.getByTestId("stats-daily-pages-edit").click();
+  await page.getByTestId("stats-daily-pages-input").fill("30");
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/stats-goal-daily",
+      expectedBody: { update: { kind: "pages", target: 30 } },
+      expectedStatus: 200,
+    },
+    async () => page.getByTestId("stats-daily-pages-save").click(),
+  );
+
+  await expect(page.getByTestId("stats-daily-pages-figure")).toContainText(
+    /of 30 pages/,
+  );
+  await expect(page.getByTestId("stats-daily-pages-progress")).toHaveAttribute(
+    "aria-valuemax",
+    "30",
+  );
+
+  // The other kind is untouched by a write naming only this one.
+  await expect(page.getByTestId("stats-daily-minutes-invite")).toBeVisible();
+
+  // And it survives a reload, so the target really was stored.
+  await gotoReady(page, "/stats");
+  await expect(page.getByTestId("stats-daily-pages-figure")).toContainText(
+    /of 30 pages/,
+  );
+
+  await page.getByTestId("stats-daily-pages-edit").click();
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/stats-goal-daily",
+      expectedBody: { update: { kind: "pages" } },
+      expectedStatus: 200,
+    },
+    async () => page.getByTestId("stats-daily-pages-clear").click(),
+  );
+  await expect(page.getByTestId("stats-daily-pages-invite")).toBeVisible();
+  await expect(page.getByTestId("stats-daily-pages-progress")).toHaveCount(0);
+});
+
+test("the two daily kinds are bounded independently", async ({
+  page,
+  request,
+}) => {
+  await clearDailyGoals(request);
+  await gotoReady(page, "/stats");
+
+  // 1,440 is every minute in a day, so a bigger minutes target is refused in
+  // the field — no request leaves the page.
+  await page.getByTestId("stats-daily-minutes-edit").click();
+  await page.getByTestId("stats-daily-minutes-input").fill("1500");
+  await page.getByTestId("stats-daily-minutes-save").click();
+  await expect(page.getByTestId("stats-daily-minutes-error")).toContainText(
+    "1440",
+  );
+  await expect(page.getByTestId("stats-daily-minutes-progress")).toHaveCount(0);
+
+  // The same number is a legal day of pages, and the pages field takes it.
+  await page.getByTestId("stats-daily-minutes-cancel").click();
+  await page.getByTestId("stats-daily-pages-edit").click();
+  await page.getByTestId("stats-daily-pages-input").fill("1500");
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/stats-goal-daily",
+      expectedBody: { update: { kind: "pages", target: 1500 } },
+      expectedStatus: 200,
+    },
+    async () => page.getByTestId("stats-daily-pages-save").click(),
+  );
+  await expect(page.getByTestId("stats-daily-pages-figure")).toContainText(
+    /of 1500 pages/,
+  );
+
+  await clearDailyGoals(request);
+});
+
+test("a failed daily goal save surfaces the error and leaves the row unset", async ({
+  page,
+  request,
+}) => {
+  await clearDailyGoals(request);
+  await page.route("**/api/rpc/stats-goal-daily", (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "daily goal write failed",
+    }),
+  );
+
+  await gotoReady(page, "/stats");
+  await page.getByTestId("stats-daily-minutes-edit").click();
+  await page.getByTestId("stats-daily-minutes-input").fill("20");
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/stats-goal-daily",
+      expectedBody: { update: { kind: "minutes", target: 20 } },
+      expectedStatus: 500,
+    },
+    async () => page.getByTestId("stats-daily-minutes-save").click(),
+  );
+
+  await expect(page.getByTestId("stats-daily-minutes-error")).toBeVisible();
+  // No optimistic bar for a write the server rejected.
+  await expect(page.getByTestId("stats-daily-minutes-invite")).toBeVisible();
+  await expect(page.getByTestId("stats-daily-minutes-progress")).toHaveCount(0);
+});
+
 test("the session log lists stitched sittings under the aggregates", async ({
   page,
 }) => {
