@@ -1,8 +1,9 @@
 //! Server-side axum glue on top of [`omnibus_db::auth`]: cookie/bearer
 //! extractors ([`extractor`]), `/api/auth/*` handlers + router ([`handlers`]),
 //! CSRF origin check ([`csrf`]), pluggable auth backends ([`strategy`]),
-//! the initial-admin recovery hook ([`boot`]), and the `/api/*` gate
-//! middleware ([`gate`]). Mounted by [`crate::main`].
+//! the initial-admin recovery hook ([`boot`]), the sessions-listing
+//! projection ([`session_view`]), and the `/api/*` gate middleware
+//! ([`gate`]). Mounted by [`crate::main`].
 
 pub mod basic;
 pub mod boot;
@@ -10,6 +11,7 @@ pub mod csrf;
 pub mod extractor;
 pub mod gate;
 pub mod handlers;
+pub mod session_view;
 pub mod strategy;
 
 #[cfg(test)]

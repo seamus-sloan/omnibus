@@ -274,6 +274,7 @@ async fn failed_session_insert_after_register_device_rolls_back_device_row() {
             Some(bogus_device_id),
             SessionKind::Cookie,
             3_600,
+            None,
         )
         .await
         else {
@@ -328,7 +329,7 @@ async fn revoke_device_also_revokes_its_live_sessions() {
     let d = register_device(&p, u.id, "Phone", "ios", None)
         .await
         .unwrap();
-    let ns = create_session(&p, u.id, Some(d.id), SessionKind::Bearer, 3600)
+    let ns = create_session(&p, u.id, Some(d.id), SessionKind::Bearer, 3600, None)
         .await
         .unwrap();
 
