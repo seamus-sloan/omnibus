@@ -561,6 +561,34 @@ async fn api_get_search_content_returns_401_when_anonymous() {
 }
 
 #[tokio::test]
+async fn api_get_search_content_returns_500_when_the_db_is_gone() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    // A configured library path gets the handler past its unconfigured
+    // early-out and into the FTS query the drop below breaks.
+    db::set_settings(
+        &pool,
+        &Settings {
+            ebook_library_path: Some("/lib".into()),
+            audiobook_library_path: None,
+            scan_interval_hours: None,
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("DROP TABLE book_content_fts")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let res = app
+        .oneshot(get_with_bearer("/api/search/content?q=hello", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
 async fn api_get_search_content_returns_429_after_budget_exceeded() {
     // The content route is registered inside `search_router`, so it shares
     // the per-IP search rate limit with `/api/search` and the palette.
