@@ -129,6 +129,12 @@ pub(super) async fn find_attach_target(
 
 /// Return whether another file holds the `(book_id, format)` attachment slot.
 /// The incoming `scan_key` is excluded so re-attaching the same file proceeds.
+///
+/// Both tables are consulted because neither alone describes the slot:
+/// `merged_uuids` records attached files but never a book's own native file,
+/// so asking it alone let a second on-disk copy of one book evict the native
+/// file's `book_files` row and then trade the slot back on the following scan,
+/// restamping `books.last_modified` forever (#2320).
 pub(super) async fn slot_held_by_other(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
@@ -137,8 +143,15 @@ pub(super) async fn slot_held_by_other(
 ) -> Result<bool, sqlx::Error> {
     let held: Option<i64> = sqlx::query_scalar(
         "SELECT 1 FROM merged_uuids
-          WHERE book_id = ? AND format = ? AND scan_key <> ? LIMIT 1",
+          WHERE book_id = ? AND format = ? AND scan_key <> ?
+         UNION ALL
+         SELECT 1 FROM book_files
+          WHERE book_id = ? AND format = ? AND scan_key <> ?
+         LIMIT 1",
     )
+    .bind(book_id)
+    .bind(format)
+    .bind(scan_key)
     .bind(book_id)
     .bind(format)
     .bind(scan_key)

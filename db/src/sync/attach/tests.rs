@@ -957,3 +957,76 @@ async fn attachment_survives_a_scan_root_repoint() {
         "no duplicate ledger row"
     );
 }
+
+#[tokio::test]
+async fn attach_refuses_when_the_books_own_native_file_holds_the_slot() {
+    // A book's native file carries no `merged_uuids` row, so a guard that
+    // consults only the ledger cannot see it holding the slot. Two on-disk
+    // copies of one ebook then trade the single (book, EPUB) slot on every
+    // scan, restamping `books.last_modified` forever (#2320).
+    let _covers = CoversTempDir::new("attach_native_slot_guard");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_ebook(&pool, "Sanderson/yumi-a.epub", "Yumi", "Brandon Sanderson").await;
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // A stale ledger row of the kind a library reorganization leaves behind,
+    // naming a second on-disk copy of the same book.
+    let scan_key_b = crate::helpers::scan_key_for("Sanderson/yumi-b.epub");
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES ('stale-ledger', ?, 'EPUB', '/ebooks', ?)",
+    )
+    .bind(book_id)
+    .bind(&scan_key_b)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // The second copy arrives as New and replays that ledger row.
+    sync_books(
+        &pool,
+        "/ebooks",
+        SyncPlan {
+            new_books: vec![indexed(
+                "Sanderson/yumi-b.epub",
+                Some("Yumi"),
+                &["Brandon Sanderson"],
+                &[],
+                None,
+                None,
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let incumbent: String =
+        sqlx::query_scalar("SELECT filename FROM book_files WHERE book_id = ? AND format = 'EPUB'")
+            .bind(book_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(incumbent, "yumi-a", "the native file keeps its own slot");
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE format = 'EPUB'"
+        )
+        .await,
+        2,
+        "the second copy became its own book's file"
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM merged_uuids WHERE uuid = 'stale-ledger'"
+        )
+        .await,
+        0,
+        "the stale ledger row is forgotten so it stops replaying"
+    );
+}
