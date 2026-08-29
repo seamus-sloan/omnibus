@@ -24,11 +24,11 @@ fn render_kobo_setup_steps() -> Element {
                 b { "Add a Kobo" }
             }
             li {
-                "Copy the device's wireless sync endpoint URL. ("
+                "Copy the device's wireless sync endpoint URL below. ("
                 code { "/kobo/<token>" }
-                ")"
+                ") It must be reachable from the Kobo's own Wi-Fi."
             }
-            li { "Connect the Kobo over USB," }
+            li { "Connect the Kobo over USB and tap Connect on the device." }
             li {
                 "Edit "
                 code { ".kobo/Kobo/Kobo eReader.conf" }
@@ -41,6 +41,11 @@ fn render_kobo_setup_steps() -> Element {
                 "."
             }
             li { "Eject safely. Your next sync on the device talks to Omnibus." }
+            li {
+                "Only shelves marked "
+                b { "Sync to Kobo" }
+                " are synced — set that on a shelf before the first sync."
+            }
         }
     }
 }
