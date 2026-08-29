@@ -241,7 +241,7 @@
         <div class="center-copy" style="max-width:900px">
           <p class="kick" data-anim>Scanning</p>
           <h2 class="h2" data-anim style="--d:70ms">Your files; untouched</h2>
-          <p class="lede" data-anim style="--d:130ms;max-width:74ch;margin:0 auto">The scanner recurses through whatever you already have — nested author and series trees, loose files, mixed formats — and reads each book’s metadata out of the file itself. Your metadata edits live in the Omnibus database and will be written to exported media.</p>
+          <p class="lede" data-anim style="--d:130ms;max-width:74ch;margin:0 auto">Omnibus's scanner recursively searches through the library folder you give it to find all applicable filetypes. <b>Omnibus does not, however, write to your files EVER.</b> Any updates to your book's metadata is saved to the database and is applied to the book when it is exported or sent out of Omnibus.</p>
         </div>
         <div class="duo">
           <div>
@@ -270,7 +270,7 @@
         <div class="center-copy" style="max-width:900px">
           <p class="kick" data-anim>MCP</p>
           <h2 class="h2" data-anim style="--d:70ms">Talk to your library</h2>
-          <p class="lede" data-anim style="--d:130ms;max-width:78ch;margin:0 auto">Omnibus ships an <b>MCP server</b>. Point Claude — or any MCP client — at it over stdio, or host <code>/mcp</code> on your own server behind an admin toggle and an API token. It reads the books themselves, not just the shelf, and every write it can make is allow-listed: metadata repair shows you a per-book diff before it saves, merges are confirm-gated and reversible, and your settings and reading positions are never touched.</p>
+          <p class="lede" data-anim style="--d:130ms;max-width:78ch;margin:0 auto">Omnibus ships an <b>MCP server</b> allowing you to interact with your library using your own AI agent. Enable the MCP server via toggle in admin settings and create an API key. Allow your agent to edit your metadata, create shelves for you, merge books, and talk with you about your books. 
         </div>
         <div class="duo">
           <div>
