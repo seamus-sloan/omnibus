@@ -58,9 +58,15 @@ class Resp:
 class FakeASC:
     """A scripted App Store Connect.
 
-    `build_states` is consumed one entry per `GET /v1/builds`, so a scenario can
-    say "PROCESSING, then VALID" and exercise the poll rather than only its
-    happy last iteration.
+    `build_states` is consumed one entry per *processing poll* — the
+    version-filtered `GET /v1/builds` — so a scenario can say "PROCESSING, then
+    VALID" and exercise the poll rather than only its happy last iteration.
+
+    Deliberately no stub for `GET /v1/builds/{id}/betaGroups` or any other
+    membership read: App Store Connect refuses them (the relationship is
+    write-only), so a regression back to a pre-check read trips the
+    unstubbed-request assertion here rather than 403ing in production —
+    which is how it shipped the first time.
     """
 
     def __init__(self, build_states, external_state="READY_FOR_BETA_SUBMISSION",
@@ -117,7 +123,7 @@ class FakeASC:
         if path.startswith("/v1/betaBuildLocalizations/"):
             return Resp(payload={})
 
-        if path == f"/v1/betaGroups/{GROUP_ID}/relationships/builds":
+        if path.startswith("/v1/betaGroups/") and path.endswith("/relationships/builds"):
             return Resp(status_code=204, payload={})
 
         raise AssertionError(f"unstubbed request: {method} {path}")
@@ -180,6 +186,23 @@ check("re-run re-posts the attach as a set-add no-op", 1,
       len(writes_to(fake, "/relationships/builds")))
 check("re-run does not resubmit for review", 0,
       len(writes_to(fake, "/v1/betaAppReviewSubmissions")))
+
+# Two groups: one attach POST per group, each addressed to its own group's
+# relationship endpoint — a re-run after a partial attach finishes the job
+# because the already-attached group's re-add is a 204 no-op.
+SECOND_ID = "group-2"
+code, fake = run(FakeASC(["VALID"], external_state="IN_BETA_TESTING",
+                         groups=[(GROUP_ID, GROUP_NAME), (SECOND_ID, "Beta Crew")]),
+                 BETA_GROUPS=f"{GROUP_NAME},Beta Crew")
+check("two groups exit 0", 0, code)
+attach = writes_to(fake, "/relationships/builds")
+check("each group gets its own attach", 2, len(attach))
+check("attaches address each group's endpoint",
+      [f"/v1/betaGroups/{GROUP_ID}/relationships/builds",
+       f"/v1/betaGroups/{SECOND_ID}/relationships/builds"],
+      [w[1] for w in attach])
+check("each attach names the build", True,
+      all(w[2]["data"] == [{"type": "builds", "id": BUILD_ID}] for w in attach))
 
 # A build already awaiting review still needs attaching — the two are separate
 # facts, and treating "submitted" as "distributed" is the original bug.

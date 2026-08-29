@@ -273,7 +273,9 @@ def add_to_groups(build_id, groups):
     build's `betaGroups` relationship (403 `GET_RELATED`; only CREATE/DELETE
     are allowed), and the group-side relationship add is set-semantics —
     re-adding an already-attached build answers 204 and changes nothing — so
-    posting unconditionally is what keeps the script idempotent.
+    posting unconditionally is what keeps the script idempotent. This
+    supersedes the `filter[betaGroups]` pre-check #2309 hotfixed in: one write
+    per group, no reads, and no filter for Apple to retire next.
     """
     names = ", ".join(repr(g["attributes"]["name"]) for g in groups)
     if DRY_RUN:
