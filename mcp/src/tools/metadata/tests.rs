@@ -389,7 +389,7 @@ async fn apply_metadata_changes_reports_partial_application_on_a_mid_batch_failu
     assert!(err.message.contains("uuid-2"));
     assert!(err.message.contains("uuid-3"));
     let data = err.data.unwrap();
-    assert_eq!(data["applied"], serde_json::json!(["uuid-1"]));
+    assert_eq!(data["written"], serde_json::json!(["uuid-1"]));
     assert_eq!(data["failed"]["book_uuid"], serde_json::json!("uuid-2"));
     assert_eq!(data["not_attempted"], serde_json::json!(["uuid-3"]));
 }

@@ -226,7 +226,9 @@ fn validate_change(change: &BookChange) -> Result<(), ErrorData> {
 }
 
 /// The mid-batch failure report: which books were written, which failed,
-/// which were never attempted. Partial application must be visible.
+/// which were never attempted. Partial application must be visible. The
+/// structured payload keys are operation-neutral (`written`), since both the
+/// apply and the revert batches report through here.
 fn partial_failure(
     op: &str,
     written_verb: &str,
@@ -248,7 +250,7 @@ fn partial_failure(
     ErrorData::internal_error(
         message,
         Some(serde_json::json!({
-            "applied": written_uuids,
+            "written": written_uuids,
             "failed": { "book_uuid": failed_uuid, "error": cause },
             "not_attempted": not_attempted,
         })),
@@ -310,6 +312,7 @@ impl OmnibusMcp {
         }
         let mut books = Vec::with_capacity(p.changes.len());
         for change in &p.changes {
+            crate::tools::path_segment(&change.book_uuid, "book_uuid")?;
             validate_change(change)?;
             let book = self.fetch_book(&change.book_uuid).await?;
             books.push(BookDiff {
