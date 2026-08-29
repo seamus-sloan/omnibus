@@ -67,10 +67,28 @@ not observable from the web surface.
    to and note what it currently shows: position, read status, rating,
    highlights, bookmarks, journal entries. Journal that as your baseline; the
    audit compares against it.
+
+   **Then download it, while you still can.** The reader serves the downloaded
+   file when there is one and otherwise fetches the book over `/api/*` — which
+   is exactly the client the offline switch fails. A book you did not download
+   cannot be opened offline at all, so an agent who skips this reaches step 3
+   with nothing on the device and no way to perform it. Use the book detail
+   screen's **Download** control and wait for it to finish before you flip the
+   switch; a download started *after* going offline is the case the switch
+   deliberately does not cover.
 2. **Go offline** (`ios.sh offline on`) and confirm the app says so — an
-   "Offline" pill appears in the masthead.
+   "Offline" pill appears in the **Library tab's** masthead.
+
+   **That pill lives on the Library tab and nowhere else.** The You tab, the
+   book detail screen and the reader show no connectivity indicator of any
+   kind, so an agent checking from one of those sees nothing and concludes the
+   switch failed. Go to Library to read the pill — and either way, believe
+   `ios.sh state` over the screen.
 3. **Write, as a reader would.** Read a few pages and let the position move.
-   Save a highlight. Save a bookmark in an audiobook. Write a journal entry.
+   Save a highlight. Save a bookmark — the EPUB reader has an **Add bookmark**
+   control and so does the audiobook player, and they write the same model
+   through the same endpoint, so use whichever reader you already have open.
+   Write a journal entry.
    Add a book to a shelf. Not all of them every time — pick two or three and
    do them properly.
 4. **Look at what you wrote.** Every one of them must be visible in the app
@@ -81,8 +99,15 @@ not observable from the web surface.
    "Offline · N queued" and N should match. Journal the queue.
 6. **Kill and relaunch** (`ios.sh relaunch`). The queue must survive, still
    offline, still N. A write that vanishes here was never durable.
-7. **Come back** (`ios.sh offline off`). The pill turns to "Syncing", then
+7. **Come back** (`ios.sh offline off`). The pill turns to "Syncing N", then
    goes.
+
+   **Not seeing "Syncing" is not a failure.** The pill shows that state only
+   while writes are still in flight, and a handful of queued mutations drains
+   in a couple of seconds — under ~25s in every run so far, and often far
+   less. Missing the window means the drain was fast, not that it did not
+   happen. Step 8 is what proves the drain; the pill is a courtesy. Only an
+   `outbox` that stays non-empty is a finding.
 8. **Verify on the server.** Reopen the book and check every write you made is
    there, once. Then check `ios.sh outbox` is empty.
 
@@ -144,9 +169,15 @@ value it is indistinguishable from a write another agent happened to make.
 - Positions coalesce **on purpose**: reading for five minutes offline queues
   one position, not fifty, and the server should end up at the last one. One
   queued position for one book is correct, not a lost write.
-- The reader and the player write read status on their own — opening a book
-  marks it `reading`, finishing marks it `finished`. Do not journal that as a
-  write you made, and do not call it unexpected when the audit sees it.
+- The reader and the player are *meant* to write read status on their own —
+  opening a book marks it `reading`, finishing marks it `finished`. Where it
+  happens, do not journal it as a write you made, and do not call it unexpected
+  when the audit sees it. **On this surface it currently does not happen**
+  (#2289): a book read in the native reader comes back with no read status at
+  all, while the Library's continue card still shows it as Reading. Treat an
+  unchanged status on iOS as that known bug rather than a fresh finding, and do
+  not lean on the transition to set up a status you need — set it by hand from
+  the detail screen's status control.
 - A drained position answer can come back *different* from what you sent. The
   server resolves position conflicts, so another device's newer position
   winning is correct behaviour.

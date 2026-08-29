@@ -76,9 +76,14 @@ Each of these was nearly filed as a defect by an agent that checked first.
 
 Each of these is intended, and each has been mistaken for a defect before:
 
-- **Opening a reader or starting a player changes your read status by itself.**
-  Unread becomes reading on open; reaching the end marks finished. You did not
-  do that, and it is not a bug.
+- **Opening a reader or starting a player changes your read status by itself —
+  on the web.** Unread becomes reading on open; reaching the end marks
+  finished. You did not do that, and it is not a bug. **This does not currently
+  hold on the iOS native reader** (#2289): a book read there comes back with no
+  read status at all, while the Library's continue card still shows it as
+  Reading, so the two surfaces disagree. On iOS, treat an unchanged status as
+  that known bug rather than a new finding — and do not rely on the transition
+  to put a book into a status you need, because it will not.
 - **Read status filters the continue surface** on the home page. A book you
   just marked finished vanishing from it is correct.
 - **The continue surface is an overlapping fan**, not a carousel — cards sit on
