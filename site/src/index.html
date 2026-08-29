@@ -241,7 +241,7 @@
         <div class="center-copy" style="max-width:900px">
           <p class="kick" data-anim>Scanning</p>
           <h2 class="h2" data-anim style="--d:70ms">Your files; untouched</h2>
-          <p class="lede" data-anim style="--d:130ms;max-width:74ch;margin:0 auto">The scanner recurses through whatever you already have — nested author and series trees, loose files, mixed formats — and reads each book’s metadata out of the file itself. Your metadata edits live in the Omnibus database and will be written to exported media.</p>
+          <p class="lede" data-anim style="--d:130ms;max-width:74ch;margin:0 auto">Omnibus's scanner recursively searches through the library folder you give it to find all applicable filetypes. <b>Omnibus does not, however, write to your files EVER.</b> Any updates to your book's metadata is saved to the database and is applied to the book when it is exported or sent out of Omnibus.</p>
         </div>
         <div class="duo">
           <div>
@@ -264,7 +264,36 @@
       </div>
     </section>
 
-    <!-- 11 · questions -->
+    <!-- 11 · mcp -->
+    <section class="pane" id="mcp" data-label="MCP">
+      <div class="sec-inner sec-inner--stack">
+        <div class="center-copy" style="max-width:900px">
+          <p class="kick" data-anim>MCP</p>
+          <h2 class="h2" data-anim style="--d:70ms">Talk to your library</h2>
+          <p class="lede" data-anim style="--d:130ms;max-width:78ch;margin:0 auto">Omnibus ships an <b>MCP server</b> allowing you to interact with your library using your own AI agent. Enable the MCP server via toggle in admin settings and create an API key. Allow your agent to edit your metadata, create shelves for you, merge books, and talk with you about your books. 
+        </div>
+        <div class="duo">
+          <div>
+            <div class="shotwrap" data-anim style="--d:190ms">
+              <figure class="frame" style="--ar:1890/1273">
+                <img class="shot" src="shots/dark/omnibus-mcp.webp" width="1890" height="1273" alt="An MCP client asked what a book&#39;s ending meant, calling the Omnibus tools List books, Reading sessions, and Book read status to work out which book was just finished.">
+              </figure>
+            </div>
+            <p class="phone-cap" data-anim style="--d:250ms">Ask about what you read</p>
+          </div>
+          <div>
+            <div class="shotwrap" data-anim style="--d:280ms">
+              <figure class="frame" style="--ar:1890/1720">
+                <img class="shot" src="shots/dark/omnibus-mcp-repair.webp" width="1890" height="1720" alt="An MCP client merging a duplicate ebook and audiobook, reporting merge log 91 as the undo handle, then a table of the genres it wrote across 100 books.">
+              </figure>
+            </div>
+            <p class="phone-cap" data-anim style="--d:340ms">Merge and repair · reversible</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 12 · questions -->
     <section class="pane" id="faq" data-label="Questions">
       <div class="sec-inner sec-inner--faq">
         <p class="kick" data-anim>Questions</p>
@@ -291,7 +320,7 @@
       </div>
     </section>
 
-    <!-- 12 · close -->
+    <!-- 13 · close -->
     <section class="pane" id="close" data-label="Get it">
       <div class="sec-inner">
         <div class="close-in">
