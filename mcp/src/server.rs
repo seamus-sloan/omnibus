@@ -23,11 +23,11 @@ impl OmnibusMcp {
     ///
     /// Later issues add write-tool families as further
     /// `#[tool_router(router = <name>)]` impl blocks under `crate::tools`
-    /// and combine them here: `Self::read_tools() + Self::write_tools()`.
+    /// and combine them here.
     pub fn new(client: Arc<OmnibusClient>) -> Self {
         Self {
             client,
-            tool_router: Self::read_tools() + Self::checkin_tools(),
+            tool_router: Self::read_tools() + Self::checkin_tools() + Self::shelf_tools(),
         }
     }
 }
@@ -56,14 +56,18 @@ impl ServerHandler for OmnibusMcp {
                  and search books, explore authors/series/tags/genres and shelves, and \
                  read the signed-in user's stats, progress, highlights, bookmarks, and \
                  journal entries; books are identified by the uuid field returned by \
-                 the listing and search tools. The physical-collection tools are the \
-                 only mutations: resolve ISBNs and title searches against the library \
-                 and the external metadata providers (always relay which provider \
-                 answered), check in physical copies, and manage the wishlist and copy \
-                 notes. check_in_physical_book and remove_physical_copy have lasting \
-                 effects, so they require confirm=true — resolve first, show the user \
-                 the target, and confirm only with their approval. Digital library \
-                 content, settings, and reading state are never modified."
+                 the listing and search tools. The physical-collection tools resolve \
+                 ISBNs and title searches against the library and the external \
+                 metadata providers (always relay which provider answered), check in \
+                 physical copies, and manage the wishlist and copy notes; \
+                 check_in_physical_book and remove_physical_copy have lasting effects, \
+                 so they require confirm=true — resolve first, show the user the \
+                 target, and confirm only with their approval. The shelf tools author \
+                 shelves for the signed-in user: iterate a smart rule with \
+                 preview_shelf_rule (which creates nothing) before create_shelf, and \
+                 delete_shelf requires confirm=true after explicit user confirmation. \
+                 Digital library content, settings, and reading state are never \
+                 modified."
                     .to_string(),
             )
     }

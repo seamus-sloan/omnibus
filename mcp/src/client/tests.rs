@@ -107,6 +107,18 @@ async fn delete_thing(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Allowlisted body-carrying 204 route (`POST /api/shelves/{id}/books`):
+/// records the body and answers no content.
+async fn add_books_thing(
+    State(stub): State<Arc<Stub>>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<StatusCode, StatusCode> {
+    check_bearer(&stub, &headers)?;
+    *stub.last_write_body.lock().unwrap() = Some(body);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Boot a stub instance and return `(client, stub)`.
 async fn stub_client() -> (OmnibusClient, Arc<Stub>) {
     let stub = Arc::new(Stub::default());
@@ -114,6 +126,7 @@ async fn stub_client() -> (OmnibusClient, Arc<Stub>) {
         .route("/api/auth/login", post(login))
         .route("/api/thing", get(protected))
         .route("/api/scan/resolve", post(write_thing))
+        .route("/api/shelves/{id}/books", post(add_books_thing))
         .route(
             "/api/scan/search",
             post(|| async { (StatusCode::BAD_REQUEST, "query is required") }),
@@ -376,10 +389,21 @@ async fn write_json_returns_write_status_carrying_the_server_message() {
 async fn write_no_content_succeeds_on_a_204_delete() {
     let (client, stub) = stub_client().await;
     client
-        .write_no_content(Method::DELETE, "/api/physical/uuid-1/wishlist")
+        .write_no_content::<()>(Method::DELETE, "/api/physical/uuid-1/wishlist", None)
         .await
         .unwrap();
     assert_eq!(stub.deletes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn write_no_content_sends_the_json_body_on_a_204_post() {
+    let (client, stub) = stub_client().await;
+    let body = serde_json::json!({ "book_uuids": ["uuid-1", "uuid-2"] });
+    client
+        .write_no_content(Method::POST, "/api/shelves/5/books", Some(&body))
+        .await
+        .unwrap();
+    assert_eq!(stub.last_write_body.lock().unwrap().take(), Some(body));
 }
 
 #[tokio::test]

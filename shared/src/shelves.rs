@@ -364,6 +364,7 @@ impl UpdateShelfRequest {
 
 /// Live-preview result for the create modal: "N of M match" + sample covers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RulePreview {
     pub matched: i64,
     pub total: i64,

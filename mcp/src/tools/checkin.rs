@@ -338,7 +338,7 @@ impl OmnibusMcp {
     ) -> Result<Json<Ack>, ErrorData> {
         let path = format!("/api/physical/{}/wishlist", p.uuid);
         self.client
-            .write_no_content(Method::DELETE, &path)
+            .write_no_content::<()>(Method::DELETE, &path, None)
             .await
             .map_err(write_error)?;
         Ok(Json(Ack {
@@ -391,7 +391,7 @@ impl OmnibusMcp {
         }
         let path = format!("/api/physical/copies/{}", p.copy_id);
         self.client
-            .write_no_content(Method::DELETE, &path)
+            .write_no_content::<()>(Method::DELETE, &path, None)
             .await
             .map_err(write_error)?;
         Ok(Json(Ack {
