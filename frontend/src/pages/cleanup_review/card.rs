@@ -47,23 +47,33 @@ pub fn SuggestionCardView(
                 "{action_sentence(card.kind, card.action)}"
                 span { class: "crx-detected mono", "data-testid": "cleanup-card-books", "{books} affected" }
             }
-            div { class: "crx-proposal",
-                div {
+            // A delete has no second side: nothing replaces the record, it just
+            // goes. Rendering the proposal grid for it put the same name under
+            // both labels, which reads as a change that isn't one.
+            if card.action == CleanupAction::Delete {
+                div { class: "crx-proposal crx-proposal-solo",
                     span { class: "crx-side-label", "{scanned_label(card.action)}" }
                     ScannedValue { card: card.clone() }
                 }
-                div { class: "crx-arrow", "aria-hidden": "true", "\u{2192}" }
-                div { class: "crx-proposed-wrap",
-                    span { class: "crx-side-label",
-                        "{proposed_label(card.action)}"
-                        if edited {
-                            span { class: "crx-edited-tag", "data-testid": "cleanup-edited-tag", "edited" }
-                        }
+            } else {
+                div { class: "crx-proposal",
+                    div {
+                        span { class: "crx-side-label", "{scanned_label(card.action)}" }
+                        ScannedValue { card: card.clone() }
                     }
-                    if card.action == CleanupAction::Split {
-                        SplitParts { parts: card.proposed_parts.clone() }
-                    } else {
-                        ProposedValue { card: card.clone(), editable, draft, typing, on_commit }
+                    div { class: "crx-arrow", "aria-hidden": "true", "\u{2192}" }
+                    div { class: "crx-proposed-wrap",
+                        span { class: "crx-side-label",
+                            "{proposed_label(card.action)}"
+                            if edited {
+                                span { class: "crx-edited-tag", "data-testid": "cleanup-edited-tag", "edited" }
+                            }
+                        }
+                        if card.action == CleanupAction::Split {
+                            SplitParts { parts: card.proposed_parts.clone() }
+                        } else {
+                            ProposedValue { card: card.clone(), editable, draft, typing, on_commit }
+                        }
                     }
                 }
             }
@@ -76,7 +86,9 @@ pub fn SuggestionCardView(
                 }
             }
             p { class: "crx-hint", "data-testid": "cleanup-hint",
-                if editable {
+                if card.action == CleanupAction::Delete {
+                    "Nothing replaces it — accepting removes the record and blocklists the name — "
+                } else if editable {
                     "Type over the proposal to accept your own wording — "
                 } else {
                     // Deliberately not "the surviving record": this arm also
@@ -207,8 +219,10 @@ fn proposed_label(action: CleanupAction) -> &'static str {
     match action {
         CleanupAction::Rename => "Proposed title",
         CleanupAction::Split => "Splits into",
-        CleanupAction::Delete => "Becomes",
         CleanupAction::Merge => "Surviving name",
+        // A delete renders no proposed side at all, so it needs no label —
+        // "Becomes" was only ever describing a box that shouldn't exist.
+        CleanupAction::Delete => "",
     }
 }
 

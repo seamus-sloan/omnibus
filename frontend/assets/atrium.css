@@ -10324,6 +10324,8 @@ html {
 .crx-detected { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; color: var(--ink-3); letter-spacing: .06em; }
 
 .crx-proposal { display: grid; grid-template-columns: 1fr 34px 1fr; gap: 14px; align-items: start; }
+/* A delete has no proposed side, so its scanned value spans the card. */
+.crx-proposal-solo { grid-template-columns: 1fr; }
 .crx-side-label { font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; display: flex; align-items: baseline; gap: 8px; }
 .crx-current { padding: 11px 14px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg-2); color: var(--ink-2); font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
 .crx-current.crx-strike { text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--bad) 70%, transparent); }

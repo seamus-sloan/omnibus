@@ -148,9 +148,11 @@ pub struct SuggestionCard {
     /// The primary entity's display name (e.g. the merge target, or the
     /// tag being split).
     pub primary_name: String,
-    /// The other entity's display name, when the suggestion involves
-    /// exactly one (a two-way merge). `None` for splits with several
-    /// resulting names, or book-title normalization.
+    /// The suggestion's second name, where it has one: the proposed title on
+    /// a rename, or the single record folding away in a *two-way* merge.
+    /// `None` for a split, for a delete, and for a merge group of three or
+    /// more — which has no one name that can stand in for the rest, and is
+    /// what `source_names` is for.
     pub secondary_name: Option<String>,
     /// Every name a merge would fold into `primary_name`. Empty for the
     /// actions that fold nothing. `secondary_name` is the two-way special

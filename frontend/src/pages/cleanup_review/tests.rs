@@ -248,3 +248,19 @@ fn suggestion_card_view_shows_the_atoms_a_split_would_write() {
     assert!(html.contains(">Fiction<"));
     assert!(html.contains(">Poland<"));
 }
+
+#[test]
+fn suggestion_card_view_gives_a_delete_no_proposed_side() {
+    // Nothing replaces a deleted record, so the card must not show its name
+    // under a second label as though something did.
+    let mut del = card(CleanupKind::Author, CleanupAction::Delete);
+    del.primary_name = "calibre (0.7.23)".into();
+    del.secondary_name = None;
+    del.source_names = Vec::new();
+    let html = render_card(del);
+    assert!(html.contains("crx-proposal-solo"));
+    assert!(!html.contains("crx-arrow"));
+    assert!(!html.contains("cleanup-card-proposed"));
+    assert_eq!(html.matches("calibre (0.7.23)").count(), 1);
+    assert!(html.contains("accepting removes the record"));
+}

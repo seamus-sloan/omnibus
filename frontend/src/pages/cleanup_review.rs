@@ -237,7 +237,15 @@ fn review_key_action(key: &Key) -> Option<ReviewKey> {
 
 /// Move to the next card without deciding — Skip leaves the suggestion pending
 /// so it comes back on the next pass.
+///
+/// A no-op once the queue is worked through, matching Accept and Reject, which
+/// return early when there is no card to decide. Without the guard, Space on
+/// the end-of-pass screen keeps counting skips into the very tally that screen
+/// is reporting.
 fn skip(state: QueueState) {
+    if current_card(&state.cards.read(), (state.cursor)()).is_none() {
+        return;
+    }
     let mut tally = state.tally;
     tally.write().skipped += 1;
     advance(state);

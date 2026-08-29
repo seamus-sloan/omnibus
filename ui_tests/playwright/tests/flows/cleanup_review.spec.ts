@@ -411,3 +411,23 @@ test("does not fire the hotkeys while the proposal field has focus", async ({
   await expect(proposal).toHaveValue("Mary yn Shelley");
   await expect(page.getByTestId("cleanup-card")).toBeVisible();
 });
+
+test("stops counting skips once the pass is worked through", async ({
+  page,
+}) => {
+  // Space on the end-of-pass screen used to keep incrementing the very tally
+  // that screen reports.
+  await mockQueue(page, [TITLE_RENAME_CARD]);
+  await openReview(page, "book_title");
+
+  await page.getByRole("button", { name: "Skip (Space)" }).click();
+  await expect(page.getByTestId("cleanup-review-empty")).toBeVisible();
+  await expect(page.getByTestId("cleanup-tally")).toContainText("1");
+
+  await page.getByTestId("cleanup-review").press("Space");
+  await page.getByTestId("cleanup-review").press("Space");
+
+  const tally = page.getByTestId("cleanup-tally");
+  await expect(tally).toContainText("skipped");
+  await expect(tally.locator(".crx-tally-n")).toHaveText(["1"]);
+});
