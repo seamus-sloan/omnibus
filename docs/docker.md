@@ -5,8 +5,8 @@ Omnibus ships a multi-stage [`Dockerfile`](../Dockerfile) and a
 convention: bind-mount your media read-only, keep durable state in `/config`
 and a regenerable cache in `/cache`, and configure everything through env.
 
-> The Nix dev shell (see the [README](../README.md)) is still the supported way
-> to *develop*. Docker is for *deploying* a built server.
+> The Nix dev shell (see [local-development.md](local-development.md)) is
+> still the supported way to *develop*. Docker is for *deploying* a built server.
 
 ## Quick start
 
