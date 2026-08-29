@@ -1,9 +1,8 @@
-//! Per-user API-token management (web Settings → API Tokens section), in the
-//! `.tkx-*` redesign idiom: blast radius stated up front (the account's
-//! permission chips), creation at the top, the one-time secret as a real
-//! hand-off (copy + a pre-filled `claude mcp add` command), and a token table
-//! with status pills, in-row rename, and in-row revoke confirmation.
-//! Signals start empty so SSR and the first WASM paint agree (rule 07).
+//! Per-user API-token management (web Settings → API Tokens), in the `.tkx-*`
+//! redesign idiom: permission chips state the blast radius up front, creation
+//! sits on top, the one-time secret is a real hand-off (copy + a pre-filled
+//! `claude mcp add` command), and the token table carries status pills plus
+//! in-row rename and revoke confirmation. Signals start empty (rule 07).
 
 use dioxus::prelude::*;
 use omnibus_shared::ApiTokenView;

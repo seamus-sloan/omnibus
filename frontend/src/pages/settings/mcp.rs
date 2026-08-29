@@ -1,12 +1,8 @@
-//! Admin toggle card for the hosted `/mcp` endpoint, rendered in the
-//! Settings → API Tokens section (the tokens it authenticates with live on
-//! the same screen) in the `.tkx-mcp` redesign idiom: admin tag, a real
-//! switch with a state word, per-state note text, and a copyable endpoint
-//! URL. Default OFF; flipping it takes effect on the next `/mcp` request
-//! without a restart. Renders nothing for non-admins — the `is_admin`
-//! signal starts `false` on SSR and the first WASM paint, so the two agree
-//! (rule 07); the server-side `AdminUser` gate on `/api/settings/mcp` is
-//! the real boundary.
+//! Admin toggle card for the hosted `/mcp` endpoint, rendered beside the API
+//! tokens that authenticate it, in the `.tkx-mcp` redesign idiom: admin tag,
+//! a real switch, per-state note text, and a copyable endpoint URL. Default
+//! OFF; a flip takes effect on the next `/mcp` request. Renders nothing for
+//! non-admins; the server-side `AdminUser` gate is the real boundary.
 
 use dioxus::prelude::*;
 
@@ -89,7 +85,11 @@ pub fn McpToggleCard() -> Element {
     let endpoint = format!("{}/mcp", origin());
     let copy_endpoint = endpoint.clone();
     let track_class = if on { "tkx-track on" } else { "tkx-track" };
-    let aria_checked = if on { "true" } else { "false" };
+    // While the state is still loading, the track is a visual placeholder:
+    // no `switch` role and no `aria-checked`, so assistive tech never hears a
+    // state the server hasn't confirmed (ARIA has no "unknown" for switches).
+    let role_attr = enabled().is_some().then_some("switch");
+    let aria_checked = enabled().map(|on| if on { "true" } else { "false" });
 
     rsx! {
         section { class: "card tkx-mcp", "data-testid": "mcp-toggle-card",
@@ -103,8 +103,8 @@ pub fn McpToggleCard() -> Element {
                     button {
                         r#type: "button",
                         class: "{track_class}",
-                        role: "switch",
-                        "aria-checked": "{aria_checked}",
+                        role: role_attr,
+                        "aria-checked": aria_checked,
                         "aria-label": "Hosted MCP endpoint",
                         disabled: busy() || enabled().is_none(),
                         "data-testid": "mcp-toggle",
