@@ -135,29 +135,38 @@ test("enables and disables the MCP endpoint", async ({ page }) => {
   await gotoReady(page, SETTINGS_API_TOKENS);
   await expect(mcpToggle(page)).toBeEnabled();
 
-  // The dev instance ships with the toggle off; flip on, then restore.
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/settings/mcp",
-      expectedBody: { enabled: true },
-      expectedStatus: 204,
-    },
-    async () => mcpToggle(page).click(),
-  );
-  await expect(page.getByTestId("mcp-toggle-status")).toHaveClass(/success/);
-  await expect(mcpState(page)).toContainText("Enabled");
+  try {
+    // The dev instance ships with the toggle off; flip on, then restore.
+    await expectMutation(
+      page,
+      {
+        method: "POST",
+        url: "/api/settings/mcp",
+        expectedBody: { enabled: true },
+        expectedStatus: 204,
+      },
+      async () => mcpToggle(page).click(),
+    );
+    await expect(page.getByTestId("mcp-toggle-status")).toHaveClass(/success/);
+    await expect(mcpState(page)).toContainText("Enabled");
 
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/settings/mcp",
-      expectedBody: { enabled: false },
-      expectedStatus: 204,
-    },
-    async () => mcpToggle(page).click(),
-  );
-  await expect(mcpState(page)).toContainText("Disabled");
+    await expectMutation(
+      page,
+      {
+        method: "POST",
+        url: "/api/settings/mcp",
+        expectedBody: { enabled: false },
+        expectedStatus: 204,
+      },
+      async () => mcpToggle(page).click(),
+    );
+    await expect(mcpState(page)).toContainText("Disabled");
+  } finally {
+    // Failure-safe restore of the instance-wide default: a mid-test failure
+    // must not leave /mcp enabled for the rest of the suite. Direct API
+    // write (idempotent) — the UI's state is unknowable after a failure.
+    await page.request.post("/api/settings/mcp", {
+      data: { enabled: false },
+    });
+  }
 });

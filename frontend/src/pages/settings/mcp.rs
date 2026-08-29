@@ -1,4 +1,4 @@
-//! Admin toggle card for the hosted `/mcp` endpoint (#2314), rendered in the
+//! Admin toggle card for the hosted `/mcp` endpoint, rendered in the
 //! Settings → API Tokens section (the tokens it authenticates with live on
 //! the same screen). Default OFF; flipping it takes effect on the next
 //! `/mcp` request without a restart. Renders nothing for non-admins — the

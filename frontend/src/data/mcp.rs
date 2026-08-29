@@ -1,4 +1,4 @@
-//! Hosted `/mcp` endpoint toggle data access (#2314). Web hits the
+//! Hosted `/mcp` endpoint toggle data access. Web hits the
 //! admin-gated `/api/settings/mcp` REST pair via `gloo-net` (same-origin
 //! cookie session); SSR builds get no-op stubs so the Settings card compiles
 //! and hydrates with identical markup. No mobile surface.
@@ -34,11 +34,19 @@ pub async fn set_mcp_enabled(enabled: bool) -> Result<(), String> {
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    if res.ok() {
-        Ok(())
-    } else {
-        Err(format!("saving MCP setting failed: {}", res.status()))
+    if !res.ok() {
+        // Surface the server's own text body when it has one (a 403's
+        // "admin required" beats a bare status), mirroring
+        // `set_registration_enabled`.
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        return if body.trim().is_empty() {
+            Err(format!("request failed ({status})"))
+        } else {
+            Err(body)
+        };
     }
+    Ok(())
 }
 
 // ── SSR stubs (server feature, no web) ───────────────────────────
