@@ -617,6 +617,13 @@ struct MetadataEditView: View {
         guard let item else { return }
         // Cleared so picking the same photo again re-fires the selection.
         defer { coverPhotoItem = nil }
+        // Claimed before the read/re-encode, not after: that work is async,
+        // and a second pick landing during it would otherwise start a second
+        // concurrent upload.
+        guard !isCoverBusy else { return }
+        isCoverBusy = true
+        coverStatus = "Uploading cover\u{2026}"
+        defer { isCoverBusy = false }
         guard let raw = try? await item.loadTransferable(type: Data.self),
             let image = UIImage(data: raw)
         else {
@@ -632,9 +639,6 @@ struct MetadataEditView: View {
             Haptics.warning()
             return
         }
-        isCoverBusy = true
-        coverStatus = "Uploading cover\u{2026}"
-        defer { isCoverBusy = false }
         do {
             let updated = try await LibraryService.uploadCover(uuid: uuid, jpegData: encoded)
             applyCoverWrite(updated, status: "Cover updated.")
@@ -644,6 +648,7 @@ struct MetadataEditView: View {
     }
 
     private func revertCover() async {
+        guard !isCoverBusy else { return }
         Haptics.warning()
         isCoverBusy = true
         coverStatus = "Reverting\u{2026}"
