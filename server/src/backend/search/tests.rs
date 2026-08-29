@@ -439,3 +439,157 @@ async fn api_search_palette_returns_429_after_budget_exceeded() {
         "request beyond SEARCH_RATE_LIMIT_MAX must return 429",
     );
 }
+
+// -------------------------------------------------------------------
+// /api/search/content — book-content search (#2282)
+// -------------------------------------------------------------------
+
+/// Seed one indexed book plus a `book_content_chapters` row carrying `text`,
+/// returning the book's uuid. Raw insert rather than the worker pass — the
+/// extraction pipeline is covered by the db-crate tests; here only the wire
+/// contract is under test.
+async fn seed_content_chapter(pool: &sqlx::SqlitePool, text: &str) -> String {
+    db::set_settings(
+        pool,
+        &Settings {
+            ebook_library_path: Some("/lib".into()),
+            audiobook_library_path: None,
+            scan_interval_hours: None,
+        },
+    )
+    .await
+    .unwrap();
+    db::replace_books(
+        pool,
+        "/lib",
+        vec![db::ebook::IndexedBook {
+            metadata: omnibus_shared::EbookMetadata {
+                filename: "alpha.epub".into(),
+                title: Some("Alpha".into()),
+                ..Default::default()
+            },
+            cover: None,
+            mtime_epoch: 7,
+            size_bytes: 9,
+            word_count: None,
+        }],
+    )
+    .await
+    .unwrap();
+    let uuid: String = sqlx::query_scalar("SELECT uuid FROM books LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO book_content_chapters (book_uuid, spine_index, mtime_epoch, size_bytes, text) \
+         VALUES (?, 2, 7, 9, ?)",
+    )
+    .bind(&uuid)
+    .bind(text)
+    .execute(pool)
+    .await
+    .unwrap();
+    uuid
+}
+
+#[tokio::test]
+async fn api_get_search_content_returns_hits_with_chapter_citation() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let uuid = seed_content_chapter(&pool, "The lighthouse keeper counted the waves.").await;
+
+    let response = app
+        .oneshot(get_with_bearer("/api/search/content?q=lighthouse", &token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let results: omnibus_shared::ContentSearchResults = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(results.hits.len(), 1);
+    assert_eq!(results.hits[0].book_uuid, uuid);
+    assert_eq!(results.hits[0].spine_index, 2);
+    assert_eq!(results.hits[0].title, "Alpha");
+    assert!(
+        results.hits[0].snippet.contains("[lighthouse]"),
+        "snippet must mark the matched term: {}",
+        results.hits[0].snippet
+    );
+}
+
+#[tokio::test]
+async fn api_get_search_content_returns_empty_hits_when_no_library_configured() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let response = app
+        .oneshot(get_with_bearer("/api/search/content?q=anything", &token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let results: omnibus_shared::ContentSearchResults = serde_json::from_slice(&bytes).unwrap();
+    assert!(results.hits.is_empty());
+}
+
+#[tokio::test]
+async fn api_get_search_content_rejects_over_length_q_with_400() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let oversized = "a".repeat(MAX_SEARCH_QUERY_LEN + 1);
+    let response = app
+        .oneshot(get_with_bearer(
+            &format!("/api/search/content?q={oversized}"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn api_get_search_content_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let res = app
+        .oneshot(get_anon("/api/search/content?q=hello"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_get_search_content_returns_429_after_budget_exceeded() {
+    // The content route is registered inside `search_router`, so it shares
+    // the per-IP search rate limit with `/api/search` and the palette.
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    for i in 0..SEARCH_RATE_LIMIT_MAX {
+        let res = app
+            .clone()
+            .oneshot(get_with_bearer("/api/search/content?q=hello", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "request #{} should be within budget",
+            i + 1
+        );
+    }
+
+    let over_limit = app
+        .clone()
+        .oneshot(get_with_bearer("/api/search/content?q=hello", &token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(
+        over_limit.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "request beyond SEARCH_RATE_LIMIT_MAX must return 429",
+    );
+}
