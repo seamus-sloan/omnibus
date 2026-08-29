@@ -23,7 +23,10 @@ use crate::config::Config;
 /// lands here as it ships. **Instance configuration** (`/api/settings`, API
 /// keys, SMTP, registration) and **commands** (`/api/reindex`,
 /// `/api/scan-library`, `/api/fts/rebuild`, `/api/kindle/send`) are never
-/// added. Enforcement matches the statement: [`OmnibusClient`]'s public read
+/// added. API-token management (`/api/auth/api-tokens*`) is **permanently
+/// excluded** on both grounds — it is configuration *and* credential
+/// minting: an MCP session must never be able to mint itself new
+/// credentials or revoke the ones it rode in on. Enforcement matches the statement: [`OmnibusClient`]'s public read
 /// surface builds only `GET` requests, and every non-`GET` routes through
 /// [`OmnibusClient::write_json`] / [`OmnibusClient::write_no_content`], which
 /// assert membership here (a `{param}` segment matches any single path

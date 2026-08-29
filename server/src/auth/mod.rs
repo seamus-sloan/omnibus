@@ -5,6 +5,7 @@
 //! projection ([`session_view`]), and the `/api/*` gate middleware
 //! ([`gate`]). Mounted by [`crate::main`].
 
+pub mod api_tokens;
 pub mod basic;
 pub mod boot;
 pub mod csrf;

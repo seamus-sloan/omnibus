@@ -4,6 +4,10 @@
 //! Library Location, Metadata Lookup, Email delivery, Users, and Logs. The
 //! mobile shell has no sidebar — it renders those cards flat.
 
+// Web/server only: the API-token management card calls the web-only
+// `data::*_api_token` wrappers (no mobile surface).
+#[cfg(not(feature = "mobile"))]
+mod api_tokens;
 // Web/server only: the Background Tasks dashboard calls the web-only
 // `data::get_background_tasks` (no mobile RPC route yet), same shape as
 // `health`'s "Last errors" panel.
@@ -36,6 +40,8 @@ mod users;
 
 use dioxus::prelude::*;
 
+#[cfg(not(feature = "mobile"))]
+use api_tokens::ApiTokensSection;
 #[cfg(not(feature = "mobile"))]
 use background_tasks::BackgroundTasksSection;
 #[cfg(not(feature = "mobile"))]
@@ -101,6 +107,7 @@ enum SettingsSection {
     Account,
     Kindle,
     Kobo,
+    ApiTokens,
     Library,
     Metadata,
     Email,
@@ -119,6 +126,7 @@ impl SettingsSection {
             SettingsSection::Account => "account",
             SettingsSection::Kindle => "kindle",
             SettingsSection::Kobo => "kobo",
+            SettingsSection::ApiTokens => "api-tokens",
             SettingsSection::Library => "library",
             SettingsSection::Metadata => "metadata",
             SettingsSection::Email => "email",
@@ -134,7 +142,10 @@ impl SettingsSection {
     fn requires_admin(self) -> bool {
         !matches!(
             self,
-            SettingsSection::Account | SettingsSection::Kindle | SettingsSection::Kobo
+            SettingsSection::Account
+                | SettingsSection::Kindle
+                | SettingsSection::Kobo
+                | SettingsSection::ApiTokens
         )
     }
 }
@@ -146,6 +157,7 @@ fn parse_section(raw: Option<&str>, is_admin: bool) -> SettingsSection {
     let requested = match raw {
         Some("kindle") => SettingsSection::Kindle,
         Some("kobo") => SettingsSection::Kobo,
+        Some("api-tokens") => SettingsSection::ApiTokens,
         Some("library") => SettingsSection::Library,
         Some("metadata") => SettingsSection::Metadata,
         Some("email") => SettingsSection::Email,
@@ -171,6 +183,7 @@ fn section_content(active: SettingsSection) -> Element {
         SettingsSection::Account => rsx! { super::AccountPage {} },
         SettingsSection::Kindle => rsx! { super::account::KindleEmailCard {} },
         SettingsSection::Kobo => rsx! { super::account::kobo::KoboDevicesCard {} },
+        SettingsSection::ApiTokens => rsx! { ApiTokensSection {} },
         SettingsSection::Library => rsx! {
             LibraryLocationSection {}
             EbookConvertField {}
@@ -210,6 +223,7 @@ fn SettingsSidebar(active: SettingsSection, is_admin: bool) -> Element {
                 SettingsNavItem { section: SettingsSection::Account, active, label: "Account", icon: "◉" }
                 SettingsNavItem { section: SettingsSection::Kindle, active, label: "Kindle", icon: "▤" }
                 SettingsNavItem { section: SettingsSection::Kobo, active, label: "Kobo", icon: "▦" }
+                SettingsNavItem { section: SettingsSection::ApiTokens, active, label: "API Tokens", icon: "⚷" }
             }
 
             if is_admin {
@@ -335,6 +349,14 @@ mod tests {
         assert!(matches!(
             parse_section(Some("kobo"), true),
             SettingsSection::Kobo
+        ));
+        assert!(matches!(
+            parse_section(Some("api-tokens"), false),
+            SettingsSection::ApiTokens
+        ));
+        assert!(matches!(
+            parse_section(Some("api-tokens"), true),
+            SettingsSection::ApiTokens
         ));
     }
 

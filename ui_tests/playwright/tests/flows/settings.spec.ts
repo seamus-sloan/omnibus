@@ -62,6 +62,7 @@ test("renders the settings sidebar with every admin section", async ({
   await expect(page.getByTestId("settings-nav-account")).toBeVisible();
   await expect(page.getByTestId("settings-nav-kindle")).toBeVisible();
   await expect(page.getByTestId("settings-nav-kobo")).toBeVisible();
+  await expect(page.getByTestId("settings-nav-api-tokens")).toBeVisible();
   await expect(page.getByTestId("settings-nav-library")).toBeVisible();
   await expect(page.getByTestId("settings-nav-metadata")).toBeVisible();
   await expect(page.getByTestId("settings-nav-email")).toBeVisible();
