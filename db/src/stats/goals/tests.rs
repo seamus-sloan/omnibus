@@ -388,7 +388,14 @@ async fn read_session(
 
 /// The same for a listening session, so the minutes goal can be shown to count
 /// both.
-async fn listen_session(pool: &SqlitePool, user: i64, uuid: &str, started_at: i64, secs: i64) {
+async fn listen_session(
+    pool: &SqlitePool,
+    user: i64,
+    uuid: &str,
+    started_at: i64,
+    secs: i64,
+    offset: i64,
+) {
     sqlx::query(
         "INSERT INTO listening_sessions
              (user_id, book_uuid, started_at, ended_at, seconds_listened, utc_offset_minutes)
@@ -399,7 +406,7 @@ async fn listen_session(pool: &SqlitePool, user: i64, uuid: &str, started_at: i6
     .bind(started_at)
     .bind(started_at + secs)
     .bind(secs)
-    .bind(OFFSET_PLUS_13)
+    .bind(offset)
     .execute(pool)
     .await
     .unwrap();
@@ -427,6 +434,68 @@ async fn local_day_start_plus(pool: &SqlitePool, offset: i64, secs_into_day: i64
     .fetch_one(pool)
     .await
     .unwrap()
+}
+
+/// The reader's local day for a given offset, `YYYY-MM-DD`.
+async fn local_day(pool: &SqlitePool, offset: i64) -> String {
+    sqlx::query_scalar("SELECT date(strftime('%s','now') + ? * 60, 'unixepoch')")
+        .bind(offset)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// The server's current unix second.
+async fn now_secs(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar("SELECT CAST(strftime('%s','now') AS INTEGER)")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn daily_goals_take_the_offset_from_the_most_recent_session_in_either_table() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let now = now_secs(&pool).await;
+
+    // A reader who has moved: one session at UTC-12 and one at UTC+13. The two
+    // are 25 hours apart, so they can never name the same local day — which is
+    // what makes the reported `day` say which offset won.
+    const WEST: i64 = -720;
+    let west_day = local_day(&pool, WEST).await;
+    let east_day = local_day(&pool, OFFSET_PLUS_13).await;
+    assert_ne!(west_day, east_day, "the fixture must separate the two days");
+
+    // Alice's newer session is the *listening* one.
+    let alice = seed_user(&pool, "alice").await;
+    read_session(&pool, alice, "uuid-1", now - 3_600, 60, Some(WEST)).await;
+    listen_session(&pool, alice, "uuid-1", now - 60, 60, OFFSET_PLUS_13).await;
+    set_daily_goal(&pool, alice, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20))
+        .await
+        .unwrap();
+    assert_eq!(
+        daily_goals(&pool, alice)
+            .await
+            .unwrap()
+            .minutes
+            .unwrap()
+            .day,
+        east_day
+    );
+
+    // Bob's is the *reading* one, so a probe that simply preferred one table
+    // over the other would answer one of these two wrongly.
+    let bob = seed_user(&pool, "bob").await;
+    listen_session(&pool, bob, "uuid-1", now - 3_600, 60, OFFSET_PLUS_13).await;
+    read_session(&pool, bob, "uuid-1", now - 60, 60, Some(WEST)).await;
+    set_daily_goal(&pool, bob, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20))
+        .await
+        .unwrap();
+    assert_eq!(
+        daily_goals(&pool, bob).await.unwrap().minutes.unwrap().day,
+        west_day
+    );
 }
 
 #[tokio::test]
@@ -697,7 +766,7 @@ async fn daily_goals_counts_listening_toward_the_minutes_goal_alongside_reading(
     let midday = local_day_start_plus(&pool, OFFSET_PLUS_13, 43_200).await;
 
     read_session(&pool, user, "uuid-1", midday, 600, Some(OFFSET_PLUS_13)).await;
-    listen_session(&pool, user, "uuid-1", midday, 900).await;
+    listen_session(&pool, user, "uuid-1", midday, 900, OFFSET_PLUS_13).await;
 
     set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 30))
         .await
