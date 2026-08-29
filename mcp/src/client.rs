@@ -51,6 +51,16 @@ pub const WRITE_ALLOWLIST: &[&str] = &[
     // from external meta; the remove is the per-book detail route.
     "POST /api/scan/wishlist",
     "DELETE /api/physical/{uuid}/wishlist",
+    // Content state (rule 08 tier 3): which shelves exist for a user and
+    // which books they hold is per-user content, not configuration.
+    "POST /api/shelves",
+    "PATCH /api/shelves/{id}",
+    "DELETE /api/shelves/{id}",
+    "POST /api/shelves/{id}/books",
+    "DELETE /api/shelves/{id}/books/{uuid}",
+    // Not a mutation at all — rule 08 calls this one out as "a read wearing
+    // POST": it evaluates a candidate smart rule and creates nothing.
+    "POST /api/shelves/preview",
 ];
 
 /// True when `method path` is covered by [`WRITE_ALLOWLIST`]. A `{param}`
@@ -385,12 +395,16 @@ impl OmnibusClient {
         })
     }
 
-    /// Send an allowlisted body-less write whose success answer carries no
-    /// content (the `204` DELETE endpoints).
-    pub async fn write_no_content(&self, method: Method, path: &str) -> Result<(), ClientError> {
-        let resp = self
-            .write_with_relogin::<()>(method.clone(), path, None)
-            .await?;
+    /// Send an allowlisted write (with an optional JSON body) whose success
+    /// answer carries no content — the `204` DELETE endpoints, and the shelf
+    /// membership `POST` that acknowledges with `204`.
+    pub async fn write_no_content<B: Serialize + ?Sized>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&B>,
+    ) -> Result<(), ClientError> {
+        let resp = self.write_with_relogin(method.clone(), path, body).await?;
         if !resp.status().is_success() {
             return Err(Self::write_status_error(&method, path, resp).await);
         }
