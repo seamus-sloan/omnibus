@@ -8,6 +8,10 @@
 // `data::*_api_token` wrappers (no mobile surface).
 #[cfg(not(feature = "mobile"))]
 mod api_tokens;
+// Web/server only: the hosted-/mcp admin toggle calls the web-only
+// `data::mcp_status`/`set_mcp_enabled` wrappers (no mobile surface).
+#[cfg(not(feature = "mobile"))]
+mod mcp;
 // Web/server only: the Background Tasks dashboard calls the web-only
 // `data::get_background_tasks` (no mobile RPC route yet), same shape as
 // `health`'s "Last errors" panel.
@@ -51,6 +55,8 @@ use ebook_convert::EbookConvertField;
 #[cfg(not(feature = "mobile"))]
 use health::LastErrorsSection;
 use library::LibraryLocationSection;
+#[cfg(not(feature = "mobile"))]
+use mcp::McpToggleCard;
 use secret_key_field::{SecretKeyField, SecretKeyKind};
 use smtp::SmtpConfigField;
 #[cfg(not(feature = "mobile"))]
@@ -183,7 +189,12 @@ fn section_content(active: SettingsSection) -> Element {
         SettingsSection::Account => rsx! { super::AccountPage {} },
         SettingsSection::Kindle => rsx! { super::account::KindleEmailCard {} },
         SettingsSection::Kobo => rsx! { super::account::kobo::KoboDevicesCard {} },
-        SettingsSection::ApiTokens => rsx! { ApiTokensSection {} },
+        SettingsSection::ApiTokens => rsx! {
+            ApiTokensSection {}
+            // Admin-only card (renders empty otherwise): the endpoint these
+            // tokens authenticate against is toggled on the same screen.
+            McpToggleCard {}
+        },
         SettingsSection::Library => rsx! {
             LibraryLocationSection {}
             EbookConvertField {}

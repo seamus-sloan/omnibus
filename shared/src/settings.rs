@@ -295,3 +295,11 @@ pub struct LibraryContents {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether the hosted `/mcp` endpoint is enabled; the body of
+/// `GET`/`POST /api/settings/mcp` and the matching rpc pair. Mirrors
+/// `RegistrationStatus`'s shape for the other instance-level switch.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpStatus {
+    pub enabled: bool,
+}

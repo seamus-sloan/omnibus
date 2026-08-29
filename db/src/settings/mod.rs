@@ -49,6 +49,10 @@ const SMTP_PASSWORD_KEY: &str = "smtp_password";
 const SMTP_FROM_EMAIL_KEY: &str = "smtp_from_email";
 const SMTP_SECURITY_KEY: &str = "smtp_security";
 
+/// `settings` KV key for the hosted `/mcp` endpoint toggle (#2314). A
+/// missing row reads as disabled, so a fresh install exposes no MCP surface.
+const MCP_ENABLED_KEY: &str = "mcp_enabled";
+
 /// Errors returned by the settings data layer.
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
@@ -62,6 +66,31 @@ pub enum SettingsError {
     /// A `scan_roots.metadata_precedence` JSON (de)serialization failure.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+}
+
+/// Whether the hosted `/mcp` endpoint is enabled. Read per request by the
+/// `/mcp` handler (no cache), so flipping the toggle takes effect without a
+/// restart. Default (no row) is **off**.
+pub async fn mcp_enabled(pool: &SqlitePool) -> Result<bool, SettingsError> {
+    let v: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+        .bind(MCP_ENABLED_KEY)
+        .fetch_optional(pool)
+        .await?;
+    Ok(v.as_deref() == Some("1"))
+}
+
+/// Enable or disable the hosted `/mcp` endpoint (admin-only write at the
+/// HTTP layer).
+pub async fn set_mcp_enabled(pool: &SqlitePool, enabled: bool) -> Result<(), SettingsError> {
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(MCP_ENABLED_KEY)
+    .bind(if enabled { "1" } else { "0" })
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Read the ebook and audiobook library paths from the `settings` KV table.
