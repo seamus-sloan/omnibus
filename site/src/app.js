@@ -45,10 +45,33 @@
   try { stored = localStorage.getItem('omn.site.dir'); } catch (e) { /* private mode */ }
   var dir = DIRS[stored] ? stored : 'dark';
 
+  /* Shots with a shots/sepia/ counterpart. Anything absent here keeps its
+     dark render in both directions rather than 404ing mid-toggle. */
+  var SEPIA_SHOTS = {
+    'omnibus-android-library': 1, 'omnibus-book-detail': 1,
+    'omnibus-checkin-scan': 1, 'omnibus-ios-book-detail': 1,
+    'omnibus-library-home': 1, 'omnibus-metadata-edit': 1,
+    'omnibus-player': 1, 'omnibus-settings-library': 1,
+    'omnibus-shelf-kobo': 1, 'omnibus-sync-alignment': 1,
+    'omnibus-sync-continue-hero': 1, 'omnibus-themes-strip': 1,
+    'omnibus-wishlist-ios': 1
+  };
+
+  function retint(d) {
+    Array.prototype.forEach.call(document.querySelectorAll('img.shot'), function (img) {
+      var m = (img.getAttribute('src') || '').match(/^shots\/[^/]+\/(.+)\.webp$/);
+      if (!m) return;
+      var want = d === 'sepia' && SEPIA_SHOTS[m[1]] ? 'sepia' : 'dark';
+      var src = 'shots/' + want + '/' + m[1] + '.webp';
+      if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+    });
+  }
+
   function setDir(next) {
     if (!DIRS[next]) return;
     dir = next;
     site.className = 'site dir-' + dir;
+    retint(dir);
     Array.prototype.forEach.call(document.querySelectorAll('.dirtog button'), function (b) {
       var on = b.getAttribute('data-dir') === dir;
       b.classList.toggle('on', on);

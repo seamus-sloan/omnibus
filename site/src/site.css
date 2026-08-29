@@ -29,8 +29,8 @@ html,body{margin:0;height:100%;background:oklch(0.125 0.006 70)}
 body{overflow:hidden}
 body.flow{overflow:auto}
 
-.dir-dark{--pg-bg:oklch(0.125 0.006 70);--pg-panel:oklch(0.175 0.008 70);--pg-ink:oklch(0.97 0.006 80);--pg-ink2:oklch(0.74 0.012 72);--pg-ink3:oklch(0.55 0.012 70);--pg-line:oklch(0.45 0.012 70/0.34);--pg-accent:oklch(0.80 0.13 66);--pg-accent-ink:oklch(0.18 0.03 65);--pg-shadow:0 46px 90px -34px rgb(0 0 0/.85)}
-.dir-sepia{--pg-bg:oklch(0.930 0.025 75);--pg-panel:oklch(0.888 0.028 75);--pg-ink:oklch(0.215 0.020 58);--pg-ink2:oklch(0.395 0.022 54);--pg-ink3:oklch(0.545 0.022 54);--pg-line:oklch(0.46 0.024 54/0.32);--pg-accent:oklch(0.47 0.14 30);--pg-accent-ink:oklch(0.965 0.020 80);--pg-shadow:0 40px 70px -34px oklch(0.35 0.03 50/.45)}
+.dir-dark{--pg-bg:oklch(0.125 0.006 70);--pg-panel:oklch(0.175 0.008 70);--pg-ink:oklch(0.97 0.006 80);--pg-ink2:oklch(0.74 0.012 72);--pg-ink3:oklch(0.55 0.012 70);--pg-line:oklch(0.45 0.012 70/0.34);--pg-accent:oklch(0.80 0.13 66);--pg-accent-ink:oklch(0.18 0.03 65);--pg-shadow:0 46px 90px -34px rgb(0 0 0/.85);--pg-drop:0 28px 44px rgb(0 0 0/.55)}
+.dir-sepia{--pg-bg:oklch(0.930 0.025 75);--pg-panel:oklch(0.888 0.028 75);--pg-ink:oklch(0.215 0.020 58);--pg-ink2:oklch(0.395 0.022 54);--pg-ink3:oklch(0.545 0.022 54);--pg-line:oklch(0.46 0.024 54/0.32);--pg-accent:oklch(0.47 0.14 30);--pg-accent-ink:oklch(0.965 0.020 80);--pg-shadow:0 40px 70px -34px oklch(0.35 0.03 50/.45);--pg-drop:0 24px 36px oklch(0.35 0.03 50/.32)}
 
 .site{position:fixed;inset:0;overflow:hidden;background:var(--pg-bg);color:var(--pg-ink);font-family:var(--sans);font-size:15px;line-height:1.5;letter-spacing:-0.005em;-webkit-font-smoothing:antialiased;--pad:clamp(26px,4.4vw,86px)}
 .site *,.site *::before,.site *::after{box-sizing:border-box}
@@ -78,7 +78,9 @@ body.flow{overflow:auto}
 .dirtog{display:inline-flex;padding:3px;border:1px solid var(--pg-line);border-radius:999px;gap:2px;background:color-mix(in oklch,var(--pg-bg) 70%,transparent);backdrop-filter:blur(8px)}
 .dirtog button{border:0;background:transparent;color:var(--pg-ink3);font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;padding:6px 12px;border-radius:999px;transition:color .15s,background .15s}
 .dirtog button.on{background:var(--pg-ink);color:var(--pg-bg)}
-.dirtog button:hover{color:var(--pg-ink)}
+/* :not(.on) — this rule ties .dirtog button.on on specificity and sits later,
+   so a bare :hover would repaint the active pill's text ink-on-ink */
+.dirtog button:hover:not(.on){color:var(--pg-ink)}
 .site a.top-star{white-space:nowrap;display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 15px;border:1px solid var(--pg-line);border-radius:999px;color:var(--pg-ink);font-size:12.5px;font-weight:500}
 .site a.top-star:hover{border-color:var(--pg-accent);color:var(--pg-ink)}
 
@@ -146,7 +148,10 @@ body.flow{overflow:auto}
 .phones>div,.trio>div{min-width:0;height:100%;display:grid;grid-template-rows:1fr auto}
 .trio>div{flex:0 1 320px}
 .phones>div{flex:0 1 440px}
-.phone .shot{border-radius:22px}
+/* the phone renders carry their own bezel with alpha corners, so the desktop
+   frame chrome (border/panel/box-shadow) draws a spurious rectangle around
+   them; drop-shadow follows the alpha silhouette instead */
+.phone .shot{border:0;border-radius:0;background:transparent;box-shadow:none;filter:drop-shadow(var(--pg-drop))}
 .phone-cap{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--pg-ink3);text-align:center;margin-top:16px;min-height:2.4em}
 
 /* side-by-side desktop screens */
