@@ -14,6 +14,16 @@ turn up something cosmetic that no assertion would catch.
 ## Steps
 
 1. Reach a book's detail page from wherever you happen to be.
+
+   **In the library's table view, click the book's cover.** The row carries
+   `role="button"` and an `aria-label` of "Open details for …", so it reads
+   like the whole row is the target — but most of its cells (title, author,
+   series, tags, genres, published, language) are inline editors that swallow
+   the click and open themselves instead. Only the cells with no editor behind
+   them — **cover**, formats, and the two date columns — let the click through
+   to the navigation. Clicking a title and landing in an edit box is the table
+   working as designed; it is **not** a broken row, and must not be journalled
+   as one. In grid view, click the tile.
 2. Actually read the page. Cover, title, author, series, description, formats,
    dates, identifiers, tags, genres, ratings, saved passages, suggestions.
    There is **no page or chapter count** on this page — do not go looking for
