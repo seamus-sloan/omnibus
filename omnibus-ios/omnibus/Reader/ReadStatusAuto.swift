@@ -56,16 +56,8 @@ final class ReadStatusAuto {
 
     /// Fetch the stored status and apply the open transition. Call once per
     /// open, off the reader's critical path — the fetch may cost a round trip.
-    ///
-    /// A status this tracker already holds is kept rather than refetched: it
-    /// is either the one this fetch would return, or the newer one this
-    /// tracker just wrote. Overwriting the second with a response that
-    /// predates it re-runs a transition that has already happened, and writes
-    /// `finished` twice.
     func bookOpened() async {
-        if status == nil {
-            status = await fetch()
-        }
+        await fetchIfUnknown()
         await applyIfNeeded()
     }
 
@@ -85,10 +77,32 @@ final class ReadStatusAuto {
         // relies on that — it finishes books it was never asked to open. An
         // ordinary relocate only retries when there is a server to ask, so
         // reading offline costs nothing until the device is back.
-        if status == nil, atEnd || isOnline() {
-            status = await fetch()
+        if atEnd || isOnline() {
+            await fetchIfUnknown()
         }
         await applyIfNeeded()
+    }
+
+    /// Learn the stored status, unless this tracker already knows it.
+    ///
+    /// A status this tracker already holds is kept rather than refetched: it
+    /// is either the one this fetch would return, or the newer one this
+    /// tracker just wrote. Overwriting the second with a response that
+    /// predates it re-runs a transition that has already happened, and writes
+    /// `finished` twice.
+    ///
+    /// That is why the check is repeated **after** the fetch and not only
+    /// before it. `fetch` suspends, and every relocate drives this — so a
+    /// second observation can settle the status, and write it, while the
+    /// first request is still in flight. Assigning unconditionally on the way
+    /// out replays that transition, or drops a settled status back to unknown
+    /// when the late answer is a failure. Two concurrent fetches can still
+    /// both go out; that costs a redundant GET and nothing else.
+    private func fetchIfUnknown() async {
+        guard status == nil else { return }
+        let fetched = await fetch()
+        guard status == nil else { return }
+        status = fetched
     }
 
     private func applyIfNeeded() async {

@@ -171,6 +171,40 @@ struct ReadStatusAutoTrackerTests {
         #expect(device.fetches == 2)
     }
 
+    /// Lets a test reach back into the tracker from inside its own `fetch`,
+    /// which is the one place a second observation can interleave with a
+    /// request that is still in flight.
+    private final class Reentry {
+        var tracker: ReadStatusAuto?
+        var armed = true
+    }
+
+    @Test("an answer that lands after the status settled does not overwrite it")
+    func lateFetchDoesNotClobberASettledStatus() async {
+        // Every relocate drives the tracker now, so two of them can sit in
+        // `fetch` at once. Here the reader reaches the end — and finishes the
+        // book — while the opening request is still out. That request's answer
+        // predates the write, so adopting it on arrival would replay the
+        // transition and write `finished` twice.
+        let log = Log()
+        let reentry = Reentry()
+        let auto = ReadStatusAuto(
+            fetch: {
+                if reentry.armed {
+                    reentry.armed = false
+                    await reentry.tracker?.positionChanged(atEnd: true)
+                }
+                return .unread
+            },
+            write: { log.writes.append($0) },
+            isOnline: { true }
+        )
+        reentry.tracker = auto
+
+        await auto.bookOpened()
+        #expect(log.writes == [.finished])
+    }
+
     @Test("reaching the end retries the status even while offline")
     func endRetriesEvenWhileOffline() async {
         // Unlike the open transition, finishing cannot downgrade anything, so
