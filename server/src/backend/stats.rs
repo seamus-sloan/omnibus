@@ -71,9 +71,13 @@ pub(super) async fn put_stats_goal(
         Err(GoalError::Sqlx(e)) => internal("set_reading_goal", e),
         // The remaining variants are all boundary checks on the payload, and
         // each `#[error]` message names the bound it failed.
+        // `InvalidDailyTarget` is unreachable here — `set_goal` bounds against
+        // the annual maximum — but it is a 400 wherever it does arise, so it is
+        // answered rather than left to widen this match into a catch-all.
         Err(
             e @ (GoalError::UnsupportedKind(_)
             | GoalError::InvalidTarget(_)
+            | GoalError::InvalidDailyTarget { .. }
             | GoalError::InvalidYear(_)),
         ) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
