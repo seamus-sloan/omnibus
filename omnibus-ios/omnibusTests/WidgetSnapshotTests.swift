@@ -408,6 +408,19 @@ struct WidgetLabelsTests {
                 == Format.relative(unix: Int64(then.timeIntervalSince1970), relativeTo: now)
         )
     }
+
+    @Test
+    func relative_reads_just_now_at_or_past_the_present_not_a_countdown() {
+        // #2358: a position written moments ago carries a timestamp at or just
+        // past `now`; the raw relative formatter phrases that as "in 0s".
+        let now = Date(timeIntervalSince1970: 1_724_500_000)
+        let unix = Int64(now.timeIntervalSince1970)
+
+        #expect(WidgetLabels.relative(now, relativeTo: now) == "just now")
+        #expect(WidgetLabels.relative(now.addingTimeInterval(0.5), relativeTo: now) == "just now")
+        #expect(Format.relative(unix: unix, relativeTo: now) == "just now")
+        #expect(Format.relative(unix: unix + 5, relativeTo: now) == "just now")
+    }
 }
 
 @Suite("Resume format resolution")
