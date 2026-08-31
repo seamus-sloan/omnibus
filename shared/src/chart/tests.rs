@@ -445,3 +445,55 @@ fn both_axes_share_one_gridline_count() {
     assert_eq!(right, 500.0);
     assert!((right / divisions as f64 - 100.0).abs() < f64::EPSILON);
 }
+
+#[test]
+fn fit_axes_scales_a_stacked_axis_to_the_tallest_column() {
+    let slice = |name: &str, values: Vec<Option<f64>>| ChartSeries {
+        measure: ChartMeasure::BooksFinished,
+        slice: Some(name.to_string()),
+        axis: 0,
+        mark: ChartMark::Bar,
+        values,
+    };
+    let series = vec![
+        slice("Fantasy", vec![Some(2.0), Some(1.0)]),
+        slice("Horror", vec![Some(2.0), Some(1.0)]),
+        slice("Crime", vec![Some(2.0), Some(1.0)]),
+    ];
+
+    // Stacked: the first column is 6, so the axis has to clear 6.
+    let (axes, _) = fit_axes(&series, true, 2);
+    assert!(axes[0].max >= 6.0, "{:?}", axes[0]);
+
+    // Grouped: no column, so the tallest single slice is 2.
+    let (axes, _) = fit_axes(&series, false, 2);
+    assert_eq!(axes[0].max, 2.0);
+}
+
+#[test]
+fn fit_axes_gives_a_second_unit_its_own_axis_on_the_shared_tick_count() {
+    let series = vec![
+        ChartSeries {
+            measure: ChartMeasure::BooksFinished,
+            slice: None,
+            axis: 0,
+            mark: ChartMark::Bar,
+            values: vec![Some(4.0)],
+        },
+        ChartSeries {
+            measure: ChartMeasure::AvgPageLength,
+            slice: None,
+            axis: 1,
+            mark: ChartMark::Line,
+            values: vec![Some(450.0)],
+        },
+    ];
+    let (axes, divisions) = fit_axes(&series, false, 1);
+    assert_eq!(axes.len(), 2);
+    assert_eq!(axes[0].unit, ChartUnit::Books);
+    assert_eq!(axes[1].unit, ChartUnit::Pages);
+    // Both axes divide into the same number of gridlines, or the right-hand
+    // labels would sit between the lines they belong to.
+    assert!(axes[1].max >= 450.0);
+    assert!(divisions >= 3);
+}
