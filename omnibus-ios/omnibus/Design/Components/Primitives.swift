@@ -209,18 +209,27 @@ struct GhostPlate: View {
 
     private var height: CGFloat { width * 1.5 }
 
+    /// How far a fanned sibling is pushed out, and how far it leans.
+    private static let fanOffset: CGFloat = 0.5
+    private static let fanAngle: Double = 11
+    /// Total width a fan occupies, in multiples of one plate — see `body`.
+    private static let fanSpan: CGFloat = 2.6
+
     var body: some View {
         ZStack {
             if fanned {
-                sibling(angle: -11, x: -width * 0.5)
-                sibling(angle: 11, x: width * 0.5)
+                sibling(angle: -Self.fanAngle, x: -width * Self.fanOffset)
+                sibling(angle: Self.fanAngle, x: width * Self.fanOffset)
             }
             lead
         }
-        // Bound the fan explicitly: the rotated siblings overflow the lead
-        // plate, and an unbounded ZStack would let them run under whatever
-        // sits beside it.
-        .frame(width: fanned ? width * 2.2 : width, height: height + 16)
+        // Bound the fan explicitly: a ZStack sizes to its largest child, so
+        // without this the offset, rotated siblings would run under whatever
+        // sits beside the motif. A sibling sits `0.5w` out and rotating it
+        // `fanAngle` about its bottom throws its outer top corner a further
+        // `0.5w·cos + 1.5w·sin` ≈ `0.78w`, so the half-width to reserve is
+        // ~`1.28w` — hence `2.6w`, not the `2.2w` that left 13pt outside.
+        .frame(width: fanned ? width * Self.fanSpan : width, height: height + 16)
         .accessibilityHidden(true)
     }
 
@@ -229,11 +238,10 @@ struct GhostPlate: View {
     /// tangle of lines rather than as a stack.
     private var lead: some View {
         RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
-            .fill(palette.bg0Color)
-            .overlay(
-                RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
-                    .fill(palette.bg1Color.opacity(0.55))
-            )
+            // One opaque fill, not a translucent one over the page ground:
+            // `bg1` at 55% over `bg0` is a colour, and stacking two shapes to
+            // arrive at it costs a layer and hides the intent.
+            .fill(palette.bg0Color.mix(with: palette.bg1Color, by: 0.55))
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
                     .strokeBorder(

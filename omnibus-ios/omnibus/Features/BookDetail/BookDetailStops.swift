@@ -210,6 +210,9 @@ struct StopRuledVoid: View {
 
     @Environment(\.palette) private var palette
 
+    private static let barHeight: CGFloat = 5
+    private static let barGap: CGFloat = 8
+
     var body: some View {
         VStack(spacing: 0) {
             ForEach(0 ..< rows, id: \.self) { row in
@@ -220,10 +223,7 @@ struct StopRuledVoid: View {
                                 .fill(palette.line.color)
                                 .frame(width: 3, height: 30)
                         }
-                        VStack(alignment: .leading, spacing: 8) {
-                            blank(0.82)
-                            blank(0.54)
-                        }
+                        bars
                         Spacer(minLength: 0)
                     }
                     .padding(.vertical, 12)
@@ -231,20 +231,37 @@ struct StopRuledVoid: View {
                     Hairline()
                 }
                 // Fades out down the page, so the rules read as the page
-                // continuing rather than as three specific missing rows.
-                .opacity(1 - Double(row) * 0.3)
+                // continuing rather than as N specific missing rows. Derived
+                // from `rows` rather than a fixed step, so the last row lands
+                // at the same faintness whatever the arity — a fixed 0.3 step
+                // went *negative* past four rows and left the result to
+                // whatever `.opacity` happens to clamp to.
+                .opacity(1 - (Double(row) / Double(max(rows, 1))) * 0.75)
             }
         }
         .accessibilityHidden(true)
     }
 
-    private func blank(_ fraction: CGFloat) -> some View {
+    /// The two blank rules of one row.
+    ///
+    /// One `GeometryReader` for the pair rather than one each: it is the only
+    /// way to take a *fraction* of the row's width, but it has no intrinsic
+    /// height, so every use has to be given one back — and stating that once
+    /// per row beats stating it once per bar.
+    private var bars: some View {
         GeometryReader { geometry in
-            Capsule()
-                .fill(palette.line2.color)
-                .frame(width: geometry.size.width * fraction, height: 5)
+            VStack(alignment: .leading, spacing: Self.barGap) {
+                bar(geometry.size.width * 0.82)
+                bar(geometry.size.width * 0.54)
+            }
         }
-        .frame(height: 5)
+        .frame(height: Self.barHeight * 2 + Self.barGap)
+    }
+
+    private func bar(_ width: CGFloat) -> some View {
+        Capsule()
+            .fill(palette.line2.color)
+            .frame(width: width, height: Self.barHeight)
     }
 }
 
@@ -785,6 +802,15 @@ struct StopShelf: View {
             .map(\.name)
     }
 
+    /// Whether "this book is on none of your shelves" is a thing we can yet
+    /// say. `allShelves` and `shelvesContaining` are separate live reads, so
+    /// on a cold cache the stop renders before either lands — and asserting
+    /// "· none" then told the reader something the app did not know, and took
+    /// it back a moment later when the chips appeared. Derived from the data
+    /// rather than a load flag: naming the shelves a book is on requires the
+    /// shelf catalog, so having it *is* the precondition.
+    private var knowsMembership: Bool { !model.allShelves.isEmpty }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if series.count > 1, let name = book.series {
@@ -823,14 +849,16 @@ struct StopShelf: View {
                     .padding(.top, 14)
                 }
             } else {
-                DetailKicker(text: shelfNames.isEmpty
+                DetailKicker(text: knowsMembership && shelfNames.isEmpty
                     ? "On your shelves · none"
-                    : "On your shelves · \(shelfNames.count)")
+                    : shelfNames.isEmpty
+                        ? "On your shelves"
+                        : "On your shelves · \(shelfNames.count)")
             }
 
             // A lone "+ Shelf" chip under a bare kicker said nothing about
             // what a shelf is or why this book has none.
-            if series.count <= 1, shelfNames.isEmpty {
+            if series.count <= 1, knowsMembership, shelfNames.isEmpty {
                 Text("This book isn't on a shelf yet.")
                     .font(.displayItalic(21))
                     .foregroundStyle(palette.ink2Color)
@@ -853,7 +881,7 @@ struct StopShelf: View {
             }
             .padding(.top, series.count > 1 ? 18 : 12)
 
-            if series.count <= 1, model.authorBooks.isEmpty, shelfNames.isEmpty {
+            if series.count <= 1, knowsMembership, model.authorBooks.isEmpty, shelfNames.isEmpty {
                 MonoNote(text: "a shelf gathers books by hand, or fills itself from a rule")
                     .padding(.top, 20)
                 StopRuledVoid(rows: 2)

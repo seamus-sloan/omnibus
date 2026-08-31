@@ -24,4 +24,11 @@ struct SymbolNameTests {
         #expect(UIImage(systemName: BookMenuGlyph.detail) != nil)
         #expect(UIImage(systemName: BookMenuGlyph.edit) != nil)
     }
+
+    @Test("the shelf's off-the-network glyph resolves")
+    func shelfUnreachableGlyphResolves() {
+        // A long `arrow.trianglehead.…` name, and the only mark that state
+        // carries — a typo would leave a bare dashed plate with nothing in it.
+        #expect(UIImage(systemName: ShelfDetailView.unreachableGlyph) != nil)
+    }
 }

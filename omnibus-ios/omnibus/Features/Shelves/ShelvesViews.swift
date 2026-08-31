@@ -111,8 +111,14 @@ struct ShelfDetailView: View {
     /// gone it told a manual shelf that nothing matched its conditions. The
     /// shelves index is already in the replica and carries every field the
     /// header needs.
-    @State private var indexed: ShelfSummary?
+    @State private var indexed: ShelfPreview?
     @State private var books: [Book] = []
+    /// Whether the member read has finished, as opposed to not having answered
+    /// yet. `isLoading` clears on *either* stream's first value, so a cold
+    /// online load where the detail read wins the race left `books` empty with
+    /// the page already showing — and the unreachable state then told a reader
+    /// who was online that the books would arrive when they next were.
+    @State private var booksSettled = false
     @State private var isLoading = true
     @State private var showAddBooks = false
     @State private var scrollY: CGFloat = 0
@@ -122,7 +128,15 @@ struct ShelfDetailView: View {
     private let columns = [GridItem(.adaptive(minimum: 112, maximum: 168), spacing: 16, alignment: .top)]
 
     /// Whatever is known about this shelf, detail read first.
-    private var identity: ShelfSummary? { shelf.map(Self.summary) ?? indexed }
+    private var identity: ShelfSummary? { shelf.map(Self.summary) ?? indexed?.shelf }
+
+    /// Covers for the header mosaic: this shelf's own members once they land,
+    /// and the ones the cached index already holds until then. Without the
+    /// fallback the offline header drew the flat empty plate while the shelves
+    /// screen one back was showing that shelf's art from the same replica.
+    private var mosaicCovers: [Book] {
+        books.isEmpty ? (indexed?.covers ?? []) : Array(books.prefix(4))
+    }
 
     /// Only a manual shelf can be filled by hand — a smart shelf's membership
     /// is whatever its rules match, and the wishlist's is what you check in.
@@ -144,7 +158,7 @@ struct ShelfDetailView: View {
                             // is not the same as the shelf being empty — and
                             // saying "nothing on this shelf" under a header
                             // reading "1 book" contradicts itself.
-                            if let identity, identity.bookCount > 0 {
+                            if booksSettled, let identity, identity.bookCount > 0 {
                                 unreachableState(count: identity.bookCount)
                             } else {
                                 emptyState
@@ -237,10 +251,14 @@ struct ShelfDetailView: View {
         .frame(minHeight: 380)
     }
 
+    /// Named so a test can prove it resolves — `Image(systemName:)` neither
+    /// warns nor fails on a name that doesn't, it just draws nothing.
+    static let unreachableGlyph = "arrow.trianglehead.2.clockwise.rotate.90"
+
     /// The shelf has books the device hasn't got a copy of.
     private func unreachableState(count: Int64) -> some View {
         EmptyStateView(
-            icon: "arrow.trianglehead.2.clockwise.rotate.90",
+            icon: Self.unreachableGlyph,
             title: "Not here yet",
             message: ShelfEmptyCopy.unreachable(count: count),
             kicker: "Off the network",
@@ -257,7 +275,7 @@ struct ShelfDetailView: View {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 HStack(alignment: .top, spacing: Spacing.lg) {
                     ShelfMosaic(
-                        preview: ShelfPreview(shelf: identity, covers: Array(books.prefix(4)))
+                        preview: ShelfPreview(shelf: identity, covers: mosaicCovers)
                     )
                     .frame(width: 104)
                     .coverShadow(1.2)
@@ -349,12 +367,13 @@ struct ShelfDetailView: View {
             await OfflineStore.shared.cacheDelete(CacheKey.shelf(id))
             await OfflineStore.shared.cacheDelete(CacheKey.shelfPage(id))
         }
+        booksSettled = false
         await withTaskGroup(of: Void.self) { group in
             group.addTask { @MainActor in
                 // Cheap, local, and only ever a fallback — the detail read
                 // wins the moment it lands.
                 let previews: [ShelfPreview]? = await Cache.cachedOnly(CacheKey.shelfPreviews)
-                self.indexed = previews?.first { $0.shelf.id == self.id }?.shelf
+                self.indexed = previews?.first { $0.shelf.id == self.id }
             }
             group.addTask { @MainActor in
                 for await value in UserDataService.shelf(id: id).values() {
@@ -367,6 +386,10 @@ struct ShelfDetailView: View {
                     self.books = page.books
                     self.isLoading = false
                 }
+                // The stream is done — offline with nothing cached it finishes
+                // without ever yielding, which is exactly the case the
+                // unreachable state describes.
+                self.booksSettled = true
             }
         }
         isLoading = false
