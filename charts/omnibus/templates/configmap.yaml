@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "omnibus.fullname" . }}
+  labels:
+    {{- include "omnibus.labels" . | nindent 4 }}
+data:
+  # Dioxus binds 127.0.0.1 unless told otherwise, which is unreachable from
+  # outside the container.
+  IP: "0.0.0.0"
+  PORT: "3000"
+
+  # --- Durable state: the /config volume -------------------------------------
+  DATABASE_URL: "sqlite:///config/omnibus.db?mode=rwc"
+  OMNIBUS_COVERS_DIR: "/config/covers"
+  # Images embedded in journal entries are durable user data, but default to
+  # $OMNIBUS_DATA_DIR/journal-images — which the image points at /cache. Pin
+  # them to /config so wiping the regenerable cache can't delete a reader's
+  # uploads. (db::journal_images::journal_images_dir)
+  OMNIBUS_JOURNAL_IMAGES_DIR: "/config/journal-images"
+
+  # --- Regenerable: the /cache volume ----------------------------------------
+  OMNIBUS_THUMBS_DIR: "/cache/thumbs"
+  # Base for HLS segments, KEPUB/converted output, export EPUBs and JSON logs.
+  OMNIBUS_DATA_DIR: "/cache/data"
+
+  # --- Access -----------------------------------------------------------------
+  {{- $origin := include "omnibus.publicOrigin" . }}
+  {{- if $origin }}
+  OMNIBUS_PUBLIC_ORIGIN: {{ $origin | quote }}
+  {{- end }}
+  OMNIBUS_SECURE_COOKIES: {{ include "omnibus.secureCookies" . | quote }}
+
+  # --- Libraries ---------------------------------------------------------------
+  {{- if .Values.libraryPathsFromEnv }}
+  {{- if .Values.libraries.ebooks.enabled }}
+  EBOOK_LIBRARY_PATH: {{ .Values.libraries.ebooks.mountPath | quote }}
+  {{- end }}
+  {{- if .Values.libraries.audiobooks.enabled }}
+  AUDIOBOOK_LIBRARY_PATH: {{ .Values.libraries.audiobooks.mountPath | quote }}
+  {{- end }}
+  {{- end }}
+
+  # --- Tuning -------------------------------------------------------------------
+  RUST_LOG: {{ .Values.config.logLevel | quote }}
+  OMNIBUS_MAX_UPLOAD_BYTES: {{ .Values.config.maxUploadBytes | int64 | quote }}
+  OMNIBUS_THUMBS_CAP_BYTES: {{ .Values.config.thumbsCapBytes | int64 | quote }}
+  OMNIBUS_HLS_CAP_BYTES: {{ .Values.config.hlsCapBytes | int64 | quote }}
+  OMNIBUS_EXPORT_EPUB_CAP_BYTES: {{ .Values.config.exportEpubCapBytes | int64 | quote }}
+  OMNIBUS_HLS_TRANSCODE_TIMEOUT_SECS: {{ .Values.config.hlsTranscodeTimeoutSecs | quote }}
+  OMNIBUS_CONVERT_TIMEOUT_SECS: {{ .Values.config.convertTimeoutSecs | quote }}
+  {{- if .Values.config.trustForwardedFor }}
+  OMNIBUS_TRUST_FORWARDED_FOR: "1"
+  {{- end }}
+  {{- if .Values.config.initialAdmin }}
+  OMNIBUS_INITIAL_ADMIN: {{ .Values.config.initialAdmin | quote }}
+  {{- end }}
+  {{- range $key, $value := .Values.config.extraEnv }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

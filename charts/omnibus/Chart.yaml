@@ -1,0 +1,28 @@
+apiVersion: v2
+name: omnibus
+description: Self-hosted ebook and audiobook library — EPUB reader, audiobook player, and library management.
+type: application
+
+# Chart version — bump on every chart change (SemVer, independent of appVersion).
+version: 0.1.0
+
+# Upstream release this chart defaults to. `just`-cut releases publish
+# sesloan/omnibus:<tag> from .github/workflows/docker.yml.
+appVersion: "v0.30.3"
+
+home: https://seamus-sloan.github.io/omnibus/
+icon: https://seamus-sloan.github.io/omnibus/assets/icon.png
+sources:
+  - https://github.com/seamus-sloan/omnibus
+keywords:
+  - ebook
+  - audiobook
+  - epub
+  - library
+  - self-hosted
+  - media
+maintainers:
+  - name: seamus-sloan
+    url: https://github.com/seamus-sloan
+annotations:
+  category: Media

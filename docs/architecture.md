@@ -678,3 +678,22 @@ Serve it locally with `python3 -m http.server 8000 --directory site/src`. The
 deck engages only above 861x560 — below that, and with JS off, `body.flow`
 leaves the panels as ordinary stacked sections, so test both.
 
+
+## charts/
+
+The Helm chart for Kubernetes deployments. Not a crate and not part of any
+build — `charts/omnibus/` packages the same `sesloan/omnibus` image the
+[Docker guide](docker.md) uses, and is versioned independently of the app
+(`Chart.yaml`'s `version` vs `appVersion`).
+
+| Path | Role |
+|---|---|
+| `Chart.yaml` | Chart metadata. `appVersion` tracks the upstream release tag. |
+| `values.yaml` | The whole configuration surface, commented in place. |
+| `templates/` | Deployment, Service, Ingress, PVCs, ConfigMap/Secret, ServiceMonitor, NetworkPolicy, and a `helm test` pod that asserts `/api/_health`. |
+| `README.md` | Design rationale — why one replica, the volume split, the two security modes. |
+
+The chart's shape is dictated by SQLite: one replica, `Recreate` rollouts, and
+`ReadWriteOnce` volumes, none of it configurable. It also pins
+`OMNIBUS_JOURNAL_IMAGES_DIR` into `/config`, because the image's default puts
+that durable user data under the regenerable `/cache` volume.

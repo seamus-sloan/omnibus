@@ -1,0 +1,88 @@
+Omnibus {{ .Chart.AppVersion }} is installed as {{ include "omnibus.fullname" . }}.
+
+{{- $origin := include "omnibus.publicOrigin" . }}
+
+{{ if .Values.ingress.enabled -}}
+Reach it at:
+{{- range .Values.ingress.hosts }}
+  {{ include "omnibus.hostScheme" (dict "host" .host "root" $) }}://{{ .host }}
+{{- end }}
+{{- else if eq .Values.service.type "ClusterIP" }}
+No ingress is configured. Port-forward to try it:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "omnibus.fullname" . }} 3000:{{ .Values.service.port }}
+  # then open http://127.0.0.1:3000
+{{- end }}
+
+The FIRST account you register becomes the admin. Register before exposing it.
+
+{{- if not (or .Values.libraries.ebooks.enabled .Values.libraries.audiobooks.enabled) }}
+
+WARNING: no library volume is mounted, so Omnibus has nothing to index. Enable
+the libraries you have and point each at an existing volume:
+
+  --set libraries.ebooks.enabled=true \
+  --set libraries.ebooks.volume.persistentVolumeClaim.claimName=my-ebooks
+{{- end }}
+
+{{- if not $origin }}
+
+WARNING: OMNIBUS_PUBLIC_ORIGIN is not set (no ingress host, no `publicOrigin`).
+The CSRF gate falls back to comparing against the Host header, which breaks
+behind any proxy that rewrites Host: reads work, every write returns 403.
+If you reach Omnibus at a fixed URL, set it:
+
+  --set publicOrigin=https://omnibus.example.com
+{{- end }}
+
+{{- if and $origin (not (hasPrefix "https://" $origin)) }}
+
+NOTE: serving over plain http://, so session cookies are issued without the
+Secure flag ({{ include "omnibus.secureCookies" . }}). Fine on a trusted LAN;
+do not expose this to the internet.
+{{- end }}
+
+{{- if and .Values.ingress.enabled (eq (include "omnibus.secureCookies" .) "true") }}
+{{- $plain := list }}
+{{- range $host := .Values.ingress.hosts }}
+{{- if eq (include "omnibus.hostScheme" (dict "host" $host.host "root" $)) "http" }}
+{{- $plain = append $plain $host.host }}
+{{- end }}
+{{- end }}
+{{- if $plain }}
+
+WARNING: these ingress hosts have no TLS block: {{ join ", " $plain }}.
+Session cookies are Secure (because another host uses TLS), and a browser never
+sends a Secure cookie over http:// — so login will silently fail on them. Give
+every host a TLS block, or drop the plaintext ones.
+{{- end }}
+{{- end }}
+
+{{- if .Values.config.initialAdmin }}
+
+WARNING: config.initialAdmin is set to {{ .Values.config.initialAdmin | quote }}.
+This re-promotes that user to admin on EVERY boot. Clear it and upgrade again
+once you have regained access:
+
+  helm upgrade {{ .Release.Name }} ... --set config.initialAdmin=""
+{{- end }}
+
+{{- if .Values.config.trustForwardedFor }}
+
+WARNING: config.trustForwardedFor is on. Only safe when every request reaches
+the pod through a proxy that overwrites X-Forwarded-For. If the Service is
+reachable directly (NodePort/LoadBalancer, or a NetworkPolicy-free cluster),
+a client can spoof the header and walk past the login rate limit.
+{{- end }}
+
+{{- if and .Values.persistence.config.enabled (not .Values.persistence.config.existingClaim) }}
+
+Back up the config volume — it holds the SQLite database, covers, and journal
+images. Nothing else in this release is recoverable without it:
+
+  kubectl --namespace {{ .Release.Namespace }} get pvc {{ include "omnibus.configClaimName" . }}
+{{- end }}
+
+Verify the install:
+
+  helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }}

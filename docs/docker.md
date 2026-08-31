@@ -8,6 +8,9 @@ and a regenerable cache in `/cache`, and configure everything through env.
 > The Nix dev shell (see [local-development.md](local-development.md)) is
 > still the supported way to *develop*. Docker is for *deploying* a built server.
 
+Running on Kubernetes instead? The [Helm chart](../charts/omnibus/README.md)
+wraps this same image.
+
 ## Quick start
 
 ```bash

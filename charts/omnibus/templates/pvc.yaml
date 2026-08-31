@@ -1,0 +1,30 @@
+{{- range $key, $cfg := .Values.persistence }}
+{{- if and $cfg.enabled (not $cfg.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "omnibus.fullname" $ }}-{{ $key }}
+  labels:
+    {{- include "omnibus.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $key }}
+  annotations:
+    {{- if $cfg.retain }}
+    # Survive `helm uninstall`. Deleting the config claim destroys the library
+    # database, covers and every reader's progress.
+    helm.sh/resource-policy: keep
+    {{- end }}
+    {{- with $cfg.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- toYaml $cfg.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ $cfg.size }}
+  {{- if $cfg.storageClass }}
+  storageClassName: {{ $cfg.storageClass }}
+  {{- end }}
+{{- end }}
+{{- end }}

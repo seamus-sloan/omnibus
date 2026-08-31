@@ -1,0 +1,52 @@
+{{- if .Values.ingress.enabled }}
+{{- $fullName := include "omnibus.fullname" . }}
+{{- $svcPort := .Values.service.port }}
+{{/*
+Derived ingress-nginx annotations. User-supplied keys win on conflict.
+*/}}
+{{- $tuning := dict }}
+{{- if .Values.ingress.tuning.enabled }}
+{{- $bodyMiB := max 1 (div (int64 .Values.config.maxUploadBytes) 1048576) }}
+{{- $_ := set $tuning "nginx.ingress.kubernetes.io/proxy-body-size" (printf "%dm" (int $bodyMiB)) }}
+{{- $timeout := .Values.ingress.tuning.proxyTimeoutSeconds | toString }}
+{{- $_ := set $tuning "nginx.ingress.kubernetes.io/proxy-read-timeout" $timeout }}
+{{- $_ := set $tuning "nginx.ingress.kubernetes.io/proxy-send-timeout" $timeout }}
+{{- if .Values.ingress.tuning.blockMetrics }}
+{{- $_ := set $tuning "nginx.ingress.kubernetes.io/server-snippet" "location = /metrics { deny all; }" }}
+{{- end }}
+{{- end }}
+{{- $annotations := merge (deepCopy .Values.ingress.annotations) $tuning }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "omnibus.labels" . | nindent 4 }}
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ $fullName }}
+                port:
+                  number: {{ $svcPort }}
+          {{- end }}
+    {{- end }}
+{{- end }}

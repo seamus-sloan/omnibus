@@ -1,0 +1,314 @@
+# Omnibus — self-hosted ebook/audiobook library.
+#
+# Omnibus stores everything in ONE SQLite file. That single fact drives most of
+# the decisions in this chart: one replica, Recreate rollouts, RWO volumes.
+# See README.md in this chart for the reasoning.
+
+image:
+  repository: sesloan/omnibus
+  # Defaults to .Chart.AppVersion. Pin a digest in production.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+## -----------------------------------------------------------------------------
+## Access URL
+## -----------------------------------------------------------------------------
+# OMNIBUS_PUBLIC_ORIGIN is an allowlist of the exact origin(s) you load the app
+# from. The CSRF gate (server/src/auth/csrf.rs) rejects cookie-authed POSTs
+# whose Origin/Referer isn't on it — a mismatch is a silent 403 on every write
+# while GETs keep working, which is the single most common misconfiguration.
+#
+# Leave empty and the chart derives it from `ingress.hosts` (scheme picked from
+# `ingress.tls`). Set it explicitly for a LoadBalancer/NodePort install, or to
+# list extra origins (comma-separated).
+publicOrigin: ""
+
+# Session cookies are Secure-only by default, so a browser never sends them
+# over plain http:// and login appears to succeed but doesn't stick.
+# Empty = auto: true when ingress TLS is configured, false otherwise.
+# Force with "true"/"false". Never set false on an internet-facing install.
+secureCookies: ""
+
+## -----------------------------------------------------------------------------
+## Libraries — your existing media
+## -----------------------------------------------------------------------------
+# The chart deliberately does NOT provision these. Your books already live
+# somewhere (NFS, an existing PVC, a CSI volume), so each entry takes a raw
+# Kubernetes volume source spliced into the pod as-is.
+#
+# The ebook mount must stay writable: in-app uploads land there.
+#
+# `volume` ships EMPTY on purpose. Helm deep-merges values files, so a default
+# volume source here would merge with — not be replaced by — yours, producing a
+# volume with two sources that the API server rejects. Install fails with a
+# clear message if an enabled library has no volume set.
+# Both default OFF so the chart renders (and `helm lint`/CI pass) out of the
+# box; enable the ones you have.
+libraries:
+  ebooks:
+    enabled: false
+    mountPath: /books
+    readOnly: false
+    volume: {}
+    #  persistentVolumeClaim:
+    #    claimName: omnibus-ebooks
+    #  --- or ---
+    #  nfs:
+    #    server: 10.0.0.5
+    #    path: /export/ebooks
+  audiobooks:
+    enabled: false
+    mountPath: /audiobooks
+    readOnly: true
+    volume: {}
+    #  persistentVolumeClaim:
+    #    claimName: omnibus-audiobooks
+
+# Publish the mount paths as EBOOK_LIBRARY_PATH / AUDIOBOOK_LIBRARY_PATH, which
+# the server re-seeds into the settings row on EVERY boot.
+#
+# Set false to manage library paths from the in-app Settings page instead —
+# required if an admin ever sets them in the UI, because the boot hook
+# (db::settings::seed_settings_from_env) overwrites BOTH rows whenever either
+# env var is present, so a chart that sets only one silently clears the other.
+libraryPathsFromEnv: true
+
+## -----------------------------------------------------------------------------
+## Persistence
+## -----------------------------------------------------------------------------
+persistence:
+  # Durable state. Back this up: SQLite DB, cover images, journal images.
+  config:
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    # SQLite over a shared filesystem corrupts. Keep this RWO.
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+    annotations: {}
+    # Keep the PVC when the release is uninstalled.
+    retain: true
+
+  # Regenerable: WebP thumbnails, HLS audio segments, KEPUB/converted-format
+  # output, export EPUBs, logs. Safe to delete; the server rebuilds on demand.
+  # Size it above the sum of the cache caps below plus headroom.
+  cache:
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 20Gi
+    annotations: {}
+    retain: false
+
+## -----------------------------------------------------------------------------
+## Application config (non-secret) -> ConfigMap
+## -----------------------------------------------------------------------------
+config:
+  # tracing EnvFilter syntax. Query strings are never logged.
+  logLevel: "info,omnibus=debug"
+
+  # Max accepted upload size, bytes. The ingress body-size annotation is
+  # derived from this so the proxy doesn't 413 before the app sees the request.
+  maxUploadBytes: 1073741824 # 1 GiB
+
+  # Cache eviction caps, bytes. Keep the total under persistence.cache.size.
+  thumbsCapBytes: 1073741824 # 1 GiB
+  hlsCapBytes: 5368709120 # 5 GiB
+  exportEpubCapBytes: 5368709120 # 5 GiB
+
+  # Watchdogs, seconds.
+  hlsTranscodeTimeoutSecs: 1800
+  convertTimeoutSecs: 600
+
+  # Rate-limit the login throttle per client IP taken from X-Forwarded-For.
+  # Only enable when traffic reaches the pod through a proxy that overwrites
+  # the header (ingress-nginx does by default) — otherwise any client can spoof
+  # a fresh bucket and brute-force logins. See README "Rate limiting".
+  trustForwardedFor: false
+
+  # ONE-TIME admin recovery: promotes this username to admin on EVERY boot
+  # while set. Unset and roll the deployment immediately after use.
+  initialAdmin: ""
+
+  # Free-form extras; merged last, so these win. Anything in .env.example works.
+  extraEnv: {}
+  #  OMNIBUS_SCAN_INTERVAL_HOURS: "6"
+
+## -----------------------------------------------------------------------------
+## Secrets
+## -----------------------------------------------------------------------------
+# Rendered into a Secret unless `existingSecret` is set. Keys are used verbatim
+# as env var names, so an existing Secret just needs the same key names.
+secrets:
+  existingSecret: ""
+  # Metadata providers. Both are optional; the Settings page overrides them.
+  hardcoverApiKey: ""
+  googleBooksApiKey: ""
+  # Send-to-Kindle SMTP relay. host + fromEmail are the required pair.
+  smtp:
+    host: ""
+    port: 587
+    security: starttls # starttls | tls
+    username: ""
+    password: ""
+    fromEmail: ""
+
+## -----------------------------------------------------------------------------
+## Runtime security
+## -----------------------------------------------------------------------------
+# The image's entrypoint starts as root, remaps its `omnibus` user to
+# PUID/PGID, chowns the volume roots, then drops privileges with gosu.
+# Kubernetes does that job better with fsGroup, so by default the chart
+# BYPASSES the entrypoint (command: /app/server) and runs unprivileged —
+# which also satisfies the `restricted` Pod Security Standard.
+#
+# Set puid.enabled=true to use the image's entrypoint instead. Needed when the
+# media/config volumes are NFS-backed, where fsGroup has no effect and the
+# ownership has to match a real uid/gid on the server.
+puid:
+  enabled: false
+  uid: 1000
+  gid: 1000
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  # Skip the recursive chown when the volume root already matches — a full
+  # relabel of a large cover directory delays every pod start otherwise.
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+## -----------------------------------------------------------------------------
+## Workload
+## -----------------------------------------------------------------------------
+# NOTE: replicaCount is intentionally absent. See README "Why one replica".
+
+# ffmpeg HLS transcodes are the CPU spike; the steady state is small. Limits
+# below are a starting point for a single-user library.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 2Gi
+
+# Probes hit GET /api/_health, which is unauthenticated by design
+# (server/src/auth/gate.rs whitelists it).
+probes:
+  startup:
+    enabled: true
+    # Migrations plus the norm-column backfills run before the first response.
+    # 30 x 10s = 5 minutes of headroom on a cold, large database.
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 30
+  readiness:
+    enabled: true
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  liveness:
+    enabled: true
+    periodSeconds: 30
+    timeoutSeconds: 5
+    # Deliberately slack: a wedged pod is worse than a slow one, but killing
+    # the pod mid-transcode throws away the work and the partial segments.
+    failureThreshold: 6
+
+# The container writes only to its mounted volumes, so the root filesystem is
+# read-only. SQLite and ffmpeg still want a scratch dir.
+tmpDir:
+  enabled: true
+  sizeLimit: 1Gi
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+terminationGracePeriodSeconds: 60
+extraVolumes: []
+extraVolumeMounts: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # The app calls no Kubernetes API.
+  automountServiceAccountToken: false
+
+## -----------------------------------------------------------------------------
+## Networking
+## -----------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 3000
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  #  cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: omnibus.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: omnibus-tls
+  #    hosts:
+  #      - omnibus.example.com
+
+  # ingress-nginx annotations the chart derives unless you override the same
+  # key in `annotations` above. Set false to manage them yourself or when using
+  # a controller that doesn't understand them.
+  tuning:
+    enabled: true
+    # Audiobook streams and large downloads outlive the 60s default.
+    proxyTimeoutSeconds: 3600
+    # Blocks /metrics at the edge. The endpoint is NOT behind auth — only
+    # /api/* is gated — so leaving it routable publishes request metrics.
+    blockMetrics: true
+
+## -----------------------------------------------------------------------------
+## Observability
+## -----------------------------------------------------------------------------
+# The server exposes Prometheus metrics at /metrics (server/src/metrics.rs).
+serviceMonitor:
+  enabled: false
+  # Empty = the release namespace.
+  namespace: ""
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+  relabelings: []
+  metricRelabelings: []
+
+# Restrict egress to DNS, HTTPS (cover art + metadata providers) and SMTP.
+networkPolicy:
+  enabled: false
+  # Selector for pods allowed to reach the app — typically your ingress
+  # controller. Empty allows ingress from anywhere in the cluster.
+  ingressFrom: []
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: ingress-nginx

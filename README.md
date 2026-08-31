@@ -40,6 +40,7 @@ the [Docker guide](docs/docker.md).
 |---|---|
 | [**Feature tour**](https://seamus-sloan.github.io/omnibus/) | What Omnibus does, with screenshots |
 | [**Deploy with Docker**](docs/docker.md) | Volumes, env vars, TLS, PUID/PGID, admin recovery |
+| [**Deploy on Kubernetes**](charts/omnibus/README.md) | Helm chart: single-replica/SQLite constraints, volumes, ingress, security modes |
 | [**Kobo sync & KEPUB**](docs/kobo.md) | Wired one-click transfer, wireless sync setup, two-way highlights |
 | [**Local development**](docs/local-development.md) | Nix shells, `just` recipes, tests, mobile builds, project layout |
 | [**Architecture**](docs/architecture.md) | Crate and module maps, request flows, mobile auth |

@@ -1,0 +1,196 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "omnibus.fullname" . }}
+  labels:
+    {{- include "omnibus.labels" . | nindent 4 }}
+spec:
+  # Not configurable, and deliberately so. Omnibus keeps all state in one
+  # SQLite file; a second replica writing it concurrently corrupts the
+  # database. Scale the node, not the deployment.
+  replicas: 1
+  strategy:
+    # RollingUpdate would briefly run the new pod alongside the old one on the
+    # same volume — the exact thing the single replica exists to prevent. The
+    # cost is a short outage on every upgrade.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "omnibus.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if and (include "omnibus.hasSecrets" .) (not .Values.secrets.existingSecret) }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "omnibus.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "omnibus.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- if .Values.puid.enabled }}
+      # The image's entrypoint needs root to remap its user and chown the
+      # volume roots; it drops to {{ .Values.puid.uid }}:{{ .Values.puid.gid }} with gosu before serving.
+      securityContext:
+        runAsUser: 0
+        seccompProfile:
+          type: RuntimeDefault
+      {{- else }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: omnibus
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if not .Values.puid.enabled }}
+          # Skip the PUID/PGID entrypoint: Kubernetes already owns uid/gid and
+          # volume ownership (fsGroup), and the entrypoint would need root.
+          command: ["/app/server"]
+          {{- end }}
+          {{- if .Values.puid.enabled }}
+          env:
+            - name: PUID
+              value: {{ .Values.puid.uid | quote }}
+            - name: PGID
+              value: {{ .Values.puid.gid | quote }}
+          {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "omnibus.fullname" . }}
+            {{- if include "omnibus.hasSecrets" . }}
+            - secretRef:
+                name: {{ include "omnibus.secretName" . }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          {{- if .Values.probes.startup.enabled }}
+          startupProbe:
+            httpGet:
+              path: /api/_health
+              port: http
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: /api/_health
+              port: http
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /api/_health
+              port: http
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.puid.enabled }}
+          # usermod/groupmod rewrite /etc/passwd and /etc/group, so the root
+          # filesystem can't be read-only and the ownership capabilities have
+          # to stay.
+          securityContext:
+            runAsUser: 0
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+                - DAC_OVERRIDE
+                - FOWNER
+                - SETGID
+                - SETUID
+          {{- else }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: cache
+              mountPath: /cache
+            {{- range $name, $lib := .Values.libraries }}
+            {{- if $lib.enabled }}
+            - name: library-{{ $name }}
+              mountPath: {{ $lib.mountPath }}
+              readOnly: {{ $lib.readOnly }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.tmpDir.enabled }}
+            - name: tmp
+              mountPath: /tmp
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          {{- if .Values.persistence.config.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "omnibus.configClaimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: cache
+          {{- if .Values.persistence.cache.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "omnibus.cacheClaimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- range $name, $lib := .Values.libraries }}
+        {{- if $lib.enabled }}
+        {{- if not $lib.volume }}
+        {{- fail (printf "libraries.%s is enabled but libraries.%s.volume is empty. Set a Kubernetes volume source, e.g. --set libraries.%s.volume.persistentVolumeClaim.claimName=my-claim (or disable it with libraries.%s.enabled=false)." $name $name $name $name) }}
+        {{- end }}
+        - name: library-{{ $name }}
+          {{- toYaml $lib.volume | nindent 10 }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.tmpDir.enabled }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.tmpDir.sizeLimit }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
