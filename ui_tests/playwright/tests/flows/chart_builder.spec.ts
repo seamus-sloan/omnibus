@@ -20,6 +20,17 @@ const CHART = "/stats/chart";
 const control = (page: Page, label: string) =>
   page.getByTestId("chart-controls").getByLabel(label);
 
+// The builder opens with nothing plotted, so any test that needs a chart
+// selects one first. This pair — a count against an average, on two scales —
+// is the comparison the page exists for.
+async function plotThePair(page: Page): Promise<void> {
+  await control(page, "Books finished").check();
+  await control(page, "Avg book length").check();
+  await expect
+    .poll(async () => page.getByTestId("chart-legend").count())
+    .toBeGreaterThan(0);
+}
+
 // Drag across the plot from band `a` to band `b`. The plot sits below the
 // picker in a 720-high viewport, so it is scrolled into view first — a drag
 // aimed at a band's centre would otherwise land off-screen.
@@ -46,24 +57,44 @@ test("renders the chart builder layout", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByTestId("chart-controls")).toBeVisible();
   await expect(page.getByTestId("chart-measures")).toBeVisible();
-  await expect(page.getByTestId("chart-canvas")).toBeVisible();
+  // Opens empty, so the prompt stands where the chart will be.
+  await expect(page.getByTestId("chart-prompt")).toBeVisible();
+  await expect(page.getByTestId("chart-canvas")).toHaveCount(0);
 
   for (const label of ["Group by", "Period", "Split"]) {
     await expect(control(page, label)).toBeVisible();
   }
 });
 
-test("opens on the two-measure comparison the builder exists for", async ({
+test("opens with nothing plotted and nothing greyed out", async ({ page }) => {
+  await gotoReady(page, CHART);
+
+  // No opinion pre-loaded, and — because no unit has claimed a scale — the
+  // whole vocabulary is available, so the compatibility rule is visible
+  // rather than discovered by being blocked.
+  for (const name of ["Books finished", "Avg rating", "Reading minutes"]) {
+    await expect(control(page, name)).not.toBeChecked();
+    await expect(control(page, name)).toBeEnabled();
+  }
+  await expect(page.getByTestId("chart-prompt")).toBeVisible();
+
+  // Ticking one draws it.
+  await control(page, "Books finished").check();
+  await expect(page.getByTestId("chart-prompt")).toHaveCount(0);
+  await expect(page.getByTestId("chart-canvas")).toBeVisible();
+});
+
+test("lets the last measure be cleared back to an empty chart", async ({
   page,
 }) => {
   await gotoReady(page, CHART);
+  await control(page, "Books finished").check();
+  await expect(page.getByTestId("chart-canvas")).toBeVisible();
 
-  // The default spec is a count against an average — the case a single pivot
-  // query cannot serve, and the reason the page exists.
-  await expect(control(page, "Books finished")).toBeChecked();
-  await expect(control(page, "Avg book length")).toBeChecked();
-  await expect(control(page, "Group by")).toHaveValue("month");
-  await expect(control(page, "Period")).toHaveValue("year");
+  // Clearing the chart is a state a reader is allowed to reach.
+  await control(page, "Books finished").uncheck();
+  await expect(page.getByTestId("chart-prompt")).toBeVisible();
+  await expect(page.getByTestId("chart-canvas")).toHaveCount(0);
 });
 
 test("offers every measure with the unit that decides its compatibility", async ({
@@ -90,6 +121,7 @@ test("offers every measure with the unit that decides its compatibility", async 
 
 test("narrows the list only once both scales are claimed", async ({ page }) => {
   await gotoReady(page, CHART);
+  await plotThePair(page);
 
   // Books + pages, so both scales are in use: a third unit is blocked, but a
   // second pages measure still joins the scale pages already own.
@@ -111,6 +143,7 @@ test("narrows the list only once both scales are claimed", async ({ page }) => {
 
 test("plots more measures than there are scales", async ({ page }) => {
   await gotoReady(page, CHART);
+  await plotThePair(page);
 
   // A third measure sharing an existing unit is allowed — the bound is on
   // scales, not on how many measures use them.
@@ -126,17 +159,9 @@ test("plots more measures than there are scales", async ({ page }) => {
   await expect(legend).toContainText("Pages read");
 });
 
-test("never lets the last measure be removed", async ({ page }) => {
-  await gotoReady(page, CHART);
-
-  await control(page, "Avg book length").uncheck();
-  // One left, so it is held checked — an empty chart is not a reachable state.
-  await expect(control(page, "Books finished")).toBeChecked();
-  await expect(control(page, "Books finished")).toBeDisabled();
-});
-
 test("offers a split only for a single per-book measure", async ({ page }) => {
   await gotoReady(page, CHART);
+  await plotThePair(page);
   const split = control(page, "Split");
 
   // Two measures, so no single population for a split to describe.
@@ -161,6 +186,7 @@ test("offers a split only for a single per-book measure", async ({ page }) => {
 
 test("redraws when the selection changes", async ({ page }) => {
   await gotoReady(page, CHART);
+  await plotThePair(page);
   const canvas = page.getByTestId("chart-canvas");
 
   // Either a chart or the empty state, depending on what reading history the
@@ -200,9 +226,7 @@ test("redraws when the selection changes", async ({ page }) => {
 
 test("reads every series at the hovered bucket", async ({ page }) => {
   await gotoReady(page, CHART);
-  await expect
-    .poll(async () => page.getByTestId("chart-legend").count())
-    .toBeGreaterThan(0);
+  await plotThePair(page);
 
   // No hover state in the server-rendered markup — it is client-only, so the
   // first paint has to match it (rule 07).
@@ -224,6 +248,7 @@ test("reads every series at the hovered bucket", async ({ page }) => {
 
 test("stacks a split count into one column per bucket", async ({ page }) => {
   await gotoReady(page, CHART);
+  await plotThePair(page);
   await control(page, "Avg book length").uncheck();
   await control(page, "Split").selectOption("genre");
 
@@ -248,6 +273,7 @@ test("explains what the chart shows and why the list is narrowed", async ({
   page,
 }) => {
   await gotoReady(page, CHART);
+  await plotThePair(page);
   const notes = page.getByTestId("chart-notes");
   await expect(notes).toBeVisible();
 
@@ -271,6 +297,7 @@ test("explains what the chart shows and why the list is narrowed", async ({
 
 test("rewrites the notes when the selection changes", async ({ page }) => {
   await gotoReady(page, CHART);
+  await plotThePair(page);
   await page
     .getByTestId("chart-notes")
     .getByText("What this chart shows")
@@ -295,9 +322,7 @@ test("rewrites the notes when the selection changes", async ({ page }) => {
 
 test("zooms to a brushed range and back", async ({ page }) => {
   await gotoReady(page, CHART);
-  await expect
-    .poll(async () => page.getByTestId("chart-legend").count())
-    .toBeGreaterThan(0);
+  await plotThePair(page);
 
   const bands = page.locator(".cb-hit");
   const before = await bands.count();
@@ -321,9 +346,7 @@ test("drops a zoom the regrouped axis can no longer resolve", async ({
   page,
 }) => {
   await gotoReady(page, CHART);
-  await expect
-    .poll(async () => page.getByTestId("chart-legend").count())
-    .toBeGreaterThan(0);
+  await plotThePair(page);
 
   const bands = page.locator(".cb-hit");
   const before = await bands.count();
@@ -338,6 +361,7 @@ test("drops a zoom the regrouped axis can no longer resolve", async ({
 
 test("says what zooming can and cannot do", async ({ page }) => {
   await gotoReady(page, CHART);
+  await plotThePair(page);
   await page
     .getByTestId("chart-notes")
     .getByText("What this chart shows")
@@ -357,10 +381,13 @@ test("surfaces a rejected spec instead of failing silently", async ({
     route.fulfill({
       status: 500,
       contentType: "application/json",
-      body: JSON.stringify({ error: "pick at least one measure" }),
+      body: JSON.stringify({ error: "something went wrong" }),
     }),
   );
 
   await gotoReady(page, CHART);
+  // The page opens empty and asks for nothing, so the failure only has a
+  // request to attach itself to once a measure is picked.
+  await control(page, "Books finished").check();
   await expect(page.getByRole("alert")).toBeVisible();
 });

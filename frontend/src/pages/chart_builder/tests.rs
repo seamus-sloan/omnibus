@@ -4,6 +4,15 @@
 use super::*;
 use crate::test_support::render_in_vdom;
 
+/// The two-measure comparison the page used to open on — still the case most
+/// of these assertions are about, now that the default opens empty.
+fn two_measures() -> ChartSpec {
+    ChartSpec {
+        measures: vec![ChartMeasure::BooksFinished, ChartMeasure::AvgPageLength],
+        ..ChartSpec::default()
+    }
+}
+
 /// A checkbox row's rendered `<input …>` tag, so a test can assert on its
 /// attributes without matching the whole document.
 fn input_tag(html: &str, measure: ChartMeasure) -> String {
@@ -20,7 +29,7 @@ fn input_tag(html: &str, measure: ChartMeasure) -> String {
 fn the_measure_group_offers_every_measure_with_its_unit_and_grain() {
     let html = render_in_vdom(|| {
         rsx! {
-            ChartControls { spec: Signal::new(ChartSpec::default()) }
+            ChartControls { spec: Signal::new(two_measures()) }
         }
     });
     for m in ChartMeasure::ALL {
@@ -60,7 +69,7 @@ fn a_measure_is_offered_while_a_scale_is_free_and_greyed_once_both_are_claimed()
     // pages measure is not, because it joins a scale that already exists.
     let two = render_in_vdom(|| {
         rsx! {
-            ChartControls { spec: Signal::new(ChartSpec::default()) }
+            ChartControls { spec: Signal::new(two_measures()) }
         }
     });
     assert!(input_tag(&two, ChartMeasure::AvgRating).contains("disabled"));
@@ -69,7 +78,7 @@ fn a_measure_is_offered_while_a_scale_is_free_and_greyed_once_both_are_claimed()
 }
 
 #[test]
-fn the_last_remaining_measure_cannot_be_unchecked() {
+fn the_last_remaining_measure_can_still_be_unchecked() {
     let html = render_in_vdom(|| {
         rsx! {
             ChartControls {
@@ -80,17 +89,31 @@ fn the_last_remaining_measure_cannot_be_unchecked() {
             }
         }
     });
-    // An empty chart is not a state the picker should be able to reach.
+    // Clearing the chart is a state a reader is allowed to reach.
     let tag = input_tag(&html, ChartMeasure::BooksFinished);
     assert!(tag.contains("checked"), "{tag}");
-    assert!(tag.contains("disabled"), "{tag}");
+    assert!(!tag.contains("disabled"), "{tag}");
+}
+
+#[test]
+fn an_empty_selection_greys_nothing_out() {
+    let html = render_in_vdom(|| {
+        rsx! {
+            ChartControls { spec: Signal::new(ChartSpec::default()) }
+        }
+    });
+    for m in ChartMeasure::ALL {
+        let tag = input_tag(&html, m);
+        assert!(!tag.contains("checked"), "{}: {tag}", m.label());
+        assert!(!tag.contains("disabled"), "{}: {tag}", m.label());
+    }
 }
 
 #[test]
 fn a_selected_measure_stays_uncheckable_off_only_while_others_remain() {
     let html = render_in_vdom(|| {
         rsx! {
-            ChartControls { spec: Signal::new(ChartSpec::default()) }
+            ChartControls { spec: Signal::new(two_measures()) }
         }
     });
     // Two selected, so either may be removed.
@@ -99,6 +122,17 @@ fn a_selected_measure_stays_uncheckable_off_only_while_others_remain() {
         assert!(tag.contains("checked"), "{m:?}: {tag}");
         assert!(!tag.contains("disabled"), "{m:?}: {tag}");
     }
+}
+
+#[test]
+fn the_scales_hint_does_not_claim_a_scale_is_in_use_on_an_empty_chart() {
+    let html = render_in_vdom(|| {
+        rsx! {
+            ChartControls { spec: Signal::new(ChartSpec::default()) }
+        }
+    });
+    assert!(html.contains("Nothing plotted yet"), "{html}");
+    assert!(!html.contains("scale in use"), "{html}");
 }
 
 #[test]
@@ -117,7 +151,7 @@ fn the_scales_hint_says_whether_another_unit_can_still_join() {
 
     let full = render_in_vdom(|| {
         rsx! {
-            ChartControls { spec: Signal::new(ChartSpec::default()) }
+            ChartControls { spec: Signal::new(two_measures()) }
         }
     });
     assert!(full.contains("Both scales in use"));
@@ -127,7 +161,7 @@ fn the_scales_hint_says_whether_another_unit_can_still_join() {
 fn the_split_control_is_disabled_while_more_than_one_measure_is_selected() {
     let html = render_in_vdom(|| {
         rsx! {
-            ChartControls { spec: Signal::new(ChartSpec::default()) }
+            ChartControls { spec: Signal::new(two_measures()) }
         }
     });
     assert!(html.contains("one measure only"));
@@ -160,7 +194,7 @@ fn the_bucket_and_period_selects_mark_the_spec_s_current_choice() {
 fn the_page_renders_every_picker_control() {
     let html = render_in_vdom(|| {
         rsx! {
-            ChartControls { spec: Signal::new(ChartSpec::default()) }
+            ChartControls { spec: Signal::new(two_measures()) }
         }
     });
     for id in [

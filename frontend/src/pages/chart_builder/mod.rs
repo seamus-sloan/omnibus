@@ -45,6 +45,15 @@ fn use_chart_fetch_effect(
         let mut result = result;
         let mut loading = loading;
         let mut error = error;
+        // Nothing selected: the server would answer with an empty chart, so
+        // asking it is a round trip whose answer the page already knows —
+        // and this is the state every visit opens in.
+        if current.measures.is_empty() {
+            result.set(None);
+            error.set(None);
+            loading.set(false);
+            return;
+        }
         loading.set(true);
         spawn(async move {
             let answer = data::fetch_chart_series(&url, current).await;
@@ -92,7 +101,13 @@ pub fn ChartBuilderPage() -> Element {
                 }
             }
             ChartControls { spec }
-            ChartCanvas { result, loading, error }
+            if spec.read().measures.is_empty() {
+                p { class: "cb-prompt", "data-testid": "chart-prompt",
+                    "Nothing plotted yet — tick a measure above and it'll appear here."
+                }
+            } else {
+                ChartCanvas { result, loading, error }
+            }
         }
     }
 }
@@ -126,10 +141,6 @@ fn ChartControls(spec: Signal<ChartSpec>) -> Element {
                     for m in ChartMeasure::ALL {
                         {
                             let on = current.measures.contains(&m);
-                            // The last remaining measure can't be removed —
-                            // an empty chart is not a state the picker should
-                            // be able to reach.
-                            let last = on && current.measures.len() == 1;
                             let blocked = !on && !current.can_add(m);
                             rsx! {
                                 div {
@@ -138,7 +149,7 @@ fn ChartControls(spec: Signal<ChartSpec>) -> Element {
                                         id: "cb-m-{m.as_query()}",
                                         r#type: "checkbox",
                                         checked: on,
-                                        disabled: last || blocked,
+                                        disabled: blocked,
                                         onchange: move |_| {
                                             let mut next = spec.read().clone();
                                             next.toggle(m);
@@ -166,10 +177,14 @@ fn ChartControls(spec: Signal<ChartSpec>) -> Element {
                     }
                 }
                 p { class: "cb-hint", "data-testid": "chart-scales",
-                    if units.len() < omnibus_shared::MAX_AXES {
-                        "One scale in use — anything else can still join."
-                    } else {
-                        "Both scales in use. Measures in other units are greyed out until you free one."
+                    // Three states, because "one scale in use" is untrue of an
+                    // empty chart — which is the one every visit opens in.
+                    match units.len() {
+                        0 => "Nothing plotted yet — anything in the list can join.",
+                        n if n < omnibus_shared::MAX_AXES => {
+                            "One scale in use — anything else can still join."
+                        }
+                        _ => "Both scales in use. Measures in other units are greyed out until you free one.",
                     }
                 }
             }

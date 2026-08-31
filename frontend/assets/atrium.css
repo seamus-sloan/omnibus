@@ -11872,6 +11872,15 @@ html {
 
 /* ── Notes & empty ────────────────────────────────────────────────── */
 .cb-empty { margin: 0; padding: 40px 0; text-align: center; color: var(--ink-3); font-size: 14px; }
+/* The opening state: no card, because there is no chart to frame yet — just
+   the invitation, sitting where the chart will be. */
+.cb-prompt {
+  margin: 0;
+  padding: 56px 0;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 14px;
+}
 .cb-note { margin: 0; color: var(--ink-3); font-size: 11.5px; line-height: 1.5; }
 
 /* The explanation of what the chart shows and why it is restricted. Closed by
