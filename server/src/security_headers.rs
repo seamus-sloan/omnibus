@@ -41,12 +41,10 @@ use tower_http::set_header::SetResponseHeaderLayer;
 ///   drops its `Function()` use and gains nonce support.
 /// - `style-src 'self' 'unsafe-inline' blob: https://fonts.googleapis.com` —
 ///   `'unsafe-inline'` because Dioxus emits inline `style=""` attributes;
-///   `blob:` because epub.js renders a book's own stylesheets through
-///   `URL.createObjectURL` when a rule references an internal asset (a
-///   relative `url()` / `@font-face`), so every forward page-turn on such a
-///   book loads a `blob:` stylesheet the policy must permit — without it the
-///   reader breaks on any real book that carries CSS (issue #2213). Matches
-///   the `blob:` already granted in `img-src`. The Google Fonts host because
+///   `blob:` because epub.js (`assets/vendor/epub.min.js`) renders a book's
+///   own stylesheets through `URL.createObjectURL`, and without it every
+///   forward page-turn is blocked as a CSP violation (#2213) — the same
+///   reason `img-src` already lists `blob:`; the Google Fonts host because
 ///   `atrium.css` `@import`s the Cormorant Garamond / Instrument Sans / Space
 ///   Mono stylesheet from it. (The reader glue loads a second one for the
 ///   in-iframe reading faces.) Self-hosting the fonts (a follow-up tracked in

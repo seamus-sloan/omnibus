@@ -87,7 +87,7 @@ async fn csp_permits_dioxus_hydration_and_fonts() {
     );
     assert!(
         csp.contains("style-src 'self' 'unsafe-inline' blob: https://fonts.googleapis.com"),
-        "csp must allow inline styles + epub.js blob stylesheets + Google Fonts stylesheet host: {csp}"
+        "csp must allow inline styles, epub.js blob stylesheets, and the Google Fonts host: {csp}"
     );
     assert!(
         csp.contains("font-src 'self' data: https://fonts.gstatic.com"),
@@ -120,17 +120,15 @@ async fn csp_permits_dioxus_hydration_and_fonts() {
 
 #[test]
 fn both_policies_allow_blob_stylesheets_for_epub_js() {
-    // epub.js renders a book's own stylesheets through URL.createObjectURL
-    // when a rule references an internal asset (a relative url() / @font-face),
-    // so a forward page-turn on any real book that carries CSS loads a blob:
-    // stylesheet. style-src must permit blob: in BOTH the default policy and
-    // the provider-host fallback, or that page-turn fails with a CSP refusal
-    // (issue #2213) — the same relaxation img-src already grants. Checked on
-    // both so a future tightening cannot silently drop it from one.
-    for policy in [DEFAULT_CSP.as_str(), NO_PROVIDER_HOSTS_CSP] {
+    // epub.js renders a book's own stylesheets through `URL.createObjectURL`,
+    // so `style-src` must permit `blob:` or every forward page-turn is a CSP
+    // violation (#2213). The two policies must not drift: a future tightening
+    // that drops it from either one fails here rather than in a reader nobody
+    // is watching.
+    for csp in [DEFAULT_CSP.as_str(), NO_PROVIDER_HOSTS_CSP] {
         assert!(
-            policy.contains("style-src 'self' 'unsafe-inline' blob: https://fonts.googleapis.com"),
-            "style-src must allow blob: stylesheets for epub.js: {policy}"
+            csp.contains("style-src 'self' 'unsafe-inline' blob: https://fonts.googleapis.com"),
+            "csp style-src must permit blob: for epub.js stylesheets: {csp}"
         );
     }
 }

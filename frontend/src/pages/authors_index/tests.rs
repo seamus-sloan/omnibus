@@ -161,3 +161,14 @@ fn group_by_letter_returns_empty_when_show_letters_is_false() {
     let groups = group_by_letter(&all, false);
     assert!(groups.is_empty());
 }
+
+#[test]
+fn index_subtitle_labels_the_second_figure_as_credits_not_books() {
+    // #2292: the figure is Σ per-author book counts (author–book credits),
+    // which a multi-creator book inflates past the distinct-title total, so
+    // the header must not call it "books".
+    let sub = index_subtitle(23, 27);
+    assert!(sub.contains("23 authors"), "{sub}");
+    assert!(sub.contains("27 author credits"), "{sub}");
+    assert!(!sub.contains("books"), "must not claim a book count: {sub}");
+}

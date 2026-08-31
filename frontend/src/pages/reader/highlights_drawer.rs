@@ -183,6 +183,15 @@ fn build_delete_handler(
                     let _ = cfi;
                 }
                 highlights.write().retain(|h| h.id != id);
+                // Deleting removes the focused button, dropping focus to
+                // <body> where the reader-root Escape handler no longer fires;
+                // refocus the drawer's close button to keep that path (#2354).
+                #[cfg(feature = "web")]
+                {
+                    let _ = dioxus::document::eval(
+                        "requestAnimationFrame(() => document.querySelector('[data-testid=\"reader-highlights-drawer\"] .rd-x')?.focus());",
+                    );
+                }
             }
         });
     }

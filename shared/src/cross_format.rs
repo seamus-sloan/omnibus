@@ -206,6 +206,13 @@ pub struct AlignmentEbookChapter {
     pub title: String,
     /// Whole-book percent where the chapter starts, 0..=100.
     pub percent: f64,
+    /// 0-based spine item the chapter starts in. Lets a reading position's CFI
+    /// spine step resolve to the same chapter the reader opens, instead of the
+    /// rounded whole-book percent that lands one chapter ahead when a boundary
+    /// falls inside the rounding window (#2345). `#[serde(default)]` so a
+    /// payload from a server predating the field still decodes.
+    #[serde(default)]
+    pub spine_index: i64,
 }
 
 /// One audio file segment for the lane, in current ordinal order.

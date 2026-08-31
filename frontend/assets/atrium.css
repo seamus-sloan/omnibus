@@ -16,6 +16,14 @@
  */
 
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400..700;1,400..700&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
+/* Reader Aa-panel typeface chips preview their prose faces (Editorial =
+   Instrument Serif, Classic = EB Garamond), which the app-wide import above no
+   longer carries after the #2162 type slimming — so both chips fell back to a
+   generic serif and looked identical (#2163). Loaded here for the parent
+   document only, subset to the chips' "Aa" specimen glyphs so the cost is two
+   glyphs, not two families. The reader body itself gets these faces from
+   epub-reader-glue.js's own iframe import, which this does not touch. */
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond&family=Instrument+Serif&text=Aa&display=swap');
 
 /* ── Tokens · dark (default) ─────────────────────────────────────── */
 :root {
@@ -5556,6 +5564,19 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 
 .ebook-col-cover { width: 40px; }
+/* The row's "Open details" affordance (#2350): wraps the cover so a click or
+   keyboard activation navigates, with its own focus ring. `line-height:0`
+   keeps the anchor from adding inline space around the thumb. */
+.ebook-cover-link {
+  display: block;
+  line-height: 0;
+  color: inherit;
+  border-radius: 2px;
+}
+.ebook-cover-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .ebook-thumb {
   width: 26px;
   height: 38px;

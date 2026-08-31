@@ -7,7 +7,7 @@ use sqlx::{SqlitePool, Transaction};
 use super::{PhysicalError, PHYSICAL_LIBRARY_PATH};
 use crate::covers::write_cover_file;
 use crate::helpers::mint_uuid;
-use crate::normalize::{normalize_author, normalize_title};
+use crate::normalize::{author_sort_key, normalize_author, normalize_title};
 
 /// A cover image for a fileless book: the source `mime` plus raw bytes.
 pub struct FilelessCover {
@@ -42,7 +42,8 @@ pub async fn create_fileless_book(
     let library_id = ensure_physical_library(&mut tx).await?;
     let uuid = mint_uuid();
     let has_cover = i64::from(book.cover.is_some());
-    let author_sort = book.authors.first().cloned();
+    // Surname-first sort key (#2342), matching the scanned write path.
+    let author_sort = book.authors.first().map(|a| author_sort_key(a));
     let author_norm = book.authors.first().and_then(|a| normalize_author(a));
 
     let book_id = sqlx::query_scalar::<_, i64>(

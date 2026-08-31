@@ -17,7 +17,12 @@ use crate::{data, index_prefs, use_server_url, Route};
 #[derive(Clone, PartialEq, Eq)]
 struct AuthorIndexCounts {
     total_authors: usize,
-    total_books: usize,
+    /// Σ of each author's `book_count` — author–book *credits*, not distinct
+    /// titles: a two-creator book contributes one credit per creator. Named
+    /// and labelled for what it holds so the header can't misreport it as a
+    /// book count (#2292). A true distinct-book total isn't derivable here —
+    /// the `AuthorSummary` list carries no per-book identity.
+    total_credits: usize,
 }
 
 /// Owned output of the filter/sort/group-by-letter pipeline, memoized as a
@@ -78,10 +83,14 @@ pub fn AuthorsIndexPage() -> Element {
     let any_in_library = !all.is_empty();
     drop(all);
 
-    // Memoized separately from the filter/sort/group-by pipeline below: this
-    // total is unaffected by the filter text or sort key, so tying it to
-    // that memo would recompute it on every keystroke for no reason.
-    let total_books = use_memo(move || authors.read().iter().map(|a| a.book_count).sum::<usize>());
+    // Σ per-author book counts = author–book credits (a multi-creator book
+    // adds one credit per creator), NOT distinct titles — the header labels
+    // it "credits" so the figure isn't a wrong book count (#2292). Memoized
+    // separately from the filter/sort/group-by pipeline below: unaffected by
+    // the filter text or sort key, so tying it to that memo would recompute it
+    // on every keystroke for no reason.
+    let total_credits =
+        use_memo(move || authors.read().iter().map(|a| a.book_count).sum::<usize>());
 
     // Group by first letter of sort key (last name when available, else
     // name); only meaningful when sorting by name. Folded into the same
@@ -98,7 +107,7 @@ pub fn AuthorsIndexPage() -> Element {
 
     let counts = AuthorIndexCounts {
         total_authors,
-        total_books: total_books(),
+        total_credits: total_credits(),
     };
     let filter_state = build_filter_state(filter(), sort(), show_letters, letters, filtered.len());
 
@@ -145,6 +154,16 @@ fn build_filter_state(
         letter_count: letters.len(),
         filtered_count,
     }
+}
+
+/// Header subtitle. The second figure counts author–book *credits* (Σ of each
+/// author's book count), not distinct titles — a multi-creator book adds one
+/// credit per creator — so it is labelled "credits" rather than "books" to
+/// avoid a count that inflates past the real title total (#2292).
+fn index_subtitle(total_authors: usize, total_credits: usize) -> String {
+    format!(
+        "{total_authors} authors \u{b7} {total_credits} author credits \u{b7} the people in your shelves."
+    )
 }
 
 /// Filter → sort → group-by-letter pipeline, folded into one step so the
@@ -271,7 +290,7 @@ fn AuthorsIndexHeader(
 ) -> Element {
     let AuthorIndexCounts {
         total_authors,
-        total_books,
+        total_credits,
     } = counts;
     let AuthorIndexFilter {
         filter,
@@ -292,9 +311,7 @@ fn AuthorsIndexHeader(
                         em { "author" }
                         "."
                     }
-                    p { class: "idx-subtitle",
-                        "{total_authors} authors across {total_books} books \u{b7} the people in your shelves."
-                    }
+                    p { class: "idx-subtitle", "{index_subtitle(total_authors, total_credits)}" }
                 }
             }
             div { class: "idx-toolbar",

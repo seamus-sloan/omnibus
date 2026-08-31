@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use sqlx::Transaction;
 
 use crate::helpers::{mint_uuid, sanitize_accent_color, stable_uuid};
-use crate::normalize::{normalize_author, normalize_title};
+use crate::normalize::{author_sort_key, normalize_author, normalize_title};
 
 use super::super::attach;
 use super::super::books::SyncError;
@@ -240,7 +240,7 @@ async fn insert_audiobook_row(
     .bind(&book_path)
     .bind(&b.title)
     .bind(&b.title)
-    .bind(&b.creator_name)
+    .bind(b.creator_name.as_deref().map(author_sort_key))
     .bind(has_cover)
     .bind(&b.description)
     .bind(sanitize_accent_color(b.accent.as_deref()))
@@ -480,7 +480,7 @@ async fn update_audiobook_row(
     .bind(&book_path)
     .bind(&b.title)
     .bind(&b.title)
-    .bind(&b.creator_name)
+    .bind(b.creator_name.as_deref().map(author_sort_key))
     .bind(has_cover)
     .bind(&b.description)
     .bind(sanitize_accent_color(b.accent.as_deref()))
