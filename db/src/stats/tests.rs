@@ -8,9 +8,9 @@ use super::*;
 use crate::init_db;
 use crate::test_support::seed_minimal_books;
 
-const DAY: i64 = 86_400;
+pub(super) const DAY: i64 = 86_400;
 
-async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
+pub(super) async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
     sqlx::query_scalar::<_, i64>(
         "INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
          VALUES (?, '!x', 0, 0, 0, 1) RETURNING id",
@@ -22,7 +22,7 @@ async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
 }
 
 /// The `books.id` behind a seeded `uuid-N`, for the taxonomy link helpers.
-async fn book_id(pool: &SqlitePool, uuid: &str) -> i64 {
+pub(super) async fn book_id(pool: &SqlitePool, uuid: &str) -> i64 {
     sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE uuid = ?")
         .bind(uuid)
         .fetch_one(pool)
@@ -30,7 +30,13 @@ async fn book_id(pool: &SqlitePool, uuid: &str) -> i64 {
         .unwrap()
 }
 
-async fn reading_session(pool: &SqlitePool, user: i64, uuid: &str, started_at: i64, secs: i64) {
+pub(super) async fn reading_session(
+    pool: &SqlitePool,
+    user: i64,
+    uuid: &str,
+    started_at: i64,
+    secs: i64,
+) {
     sqlx::query(
         "INSERT INTO reading_sessions (user_id, book_uuid, started_at, ended_at, seconds_read)
          VALUES (?, ?, ?, ?, ?)",
@@ -45,7 +51,13 @@ async fn reading_session(pool: &SqlitePool, user: i64, uuid: &str, started_at: i
     .unwrap();
 }
 
-async fn listening_session(pool: &SqlitePool, user: i64, uuid: &str, started_at: i64, secs: i64) {
+pub(super) async fn listening_session(
+    pool: &SqlitePool,
+    user: i64,
+    uuid: &str,
+    started_at: i64,
+    secs: i64,
+) {
     sqlx::query(
         "INSERT INTO listening_sessions (user_id, book_uuid, started_at, ended_at, seconds_listened)
          VALUES (?, ?, ?, ?, ?)",
@@ -102,7 +114,7 @@ async fn link_tag(pool: &SqlitePool, book: i64, name: &str) {
 /// they exist only as a `metadata_overrides` entry — so this goes through
 /// the real write path, which also materializes the `genres` rows the
 /// donut's join needs.
-async fn set_genres(pool: &SqlitePool, uuid: &str, names: &[&str], user: i64) {
+pub(super) async fn set_genres(pool: &SqlitePool, uuid: &str, names: &[&str], user: i64) {
     crate::merge_metadata_overrides(
         pool,
         uuid,
@@ -116,7 +128,13 @@ async fn set_genres(pool: &SqlitePool, uuid: &str, names: &[&str], user: i64) {
     .unwrap();
 }
 
-async fn rate_book(pool: &SqlitePool, user: i64, uuid: &str, half_stars: i64, updated_at: i64) {
+pub(super) async fn rate_book(
+    pool: &SqlitePool,
+    user: i64,
+    uuid: &str,
+    half_stars: i64,
+    updated_at: i64,
+) {
     sqlx::query(
         "INSERT INTO user_ratings (user_id, book_uuid, half_stars, updated_at)
          VALUES (?, ?, ?, ?)",
@@ -133,7 +151,7 @@ async fn rate_book(pool: &SqlitePool, user: i64, uuid: &str, half_stars: i64, up
 /// Unix seconds `months` calendar-months before the DB's `now` — computed by
 /// SQLite itself so it lands in the same calendar month the trailing-12
 /// recursive CTE anchors on, regardless of day-of-month clamping.
-async fn months_ago_secs(pool: &SqlitePool, months: i64) -> i64 {
+pub(super) async fn months_ago_secs(pool: &SqlitePool, months: i64) -> i64 {
     sqlx::query_scalar(&format!(
         // Mid-month anchor: naive '-N months' from a month-end 'now'
         // (July 31 → "June 31" → July 1) lands the seed in the wrong month.
@@ -144,7 +162,7 @@ async fn months_ago_secs(pool: &SqlitePool, months: i64) -> i64 {
     .unwrap()
 }
 
-async fn finish_journal(pool: &SqlitePool, user: i64, uuid: &str, created_at: i64) {
+pub(super) async fn finish_journal(pool: &SqlitePool, user: i64, uuid: &str, created_at: i64) {
     sqlx::query(
         "INSERT INTO journal_entries (user_id, book_uuid, body_md, progress, created_at)
          VALUES (?, ?, 'done', 100, ?)",

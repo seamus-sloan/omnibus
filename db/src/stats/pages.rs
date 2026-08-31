@@ -113,7 +113,7 @@ pub(super) fn finished_in_window() -> String {
 /// buckets by UTC day, so it is compared as the day it falls in; every
 /// [`omnibus_shared::StatsRange`] begins on a day boundary, so nothing is
 /// gained or lost by that.
-fn ledger_in_window() -> String {
+pub(super) fn ledger_in_window() -> String {
     format!(
         "SELECT d.day AS day,
                 d.book_uuid AS uuid,
