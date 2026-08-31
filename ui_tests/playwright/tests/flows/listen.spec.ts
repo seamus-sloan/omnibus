@@ -318,11 +318,18 @@ async function chapterDurationSeconds(
   const drawer = page.getByTestId("chapters-drawer");
   await page.getByRole("button", { name: /^chapters/i }).click();
   await expect(drawer).toBeVisible();
-  const text = (await drawer.innerText()).replace(/\s+/g, " ");
-  const stamps = text.match(/\d+(?::\d\d)+/g) ?? [];
+  // Each row's duration cell shows that chapter's book-time duration — except
+  // the current chapter, whose cell shows a rate-adjusted "… remaining"
+  // instead (#2344). Keep only the book-time durations so the speed test can
+  // assert they don't move with the rate.
+  const cells = await drawer.locator(".lp-drawer-dur").allInnerTexts();
+  const stamps = cells
+    .filter((t) => !/remaining/i.test(t))
+    .map((t) => t.match(/\d+(?::\d\d)+/)?.[0])
+    .filter((s): s is string => Boolean(s));
   expect(
     stamps.length,
-    `drawer should list durations: ${text}`,
+    `drawer should list book-time durations: ${cells.join(" | ")}`,
   ).toBeGreaterThan(0);
   // The drawer is painted over the toolbar it was opened from, so it closes
   // by its own button rather than the toggle.
