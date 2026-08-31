@@ -18,10 +18,10 @@
 
 use std::collections::HashMap;
 
-use omnibus_shared::chart::{axis_max_on, nice_axis, AXIS_DIVISION_CHOICES};
+use omnibus_shared::chart::{fit_axes, AXIS_DIVISION_CHOICES};
 use omnibus_shared::{
-    ChartAggregate, ChartAxis, ChartBreakdown, ChartBucket, ChartMeasure, ChartResult, ChartSeries,
-    ChartSpec, ChartSpecError, ChartUnit, BREAKDOWN_LIMIT, MAX_AXES, MAX_BUCKETS, OTHER_LABEL,
+    ChartAggregate, ChartBreakdown, ChartBucket, ChartMeasure, ChartResult, ChartSeries, ChartSpec,
+    ChartSpecError, ChartUnit, BREAKDOWN_LIMIT, MAX_BUCKETS, OTHER_LABEL,
 };
 use sqlx::{Row, SqlitePool};
 
@@ -448,7 +448,7 @@ pub async fn chart_series(
             .measures
             .first()
             .is_some_and(|m| m.aggregate() != ChartAggregate::Average);
-    let (axes, divisions) = build_axes(&series, stacked, buckets.len());
+    let (axes, divisions) = fit_axes(&series, stacked, buckets.len());
 
     Ok(ChartResult {
         bucket: spec.bucket,
@@ -540,67 +540,6 @@ fn build_split_series(
         });
     }
     series
-}
-
-/// The one or two axes the series are scaled against, plus the gridline count
-/// they share.
-///
-/// The left axis picks the tick count; the right is then fitted to it, because
-/// one set of gridlines serves both.
-fn build_axes(series: &[ChartSeries], stacked: bool, buckets: usize) -> (Vec<ChartAxis>, usize) {
-    let unit_of = |axis: u8| -> Option<ChartUnit> {
-        series
-            .iter()
-            .find(|s| s.axis == axis)
-            .map(|s| s.measure.unit())
-    };
-    // A stacked axis has to clear the tallest **column**, not the tallest
-    // slice — scaling to the largest single series clips every column whose
-    // parts add up past it, which is most of them.
-    let peak_of = |axis: u8| -> f64 {
-        if stacked {
-            (0..buckets)
-                .map(|b| {
-                    series
-                        .iter()
-                        .filter(|s| s.axis == axis)
-                        .filter_map(|s| s.values.get(b).copied().flatten())
-                        .sum::<f64>()
-                })
-                .fold(0.0, f64::max)
-        } else {
-            series
-                .iter()
-                .filter(|s| s.axis == axis)
-                .filter_map(ChartSeries::max)
-                .fold(0.0, f64::max)
-        }
-    };
-
-    // An axis is whole-numbered only when every series on it counts rows.
-    let integral_on = |axis: u8| -> bool {
-        let mut on_axis = series.iter().filter(|s| s.axis == axis).peekable();
-        on_axis.peek().is_some()
-            && series
-                .iter()
-                .filter(|s| s.axis == axis)
-                .all(|s| s.measure.aggregate() == ChartAggregate::Count)
-    };
-
-    // The left axis picks the tick count; every other is fitted to it, because
-    // one set of gridlines serves them all.
-    let (left_max, divisions) = nice_axis(peak_of(0), integral_on(0));
-    let mut axes = Vec::new();
-    for a in 0..MAX_AXES as u8 {
-        let Some(unit) = unit_of(a) else { continue };
-        let max = if a == 0 {
-            left_max
-        } else {
-            axis_max_on(peak_of(a), divisions, integral_on(a))
-        };
-        axes.push(ChartAxis { unit, max });
-    }
-    (axes, divisions)
 }
 
 #[cfg(test)]
