@@ -874,6 +874,31 @@ enum UserDataService {
         return goal
     }
 
+    /// Set, change (`target`), or clear (`nil`) one of the caller's standing
+    /// daily goals, returning **both** kinds with today's progress recomputed.
+    ///
+    /// The server answers with the whole `DailyGoals` object rather than the
+    /// one kind that moved, so the card redraws from one response instead of
+    /// following a save with a read that could observe a different day.
+    ///
+    /// Rule 08 test 1, exactly as `setReadingGoal`: a daily target is account
+    /// configuration — set rarely and deliberately — so this is a direct call
+    /// that `throws` and never a queued op, and the control that reaches it is
+    /// disabled while offline. The write path is **per kind**, so adopting two
+    /// goals is two calls and each can fail on its own.
+    static func setDailyGoal(kind: DailyGoalKind, target: Int64?) async throws -> DailyGoals {
+        let goals: DailyGoals = try await APIClient.shared.put(
+            "/api/stats/goal/daily",
+            body: DailyGoalUpdate(kind: kind, target: target)
+        )
+        // Every cached summary carries the daily goals, not just the range the
+        // picker happens to be on, so all four are now behind.
+        for range in StatsRange.allCases {
+            await OfflineStore.shared.cacheDelete(CacheKey.stats(range))
+        }
+        return goals
+    }
+
     /// What the library is made of — format, language, publisher, decade, and
     /// genre mix. Its own read for the same reason `librarySize` is.
     static func libraryComposition() -> AsyncThrowingStream<CacheRead<LibraryComposition>, Error> {

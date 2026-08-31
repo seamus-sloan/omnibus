@@ -41,6 +41,7 @@ struct AccountView: View {
                     identityCard
 
                     appearance($app)
+                    reading
                     library
                     offline
                     sendToKindle
@@ -146,6 +147,18 @@ struct AccountView: View {
                         withAnimation(Motion.settle) { app.wrappedValue.theme = name }
                     }
                 }
+            }
+        }
+    }
+
+    /// Where the three reading targets live. Account configuration under
+    /// rule 08 — per-user, set deliberately, never queued — so it belongs
+    /// beside the profile rather than under the admin-only server settings.
+    private var reading: some View {
+        group("Reading") {
+            VStack(spacing: 0) {
+                linkRow("Reading goals", icon: "target", to: .readingGoals, isFirst: true)
+                RecordRule()
             }
         }
     }
@@ -402,9 +415,11 @@ struct AccountView: View {
         .screenPadding()
     }
 
-    private func linkRow(_ label: String, icon glyph: String, to destination: Destination) -> some View {
+    private func linkRow(
+        _ label: String, icon glyph: String, to destination: Destination, isFirst: Bool = false
+    ) -> some View {
         NavigationLink(value: destination) {
-            rowShell {
+            rowShell(isFirst: isFirst) {
                 icon(glyph)
                 rowTitle(label)
                 Spacer(minLength: 0)

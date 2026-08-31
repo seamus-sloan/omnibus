@@ -370,14 +370,60 @@ Features/           — one directory per surface: Account, AddBooks, Auth,
                       to original cover" (the matching `DELETE`) while an
                       override is active. Both invalidate every cached thumb
                       size, the full cover, and the cached book record.
-                      Stats' `TimePatternCharts` (#2183) is the "When you read"
-                      section — `Charts` bar strips over the summary's
-                      `hourOfDay` / `dayOfWeek` buckets, rendered exactly as
-                      sent (the hour is already local, resolved server-side
-                      from each session's capture-time UTC offset) so this
-                      screen and the web strips can't disagree, hidden behind
-                      `hasTimePatterns` rather than drawn as flat bars, with
-                      `unzonedSeconds` disclosed beneath
+                      Stats/ is the redesigned reading-stats tab, split so the
+                      screen's one load-bearing decision is visible in the file
+                      names: the period switcher governs **part** of the page
+                      and the page says so. `StatsView` is the shell and the
+                      order; `StatsWindow` holds the pinned "In this window"
+                      header, its four-up `RangeControl`, and everything the
+                      control moves — the headline panel, the tiles and their
+                      vs-previous deltas, the `ReadingClock` (a 24-hour radial
+                      dial with the weekday strip beneath, replacing the old
+                      `TimePatternCharts` `Charts` strips, still drawn over the
+                      buckets exactly as sent since the hour is already local,
+                      resolved server-side from each session's capture-time UTC
+                      offset, and still hidden behind `hasTimePatterns` rather
+                      than drawn as flat bars with `unzonedSeconds` disclosed
+                      beneath), the genre donut and the standouts.
+                      `StatsStanding` and `StatsGoalCards` hold what it must
+                      **not** move — streak, the daily-goal rings, the annual
+                      goal as a cumulative projection curve, the four-week
+                      strip, the heatmap, what's in progress, the trailing
+                      twelve months — and `StatsChrome` the tokens and
+                      primitives both bands share, so the two cannot drift onto
+                      different paddings or different greys. The standing rule
+                      is a second pinned header, which is the whole mechanism
+                      for the control releasing exactly as that rule reaches the
+                      top. The heatmap and four-week strip read an all-time
+                      summary rather than the rendered one: `db::stats::compute`
+                      scopes `heatmap` to the *window's* start, so a grid a
+                      reader is told is "not tied to the window" would otherwise
+                      empty out on a period switch. Neither goal card is a
+                      control: each carries a pencil that pushes
+                      `Account/ReadingGoalsView`, so a panel that *reports*
+                      today's figures doesn't also look like a button and the
+                      editor isn't in two places at once. The tab reloads when
+                      its navigation path empties, since the write that happened
+                      up there has already invalidated the summary down here.
+                      The tab carries **no session log**: the web `/stats` has
+                      one and `GET /api/stats/sessions` still backs it, but a
+                      keyset-paged list of every sitting is a different kind of
+                      surface from a page of aggregates and was cut from this
+                      one. `SessionLogEntry` / `SessionLogPage` and
+                      `UserDataService.sessionLog(book:before:)` are kept — the
+                      wire contract stays mirrored and tested, and the `book`
+                      parameter is there for the per-book log the web already
+                      renders
+                      `ReadingGoalsView` (Features/Account/) owns all three
+                      targets — the annual books goal and the two dailies — on
+                      one pushed screen under the You tab, which is where rule
+                      08 test 1 already places them: account configuration, set
+                      deliberately, never queued. One request per target, since
+                      `DailyGoalUpdate` is per-kind and the annual goal has its
+                      own route, each with its own error so a partial failure
+                      doesn't read as a failure of the form. A blank field is
+                      the clear — there is no Clear button, because the form has
+                      one explicit Save
 Models/             — Codable mirrors of the `shared/` wire DTOs.
                       `MetadataLookup.swift` mirrors
                       `shared/src/metadata_lookup.rs` for the fetch flow;

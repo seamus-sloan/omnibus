@@ -1267,6 +1267,16 @@ struct MonthCount: Codable, Hashable, Sendable, Identifiable {
     var id: String { month }
 }
 
+/// One point of a labelled series — a day or a month, and the figure recorded
+/// against it. Mirrors `omnibus_shared::TrendPoint`; the label's calendar is
+/// the field's, not this type's.
+struct TrendPoint: Codable, Hashable, Sendable, Identifiable {
+    var label: String = ""
+    var value: Double = 0
+
+    var id: String { label }
+}
+
 /// One bar of the star-rating distribution: a half-star bucket and how many
 /// books the reader rated into it within the window.
 ///
@@ -1492,17 +1502,23 @@ struct PagesReadDetail: Codable, Sendable {
     var measuredBooks: Int64 = 0
     var unmeasuredBooks: Int64 = 0
     var audioBooks: Int64 = 0
+    /// Pages per UTC day inside the window, active days only, ascending.
+    ///
+    /// Decoded for one caller: the daily-goals card states today's pages even
+    /// when no pages target is set, and `dailyGoals.pages` is target-gated —
+    /// absent precisely when there is no goal. Today's entry is in every
+    /// window (each of them ends today) and carries the same figure whichever
+    /// one is showing, so reading a *standing* card off a windowed field is
+    /// safe here in a way it would not be for a period total.
+    var daily: [TrendPoint] = []
     /// Whether this window opens before `sinceDay`, so part of it is
     /// unmeasurable. Server-computed against the window's real start — the
     /// range alone does not answer it, and only the server knows where a
     /// period begins.
     var windowPredatesLedger = false
 
-    // The wire type also carries a per-day `daily` series for the web tile's
-    // drill-in chart. This screen has no drill-in, so it is left undecoded
-    // rather than mirrored into a property nothing reads.
-
     enum CodingKeys: String, CodingKey {
+        case daily
         case sinceDay = "since_day"
         case measuredBooks = "measured_books"
         case unmeasuredBooks = "unmeasured_books"
@@ -1520,6 +1536,7 @@ struct PagesReadDetail: Codable, Sendable {
         measuredBooks = try c.decodeIfPresent(Int64.self, forKey: .measuredBooks) ?? 0
         unmeasuredBooks = try c.decodeIfPresent(Int64.self, forKey: .unmeasuredBooks) ?? 0
         audioBooks = try c.decodeIfPresent(Int64.self, forKey: .audioBooks) ?? 0
+        daily = try c.decodeIfPresent([TrendPoint].self, forKey: .daily) ?? []
         windowPredatesLedger =
             try c.decodeIfPresent(Bool.self, forKey: .windowPredatesLedger) ?? false
     }
@@ -1621,6 +1638,11 @@ struct StatsSummary: Codable, Sendable {
     var topAuthors: [RankedEntity] = []
     var topTags: [RankedEntity] = []
     var genreShare: [GenreShare] = []
+    /// Distinct books with a genre *and* activity in the window — the
+    /// population `genreShare`'s slices are drawn from, and the donut's centre
+    /// count. Always `<= booksActive`; the difference is reading the ring
+    /// cannot describe.
+    var genreTaggedBooks: Int64 = 0
     var finishedBooks: [FinishedBook] = []
     var booksPerMonth: [MonthCount] = []
     /// The window's ratings by half-star bucket — the shape `avgStars`
@@ -1660,6 +1682,13 @@ struct StatsSummary: Codable, Sendable {
     /// set. Unwindowed, like `currentStreakDays` — a goal is annual, so it
     /// reads the same whichever range the picker is on.
     var goal: ReadingGoal?
+    /// The reader's standing daily goals and today's progress toward them.
+    /// Unwindowed for the same reason `goal` is: a daily target recurs, so it
+    /// reads the same whichever range the picker is on.
+    var dailyGoals = DailyGoals()
+    /// The immediately preceding window's aggregates — the baseline the
+    /// windowed tiles draw their deltas against.
+    var previous = PeriodComparison()
     /// What `pagesRead` could and could not see, plus the day its ledger began.
     var pagesDetail = PagesReadDetail()
 
@@ -1678,7 +1707,10 @@ struct StatsSummary: Codable, Sendable {
         case asOfDay = "as_of_day"
         case topAuthors = "top_authors"
         case topTags = "top_tags"
+        case previous
         case genreShare = "genre_share"
+        case genreTaggedBooks = "genre_tagged_books"
+        case dailyGoals = "daily_goals"
         case finishedBooks = "finished_books"
         case booksPerMonth = "books_per_month"
         case ratingHistogram = "rating_histogram"
@@ -1724,6 +1756,7 @@ struct StatsSummary: Codable, Sendable {
         topAuthors = try c.decodeIfPresent([RankedEntity].self, forKey: .topAuthors) ?? []
         topTags = try c.decodeIfPresent([RankedEntity].self, forKey: .topTags) ?? []
         genreShare = try c.decodeIfPresent([GenreShare].self, forKey: .genreShare) ?? []
+        genreTaggedBooks = try c.decodeIfPresent(Int64.self, forKey: .genreTaggedBooks) ?? 0
         finishedBooks = try c.decodeIfPresent([FinishedBook].self, forKey: .finishedBooks) ?? []
         booksPerMonth = try c.decodeIfPresent([MonthCount].self, forKey: .booksPerMonth) ?? []
         ratingHistogram =
@@ -1737,6 +1770,9 @@ struct StatsSummary: Codable, Sendable {
         superlatives = try c.decodeIfPresent(Superlatives.self, forKey: .superlatives)
             ?? Superlatives()
         goal = try c.decodeIfPresent(ReadingGoal.self, forKey: .goal)
+        dailyGoals = try c.decodeIfPresent(DailyGoals.self, forKey: .dailyGoals) ?? DailyGoals()
+        previous =
+            try c.decodeIfPresent(PeriodComparison.self, forKey: .previous) ?? PeriodComparison()
         pagesDetail =
             try c.decodeIfPresent(PagesReadDetail.self, forKey: .pagesDetail) ?? PagesReadDetail()
     }
@@ -1789,6 +1825,173 @@ struct ReadingGoalUpdate: Codable, Sendable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(target, forKey: .target)
+    }
+}
+
+/// A daily goal's kind — the two values `DailyGoalUpdate.kind` accepts.
+///
+/// Its own type rather than the raw string the wire carries, so a call site
+/// cannot ask for a kind the server would 400 on. Mirrors
+/// `omnibus_shared::{GOAL_KIND_PAGES, GOAL_KIND_MINUTES}` and the per-kind
+/// bounds beside them; `books` has no daily analogue and so is absent.
+enum DailyGoalKind: String, CaseIterable, Codable, Sendable, Identifiable {
+    case pages
+    case minutes
+
+    var id: String { rawValue }
+
+    /// How the editor names the target: "Pages a day".
+    var label: String {
+        switch self {
+        case .pages: "Pages a day"
+        case .minutes: "Minutes a day"
+        }
+    }
+
+    /// How the goal card names the row beside its ring, where "a day" is
+    /// already carried by the card's own heading.
+    var shortLabel: String {
+        switch self {
+        case .pages: "Pages"
+        case .minutes: "Minutes"
+        }
+    }
+
+    /// The unit, singular. Error and remaining copy pluralises it.
+    var unit: String {
+        switch self {
+        case .pages: "page"
+        case .minutes: "minute"
+        }
+    }
+
+    /// `MAX_DAILY_PAGES` / `MAX_DAILY_MINUTES`. Per-kind because the units
+    /// are: 2,000 is a generous day of pages and an impossible day of minutes.
+    var maxTarget: Int64 {
+        switch self {
+        case .pages: 2_000
+        case .minutes: 1_440
+        }
+    }
+}
+
+/// One standing daily goal and today's progress toward it.
+///
+/// Recurring rather than year-bound, so there is no year here — the target
+/// stands until it is changed, and `day` names the day `current` was measured
+/// over. That day is **kind-dependent**: minutes are measured over the
+/// reader's local day (off each session's capture-time offset), pages over the
+/// UTC day the forward-progress ledger buckets to. The two can therefore name
+/// different days for the same moment, which is why the field is per-goal.
+struct DailyGoal: Codable, Hashable, Sendable {
+    var kind: String = ""
+    var target: Int64 = 0
+    var current: Int64 = 0
+    var day: String = ""
+
+    /// Progress as a 0...1 fraction for the ring, clamped. Read `current`
+    /// against `target` for the honest ratio — an over-target day is the good
+    /// case and the figure never hides it.
+    var fraction: Double {
+        guard target > 0 else { return 0 }
+        return min(1, Double(current) / Double(target))
+    }
+
+    var isMet: Bool { current >= target }
+    /// Pages or minutes still to go, `0` once met or passed.
+    var remaining: Int64 { max(0, target - current) }
+    /// How far past the target the day went, `0` when it hasn't been reached.
+    var over: Int64 { max(0, current - target) }
+}
+
+/// The reader's daily goals — at most one per kind, each independent of the
+/// other and of the annual `ReadingGoal`.
+struct DailyGoals: Codable, Sendable {
+    var pages: DailyGoal?
+    var minutes: DailyGoal?
+    /// Seconds recorded today by sessions carrying no capture-time offset,
+    /// which the minutes goal therefore could not place on a local day. Always
+    /// `0` when no minutes goal is set — there is nothing to disclose against.
+    var unzonedSeconds: Int64 = 0
+
+    enum CodingKeys: String, CodingKey {
+        case pages, minutes
+        case unzonedSeconds = "unzoned_seconds"
+    }
+
+    init() {}
+
+    /// Field-by-field for the same reason `StatsSummary` is: the synthesized
+    /// decoder ignores property defaults, so one missing key would throw — and
+    /// this whole object is absent from every server older than the daily-goal
+    /// migration.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pages = try c.decodeIfPresent(DailyGoal.self, forKey: .pages)
+        minutes = try c.decodeIfPresent(DailyGoal.self, forKey: .minutes)
+        unzonedSeconds = try c.decodeIfPresent(Int64.self, forKey: .unzonedSeconds) ?? 0
+    }
+
+    subscript(kind: DailyGoalKind) -> DailyGoal? {
+        switch kind {
+        case .pages: pages
+        case .minutes: minutes
+        }
+    }
+
+    /// Whether the reader has any daily goal at all — what turns the card's
+    /// heading from "Daily goals" into "Today".
+    var isEmpty: Bool { pages == nil && minutes == nil }
+}
+
+/// Write payload for `PUT /api/stats/goal/daily`. A `nil` `target` clears that
+/// kind, leaving the other and the annual goal alone.
+struct DailyGoalUpdate: Codable, Sendable {
+    var kind: DailyGoalKind
+    var target: Int64?
+
+    enum CodingKeys: String, CodingKey { case kind, target }
+
+    /// Encoded explicitly, exactly as `ReadingGoalUpdate` is: the synthesized
+    /// encoder drops a `nil` `Optional` key entirely, and sending `null`
+    /// states the clear on the wire rather than leaning on an absent key.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(target, forKey: .target)
+    }
+}
+
+/// The immediately preceding window's aggregates — the baseline the windowed
+/// tiles render their deltas against.
+///
+/// Windowed like the figures it is compared to: switching the period moves
+/// both sides together, so a delta always compares like with like.
+struct PeriodComparison: Codable, Sendable {
+    var booksFinished: Int64 = 0
+    var avgStars: Double?
+    var listeningSeconds: Int64 = 0
+    /// Pages over the baseline window. Day-grained, unlike its siblings — the
+    /// ledger buckets by UTC day — so the baseline includes the whole of its
+    /// boundary day, matching the current window's own partial today.
+    var pagesRead: Int64 = 0
+
+    enum CodingKeys: String, CodingKey {
+        case booksFinished = "books_finished"
+        case avgStars = "avg_stars"
+        case listeningSeconds = "listening_seconds"
+        case pagesRead = "pages_read"
+    }
+
+    init() {}
+
+    /// Field-by-field for the same reason `StatsSummary` is.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        booksFinished = try c.decodeIfPresent(Int64.self, forKey: .booksFinished) ?? 0
+        avgStars = try c.decodeIfPresent(Double.self, forKey: .avgStars)
+        listeningSeconds = try c.decodeIfPresent(Int64.self, forKey: .listeningSeconds) ?? 0
+        pagesRead = try c.decodeIfPresent(Int64.self, forKey: .pagesRead) ?? 0
     }
 }
 
