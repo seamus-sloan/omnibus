@@ -9,6 +9,30 @@
 
 import SwiftUI
 
+/// The link out to where the targets are actually set.
+///
+/// A pencil rather than a chevron, and the only tappable thing on the card:
+/// the whole card was a button, which made a panel that *reports* today's
+/// figures look like a control and put the editor in two places at once.
+private struct GoalEditLink: View {
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        NavigationLink(value: Destination.readingGoals) {
+            Image(systemName: "pencil")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(palette.ink3Color)
+                // A real 44pt target, pulled back to a 20pt layout height so
+                // claiming one doesn't add 24pt to every card header.
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+                .padding(.vertical, -12)
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel("Edit reading goals")
+    }
+}
+
 // MARK: - Daily goals
 
 /// Today's pages and minutes, each as a ring when a target exists and a bare
@@ -19,7 +43,6 @@ import SwiftUI
 /// card still aligns.
 struct DailyGoalsCard: View {
     let summary: StatsSummary
-    let onEdit: () -> Void
 
     @Environment(\.palette) private var palette
 
@@ -30,37 +53,31 @@ struct DailyGoalsCard: View {
     }
 
     var body: some View {
-        Button(action: onEdit) {
-            StatsCard {
-                VStack(alignment: .leading, spacing: Spacing.lg) {
-                    HStack(spacing: 7) {
-                        Text(heading)
-                            .font(.monoUI(10, weight: .bold))
-                            .tracking(0.8)
-                            .textCase(.uppercase)
-                            .foregroundStyle(palette.ink2Color)
-                        Spacer(minLength: Spacing.sm)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(palette.ink3Color)
-                    }
+        StatsCard {
+            VStack(alignment: .leading, spacing: Spacing.lg) {
+                HStack(spacing: 7) {
+                    Text(heading)
+                        .font(.monoUI(10, weight: .bold))
+                        .tracking(0.8)
+                        .textCase(.uppercase)
+                        .foregroundStyle(palette.ink2Color)
+                    Spacer(minLength: Spacing.sm)
+                    GoalEditLink()
+                }
 
-                    HStack(alignment: .center, spacing: 14) {
-                        ForEach(DailyGoalKind.allCases) { kind in
-                            DailyGoalRow(
-                                kind: kind,
-                                goal: summary.dailyGoals[kind],
-                                todaysFigure: DailyGoalsCard.todaysFigure(kind, summary),
-                                bothUnset: summary.dailyGoals.isEmpty
-                            )
-                        }
+                HStack(alignment: .center, spacing: 14) {
+                    ForEach(DailyGoalKind.allCases) { kind in
+                        DailyGoalRow(
+                            kind: kind,
+                            goal: summary.dailyGoals[kind],
+                            todaysFigure: DailyGoalsCard.todaysFigure(kind, summary),
+                            bothUnset: summary.dailyGoals.isEmpty
+                        )
                     }
                 }
             }
         }
-        .buttonStyle(PressableStyle())
         .screenPadding()
-        .accessibilityHint("Edit your daily goals")
     }
 
     /// Today's figure for a kind whose target is unset.
@@ -191,7 +208,6 @@ private struct DailyGoalRow: View {
 struct YearGoalCard: View {
     let summary: StatsSummary
     let year: String
-    let onEdit: () -> Void
 
     @Environment(\.palette) private var palette
 
@@ -199,20 +215,16 @@ struct YearGoalCard: View {
 
     var body: some View {
         let p = projection
-        Button(action: onEdit) {
-            StatsCard {
-                VStack(alignment: .leading, spacing: 0) {
-                    header(p)
-                    figure(p)
-                    YearGoalChart(projection: p)
-                        .padding(.top, 14)
-                    footer(p)
-                }
+        StatsCard {
+            VStack(alignment: .leading, spacing: 0) {
+                header(p)
+                figure(p)
+                YearGoalChart(projection: p)
+                    .padding(.top, 14)
+                footer(p)
             }
         }
-        .buttonStyle(PressableStyle())
         .screenPadding()
-        .accessibilityHint("Edit your reading goal for \(year)")
     }
 
     private func header(_ p: YearProjection) -> some View {
@@ -230,9 +242,7 @@ struct YearGoalCard: View {
                     .foregroundStyle(palette.ink3Color)
                     .lineLimit(1)
             }
-            Image(systemName: "chevron.right")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(palette.ink3Color)
+            GoalEditLink()
         }
     }
 
@@ -259,8 +269,14 @@ struct YearGoalCard: View {
     /// decimal, and there is deliberately no completion date — "you'd hit 30
     /// around 8 January" is not something a reader can act on, where "11 days
     /// a book to hit 30" is.
+    /// Top-aligned, so the three figures sit on one line.
+    ///
+    /// Bottom-aligning them — which is what the mock's `align-items: flex-end`
+    /// does — lines up the *labels* instead, and since they wrap to one line or
+    /// two depending on the copy, the numbers above them ended up at three
+    /// different heights.
     private func footer(_ p: YearProjection) -> some View {
-        HStack(alignment: .bottom, spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             ForEach(p.stats) { stat in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(stat.value)

@@ -398,10 +398,23 @@ Features/           — one directory per surface: Account, AddBooks, Auth,
                       summary rather than the rendered one: `db::stats::compute`
                       scopes `heatmap` to the *window's* start, so a grid a
                       reader is told is "not tied to the window" would otherwise
-                      empty out on a period switch. `StatsGoalEditor` writes the
-                      targets — one PUT per daily kind, since `DailyGoalUpdate`
-                      is per-kind, with per-kind errors so a failed write
-                      doesn't read as though both failed
+                      empty out on a period switch. Neither goal card is a
+                      control: each carries a pencil that pushes
+                      `Account/ReadingGoalsView`, so a panel that *reports*
+                      today's figures doesn't also look like a button and the
+                      editor isn't in two places at once. The tab reloads when
+                      its navigation path empties, since the write that happened
+                      up there has already invalidated the summary down here
+                      `ReadingGoalsView` (Features/Account/) owns all three
+                      targets — the annual books goal and the two dailies — on
+                      one pushed screen under the You tab, which is where rule
+                      08 test 1 already places them: account configuration, set
+                      deliberately, never queued. One request per target, since
+                      `DailyGoalUpdate` is per-kind and the annual goal has its
+                      own route, each with its own error so a partial failure
+                      doesn't read as a failure of the form. A blank field is
+                      the clear — there is no Clear button, because the form has
+                      one explicit Save
 Models/             — Codable mirrors of the `shared/` wire DTOs.
                       `MetadataLookup.swift` mirrors
                       `shared/src/metadata_lookup.rs` for the fetch flow;

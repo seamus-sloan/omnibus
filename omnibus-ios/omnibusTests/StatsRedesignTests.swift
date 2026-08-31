@@ -455,3 +455,55 @@ struct StandingStripTests {
         #expect(TrailingYearCard.initial("nonsense") == "")
     }
 }
+
+// MARK: - The goals form
+
+@Suite("Reading goals form")
+struct ReadingGoalsFormTests {
+    private func target(_ raw: String, max: Int64 = 2_000, unit: String = "page")
+        -> GoalTargetInput
+    {
+        ReadingGoalsView.target(from: raw, max: max, unit: unit)
+    }
+
+    @Test("a number inside the bounds is the target")
+    func acceptsInRange() {
+        #expect(target("250") == .target(250))
+        #expect(target("1") == .target(1), "the lower bound is inclusive")
+        #expect(target("2000") == .target(2_000), "so is the upper one")
+        #expect(target(" 250 ") == .target(250), "surrounding space is not a typo to reject")
+    }
+
+    @Test("a blank field is the clear, not an error")
+    func blankClears() {
+        // There is no Clear button: the form has one explicit Save, so
+        // emptying a target and pressing it is as deliberate as typing one.
+        #expect(target("") == .target(nil))
+        #expect(target("   ") == .target(nil))
+    }
+
+    @Test("out of range is named under the field rather than bounced as a 400")
+    func rejectsOutOfRange() {
+        for raw in ["0", "-5", "2001"] {
+            #expect(
+                target(raw) == .invalid("Enter a whole number of pages between 1 and 2,000."),
+                "\(raw) should not be accepted")
+        }
+    }
+
+    @Test("the message names the kind's own unit and bound")
+    func messageNamesTheUnit() {
+        // 2,000 is a generous day of pages and an impossible day of minutes,
+        // so a shared message would be wrong for one of them.
+        #expect(
+            target("9999", max: DailyGoalKind.minutes.maxTarget, unit: "minute")
+                == .invalid("Enter a whole number of minutes between 1 and 1,440."))
+    }
+
+    @Test("anything that isn't a whole number is refused")
+    func rejectsNonIntegers() {
+        for raw in ["12.5", "ten", "4 0", "1e3"] {
+            if case .target = target(raw) { Issue.record("\(raw) should not parse") }
+        }
+    }
+}

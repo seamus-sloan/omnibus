@@ -39,7 +39,10 @@ struct StatsView: View {
     @State private var standingSummary: StatsSummary?
     @State private var isLoading = true
     @State private var error: String?
-    @State private var goalEditor: GoalEditorTarget?
+    /// Owned here so the tab can tell a pop apart from a tab switch: the goals
+    /// are edited on a screen pushed onto this stack, and returning from it has
+    /// to re-read a summary the write has already invalidated.
+    @State private var path = NavigationPath()
     // The log is its own paged read rather than a rollup of the window above
     // it, so it holds its own state and never reloads on a range change.
     @State private var sessions: [SessionLogEntry] = []
@@ -48,7 +51,7 @@ struct StatsView: View {
     @State private var sessionsError: String?
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if isLoading && summary == nil {
                     LoadingView()
@@ -78,23 +81,11 @@ struct StatsView: View {
             await loadSessions()
         }
         .onChange(of: range) { _, _ in Task { await load() } }
-        .sheet(item: $goalEditor) { target in
-            if let summary {
-                GoalEditorSheet(
-                    target: target,
-                    summary: summary,
-                    // Folded straight into the rendered summary rather than
-                    // waiting on the reload, so the ring moves at once.
-                    onDailySaved: { goals in
-                        self.summary?.dailyGoals = goals
-                        Task { await load(force: true) }
-                    },
-                    onAnnualSaved: { goal in
-                        self.summary?.goal = goal
-                        Task { await load(force: true) }
-                    }
-                )
-            }
+        // Popping back from the goals screen. The write already dropped every
+        // cached summary, so a plain read is a fetch — and without this the
+        // rings would keep drawing the target the reader just changed.
+        .onChange(of: path.isEmpty) { _, isRoot in
+            if isRoot { Task { await load() } }
         }
     }
 
@@ -109,11 +100,9 @@ struct StatsView: View {
                     .padding(.bottom, -Spacing.lg)
 
                 StreakHeadline(summary: summary)
-                DailyGoalsCard(summary: summary) { goalEditor = .daily }
+                DailyGoalsCard(summary: summary)
                 if let year = Self.goalYear(summary) {
-                    YearGoalCard(summary: summary, year: year) {
-                        goalEditor = .annual(year: year)
-                    }
+                    YearGoalCard(summary: summary, year: year)
                 }
                 // Both off the unwindowed summary — see `standingSummary`.
                 let unwindowed = standingSummary ?? summary

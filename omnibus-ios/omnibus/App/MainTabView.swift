@@ -17,6 +17,7 @@ enum Destination: Hashable {
     case tags
     case tag(name: String)
     case settings
+    case readingGoals
     case downloads
     case authorsIndex
     case searchResults(query: String)
@@ -245,6 +246,8 @@ struct DestinationRouter: ViewModifier {
                 SearchResultsView(query: name, title: name)
             case .settings:
                 SettingsView()
+            case .readingGoals:
+                ReadingGoalsView()
             case .downloads:
                 DownloadsView()
             case .authorsIndex:
