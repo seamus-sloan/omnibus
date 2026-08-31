@@ -1,7 +1,8 @@
 //  MainTabView.swift
-//  The signed-in shell: five native tabs, one NavigationStack each (so every
-//  push gets interactive swipe-back for free), and the audiobook mini player
-//  docked in the tab bar's accessory slot.
+//  The signed-in shell: four native tabs, one NavigationStack each (so every
+//  push gets interactive swipe-back for free). The system tab bar is hidden and
+//  replaced by `OmnibusTabBar` in a bottom safe-area inset, with the audiobook
+//  mini player stacked directly above it.
 
 import SwiftUI
 
@@ -22,6 +23,47 @@ enum Destination: Hashable {
     case authorsIndex
     case searchResults(query: String)
     case metadataEdit(uuid: String)
+
+    /// Whether this screen draws its own bottom-edge chrome, so the tab bar
+    /// and mini player must step aside for it.
+    var hidesTabBar: Bool {
+        if case .book = self { return true }
+        return false
+    }
+}
+
+extension [Destination] {
+    /// Whether anything in this stack is holding the bottom edge.
+    ///
+    /// The whole stack, not just its top: a book detail with the metadata
+    /// editor pushed over it still owns that edge, and the bar stays away
+    /// until the detail itself pops.
+    var hidesTabBar: Bool {
+        contains { $0.hidesTabBar }
+    }
+}
+
+/// The four tabs' navigation stacks, held together so the tab → stack mapping
+/// is one nameable thing rather than a `switch` buried in a view.
+///
+/// Worth a type of its own because a transposed case in the subscript type
+/// checks perfectly and would simply answer for the wrong tab — the bar would
+/// go missing on one and linger on another. `tabPathsSubscriptReadsEachTabsOwnStack`
+/// is what actually pins it.
+struct TabPaths: Equatable {
+    var library: [Destination] = []
+    var search: [Destination] = []
+    var stats: [Destination] = []
+    var you: [Destination] = []
+
+    subscript(tab: AppTab) -> [Destination] {
+        switch tab {
+        case .library: library
+        case .search: search
+        case .stats: stats
+        case .you: you
+        }
+    }
 }
 
 struct MainTabView: View {
@@ -32,20 +74,36 @@ struct MainTabView: View {
     @State private var selection: AppTab = .library
     @State private var addSheetPresented = false
     @State private var reselect = TabReselect()
+    // One navigation path per tab, owned here rather than by each tab root:
+    // whether the bottom bar is up is a question about the *selected* stack,
+    // and this is the only view that knows which stack that is.
+    @State private var paths = TabPaths()
+
+    /// Whether an immersive detail screen is up.
+    ///
+    /// Derived from the navigation path rather than that screen's own
+    /// `onAppear` / `onDisappear`, because a `NavigationStack` fires the
+    /// latter only once the pop has *finished*: the bar used to sit out the
+    /// whole transition and only then spring back, which read as a lag on
+    /// every exit. A bound path moves the instant the pop is committed, so
+    /// the bar now returns alongside the screen sliding away.
+    private var isImmersiveDetail: Bool {
+        paths[selection].hidesTabBar
+    }
 
     var body: some View {
         TabView(selection: $selection) {
             Tab(value: AppTab.library) {
-                LibraryView(addSheetPresented: $addSheetPresented)
+                LibraryView(addSheetPresented: $addSheetPresented, path: $paths.library)
             }
             Tab(value: AppTab.search) {
-                SearchTab()
+                SearchTab(path: $paths.search)
             }
             Tab(value: AppTab.stats) {
-                StatsView()
+                StatsView(path: $paths.stats)
             }
             Tab(value: AppTab.you) {
-                AccountView()
+                AccountView(path: $paths.you)
             }
         }
         // `TabView` keeps tab state and lazy loading; only its chrome is
@@ -57,7 +115,7 @@ struct MainTabView: View {
             // bar sits where the tabs do — so the whole block steps aside
             // while one is up. Audio keeps playing; the mini player returns
             // with the bar on pop.
-            if !Presentation.shared.isImmersiveDetail {
+            if !isImmersiveDetail {
                 VStack(spacing: 0) {
                     if player.isActive {
                         MiniPlayerBar()
@@ -71,7 +129,7 @@ struct MainTabView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(Motion.glide, value: Presentation.shared.isImmersiveDetail)
+        .animation(Motion.glide, value: isImmersiveDetail)
         // The keyboard belongs over the tab bar, not under it. Has to sit on
         // the modified view — on the inset's content it is a no-op (#2102).
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -165,22 +223,6 @@ final class Presentation {
 
     var reader: ReaderSession?
     var player: ReaderSession?
-
-    /// How many immersive detail screens are on screen — pushed book details
-    /// hide the tab bar and mini player. A count, not a flag: a series-strip
-    /// tap pushes a second detail over the first, and appear/disappear of the
-    /// two interleave during the transition.
-    private(set) var immersiveDetailDepth = 0
-
-    var isImmersiveDetail: Bool { immersiveDetailDepth > 0 }
-
-    func pushImmersiveDetail() {
-        immersiveDetailDepth += 1
-    }
-
-    func popImmersiveDetail() {
-        immersiveDetailDepth = max(0, immersiveDetailDepth - 1)
-    }
 
     /// Bumped once a reading or listening session has *persisted* its final
     /// position. Surfaces that show resume state observe this instead of

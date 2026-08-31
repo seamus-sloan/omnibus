@@ -320,11 +320,6 @@ struct BookDetailView: View {
         .bookZoomDestination(uuid, in: bookZoom)
         .task { await model.load(uuid: uuid) }
         .refreshTask { await model.load(uuid: uuid) }
-        // The tab bar and mini player yield the bottom edge to the action
-        // bar while this screen is up. Counted, not toggled: a series-strip
-        // tap pushes a second detail over this one.
-        .onAppear { Presentation.shared.pushImmersiveDetail() }
-        .onDisappear { Presentation.shared.popImmersiveDetail() }
         .sheet(isPresented: $showAlignment) {
             if let book = model.book {
                 AlignmentSheet(book: book) {

@@ -227,15 +227,17 @@ final class LibraryModel {
 
 struct LibraryView: View {
     @Binding var addSheetPresented: Bool
+    /// Owned by `MainTabView` — see `isImmersiveDetail` there.
+    @Binding var path: [Destination]
 
-    init(addSheetPresented: Binding<Bool>) {
+    init(addSheetPresented: Binding<Bool>, path: Binding<[Destination]>) {
         _addSheetPresented = addSheetPresented
+        _path = path
     }
 
     @Environment(\.palette) private var palette
     @Environment(AppState.self) private var app
     @State private var model = LibraryModel()
-    @State private var path = NavigationPath()
     @Namespace private var bookZoom
     private var presentation = Presentation.shared
 

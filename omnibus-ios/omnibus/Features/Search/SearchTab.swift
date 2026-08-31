@@ -10,9 +10,15 @@
 import SwiftUI
 
 struct SearchTab: View {
+    /// Owned by `MainTabView` — see `isImmersiveDetail` there.
+    @Binding var path: [Destination]
+
+    init(path: Binding<[Destination]>) {
+        _path = path
+    }
+
     @Environment(\.palette) private var palette
     @Environment(TabReselect.self) private var reselect
-    @State private var path = NavigationPath()
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -23,7 +29,7 @@ struct SearchTab: View {
         // page — unwinding any pushed authors/series/tags screens.
         .onChange(of: reselect.token) { _, _ in
             guard reselect.tab == .search, !path.isEmpty else { return }
-            withAnimation(Motion.glide) { path.removeLast(path.count) }
+            withAnimation(Motion.glide) { path.removeAll() }
         }
     }
 }

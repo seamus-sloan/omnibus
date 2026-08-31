@@ -240,26 +240,3 @@ private func sitting(
     #expect(preview == "The Cinder scene lands differently in audio")
 }
 
-// MARK: - Immersive chrome depth
-
-@Test @MainActor func immersiveDepthSurvivesNestedDetailsAndClampsAtZero() {
-    let presentation = Presentation.shared
-    #expect(!presentation.isImmersiveDetail)
-
-    // A detail pushed over a detail: the bar stays hidden until both pop.
-    presentation.pushImmersiveDetail()
-    presentation.pushImmersiveDetail()
-    #expect(presentation.isImmersiveDetail)
-    presentation.popImmersiveDetail()
-    #expect(presentation.isImmersiveDetail)
-    presentation.popImmersiveDetail()
-    #expect(!presentation.isImmersiveDetail)
-
-    // An interleaved extra pop must clamp, not go negative and swallow the
-    // next push.
-    presentation.popImmersiveDetail()
-    presentation.pushImmersiveDetail()
-    #expect(presentation.isImmersiveDetail)
-    presentation.popImmersiveDetail()
-    #expect(!presentation.isImmersiveDetail)
-}
