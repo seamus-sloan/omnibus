@@ -105,22 +105,8 @@ struct WishlistSection: View {
         }
     }
 
-    /// Open the store search in the Amazon app when it's installed, else the
-    /// browser. The app's URL scheme is tried first because an https link only
-    /// reaches the app when Amazon's universal-link registration covers the
-    /// path — the scheme is the deterministic door.
     private func openStore() {
-        guard let web = StoreLink.searchURL(
-            isbn: book.isbn13, title: book.displayTitle, author: book.authorDisplay
-        ) else { return }
-
-        guard let app = StoreLink.appURL(for: web) else {
-            openURL(web)
-            return
-        }
-        openURL(app) { accepted in
-            if !accepted { openURL(web) }
-        }
+        StoreLink.open(book: book, with: openURL)
     }
 
     // MARK: - Copy

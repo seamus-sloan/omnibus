@@ -138,23 +138,54 @@ pub(super) fn bd_identifier_rows(identifiers: &[Identifier]) -> Vec<BdIdentifier
     rows.into_iter().map(|(row, _)| row).collect()
 }
 
-/// True when `value`, with hyphens and whitespace stripped, is the right length for an ISBN-10 or ISBN-13, digits-only except a trailing ISBN-10 `X` check digit.
+/// True when `value`, with hyphens and whitespace stripped, is a valid ISBN —
+/// the right length for an ISBN-10 or ISBN-13 **and** passing its check digit.
+///
+/// The check digit is the point: a shape-only test (right length, digits with
+/// an optional trailing `X`) labelled a checksum-failing `unknown`-scheme
+/// value like `2100906924` as an ISBN, presenting bad file metadata as
+/// verified data (#2359). Only used to *infer* a label when the scheme said
+/// nothing, so a false positive here is a mislabel.
 fn bd_looks_like_isbn(value: &str) -> bool {
     let cleaned: Vec<char> = value
         .chars()
         .filter(|c| !c.is_whitespace() && *c != '-')
         .collect();
     match cleaned.len() {
-        10 => {
-            let last = cleaned.len() - 1;
-            cleaned
-                .iter()
-                .enumerate()
-                .all(|(i, c)| c.is_ascii_digit() || (i == last && c.eq_ignore_ascii_case(&'x')))
-        }
-        13 => cleaned.iter().all(|c| c.is_ascii_digit()),
+        10 => isbn10_checksum_ok(&cleaned),
+        13 => isbn13_checksum_ok(&cleaned),
         _ => false,
     }
+}
+
+/// ISBN-10 check: `Σ digitᵢ·(10−i) ≡ 0 (mod 11)`, where only the final digit
+/// may be `X` (value 10). Any other non-digit fails.
+fn isbn10_checksum_ok(cleaned: &[char]) -> bool {
+    let mut sum = 0u32;
+    for (i, c) in cleaned.iter().enumerate() {
+        let digit = if i == 9 && c.eq_ignore_ascii_case(&'x') {
+            10
+        } else {
+            match c.to_digit(10) {
+                Some(d) => d,
+                None => return false,
+            }
+        };
+        sum += digit * (10 - i as u32);
+    }
+    sum.is_multiple_of(11)
+}
+
+/// ISBN-13 check: alternating 1/3 weights sum to a multiple of 10.
+fn isbn13_checksum_ok(cleaned: &[char]) -> bool {
+    let mut sum = 0u32;
+    for (i, c) in cleaned.iter().enumerate() {
+        let Some(digit) = c.to_digit(10) else {
+            return false;
+        };
+        sum += if i % 2 == 0 { digit } else { digit * 3 };
+    }
+    sum.is_multiple_of(10)
 }
 
 #[cfg(test)]

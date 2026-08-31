@@ -191,7 +191,7 @@ fn SpBookRow(book: PaletteBookHit, selected: bool, on_click: EventHandler<MouseE
         }
     };
 
-    let year = book.year.as_deref().unwrap_or("");
+    let year = palette_row_year(book.year.as_deref());
     let formats: String = book.formats.join(" · ");
 
     rsx! {
@@ -332,6 +332,15 @@ fn SpGenreRow(
 
 // ── Helpers ───────────────────────────────────────────────────────
 
+/// The year shown in a palette book row, gated through the shared sentinel
+/// rule so Calibre's `0101-01-01` placeholder (which `PaletteBookHit.year`
+/// carries verbatim as `"0101"`) renders nothing — matching the library table
+/// and the detail page, which already suppress it (#2348).
+fn palette_row_year(year: Option<&str>) -> String {
+    year.and_then(crate::format::format_year)
+        .unwrap_or_default()
+}
+
 /// Build the small-thumbnail URL for a palette book row.
 ///
 /// Extracted so the URL shape — `/api/thumbs/{uuid}/sm` — has a test that
@@ -368,5 +377,19 @@ mod tests {
     fn build_flat_items_is_empty_when_results_are_none() {
         let items = build_flat_items(&None);
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn palette_row_year_suppresses_the_calibre_sentinel() {
+        // `year` arrives pre-extracted as the four-digit string, so the
+        // sentinel reaches the palette as "0101" rather than a full date.
+        assert_eq!(palette_row_year(Some("0101")), "");
+        assert_eq!(palette_row_year(Some("0101-01-01T00:00:00+00:00")), "");
+        assert_eq!(palette_row_year(None), "");
+    }
+
+    #[test]
+    fn palette_row_year_keeps_a_real_year() {
+        assert_eq!(palette_row_year(Some("2016")), "2016");
     }
 }

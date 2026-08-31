@@ -16,6 +16,7 @@ license.workspace = true
 anyhow = "1"
 # Official Rust MCP SDK: stdio transport + tool router macros. `server` and
 # `macros` are default features; `transport-io` adds the stdio server side.
+base64 = "0.22"
 rmcp = { version = "3.1", features = ["transport-io"] }
 # `query` on top of the workspace baseline: the read tools encode their
 # parameters as query strings.

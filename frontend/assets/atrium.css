@@ -16,6 +16,14 @@
  */
 
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400..700;1,400..700&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
+/* Reader Aa-panel typeface chips preview their prose faces (Editorial =
+   Instrument Serif, Classic = EB Garamond), which the app-wide import above no
+   longer carries after the #2162 type slimming — so both chips fell back to a
+   generic serif and looked identical (#2163). Loaded here for the parent
+   document only, subset to the chips' "Aa" specimen glyphs so the cost is two
+   glyphs, not two families. The reader body itself gets these faces from
+   epub-reader-glue.js's own iframe import, which this does not touch. */
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond&family=Instrument+Serif&text=Aa&display=swap');
 
 /* ── Tokens · dark (default) ─────────────────────────────────────── */
 :root {
@@ -5264,6 +5272,113 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .kobo-warning-title { font-weight: 600; color: #f87171; }
 .kobo-warning code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.8rem; }
 
+/* ── Settings · API Tokens redesign (.tkx-*) ────────────────────────
+   Ported from the Claude Design "Omnibus" project (tokens-redux.css).
+   The design's page scaffold (.tkx-root/.tkx-stage/.tkx-column) is
+   replaced by .tkx-tokens — the settings shell already provides the
+   page chrome. Design variable names map 1:1 onto the Atrium tokens
+   above (--accent/--accent-soft/--accent-ink, --bg-0..3, --ink-0..3,
+   --line/--line-2, --ok/--warn/--bad, --serif/--mono, --r-lg). */
+.tkx-tokens { display: flex; flex-direction: column; gap: 16px; }
+.tkx-tokens .btn { white-space: nowrap; }
+
+/* head + the capability line, so the blast radius is stated up front */
+.tkx-head { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
+/* Serif display face at page-title scale — deliberate, this h2 is the
+   section's title, not a card heading. */
+.tkx-title { font-family: var(--serif); font-size: 30px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.tkx-lede { margin: 8px 0 0; font-size: 13.5px; line-height: 1.6; color: var(--ink-2); max-width: 62ch; }
+.tkx-count { margin-left: auto; font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); white-space: nowrap; }
+.tkx-scope { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg-2); }
+.tkx-scope-who { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-1); }
+.tkx-scope-avatar { width: 22px; height: 22px; border-radius: 999px; background: var(--bg-3); display: grid; place-items: center; font-family: var(--mono); font-size: 9px; font-weight: 700; color: var(--ink-1); }
+.tkx-scope-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-left: auto; }
+.tkx-scope-chip { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+
+/* create row */
+.tkx-create { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.tkx-create .settings-field { flex: 1; min-width: 240px; }
+.tkx-create-hint { margin: 8px 0 0; font-size: 11.5px; color: var(--ink-3); }
+
+/* the one-time secret */
+.tkx-secret { border: 1px solid color-mix(in oklch, var(--accent) 55%, transparent); background: color-mix(in oklch, var(--accent) 8%, var(--bg-1)); border-radius: var(--r-lg); padding: 20px 22px; }
+.tkx-secret-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.tkx-secret-head h3 { margin: 0; font-size: 16px; font-weight: 600; color: var(--ink-0); }
+.tkx-secret-once { font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+.tkx-secret-sub { margin: 0 0 14px; font-size: 12.5px; color: var(--ink-2); }
+.tkx-copyrow { display: flex; gap: 8px; align-items: stretch; }
+/* user-select: all — one click selects the whole credential, the field
+   is a hand-off surface, not prose. */
+.tkx-copyfield { flex: 1; min-width: 0; display: flex; align-items: center; padding: 10px 14px; border: 1px dashed var(--line-2); border-radius: 10px; background: color-mix(in oklch, var(--bg-2) 70%, transparent); font-family: var(--mono); font-size: 12.5px; color: var(--ink-1); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: default; user-select: all; }
+.tkx-secret-next { margin-top: 16px; padding-top: 14px; border-top: 1px solid color-mix(in oklch, var(--accent) 22%, transparent); }
+.tkx-secret-next .label { margin-bottom: 8px; display: block; }
+.tkx-cmd { display: flex; gap: 8px; align-items: flex-start; }
+.tkx-cmd code { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg-2); font-family: var(--mono); font-size: 11.5px; line-height: 1.6; color: var(--ink-1); overflow-wrap: anywhere; }
+.tkx-secret-done { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.tkx-secret-done .mono { font-size: 10.5px; color: var(--ink-3); }
+
+/* token list */
+.tkx-list-head { display: grid; grid-template-columns: minmax(0, 1.4fr) 104px 132px 132px 150px; gap: 12px; padding: 0 14px 8px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.tkx-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.tkx-row { display: grid; grid-template-columns: minmax(0, 1.4fr) 104px 132px 132px 150px; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg-2); }
+.tkx-row:hover { border-color: var(--line); }
+.tkx-row-name { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tkx-row-title { font-size: 14px; font-weight: 500; color: var(--ink-0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tkx-row-id { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.tkx-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line-2); font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); white-space: nowrap; justify-self: start; }
+.tkx-pill::before { content: ''; width: 5px; height: 5px; border-radius: 999px; background: currentColor; }
+.tkx-pill-active { color: var(--ok); border-color: color-mix(in oklch, var(--ok) 35%, transparent); }
+.tkx-pill-idle { color: var(--warn); border-color: color-mix(in oklch, var(--warn) 35%, transparent); }
+.tkx-pill-unused { color: var(--ink-3); }
+.tkx-cell { font-size: 12.5px; color: var(--ink-1); min-width: 0; }
+.tkx-cell .mono { display: block; font-size: 10px; color: var(--ink-3); }
+.tkx-row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* revoke confirmation / rename form, in place of the row */
+.tkx-row-confirm { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border: 1px solid color-mix(in oklch, var(--bad) 45%, transparent); border-radius: 10px; background: color-mix(in oklch, var(--bad) 8%, var(--bg-2)); }
+.tkx-confirm-text { flex: 1; min-width: 220px; font-size: 12.5px; color: var(--ink-1); }
+.tkx-confirm-text b { color: var(--ink-0); }
+/* Rename reuses the confirm row's shape but not its hazard tint — editing a
+   name is benign, so the border shifts to the accent family. */
+.tkx-row-edit { border-color: color-mix(in oklch, var(--accent) 40%, transparent); background: color-mix(in oklch, var(--accent) 6%, var(--bg-2)); }
+.tkx-rename-form { flex: 1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tkx-rename-form input { flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg-1); color: var(--ink-0); font-size: 13px; }
+.tkx-rename-form input:focus { outline: none; border-color: var(--accent); }
+.btn.bad { color: var(--bad); border-color: color-mix(in oklch, var(--bad) 45%, transparent); }
+.btn.bad:hover { background: color-mix(in oklch, var(--bad) 12%, transparent); }
+
+/* empty state */
+.tkx-empty { display: flex; flex-direction: column; gap: 16px; }
+.tkx-empty-title { margin: 0; font-size: 16px; }
+.tkx-steps { list-style: none; counter-reset: tkx; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.tkx-steps li { counter-increment: tkx; display: grid; grid-template-columns: 22px 1fr; gap: 12px; align-items: baseline; font-size: 13px; color: var(--ink-1); line-height: 1.55; }
+.tkx-steps li::before { content: counter(tkx); font-family: var(--mono); font-size: 10px; color: var(--accent); border: 1px solid color-mix(in oklch, var(--accent) 40%, transparent); border-radius: 999px; width: 22px; height: 22px; display: grid; place-items: center; }
+.tkx-steps li > span { min-width: 0; }
+.tkx-steps code { display: inline; font-family: var(--mono); font-size: 11.5px; color: var(--ink-1); overflow-wrap: anywhere; }
+
+/* MCP endpoint panel */
+.tkx-mcp { display: flex; flex-direction: column; gap: 12px; }
+.tkx-mcp-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tkx-mcp-head h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink-0); }
+.tkx-admin-tag { font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 999px; padding: 2px 8px; }
+.tkx-switch { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.tkx-switch-state { font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); }
+/* The track is a real <button role="switch">, so zero out the .btn-less
+   button UA styles it would otherwise carry. */
+.tkx-track { width: 40px; height: 22px; border-radius: 999px; background: var(--bg-3); border: 1px solid var(--line-2); position: relative; cursor: pointer; flex: none; padding: 0; }
+.tkx-track.on { background: color-mix(in oklch, var(--accent) 45%, transparent); border-color: transparent; }
+.tkx-track:disabled { cursor: default; opacity: 0.6; }
+.tkx-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 999px; background: var(--ink-1); transition: left .15s; }
+.tkx-track.on .tkx-knob { left: 20px; background: var(--accent-ink); }
+.tkx-mcp-note { margin: 0; font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
+
+/* Below the grid's comfortable width, rows fall back to a stacked card. */
+@media (max-width: 860px) {
+  .tkx-list-head { display: none; }
+  .tkx-row { grid-template-columns: 1fr; gap: 8px; }
+  .tkx-pill, .tkx-row-actions { justify-self: start; justify-content: flex-start; }
+}
+
 /* F5.1 per-library metadata-source precedence editor (#972). */
 .metadata-precedence-list {
   display: flex;
@@ -5484,6 +5599,19 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 
 .ebook-col-cover { width: 40px; }
+/* The row's "Open details" affordance (#2350): wraps the cover so a click or
+   keyboard activation navigates, with its own focus ring. `line-height:0`
+   keeps the anchor from adding inline space around the thumb. */
+.ebook-cover-link {
+  display: block;
+  line-height: 0;
+  color: inherit;
+  border-radius: 2px;
+}
+.ebook-cover-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .ebook-thumb {
   width: 26px;
   height: 38px;
@@ -10536,6 +10664,98 @@ html {
 .cleanup-kind-count { font-size: 12px; color: var(--ink-1); }
 .cleanup-actions { display: flex; gap: 10px; margin-top: 14px; }
 
+/* ── Library cleanup review, redesigned (.crx-*) ─────────────────────────
+   The card is one idea: what was scanned, what would replace it, and a field
+   the reviewer can type over. The .mes-* edition-picker anatomy above is
+   reused verbatim where this surface borrows it. */
+.crx-root { width: 100%; padding-bottom: 24px; }
+.crx-crumb { margin-bottom: 14px; }
+.crx-column { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.crx-column:focus { outline: none; }
+.crx-column:focus-visible { outline: 2px solid var(--accent); outline-offset: 6px; border-radius: var(--r-lg); }
+
+.crx-head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.crx-head-title { font-family: var(--serif); font-size: 30px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.crx-progress { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.crx-progress-text { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.crx-dots { display: flex; gap: 3px; }
+.crx-dot { width: 5px; height: 5px; border-radius: 999px; background: var(--bg-3); }
+.crx-dot.done { background: var(--ink-3); }
+.crx-dot.on { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 22%, transparent); }
+
+.crx-kindline { display: flex; flex-wrap: wrap; gap: 6px; }
+.crx-kindchip {
+  display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+  padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line-2);
+  background: var(--bg-1); font-size: 12.5px; color: var(--ink-2); cursor: pointer;
+  text-decoration: none;
+}
+.crx-kindchip:hover { color: var(--ink-0); border-color: var(--line); }
+.crx-kindchip.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
+.crx-kind-count { font-family: var(--mono); font-size: 10px; opacity: .75; }
+
+.crx-card { padding: 22px 24px; }
+/* Scoped under .crx-card so these beat `.atrium p { margin: 0 }`, which is
+   one class + one type and would otherwise win on specificity and flatten
+   the card's vertical rhythm. */
+.crx-card .crx-action-line { font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-2); margin: 0 0 20px; }
+.crx-detected { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; color: var(--ink-3); letter-spacing: .06em; }
+
+.crx-proposal { display: grid; grid-template-columns: 1fr 34px 1fr; gap: 14px; align-items: start; }
+/* A delete has no proposed side, so its scanned value spans the card. */
+.crx-proposal-solo { grid-template-columns: 1fr; }
+.crx-side-label { font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; display: flex; align-items: baseline; gap: 8px; }
+.crx-current { padding: 11px 14px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg-2); color: var(--ink-2); font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
+.crx-current.crx-strike { text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--bad) 70%, transparent); }
+.crx-arrow { display: grid; place-items: center; color: var(--ink-3); font-size: 16px; padding-top: 38px; }
+.crx-proposed-wrap { position: relative; }
+.crx-proposed {
+  width: 100%; padding: 11px 14px; border-radius: 10px;
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, transparent);
+  background: color-mix(in oklch, var(--accent) 7%, var(--bg-1));
+  color: var(--ink-0); font-family: var(--serif); font-size: 19px; font-weight: 600;
+  line-height: 1.35; outline: none; overflow-wrap: anywhere;
+}
+.crx-proposed:focus { border-color: var(--accent); }
+/* The non-editable arm: same box, no caret affordance, so a reviewer doesn't
+   keep clicking a field this kind can't yet carry an edit for. */
+.crx-proposed-static { background: var(--bg-2); border-color: var(--line-2); }
+.crx-edited-tag { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+.crx-card .crx-hint { margin: 14px 0 0; font-size: 11.5px; color: var(--ink-3); }
+.crx-hint kbd { font-family: var(--mono); font-size: 10.5px; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 4px; padding: 1px 5px; color: var(--ink-2); }
+
+/* Merge sources and split atoms: the scanned side of a card can hold several
+   values, so both are lists rather than a single box. */
+.crx-merge-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.crx-merge-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg-2); font-size: 13px; color: var(--ink-1); }
+.crx-merge-name { flex: 1; min-width: 0; color: var(--ink-0); overflow-wrap: anywhere; }
+.crx-merge-name.crx-strike { text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--bad) 70%, transparent); }
+.crx-parts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 9px; border-radius: 10px; border: 1px solid color-mix(in oklch, var(--accent) 40%, transparent); background: color-mix(in oklch, var(--accent) 5%, var(--bg-1)); }
+.crx-part { white-space: nowrap; }
+
+.crx-decide {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 14px 24px; border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  background: color-mix(in oklch, var(--bg-1) 92%, transparent);
+}
+.crx-decide .btn { white-space: nowrap; }
+.crx-decide-spacer { margin-left: auto; }
+.crx-decide-note { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+
+.crx-card-done { display: flex; flex-direction: column; gap: 16px; }
+.crx-tally { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; }
+.crx-tally li { display: flex; align-items: baseline; gap: 10px; padding: 8px 12px; border-radius: 9px; background: var(--bg-2); border: 1px solid var(--line-2); }
+.crx-tally-n { font-family: var(--mono); font-size: 15px; color: var(--accent); min-width: 16px; }
+.crx-tally-l { font-size: 12.5px; color: var(--ink-1); }
+
+@media (max-width: 720px) {
+  /* The arrow between the two values only reads as one when they sit side by
+     side; stacked, the order alone carries it. */
+  .crx-proposal { grid-template-columns: 1fr; }
+  .crx-arrow { display: none; }
+  .crx-tally { grid-template-columns: 1fr; }
+}
+
 .cleanup-review { max-width: 560px; }
 /* The review surface is focusable so Y / N / Space reach its keydown handler;
    the focus ring would otherwise frame the whole card on every keypress. */
@@ -11122,13 +11342,30 @@ html {
   font-size: 10.5px; color: var(--ink-3); margin-top: 12px;
   display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
 }
-.bdmq-syncline-warn { color: var(--warn); }
+/* Scoped past `.atrium .mono`, which this line carries for its face and
+   which would otherwise win the colour on specificity alone. */
+.bdmq-syncline.bdmq-syncline-warn { color: var(--warn); }
+/* Reads as a control, not prose: the sync line's affordance is the only way
+   into the alignment modal, so it carries button chrome rather than sitting
+   inline as another run of mono text. */
 .bdmq-synclink {
-  border: 0; background: transparent; padding: 0; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 11px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--bg-2);
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .02em;
-  color: var(--ink-1);
+  color: var(--ink-0); white-space: nowrap;
+  transition: background .15s, border-color .15s, color .15s, transform .12s;
 }
-.bdmq-synclink:hover { color: var(--accent); }
+@media (hover: hover) {
+  .bdmq-synclink:hover {
+    background: var(--bg-3); border-color: var(--accent); color: var(--accent);
+  }
+}
+.bdmq-synclink:active { transform: translateY(1px); }
+.bdmq-synclink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* One neutral pill in every state, including the paused-sync warning: --warn
+   and --accent are all but the same amber here, so a warn-tinted button would
+   read as the hover state rather than as a second colour. */
 .bdmq .bd-sync-panel { margin-top: 0; }
 
 /* Highlights stop: the design's inline text actions under each kept line. */

@@ -60,7 +60,7 @@ pub(super) fn MarqueeStatsStop(
 /// The populated record: stat grid, note line, spark.
 fn render_stats(i: &BookInsights, progress: &MarqueeProgress, audio_only: bool) -> Element {
     let started_short = short_date(i.started_at);
-    let days_in = ((now_unix() - i.started_at) / 86_400).max(0) + 1;
+    let started_sub = days_in_label(now_unix(), i.started_at);
     let avg = duration_label(avg_sit_secs(i));
     let time_label = if audio_only {
         "Time listened"
@@ -72,7 +72,7 @@ fn render_stats(i: &BookInsights, progress: &MarqueeProgress, audio_only: bool) 
     let max = spark.iter().copied().max().unwrap_or(0).max(1);
     rsx! {
         div { class: "bdmq-stats", "data-testid": "bdmq-stats",
-            {stat_cell("Started", &started_short, &format!("{} in", count_label(days_in, "day")))}
+            {stat_cell("Started", &started_short, &started_sub)}
             {stat_cell(time_label, &duration_label(i.seconds_total), &count_label(i.sessions, "session"))}
             {stat_cell("Pickups", &i.sessions.to_string(), &format!("avg sit {avg}"))}
             {stat_cell("Longest sit", &duration_label(i.longest_seconds), &short_date(i.longest_started_at))}
@@ -94,6 +94,21 @@ fn render_stats(i: &BookInsights, progress: &MarqueeProgress, audio_only: bool) 
             span { "minutes \u{b7} by day" }
             span { "today" }
         }
+    }
+}
+
+/// The "Started" tile's sub-label: how long the book has been in progress,
+/// counting *elapsed* days. A book started within the last day reads "today"
+/// rather than "1 day in" — the old inclusive `+ 1` count printed "1 day in"
+/// the moment a book was opened, which reads as an off-by-one (#2357). A full
+/// day or more elapsed reads "N day(s) in". `now` is injected so the label is
+/// testable on a fixed clock.
+fn days_in_label(now: i64, started_at: i64) -> String {
+    let days = ((now - started_at) / 86_400).max(0);
+    if days == 0 {
+        "today".to_string()
+    } else {
+        format!("{} in", count_label(days, "day"))
     }
 }
 
@@ -345,6 +360,18 @@ mod tests {
     fn short_date_formats_utc_month_day() {
         assert_eq!(short_date(1_700_000_000), "Nov 14");
     }
+
+    #[test]
+    fn days_in_label_reads_today_on_the_first_day_then_counts_elapsed_days() {
+        let now = 10 * 86_400;
+        // Same day (started an hour ago) and a future timestamp from clock
+        // skew both read "today" (#2357) — never a countdown, never "1 day in".
+        assert_eq!(days_in_label(now, now - 3_600), "today");
+        assert_eq!(days_in_label(now, now + 100), "today");
+        // A full elapsed day is "1 day in" (singular), more are pluralized.
+        assert_eq!(days_in_label(now, now - 86_400), "1 day in");
+        assert_eq!(days_in_label(now, now - 3 * 86_400), "3 days in");
+    }
 }
 
 // Render-smoke coverage of the stat grid's counted nouns — a separate module
@@ -356,12 +383,11 @@ mod render_tests {
     use crate::test_support::render;
 
     // Regression for issue #2250: a count of one renders a singular noun.
-    // `days_in` counts inclusively from `started_at`, so a book started this
-    // second is on day one.
+    // One full elapsed day reads "1 day in" (singular), never "1 days in".
     #[test]
     fn stat_grid_renders_singular_nouns_for_a_count_of_one() {
         let mut i = insights(3_600, 1, 3_600, 3_600);
-        i.started_at = now_unix();
+        i.started_at = now_unix() - 86_400;
         let html = render(render_stats(&i, &progress_at(50), false));
         assert!(html.contains("1 day in"), "{html}");
         assert!(html.contains("1 session"), "{html}");
@@ -374,7 +400,20 @@ mod render_tests {
         let mut i = insights(3_600, 4, 3_600, 3_600);
         i.started_at = now_unix() - 3 * 86_400;
         let html = render(render_stats(&i, &progress_at(50), false));
-        assert!(html.contains("4 days in"), "{html}");
+        assert!(html.contains("3 days in"), "{html}");
         assert!(html.contains("4 sessions"), "{html}");
+    }
+
+    // #2357: the Started sub-label reads "today", not the old "1 day in". The
+    // spark axis also carries a "today" tick, so a book started today makes it
+    // the second occurrence — one alone would mean the Started cell said
+    // something else.
+    #[test]
+    fn stat_grid_reads_today_on_the_start_day() {
+        let mut i = insights(3_600, 1, 3_600, 3_600);
+        i.started_at = now_unix();
+        let html = render(render_stats(&i, &progress_at(50), false));
+        assert_eq!(html.matches("today").count(), 2, "{html}");
+        assert!(!html.contains("day in"), "{html}");
     }
 }

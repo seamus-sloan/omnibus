@@ -4,9 +4,9 @@ use dioxus::prelude::*;
 use dioxus_router::{Routable, Router};
 use omnibus_shared::{CleanupAction, CleanupKind, SuggestionCard};
 
-use super::{
-    action_sentence, kind_title, review_key_action, secondary_label, ReviewKey, SuggestionCardView,
-};
+use super::card::{action_sentence, initial_value, is_editable, SuggestionCardView};
+use super::frame::{kind_label, kind_title, CleanupProgress};
+use super::{edited_value, review_key_action, ReviewKey};
 use crate::test_support::{render, render_in_vdom};
 
 fn card(kind: CleanupKind, action: CleanupAction) -> SuggestionCard {
@@ -17,10 +17,36 @@ fn card(kind: CleanupKind, action: CleanupAction) -> SuggestionCard {
         decision: omnibus_shared::Decision::Pending,
         primary_name: "Mary Shelley".into(),
         secondary_name: Some("Shelley, Mary W.".into()),
+        source_names: vec!["Shelley, Mary W.".into()],
+        proposed_parts: Vec::new(),
         book_count: 3,
         photo_url: None,
         created_at: 0,
     }
+}
+
+fn rename_card() -> SuggestionCard {
+    SuggestionCard {
+        primary_name: "Shelley, Mary - Frankenstein".into(),
+        secondary_name: Some("Frankenstein".into()),
+        book_count: 1,
+        ..card(CleanupKind::BookTitle, CleanupAction::Rename)
+    }
+}
+
+/// Owns the signals the card view takes as props, seeded the way the page
+/// seeds them, so a test can render one card by value.
+#[component]
+fn CardHarness(card: SuggestionCard) -> Element {
+    let draft = use_signal(|| initial_value(&card));
+    let typing = use_signal(|| false);
+    rsx! {
+        SuggestionCardView { card, draft, typing, on_commit: move |()| {} }
+    }
+}
+
+fn render_card(card: SuggestionCard) -> String {
+    render(rsx! { CardHarness { card } })
 }
 
 // The page calls `use_navigator`-free hooks but mounts inside the router in
@@ -76,6 +102,14 @@ fn kind_title_names_each_kind_and_falls_back_for_an_unknown_slug() {
 }
 
 #[test]
+fn kind_label_names_every_kind_chip() {
+    assert_eq!(kind_label(CleanupKind::Author), "Authors");
+    assert_eq!(kind_label(CleanupKind::Series), "Series");
+    assert_eq!(kind_label(CleanupKind::Tag), "Tags");
+    assert_eq!(kind_label(CleanupKind::BookTitle), "Book titles");
+}
+
+#[test]
 fn action_sentence_describes_each_supported_kind_and_action_pair() {
     assert_eq!(
         action_sentence(CleanupKind::Author, CleanupAction::Merge),
@@ -97,16 +131,50 @@ fn action_sentence_describes_each_supported_kind_and_action_pair() {
 }
 
 #[test]
-fn secondary_label_reads_proposed_for_a_rename_and_merging_away_otherwise() {
-    assert_eq!(secondary_label(CleanupAction::Rename), "Proposed");
-    assert_eq!(secondary_label(CleanupAction::Merge), "Merging away");
+fn is_editable_is_true_only_for_a_book_title_rename() {
+    // The apply path is what decides this: only `apply_book_title_override`
+    // takes an arbitrary value, so only that card may offer an edit.
+    assert!(is_editable(&rename_card()));
+    assert!(!is_editable(&card(
+        CleanupKind::Author,
+        CleanupAction::Merge
+    )));
+    assert!(!is_editable(&card(CleanupKind::Tag, CleanupAction::Split)));
 }
 
 #[test]
-fn suggestion_card_view_renders_the_names_action_and_book_count() {
-    let html = render(rsx! {
-        SuggestionCardView { card: card(CleanupKind::Author, CleanupAction::Merge) }
-    });
+fn initial_value_is_the_proposal_for_a_rename_and_the_survivor_otherwise() {
+    assert_eq!(initial_value(&rename_card()), "Frankenstein");
+    assert_eq!(
+        initial_value(&card(CleanupKind::Author, CleanupAction::Merge)),
+        "Mary Shelley"
+    );
+}
+
+#[test]
+fn edited_value_is_none_when_the_draft_still_reads_as_detected() {
+    assert_eq!(edited_value(&rename_card(), "Frankenstein"), None);
+}
+
+#[test]
+fn edited_value_carries_the_reviewers_wording_when_they_typed_over_it() {
+    assert_eq!(
+        edited_value(&rename_card(), "Frankenstein; or, The Modern Prometheus"),
+        Some("Frankenstein; or, The Modern Prometheus".to_string())
+    );
+}
+
+#[test]
+fn edited_value_stays_none_for_a_kind_whose_apply_path_cannot_carry_one() {
+    // Sending it anyway would be refused by the db layer; not sending it is
+    // what keeps the button honest about what accepting will write.
+    let merge = card(CleanupKind::Author, CleanupAction::Merge);
+    assert_eq!(edited_value(&merge, "Someone Else"), None);
+}
+
+#[test]
+fn suggestion_card_view_renders_the_action_names_and_book_count() {
+    let html = render_card(card(CleanupKind::Author, CleanupAction::Merge));
     assert!(html.contains("Merge these authors into one."));
     assert!(html.contains("Mary Shelley"));
     assert!(html.contains("Shelley, Mary W."));
@@ -118,20 +186,81 @@ fn suggestion_card_view_singularizes_a_one_book_suggestion() {
     let mut only_one = card(CleanupKind::Tag, CleanupAction::Split);
     only_one.book_count = 1;
     only_one.secondary_name = None;
-    let html = render(rsx! { SuggestionCardView { card: only_one } });
+    let html = render_card(only_one);
     assert!(html.contains("1 book affected"));
-    assert!(!html.contains("Merging away"));
 }
 
 #[test]
-fn cleanup_review_page_renders_the_loading_state_before_the_queue_arrives() {
-    // SSR / first paint: effects never run, so the page must render the
-    // loading state — the hydration-parity contract of rule 07.
+fn suggestion_card_view_offers_an_input_only_where_the_value_is_editable() {
+    let editable = render_card(rename_card());
+    assert!(editable.contains("cleanup-proposed-input"));
+    let fixed = render_card(card(CleanupKind::Author, CleanupAction::Merge));
+    assert!(!fixed.contains("cleanup-proposed-input"));
+    assert!(fixed.contains("crx-proposed-static"));
+}
+
+#[test]
+fn cleanup_progress_marks_passed_current_and_upcoming_dots() {
+    let html = render(rsx! { CleanupProgress { index: 1usize, total: 3usize } });
+    assert!(html.contains("2 of 3"));
+    assert!(html.contains("crx-dot done"));
+    assert!(html.contains("crx-dot on"));
+}
+
+#[test]
+fn cleanup_review_page_renders_its_frame_before_the_queue_arrives() {
+    // SSR / first paint: effects never run and `CurrentUser` has not resolved,
+    // so only the chrome outside the admin gate is on the page. It has to be
+    // *there* — rule 07's parity contract is that the first client render
+    // produces this same markup to hydrate onto.
     let html = render_in_vdom(|| {
         rsx! {
             Router::<ReviewRoute> {}
         }
     });
-    assert!(html.contains("Review authors"));
-    assert!(html.contains("Accept (Y), reject (N), or skip (Space) each suggestion."));
+    assert!(html.contains("Review authors"), "the heading");
+    assert!(html.contains("cleanup-kindline"), "the kind chips");
+    assert!(html.contains("cleanup-review"), "the focusable column");
+    // The queue body is gated on an admin the first paint doesn't know about.
+    assert!(html.contains("cleanup-review-forbidden"));
+}
+
+#[test]
+fn suggestion_card_view_names_every_record_a_merge_folds_away() {
+    let mut three_way = card(CleanupKind::Author, CleanupAction::Merge);
+    three_way.secondary_name = None;
+    three_way.source_names = vec!["Shelley, Mary W.".into(), "M. Shelley".into()];
+    let html = render_card(three_way);
+    assert!(html.contains("Shelley, Mary W."));
+    assert!(html.contains("M. Shelley"));
+}
+
+#[test]
+fn suggestion_card_view_shows_the_atoms_a_split_would_write() {
+    // Not the scanned tag twice: the proposed side has to be the parts.
+    let mut split = card(CleanupKind::Tag, CleanupAction::Split);
+    split.primary_name = "Fiction; Poland".into();
+    split.secondary_name = None;
+    split.source_names = Vec::new();
+    split.proposed_parts = vec!["Fiction".into(), "Poland".into()];
+    let html = render_card(split);
+    assert!(html.contains("crx-part"));
+    assert!(html.contains(">Fiction<"));
+    assert!(html.contains(">Poland<"));
+}
+
+#[test]
+fn suggestion_card_view_gives_a_delete_no_proposed_side() {
+    // Nothing replaces a deleted record, so the card must not show its name
+    // under a second label as though something did.
+    let mut del = card(CleanupKind::Author, CleanupAction::Delete);
+    del.primary_name = "calibre (0.7.23)".into();
+    del.secondary_name = None;
+    del.source_names = Vec::new();
+    let html = render_card(del);
+    assert!(html.contains("crx-proposal-solo"));
+    assert!(!html.contains("crx-arrow"));
+    assert!(!html.contains("cleanup-card-proposed"));
+    assert_eq!(html.matches("calibre (0.7.23)").count(), 1);
+    assert!(html.contains("accepting removes the record"));
 }

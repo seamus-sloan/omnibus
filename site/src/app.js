@@ -1,6 +1,6 @@
 /* Omnibus site — panel deck.
  *
- * Twelve full-viewport panels on one translated track. Wheel, keys and touch
+ * Thirteen full-viewport panels on one translated track. Wheel, keys and touch
  * all funnel through one gate so a trackpad's inertia can't skip three panels
  * at once. Nothing here is required to read the page: the document ships with
  * `body.flow` set, so with JS off every panel stays in the DOM as an ordinary
@@ -117,12 +117,22 @@
     render();
   }
 
+  /* The address bar names the panel you are on, so any panel can be linked
+     to. replaceState, not a hash assignment: assigning location.hash pushes a
+     history entry per panel, which turns Back into a walk through the deck. */
+  var stamped = '';
+  function stamp(id) {
+    if (id === stamped) return;
+    stamped = id;
+    if (history.replaceState) history.replaceState(null, '', '#' + id);
+  }
+
   function render() {
     track.style.transform = 'translate3d(0,' + (-i * 100) + 'vh,0)';
     panes.forEach(function (p, k) { p.classList.toggle('on', k === i); });
     railBtns.forEach(function (b, k) { b.classList.toggle('on', k === i); });
     cue.classList.toggle('hide', i !== 0);
-    if (history.replaceState) history.replaceState(null, '', '#' + panes[i].id);
+    stamp(panes[i].id);
   }
 
   function gate(d) {
@@ -170,6 +180,19 @@
   if (hash) {
     var found = panes.findIndex(function (p) { return p.id === hash; });
     if (found > 0) i = found;
+  }
+
+  /* ── flow mode: keep the hash on the section being read ─────────
+     The deck stamps the hash from render(); flow mode never calls it, so on a
+     phone the URL froze at whatever was loaded and no section could be linked
+     to. One observer, watching a band across the middle of the viewport, so
+     the section that owns the screen is the one that gets named. */
+  if (window.IntersectionObserver) {
+    var seen = new IntersectionObserver(function (entries) {
+      if (deck) return;
+      entries.forEach(function (e) { if (e.isIntersecting) stamp(e.target.id); });
+    }, { rootMargin: '-45% 0px -45% 0px' });
+    panes.forEach(function (p) { seen.observe(p); });
   }
 
   if (deckOK.addEventListener) deckOK.addEventListener('change', setMode);

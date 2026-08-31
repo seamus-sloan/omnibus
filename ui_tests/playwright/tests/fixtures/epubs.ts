@@ -525,6 +525,24 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     hasCover: true,
   },
 
+  // Reserved for the CSP blob-stylesheet regression in reader.spec.ts (issue
+  // #2213). Its `publisher.css` references an embedded asset via a relative
+  // `url()`, so epub.js mints a `blob:` stylesheet on render — the reader's
+  // only fixture that exercises the `style-src blob:` CSP path. No other spec
+  // may open it in the reader. "Dorothy Vaughan" is unique across ALL fixtures
+  // (ebook + audiobook) — shelves.spec.ts asserts exact author-scoped counts.
+  {
+    slug: "standalone-reef",
+    filename: "standalone-reef.epub",
+    title: "Reef of Cascades",
+    authors: ["Dorothy Vaughan"],
+    publisher: "Omnibus Test Press",
+    published: "1962-02-20",
+    tags: [],
+    language: "en",
+    hasCover: true,
+  },
+
   // The two CBZ fixtures (tools/make_cbz.ts) are reserved for the
   // comic-pager spec (comic_reader.spec.ts): `aurora-station-01` receives
   // that spec's progress and read-status writes (the pager auto-marks

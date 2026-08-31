@@ -169,8 +169,15 @@ pub(super) struct CoverFromUrlBody {
 ///
 /// **Rate-limited** (mounted in `upload_router`): it carries no upload body,
 /// which is what keeps the other cover routes outside that limiter, but it is
-/// the only override route that spends an *outbound* fetch, and that is the
+/// the only override route that spends *outbound* fetches, and that is the
 /// cost worth bounding per IP.
+///
+/// The fetch goes through [`db::fetch_provider_cover`] rather than the bare
+/// remote fetch, so a Google Books cover is stored at full size instead of the
+/// 128px thumbnail its `imageLinks` publishes. That costs a second outbound request on this route
+/// alone, and only when the submitted URL is a Google Books one — the upgrade
+/// is opportunistic and falls back to the thumbnail whenever the larger
+/// rendition cannot be shown to be the same picture.
 ///
 /// After the fetch it is the multipart upload's tail unchanged —
 /// `persist_cover`, `has_cover_override`, thumbnail invalidation — so
@@ -214,23 +221,22 @@ pub(super) async fn post_ebook_cover_from_url(
     };
 
     let config = cover_fetch_config(&state);
-    let (advertised_mime, bytes) =
-        match db::author_photos::fetch_remote_image_with(url, &config).await {
-            Ok(pair) => pair,
-            Err(db::author_photos::FetchRemoteImageError::Http(e)) => {
-                // A transport failure against the *provider* is not this server
-                // erroring; 502 says whose fault it was.
-                tracing::warn!(error = ?e, "provider cover fetch failed");
-                return (
-                    axum::http::StatusCode::BAD_GATEWAY,
-                    "could not fetch the cover from that source",
-                )
-                    .into_response();
-            }
-            // Everything else is a refusal we made: bad scheme, host off the
-            // allowlist, blocked address, non-image content-type, too large.
-            Err(e) => return (axum::http::StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-        };
+    let (advertised_mime, bytes) = match db::fetch_provider_cover(url, &config).await {
+        Ok(pair) => pair,
+        Err(db::author_photos::FetchRemoteImageError::Http(e)) => {
+            // A transport failure against the *provider* is not this server
+            // erroring; 502 says whose fault it was.
+            tracing::warn!(error = ?e, "provider cover fetch failed");
+            return (
+                axum::http::StatusCode::BAD_GATEWAY,
+                "could not fetch the cover from that source",
+            )
+                .into_response();
+        }
+        // Everything else is a refusal we made: bad scheme, host off the
+        // allowlist, blocked address, non-image content-type, too large.
+        Err(e) => return (axum::http::StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    };
 
     // Magic bytes, not the remote Content-Type: a provider serving an HTML
     // error page under `image/jpeg` must not be written as `override-<uuid>.jpg`

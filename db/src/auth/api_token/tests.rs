@@ -217,3 +217,72 @@ async fn resolve_token_still_resolves_plain_session_tokens() {
     assert_eq!(session.id, ns.session.id);
     assert_eq!(session.kind, SessionKind::Bearer);
 }
+
+#[tokio::test]
+async fn create_api_token_records_last_four_chars_as_suffix() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let nt = create_api_token(&p, u.id, "mcp").await.unwrap();
+    let expected = &nt.raw_token[nt.raw_token.len() - 4..];
+    assert_eq!(nt.token.suffix.as_deref(), Some(expected));
+
+    let listed = list_api_tokens_for_user(&p, u.id).await.unwrap();
+    assert_eq!(listed[0].suffix.as_deref(), Some(expected));
+}
+
+#[tokio::test]
+async fn list_api_tokens_for_user_surfaces_no_suffix_on_legacy_rows() {
+    // A pre-0091 row has NULL suffix; the listing must carry `None` rather
+    // than inventing one.
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let hash = crate::auth::hash_token("legacy-raw");
+    sqlx::query("INSERT INTO api_tokens (token_hash, user_id, name) VALUES (?, ?, 'legacy')")
+        .bind(&hash)
+        .bind(u.id)
+        .execute(&p)
+        .await
+        .unwrap();
+    let listed = list_api_tokens_for_user(&p, u.id).await.unwrap();
+    assert_eq!(listed[0].suffix, None);
+}
+
+#[tokio::test]
+async fn rename_api_token_for_user_updates_name() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let nt = create_api_token(&p, u.id, "old name").await.unwrap();
+    rename_api_token_for_user(&p, u.id, nt.token.id, "  new name  ")
+        .await
+        .unwrap();
+    let listed = list_api_tokens_for_user(&p, u.id).await.unwrap();
+    assert_eq!(listed[0].name, "new name");
+}
+
+#[tokio::test]
+async fn rename_api_token_for_user_rejects_invalid_name() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let nt = create_api_token(&p, u.id, "mcp").await.unwrap();
+    let err = rename_api_token_for_user(&p, u.id, nt.token.id, "   ")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::Validation(_)));
+}
+
+#[tokio::test]
+async fn rename_api_token_for_user_reports_not_found_for_another_users_token() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let other = second_user(&p, "bob").await;
+    let nt = create_api_token(&p, u.id, "mcp").await.unwrap();
+    let err = rename_api_token_for_user(&p, other, nt.token.id, "stolen")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::ApiTokenNotFound));
+
+    let err = rename_api_token_for_user(&p, u.id, 999_999, "ghost")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::ApiTokenNotFound));
+}

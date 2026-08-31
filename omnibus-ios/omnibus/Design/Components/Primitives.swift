@@ -583,6 +583,11 @@ enum Format {
     /// views — and an untestable duplicate is how the two would drift.
     static func relative(unix: Int64, relativeTo now: Date = Date()) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(unix))
+        // Non-past deltas — a moments-ago write whose timestamp sits at or just
+        // past `now` from clock skew — read as "just now" rather than the
+        // formatter's countdown ("in 0s"). Mirrors `WidgetLabels.relative`
+        // (#2358); the two are held equal by `WidgetSnapshotTests`.
+        guard date < now else { return "just now" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: now)
