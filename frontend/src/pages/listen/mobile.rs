@@ -297,13 +297,13 @@ fn derive_player_state(
     );
     let current = view.chapters.get(disp_index);
     let chapter_start = current.map(|c| c.start_seconds).unwrap_or(0.0);
-    // Every displayed time shares one rate-adjusted wall-clock basis — a 1x
-    // elapsed or chapter-total label beside a rate-adjusted "left" disagrees
-    // with its own row off 1x (#2108, matching the iOS player). `effective`
-    // and `scrub_max` stay 1x book-time: they're the range input's seek
-    // coordinate, not a readout.
-    let chapter_dur = remaining_at_rate(current.map(|c| c.duration_seconds).unwrap_or(0.0), rate);
-    let within = remaining_at_rate((effective - chapter_start).max(0.0), rate);
+    // Elapsed, chapter-elapsed and chapter-duration are real book-time,
+    // matching the bookmark stamps and the book detail page (#2344). Only the
+    // "left" values (chapter_left, remaining_book) are rate-adjusted wall-clock
+    // estimates. `effective` and `scrub_max` stay book-time: they're the range
+    // input's seek coordinate, not a readout.
+    let chapter_dur = current.map(|c| c.duration_seconds).unwrap_or(0.0);
+    let within = (effective - chapter_start).max(0.0);
     let chapter_left = remaining_at_rate(
         view::remaining_in_chapter(&view.chapters, disp_index, effective),
         rate,
@@ -311,7 +311,7 @@ fn derive_player_state(
 
     PlayerDerived {
         effective,
-        elapsed_book: remaining_at_rate(effective, rate),
+        elapsed_book: effective,
         chapter_no: disp_index + 1,
         chapter_count: view.chapters.len(),
         chapter_title: current.map(|c| c.title.clone()).unwrap_or_default(),
@@ -432,9 +432,9 @@ fn render_player(p: PlayerProps) -> Element {
     let sheet_props = SheetProps {
         uuid: uuid.clone(),
         chapters,
-        // Re-derived at the current rate rather than reused from the view:
-        // the sheet header sits above rate-adjusted row durations (#2246).
-        total_label: format_hm(remaining_at_rate(view.total_duration, rate)),
+        // Real book-time total, matching the sheet's book-time row durations
+        // and the book detail page (#2344).
+        total_label: format_hm(view.total_duration),
         elapsed,
         rate,
         sleep,

@@ -14,9 +14,9 @@ use super::panel_shell::ListenDrawerShell;
 
 /// One chapter row: ordinal/checkmark/play glyph, title, and
 /// duration-or-remaining label. `i` is the chapter's index in the list.
-/// Both time labels are rate-adjusted listening time, the same basis the
-/// transport row reads: a 1x chapter length beside a rate-adjusted total
-/// disagrees with it the moment the speed leaves 1x (#2246).
+/// The duration shows real book-time — matching bookmark stamps and the
+/// book detail page (#2344) — while the current row's "remaining" is a
+/// rate-adjusted estimate of the listening time left.
 fn chapter_row(
     i: usize,
     ch: &ChapterInfo,
@@ -42,7 +42,7 @@ fn chapter_row(
         "chapter-row-upcoming"
     };
 
-    let dur_label = format_hms(remaining_at_rate(ch.duration_seconds, rate));
+    let dur_label = format_hms(ch.duration_seconds);
     let remaining_in_ch = if is_current {
         let r = (ch.start_seconds + ch.duration_seconds - elapsed).max(0.0);
         Some(format!(
@@ -94,8 +94,8 @@ pub(super) fn ChaptersDrawer(
     chapters: Vec<ChapterInfo>,
     current_chapter_index: usize,
     elapsed: f64,
-    /// Current playback rate — every duration in the list divides by it, so
-    /// the drawer and the transport read one clock (#2246).
+    /// Current playback rate — only the current chapter's "remaining" label
+    /// divides by it; chapter durations show real book-time (#2344).
     rate: f64,
     on_seek: EventHandler<f64>,
     on_close: EventHandler<()>,
@@ -178,14 +178,17 @@ mod render_tests {
         assert!(html.contains("30:00"), "{html}");
     }
 
-    // Regression for issue #2246: the drawer's durations rescale with the
-    // speed, so they agree with the transport's rate-adjusted total instead
-    // of summing to a different book length.
+    // Regression for issue #2344: chapter durations show real book-time at any
+    // speed (matching bookmark stamps + the detail page), while only the
+    // current chapter's "remaining" is rate-adjusted.
     #[test]
-    fn chapter_rows_rescale_with_the_playback_rate() {
+    fn chapter_rows_keep_book_time_durations_but_scale_the_remaining() {
         let html = render_in_vdom(at_2x);
+        // The upcoming chapter's 30:00 duration is unchanged from 1x book-time...
+        assert!(html.contains("30:00"), "{html}");
+        // ...while the current chapter's remaining halves at 2x.
         assert!(html.contains("5:00 remaining"), "{html}");
-        assert!(html.contains("15:00"), "{html}");
-        assert!(!html.contains("30:00"), "{html}");
+        // No rate-scaled duration (15:00) appears.
+        assert!(!html.contains("15:00"), "{html}");
     }
 }

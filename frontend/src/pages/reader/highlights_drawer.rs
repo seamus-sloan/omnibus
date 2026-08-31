@@ -183,6 +183,18 @@ fn build_delete_handler(
                     let _ = cfi;
                 }
                 highlights.write().retain(|h| h.id != id);
+                // The deleted row's Delete button had focus; removing it drops
+                // focus to <body>, where the reader's Escape handler (bound on
+                // the tabindexed reader root) no longer receives keydowns, so
+                // Escape stops closing the drawer (#2354). Restore focus to the
+                // drawer's close button — a stable descendant of that root — so
+                // the keyboard path survives and focus lands somewhere sensible.
+                #[cfg(feature = "web")]
+                {
+                    let _ = dioxus::document::eval(
+                        "requestAnimationFrame(() => document.querySelector('[data-testid=\"reader-highlights-drawer\"] .rd-x')?.focus());",
+                    );
+                }
             }
         });
     }

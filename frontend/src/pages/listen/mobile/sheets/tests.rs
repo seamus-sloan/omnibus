@@ -107,11 +107,11 @@ mod render {
         assert!(html.contains("2 \u{00b7} 15m"));
     }
 
-    // Regression for issue #2246: an upcoming row's duration is rate-adjusted
-    // listening time, the same clock the transport reads, rather than a 1x
-    // length that disagrees with the total above it.
+    // Regression for issue #2344: row durations show real book-time and do NOT
+    // rescale with the speed — they match the bookmark stamps and the book
+    // detail page rather than an at-your-pace clock.
     #[test]
-    fn chapters_sheet_rescales_row_durations_with_the_playback_rate() {
+    fn chapters_sheet_shows_book_time_row_durations_regardless_of_rate() {
         fn list_at(rate: f64) -> ChaptersListView {
             ChaptersListView {
                 chapters: vec![
@@ -134,8 +134,11 @@ mod render {
                 ChaptersSheet { list: list_at(2.0), on_seek: move |_| {}, on_close: move |_| {} }
             }
         }
+        // The upcoming "Part One" row's 10:00 book-time duration is identical
+        // at both speeds; the old rate-scaled 5:00 never appears.
         assert!(render_in_vdom(at_1x).contains("10:00"));
-        assert!(render_in_vdom(at_2x).contains("5:00"));
+        assert!(render_in_vdom(at_2x).contains("10:00"));
+        assert!(!render_in_vdom(at_2x).contains("5:00"));
     }
 
     // Simulates the "chapter advanced" event: `super::view::chapter_index_for_elapsed`

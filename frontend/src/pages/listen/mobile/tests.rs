@@ -1,5 +1,6 @@
 //! Tests for the mobile player's per-render display derivation — pins the
-//! scrubber row's one-basis contract at the `derive_player_state` boundary.
+//! scrubber row's book-time position readouts and rate-adjusted "left"
+//! estimates at the `derive_player_state` boundary.
 
 use omnibus_shared::{ChapterInfo, EbookMetadata};
 
@@ -27,10 +28,11 @@ fn two_chapter_view() -> PlayerView {
 }
 
 #[test]
-fn derive_player_state_scales_every_readout_to_the_playback_rate() {
-    // 20 book-minutes into the first chapter at 2x: elapsed 10:00, chapter
-    // 10:00-in / 15:00-total / 5:00-left, book 10:00-left — the row sums on
-    // one wall-clock basis (#2108).
+fn derive_player_state_reads_book_time_and_scales_only_the_time_left() {
+    // Issue #2344: 20 book-minutes into the first of two 30-minute chapters at
+    // 2x. The position readouts (elapsed, chapter-elapsed, chapter-duration)
+    // show real book-time and do NOT change with the rate — they match the
+    // bookmark stamps and the book detail page. Only the "left" values scale.
     let d = derive_player_state(
         &two_chapter_view(),
         1200.0,
@@ -40,15 +42,14 @@ fn derive_player_state_scales_every_readout_to_the_playback_rate() {
         SleepState::Off,
         None,
     );
-    assert!((d.elapsed_book - 600.0).abs() < f64::EPSILON);
-    assert!((d.within - 600.0).abs() < f64::EPSILON);
-    assert!((d.chapter_dur - 900.0).abs() < f64::EPSILON);
+    // Book-time position — identical to the 1x derivation below.
+    assert!((d.elapsed_book - 1200.0).abs() < f64::EPSILON);
+    assert!((d.within - 1200.0).abs() < f64::EPSILON);
+    assert!((d.chapter_dur - 1800.0).abs() < f64::EPSILON);
+    // "Left" estimates are rate-adjusted — halved at 2x.
     assert!((d.chapter_left - 300.0).abs() < f64::EPSILON);
     assert!((d.remaining_book - 1200.0).abs() < f64::EPSILON);
-    assert!((d.within + d.chapter_left - d.chapter_dur).abs() < f64::EPSILON);
-    assert!((d.elapsed_book + d.remaining_book - 1800.0).abs() < f64::EPSILON);
-    // The seek coordinates stay 1x book-time — the range input's value/max,
-    // not readouts.
+    // The seek coordinates stay book-time — the range input's value/max.
     assert!((d.effective - 1200.0).abs() < f64::EPSILON);
     assert!((d.scrub_max - 3600.0).abs() < f64::EPSILON);
 }

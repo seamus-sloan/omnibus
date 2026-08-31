@@ -39,14 +39,17 @@ use tower_http::set_header::SetResponseHeaderLayer;
 ///   `ammonia` sanitizing the primary XSS source (book descriptions), an
 ///   injected script's blast radius stays bounded. Revisit only if Dioxus
 ///   drops its `Function()` use and gains nonce support.
-/// - `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com` —
+/// - `style-src 'self' 'unsafe-inline' blob: https://fonts.googleapis.com` —
 ///   `'unsafe-inline'` because Dioxus emits inline `style=""` attributes;
-///   the Google Fonts host because `atrium.css` `@import`s the Cormorant
-///   Garamond / Instrument Sans / Space Mono stylesheet from it. (The reader
-///   glue loads a second one for the in-iframe reading faces.) Self-hosting
-///   the fonts (a
-///   follow-up tracked in `atrium.css`) would let both the CDN host here
-///   and in `font-src` drop back to `'self'`.
+///   `blob:` because epub.js (`assets/vendor/epub.min.js`) renders a book's
+///   own stylesheets through `URL.createObjectURL`, and without it every
+///   forward page-turn is blocked as a CSP violation (#2213) — the same
+///   reason `img-src` already lists `blob:`; the Google Fonts host because
+///   `atrium.css` `@import`s the Cormorant Garamond / Instrument Sans / Space
+///   Mono stylesheet from it. (The reader glue loads a second one for the
+///   in-iframe reading faces.) Self-hosting the fonts (a follow-up tracked in
+///   `atrium.css`) would let both the CDN host here and in `font-src` drop
+///   back to `'self'`.
 /// - `font-src 'self' data: https://fonts.gstatic.com` — Google serves the
 ///   actual WOFF2 files from `fonts.gstatic.com`; without it the `@import`ed
 ///   stylesheet resolves but the glyphs fall back to system fonts.
@@ -69,7 +72,7 @@ static DEFAULT_CSP: LazyLock<String> = LazyLock::new(build_csp);
 /// with the image hosts.
 const NO_PROVIDER_HOSTS_CSP: &str = "default-src 'self'; \
 script-src 'self' 'unsafe-inline' 'unsafe-eval'; \
-style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+style-src 'self' 'unsafe-inline' blob: https://fonts.googleapis.com; \
 img-src 'self' data: blob:; \
 font-src 'self' data: https://fonts.gstatic.com; \
 connect-src 'self'; \
@@ -89,7 +92,7 @@ fn build_csp() -> String {
     format!(
         "default-src 'self'; \
 script-src 'self' 'unsafe-inline' 'unsafe-eval'; \
-style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+style-src 'self' 'unsafe-inline' blob: https://fonts.googleapis.com; \
 img-src 'self' data: blob:{cover_hosts}; \
 font-src 'self' data: https://fonts.gstatic.com; \
 connect-src 'self'; \

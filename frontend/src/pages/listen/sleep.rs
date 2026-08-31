@@ -121,6 +121,14 @@ impl SleepController {
         }
     }
 
+    /// Cancel any armed timer — reset to Off and restore the target volume.
+    /// The countdown is app-scoped so it outlives `/listen`; without this a
+    /// timer armed before "Stop and close player" keeps counting with no
+    /// player open (#2353). Equivalent to selecting the "Off" preset.
+    pub fn cancel(&self) {
+        self.select_seconds(0);
+    }
+
     /// Arm the timer to fire at the end of the current chapter.
     pub fn select_end_of_chapter(&self, secs: i32) {
         let mut remaining = self.remaining;
