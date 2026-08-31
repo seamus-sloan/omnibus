@@ -231,12 +231,12 @@ struct StopRuledVoid: View {
                     Hairline()
                 }
                 // Fades out down the page, so the rules read as the page
-                // continuing rather than as N specific missing rows. Derived
-                // from `rows` rather than a fixed step, so the last row lands
-                // at the same faintness whatever the arity — a fixed 0.3 step
-                // went *negative* past four rows and left the result to
-                // whatever `.opacity` happens to clamp to.
-                .opacity(1 - (Double(row) / Double(max(rows, 1))) * 0.75)
+                // continuing rather than as N specific missing rows. Spread
+                // across `rows - 1` so the *last* row lands at 0.25 whatever
+                // the arity — dividing by `rows` would make a two-row void
+                // end brighter than a three-row one. The fixed 0.3 step this
+                // replaced went negative past four rows.
+                .opacity(1 - (Double(row) / Double(max(rows - 1, 1))) * 0.75)
             }
         }
         .accessibilityHidden(true)

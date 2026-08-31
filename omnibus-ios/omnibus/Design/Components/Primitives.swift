@@ -212,8 +212,17 @@ struct GhostPlate: View {
     /// How far a fanned sibling is pushed out, and how far it leans.
     private static let fanOffset: CGFloat = 0.5
     private static let fanAngle: Double = 11
-    /// Total width a fan occupies, in multiples of one plate — see `body`.
-    private static let fanSpan: CGFloat = 2.6
+
+    /// Half the width a fan occupies, in multiples of one plate.
+    ///
+    /// Derived rather than written down: a sibling sits `fanOffset` out, and
+    /// rotating it about its bottom throws its outer top corner a further
+    /// `fanOffset·cos + 1.5·sin`. A hand-computed constant would silently go
+    /// stale the first time the angle or the offset moved.
+    private static var fanReach: CGFloat {
+        let radians = fanAngle * .pi / 180
+        return fanOffset + fanOffset * cos(radians) + 1.5 * sin(radians)
+    }
 
     var body: some View {
         ZStack {
@@ -225,11 +234,10 @@ struct GhostPlate: View {
         }
         // Bound the fan explicitly: a ZStack sizes to its largest child, so
         // without this the offset, rotated siblings would run under whatever
-        // sits beside the motif. A sibling sits `0.5w` out and rotating it
-        // `fanAngle` about its bottom throws its outer top corner a further
-        // `0.5w·cos + 1.5w·sin` ≈ `0.78w`, so the half-width to reserve is
-        // ~`1.28w` — hence `2.6w`, not the `2.2w` that left 13pt outside.
-        .frame(width: fanned ? width * Self.fanSpan : width, height: height + 16)
+        // sits beside the motif. The hardcoded 2.2 this replaced reserved
+        // 1.1w a side against the ~1.28w a sibling actually reaches, and left
+        // ~13pt of it outside.
+        .frame(width: fanned ? width * Self.fanReach * 2 : width, height: height + 16)
         .accessibilityHidden(true)
     }
 

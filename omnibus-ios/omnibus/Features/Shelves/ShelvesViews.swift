@@ -367,7 +367,10 @@ struct ShelfDetailView: View {
             await OfflineStore.shared.cacheDelete(CacheKey.shelf(id))
             await OfflineStore.shared.cacheDelete(CacheKey.shelfPage(id))
         }
-        booksSettled = false
+        // Deliberately not reset on a refresh. `books` keeps its previous
+        // value across one, so un-settling only opens a window where a shelf
+        // showing the unreachable state falls back to "Nothing on this shelf"
+        // — the same false claim this flag was added to stop.
         await withTaskGroup(of: Void.self) { group in
             group.addTask { @MainActor in
                 // Cheap, local, and only ever a fallback — the detail read
