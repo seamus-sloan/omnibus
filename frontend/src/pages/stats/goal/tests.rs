@@ -230,7 +230,7 @@ mod render_tests {
         // once: "This year" over "22 books" over "2026 so far" was the same
         // fact three times.
         let unset = render_in_vdom(|| rsx! { Router::<UnsetRingRoute> {} });
-        assert!(unset.contains("stats-goal-today"), "{unset}");
+        assert!(unset.contains("stats-goal-year-to-date"), "{unset}");
         assert!(unset.contains("22"), "{unset}");
         assert!(unset.contains("2026 so far"), "{unset}");
         assert!(!unset.contains("This year"), "{unset}");

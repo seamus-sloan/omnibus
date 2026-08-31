@@ -1063,7 +1063,7 @@ test("with no goals the hero reports the real figures and links to the editor", 
   // the figures behind them are still worth showing, so the reader can see
   // where they stand before committing to anything.
   await expect(page.getByTestId("stats-goal-progress")).toHaveCount(0);
-  await expect(page.getByTestId("stats-goal-today")).toBeVisible();
+  await expect(page.getByTestId("stats-goal-year-to-date")).toBeVisible();
   await expect(page.getByTestId("stats-daily-pages-today")).toBeVisible();
   await expect(page.getByTestId("stats-daily-minutes-today")).toBeVisible();
   await expect(page.getByTestId("stats-daily-pages-progress")).toHaveCount(0);

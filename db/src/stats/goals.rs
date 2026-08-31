@@ -89,9 +89,29 @@ pub(super) async fn current_goal_and_progress(
     user_id: i64,
 ) -> Result<(Option<ReadingGoal>, i64), StatsError> {
     let year = current_year(pool).await?;
-    let (start, end) = year_bounds(pool, year).await?;
-    let current = compute::finished_count_bounded(pool, user_id, start, end).await?;
-    let target: Option<i64> = sqlx::query_scalar(
+    let current = year_count(pool, user_id, year).await?;
+    let goal = year_target(pool, user_id, year)
+        .await?
+        .map(|target| ReadingGoal {
+            kind: GOAL_KIND_BOOKS.to_string(),
+            target,
+            current,
+            year,
+        });
+    Ok((goal, current))
+}
+
+/// The caller's stored target for `year`, `None` when they have set none.
+///
+/// Split out so [`current_goal_and_progress`] and [`goal_for_year`] read the
+/// row the same way — a second copy of this filter is a second place for the
+/// goal-kind or scope predicate to drift.
+async fn year_target(
+    pool: &SqlitePool,
+    user_id: i64,
+    year: i64,
+) -> Result<Option<i64>, StatsError> {
+    Ok(sqlx::query_scalar(
         "SELECT target FROM reading_goals
          WHERE user_id = ? AND scope = 'year' AND year = ? AND kind = ?",
     )
@@ -99,14 +119,17 @@ pub(super) async fn current_goal_and_progress(
     .bind(year)
     .bind(GOAL_KIND_BOOKS)
     .fetch_optional(pool)
-    .await?;
-    let goal = target.map(|target| ReadingGoal {
-        kind: GOAL_KIND_BOOKS.to_string(),
-        target,
-        current,
-        year,
-    });
-    Ok((goal, current))
+    .await?)
+}
+
+/// Books completed inside `year`, bounded to `[Jan 1 year, Jan 1 year+1)`.
+///
+/// Shared by both callers for the same reason [`year_target`] is: the count a
+/// goal reports and the count a bare figure reports have to be one number, and
+/// two copies of these bounds is how they stop being.
+async fn year_count(pool: &SqlitePool, user_id: i64, year: i64) -> Result<i64, StatsError> {
+    let (start, end) = year_bounds(pool, year).await?;
+    compute::finished_count_bounded(pool, user_id, start, end).await
 }
 
 /// The caller's goal for `year`, paired with that year's completion count.
@@ -120,24 +143,13 @@ pub async fn goal_for_year(
     user_id: i64,
     year: i64,
 ) -> Result<Option<ReadingGoal>, StatsError> {
-    let Some(row) = sqlx::query(
-        "SELECT kind, target FROM reading_goals
-         WHERE user_id = ? AND scope = 'year' AND year = ? AND kind = ?",
-    )
-    .bind(user_id)
-    .bind(year)
-    .bind(GOAL_KIND_BOOKS)
-    .fetch_optional(pool)
-    .await?
-    else {
+    let Some(target) = year_target(pool, user_id, year).await? else {
         return Ok(None);
     };
-    let (start, end) = year_bounds(pool, year).await?;
-    let current = compute::finished_count_bounded(pool, user_id, start, end).await?;
     Ok(Some(ReadingGoal {
-        kind: row.try_get("kind")?,
-        target: row.try_get("target")?,
-        current,
+        kind: GOAL_KIND_BOOKS.to_string(),
+        target,
+        current: year_count(pool, user_id, year).await?,
         year,
     }))
 }
@@ -343,11 +355,11 @@ pub async fn daily_goals(pool: &SqlitePool, user_id: i64) -> Result<DailyGoals, 
     Ok(DailyGoals {
         pages,
         minutes,
-        // Still gated on the minutes *goal*: the disclosure exists to explain a
-        // shortfall in a figure being measured against a target, and attaching
-        // it to a bare readout would raise a caveat about a number nobody has
-        // asked anything of yet.
-        unzoned_seconds: if minutes_target.is_some() { unzoned } else { 0 },
+        // Reported whether or not a target is set, because `minutes_today` is
+        // now shown either way and the disclosure explains a shortfall in
+        // *that figure* — a bare readout that silently drops unplaceable time
+        // is exactly what this exists to prevent.
+        unzoned_seconds: unzoned,
         pages_today: Some(pages_today),
         minutes_today: Some(minutes_today),
     })

@@ -230,9 +230,18 @@ fn save_handler(
             }
             let (msg, is_error) = save_summary(&failed);
             signals.targets.set(landed);
-            signals
-                .drafts
-                .set(landed.map(|t| t.map(|n| n.to_string()).unwrap_or_default()));
+            // Reset only the drafts that landed. Resetting all of them would
+            // overwrite what the reader typed into a kind whose write failed
+            // with the value it had before — and since the next Save diffs
+            // drafts against targets, the retry the status line asks for would
+            // then find no change and close the editor having written nothing.
+            let mut drafts_after = (signals.drafts)();
+            for (i, field) in FIELDS.iter().enumerate() {
+                if !failed.contains(&field.label) {
+                    drafts_after[i] = landed[i].map(|n| n.to_string()).unwrap_or_default();
+                }
+            }
+            signals.drafts.set(drafts_after);
             signals.msg.set(Some(msg));
             signals.msg_is_error.set(is_error);
             signals.editing.set(!failed.is_empty());

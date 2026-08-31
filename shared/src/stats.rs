@@ -891,10 +891,13 @@ pub struct DailyGoals {
     /// which the minutes goal therefore could not place on a local day.
     ///
     /// The same disclosure [`StatsSummary::unzoned_seconds`] makes, narrowed to
-    /// the goal's own window: those seconds are real reading that `minutes`
-    /// does not include, and a goal that silently under-reports is worse than
-    /// one that says what it could not see. Always `0` when no minutes goal is
-    /// set — there is nothing to disclose against.
+    /// the day: those seconds are real reading that neither `minutes` nor
+    /// [`Self::minutes_today`] includes, and a figure that silently
+    /// under-reports is worse than one that says what it could not see.
+    ///
+    /// Reported whether or not a minutes target is set, because
+    /// `minutes_today` is shown either way — there is always something to
+    /// disclose against.
     #[serde(default)]
     pub unzoned_seconds: i64,
 }

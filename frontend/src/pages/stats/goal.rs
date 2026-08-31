@@ -180,7 +180,7 @@ pub(super) fn AnnualGoalRing(
                     }
                 } else if let Some(n) = finished {
                     div { class: "st-year-bare",
-                        p { class: "st-year-figure bare", "data-testid": "stats-goal-today",
+                        p { class: "st-year-figure bare", "data-testid": "stats-goal-year-to-date",
                             "{n} "
                             span { class: "st-year-bare-unit", {plural("book", n)} }
                         }

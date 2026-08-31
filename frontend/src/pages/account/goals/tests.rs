@@ -96,6 +96,24 @@ fn save_summary_names_the_kinds_that_failed_rather_than_shrugging() {
     );
 }
 
+/// The retry the failure message asks for has to be possible: a kind whose
+/// write failed keeps the reader's draft, so the next Save still sees it as a
+/// change. Resetting every draft from the landed targets is what broke this —
+/// the failed field reverted, `changed_updates` then found nothing to do, and
+/// the retry closed the editor having written nothing.
+#[test]
+fn a_failed_kinds_draft_still_differs_from_its_target_so_a_retry_writes() {
+    // Books landed at 24; pages was typed as 30 and its write failed, so its
+    // target is still unset.
+    let targets = [Some(24), None, None];
+    let drafts_after_failure = [Some(24), Some(30), None];
+    assert_eq!(
+        changed_updates(&drafts_after_failure, &targets),
+        vec![(1, Some(30))],
+        "the retry must still have the failed kind to write"
+    );
+}
+
 #[cfg(feature = "server")]
 #[test]
 fn goals_card_opens_in_read_mode_behind_a_single_edit_control() {

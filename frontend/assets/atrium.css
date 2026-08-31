@@ -8970,67 +8970,6 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .st-goal-fill.met { background: var(--accent); }
 
-/* ── Goal editors ─────────────────────────────────────────────────── */
-.st-goal-trigger {
-  margin-left: auto;
-  border: 0; background: transparent; padding: 0;
-  color: var(--ink-2); cursor: pointer;
-  font-family: var(--mono); font-size: 10px;
-  letter-spacing: 0.1em; text-transform: uppercase;
-}
-@media (hover: hover) { .st-goal-trigger:hover:not(:disabled) { color: var(--accent); } }
-.st-goal-trigger:disabled { opacity: 0.5; cursor: not-allowed; }
-/* The ring's own trigger is a button under a paragraph, not a row's
-   trailing action, so it must not be pushed to the right edge. */
-.st-year-side .st-goal-trigger {
-  margin: 9px 0 0;
-  padding: 4px 11px;
-  border: 1px solid var(--line); border-radius: 999px;
-  color: var(--ink-1);
-}
-/* The hero's link to the one place goals are set. A link, not a button: the
-   editing happens in Settings → Account, and dressing it as a control here
-   would promise an editor this page deliberately does not have. */
-.st-goal-link {
-  display: inline-block;
-  /* The daily card is a flex column, which would otherwise stretch the link
-     to the card's full width and make it read as a primary action. */
-  align-self: flex-start;
-  margin-top: 9px;
-  padding: 4px 11px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--ink-1);
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  text-decoration: none;
-  transition: color .18s ease, border-color .18s ease;
-}
-@media (hover: hover) {
-  .st-goal-link:hover { color: var(--accent); border-color: var(--accent); }
-}
-
-.st-goal-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
-.st-goal-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
-.st-goal-input {
-  width: 76px;
-  background: var(--bg-0);
-  border: 1px solid var(--line); border-radius: 8px;
-  color: var(--ink-0); padding: 5px 8px;
-  font-family: var(--mono); font-size: 12px;
-}
-.st-goal-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-.st-goal-actions { display: flex; align-items: center; gap: 6px; }
-.st-goal-actions .btn {
-  padding: 5px 11px; border-radius: 999px;
-  font-family: var(--mono); font-size: 10px;
-  letter-spacing: 0.08em; text-transform: uppercase;
-}
-.st-goal-error { margin: 6px 0 0; font-size: 11.5px; color: var(--bad); }
-.st-goal-offline { margin: 6px 0 0; font-size: 11.5px; color: var(--ink-3); flex-basis: 100%; }
-
 /* ── Scope switch (User / Library) ────────────────────────────────── */
 .st-modes {
   position: sticky;
