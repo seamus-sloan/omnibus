@@ -16,12 +16,19 @@ use serde::{Deserialize, Serialize};
 /// can say so — a silently shortened axis would read as "this is all the data".
 pub const MAX_BUCKETS: usize = 366;
 
-/// The most measures one chart may plot.
+/// The most y-scales one chart may carry.
 ///
-/// Two, because a chart has two axes. A third distinct unit would have to
-/// share an axis with a scale that isn't its own, which draws a line whose
-/// height means nothing.
-pub const MAX_MEASURES: usize = 2;
+/// Two, because that is how many axes a chart can label without a reader
+/// having to guess which scale a mark belongs to. This bounds the *units* on
+/// screen, never the number of measures: any number that share a scale can be
+/// plotted together and stay directly comparable. A third distinct unit would
+/// have to borrow a scale that isn't its own, which draws a mark whose height
+/// means nothing.
+///
+/// The vocabulary bounds the rest on its own — the two largest unit groups
+/// hold five measures between them, inside the palette's colour count — so
+/// there is deliberately no separate cap on how many may be selected.
+pub const MAX_AXES: usize = 2;
 
 /// Width of the tail-folded breakdown: this many real series, plus `Other`.
 pub const BREAKDOWN_LIMIT: usize = 5;
@@ -389,10 +396,10 @@ impl Default for ChartSpec {
 pub enum ChartSpecError {
     #[error("pick at least one measure")]
     NoMeasures,
-    #[error("a chart plots at most {MAX_MEASURES} measures")]
-    TooManyMeasures,
-    #[error("pick two different measures")]
-    DuplicateMeasures,
+    #[error("{0} needs a third scale — a chart has room for two")]
+    TooManyUnits(&'static str),
+    #[error("{0} is already on this chart")]
+    DuplicateMeasures(&'static str),
     #[error("a breakdown needs exactly one measure")]
     BreakdownNeedsOneMeasure,
     #[error("{0} cannot be split — a genre belongs to a book, not a sitting")]
@@ -409,11 +416,19 @@ impl ChartSpec {
         if self.measures.is_empty() {
             return Err(ChartSpecError::NoMeasures);
         }
-        if self.measures.len() > MAX_MEASURES {
-            return Err(ChartSpecError::TooManyMeasures);
-        }
-        if self.measures.len() == 2 && self.measures[0] == self.measures[1] {
-            return Err(ChartSpecError::DuplicateMeasures);
+        let mut seen: Vec<ChartMeasure> = Vec::new();
+        let mut units: Vec<ChartUnit> = Vec::new();
+        for &m in &self.measures {
+            if seen.contains(&m) {
+                return Err(ChartSpecError::DuplicateMeasures(m.label()));
+            }
+            seen.push(m);
+            if !units.contains(&m.unit()) {
+                if units.len() == MAX_AXES {
+                    return Err(ChartSpecError::TooManyUnits(m.label()));
+                }
+                units.push(m.unit());
+            }
         }
         if self.breakdown != ChartBreakdown::None {
             if self.measures.len() != 1 {
@@ -425,6 +440,54 @@ impl ChartSpec {
             }
         }
         Ok(())
+    }
+
+    /// The distinct units on this chart, in the order their first measure was
+    /// chosen — which is also the order they claim axes in.
+    pub fn units(&self) -> Vec<ChartUnit> {
+        let mut units: Vec<ChartUnit> = Vec::new();
+        for m in &self.measures {
+            if !units.contains(&m.unit()) {
+                units.push(m.unit());
+            }
+        }
+        units
+    }
+
+    /// Which axis `measure` would be drawn against, or `None` when both are
+    /// already claimed by other units.
+    ///
+    /// This is the compatibility rule the picker greys options out by, and the
+    /// reason it is here rather than in the UI: the server assigns axes from
+    /// the same function, so a control that looked available can never produce
+    /// a spec the server then rejects.
+    pub fn axis_for(&self, measure: ChartMeasure) -> Option<u8> {
+        let units = self.units();
+        match units.iter().position(|u| *u == measure.unit()) {
+            Some(i) => Some(i as u8),
+            None if units.len() < MAX_AXES => Some(units.len() as u8),
+            None => None,
+        }
+    }
+
+    /// Whether `measure` can join this chart: not already on it, and its unit
+    /// either already has an axis or can claim the free one.
+    pub fn can_add(&self, measure: ChartMeasure) -> bool {
+        !self.measures.contains(&measure) && self.axis_for(measure).is_some()
+    }
+
+    /// Add or remove `measure`, keeping selection order — the first measure
+    /// chosen owns the left axis, so a toggle must not quietly reorder it.
+    ///
+    /// Adding an incompatible measure is a no-op rather than an error: the
+    /// control offering it is already disabled, and a toggle that threw would
+    /// only duplicate that guard.
+    pub fn toggle(&mut self, measure: ChartMeasure) {
+        if let Some(i) = self.measures.iter().position(|m| *m == measure) {
+            self.measures.remove(i);
+        } else if self.can_add(measure) {
+            self.measures.push(measure);
+        }
     }
 
     /// Every caveat the selected measures carry, deduplicated in measure order.

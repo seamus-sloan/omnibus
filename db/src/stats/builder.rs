@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use omnibus_shared::{
     ChartAggregate, ChartAxis, ChartBreakdown, ChartBucket, ChartMeasure, ChartResult, ChartSeries,
-    ChartSpec, ChartSpecError, ChartUnit, BREAKDOWN_LIMIT, MAX_BUCKETS, OTHER_LABEL,
+    ChartSpec, ChartSpecError, ChartUnit, BREAKDOWN_LIMIT, MAX_AXES, MAX_BUCKETS, OTHER_LABEL,
 };
 use sqlx::{Row, SqlitePool};
 
@@ -477,10 +477,14 @@ pub async fn chart_series(
     let mut fetched: Vec<(ChartMeasure, Vec<Bucketed>)> = Vec::new();
     let mut split: Vec<(String, Bucketed)> = Vec::new();
     let breakdown_on = spec.breakdown == ChartBreakdown::Genre;
-    for &m in &spec.measures {
-        if breakdown_on {
+    if breakdown_on {
+        // `validate` has already established there is exactly one measure to
+        // split; `first` rather than `[0]` keeps the path panic-free anyway.
+        if let Some(&m) = spec.measures.first() {
             split = breakdown_rows(pool, user_id, m, spec.bucket, start).await?;
-        } else {
+        }
+    } else {
+        for &m in &spec.measures {
             fetched.push((m, series_rows(pool, user_id, m, spec.bucket, start).await?));
         }
     }
@@ -533,20 +537,29 @@ pub async fn chart_series(
     })
 }
 
-/// One series per measure, second axis opened only by a differing unit.
+/// One series per measure, each scaled against the axis its **unit** claims.
+///
+/// Units claim axes in the order their first measure was chosen, so any number
+/// of measures sharing a unit sit on one scale and stay directly comparable —
+/// `MAX_AXES` bounds the scales on screen, never the measures. A unit with no
+/// axis left is unreachable here: `ChartSpec::validate` rejects it before any
+/// query runs, and the picker greys it out before that.
 fn build_measure_series(
     buckets: &[String],
     fetched: &[(ChartMeasure, Vec<Bucketed>)],
 ) -> Vec<ChartSeries> {
-    let first_unit = fetched.first().map(|(m, _)| m.unit());
+    let mut units: Vec<ChartUnit> = Vec::new();
+    for (m, _) in fetched {
+        if !units.contains(&m.unit()) {
+            units.push(m.unit());
+        }
+    }
     fetched
         .iter()
         .map(|(m, rows)| ChartSeries {
             measure: *m,
             slice: None,
-            // Same unit as the first measure means the same scale, so they
-            // share an axis and stay directly comparable.
-            axis: u8::from(Some(m.unit()) != first_unit),
+            axis: units.iter().position(|u| *u == m.unit()).unwrap_or(0) as u8,
             mark: m.mark(),
             values: align(buckets, rows, m.aggregate()),
         })
@@ -634,19 +647,18 @@ fn build_axes(series: &[ChartSeries]) -> (Vec<ChartAxis>, usize) {
                 .all(|s| s.measure.aggregate() == ChartAggregate::Count)
     };
 
+    // The left axis picks the tick count; every other is fitted to it, because
+    // one set of gridlines serves them all.
     let (left_max, divisions) = nice_axis(peak_of(0), integral_on(0));
     let mut axes = Vec::new();
-    if let Some(unit) = unit_of(0) {
-        axes.push(ChartAxis {
-            unit,
-            max: left_max,
-        });
-    }
-    if let Some(unit) = unit_of(1) {
-        axes.push(ChartAxis {
-            unit,
-            max: axis_max_on(peak_of(1), divisions, integral_on(1)),
-        });
+    for a in 0..MAX_AXES as u8 {
+        let Some(unit) = unit_of(a) else { continue };
+        let max = if a == 0 {
+            left_max
+        } else {
+            axis_max_on(peak_of(a), divisions, integral_on(a))
+        };
+        axes.push(ChartAxis { unit, max });
     }
     (axes, divisions)
 }
