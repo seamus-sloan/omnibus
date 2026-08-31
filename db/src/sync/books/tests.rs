@@ -94,10 +94,23 @@ async fn insert_book_row_keys_author_sort_surname_first_with_and_without_file_as
     let pool = init_db("sqlite::memory:").await.unwrap();
     let library_id = seed_scan_root(&pool).await;
 
-    let mut with_file_as = indexed("martian.epub", Some("The Martian"), &["Andy Weir"], &[], None, None);
+    let mut with_file_as = indexed(
+        "martian.epub",
+        Some("The Martian"),
+        &["Andy Weir"],
+        &[],
+        None,
+        None,
+    );
     with_file_as.metadata.creators[0].file_as = Some("Weir, Andy".into());
-    let without_file_as =
-        indexed("phm.epub", Some("Project Hail Mary"), &["Andy Weir"], &[], None, None);
+    let without_file_as = indexed(
+        "phm.epub",
+        Some("Project Hail Mary"),
+        &["Andy Weir"],
+        &[],
+        None,
+        None,
+    );
 
     let insert = |b: IndexedBook| {
         let pool = pool.clone();

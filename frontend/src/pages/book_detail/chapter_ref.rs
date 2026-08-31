@@ -72,10 +72,7 @@ mod tests {
             Some(1)
         );
         // A CFI past the last chapter's spine stays on the last chapter.
-        assert_eq!(
-            chapter_index_for_cfi(&spines, "epubcfi(/6/20!/4)"),
-            Some(2)
-        );
+        assert_eq!(chapter_index_for_cfi(&spines, "epubcfi(/6/20!/4)"), Some(2));
         // A CFI before the first chapter's spine resolves to nothing (the
         // caller keeps the percent fallback / chapter 1).
         assert_eq!(chapter_index_for_cfi(&spines, "epubcfi(/6/2!/4)"), None);
@@ -86,9 +83,6 @@ mod tests {
         // Two TOC entries inside one spine document (both spine_index 3): a CFI
         // in that spine lands on the later of the two — still the open document.
         let spines = [0, 3, 3, 5];
-        assert_eq!(
-            chapter_index_for_cfi(&spines, "epubcfi(/6/8!/4)"),
-            Some(2)
-        );
+        assert_eq!(chapter_index_for_cfi(&spines, "epubcfi(/6/8!/4)"), Some(2));
     }
 }
