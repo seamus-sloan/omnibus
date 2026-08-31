@@ -48,7 +48,7 @@ fn derive_player_state_reads_book_time_and_scales_only_the_time_left() {
     assert!((d.chapter_dur - 1800.0).abs() < f64::EPSILON);
     // "Left" estimates are rate-adjusted — halved at 2x.
     assert!((d.chapter_left - 300.0).abs() < f64::EPSILON);
-    assert!((d.remaining_book - 1200.0).abs() < f64::EPSILON);
+    assert!((d.remaining_left - 1200.0).abs() < f64::EPSILON);
     // The seek coordinates stay book-time — the range input's value/max.
     assert!((d.effective - 1200.0).abs() < f64::EPSILON);
     assert!((d.scrub_max - 3600.0).abs() < f64::EPSILON);
@@ -69,5 +69,5 @@ fn derive_player_state_keeps_book_time_labels_at_1x() {
     assert!((d.within - 1200.0).abs() < f64::EPSILON);
     assert!((d.chapter_dur - 1800.0).abs() < f64::EPSILON);
     assert!((d.chapter_left - 600.0).abs() < f64::EPSILON);
-    assert!((d.remaining_book - 2400.0).abs() < f64::EPSILON);
+    assert!((d.remaining_left - 2400.0).abs() < f64::EPSILON);
 }

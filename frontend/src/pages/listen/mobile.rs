@@ -262,7 +262,7 @@ struct PlayerDerived {
     within: f64,
     chapter_dur: f64,
     chapter_left: f64,
-    remaining_book: f64,
+    remaining_left: f64,
     scrub_max: f64,
     accent_style: String,
     rate_label: String,
@@ -299,7 +299,7 @@ fn derive_player_state(
     let chapter_start = current.map(|c| c.start_seconds).unwrap_or(0.0);
     // Elapsed, chapter-elapsed and chapter-duration are real book-time,
     // matching the bookmark stamps and the book detail page (#2344). Only the
-    // "left" values (chapter_left, remaining_book) are rate-adjusted wall-clock
+    // "left" values (chapter_left, remaining_left) are rate-adjusted wall-clock
     // estimates. `effective` and `scrub_max` stay book-time: they're the range
     // input's seek coordinate, not a readout.
     let chapter_dur = current.map(|c| c.duration_seconds).unwrap_or(0.0);
@@ -318,7 +318,7 @@ fn derive_player_state(
         within,
         chapter_dur,
         chapter_left,
-        remaining_book: remaining_at_rate(eff_remaining, rate),
+        remaining_left: remaining_at_rate(eff_remaining, rate),
         scrub_max: if duration > 0.0 { duration } else { 1.0 },
         accent_style: view
             .accent
@@ -522,7 +522,7 @@ fn render_player_scrubber(
                         "{format_ms(derived.within)} / {format_ms(derived.chapter_dur)} \u{00b7} {format_ms(derived.chapter_left)} left"
                     }
                 }
-                span { "-{format_hms(derived.remaining_book)}" }
+                span { "-{format_hms(derived.remaining_left)}" }
             }
         }
     }
