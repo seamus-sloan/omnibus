@@ -21,10 +21,6 @@ mod plot;
 
 use plot::{ChartLegend, ChartPlot, ChartTable};
 
-/// Sentinel for the "no second measure" option. Not a `ChartMeasure` variant:
-/// absence is a property of the *selection*, not a thing that can be plotted.
-const NONE_VALUE: &str = "__none";
-
 /// Fetch the current spec's series, dropping any answer a newer spec has
 /// already superseded.
 fn use_chart_fetch_effect(
@@ -97,178 +93,164 @@ pub fn ChartBuilderPage() -> Element {
 
 /// The picker. Each control writes one field of the spec; the effect above
 /// turns any write into a refetch.
+/// The picker. Each control writes one field of the spec; the effect above
+/// turns any write into a refetch.
+///
+/// Measures are a checkbox group rather than a fixed pair of dropdowns,
+/// because the real constraint is the number of **scales** a chart can label,
+/// not the number of measures: any number sharing a unit sit on one axis and
+/// stay directly comparable. A measure is greyed out only once both scales are
+/// claimed by other units — and by the same `ChartSpec::can_add` the server
+/// validates with, so a control that looks available can never produce a spec
+/// the server then rejects.
 #[component]
 fn ChartControls(spec: Signal<ChartSpec>) -> Element {
     let current = spec.read().clone();
-    let primary = current
-        .measures
-        .first()
-        .copied()
-        .unwrap_or_default_measure();
-    let secondary = current.measures.get(1).copied();
+    let units = current.units();
+    // A split describes one measure's population, so it needs exactly one.
+    let solo = (current.measures.len() == 1)
+        .then(|| current.measures.first().copied())
+        .flatten();
 
     rsx! {
         section { class: "cb-controls", "data-testid": "chart-controls",
-            div { class: "cb-field",
-                label { r#for: "cb-measure-a", "Measure" }
-                select {
-                    id: "cb-measure-a",
-                    class: "cb-select",
-                    onchange: move |e| {
-                        if let Some(m) = ChartMeasure::from_query(&e.value()) {
-                            let mut next = spec.read().clone();
-                            // Replacing the primary with the measure already
-                            // in the second slot would plot it twice, so the
-                            // comparison drops rather than duplicating.
-                            if next.measures.get(1) == Some(&m) {
-                                next.measures.truncate(1);
-                            }
-                            if next.measures.is_empty() {
-                                next.measures.push(m);
-                            } else {
-                                next.measures[0] = m;
-                            }
-                            if !m.supports_breakdown() {
-                                next.breakdown = ChartBreakdown::None;
-                            }
-                            spec.set(next);
-                        }
-                    },
+            fieldset { class: "cb-measures", "data-testid": "chart-measures",
+                legend { "Measures" }
+                div { class: "cb-measure-list",
                     for m in ChartMeasure::ALL {
-                        option {
-                            value: "{m.as_query()}",
-                            selected: m == primary,
-                            "{m.label()}"
+                        {
+                            let on = current.measures.contains(&m);
+                            // The last remaining measure can't be removed —
+                            // an empty chart is not a state the picker should
+                            // be able to reach.
+                            let last = on && current.measures.len() == 1;
+                            let blocked = !on && !current.can_add(m);
+                            rsx! {
+                                div {
+                                    class: if on { "cb-measure is-on" } else { "cb-measure" },
+                                    input {
+                                        id: "cb-m-{m.as_query()}",
+                                        r#type: "checkbox",
+                                        checked: on,
+                                        disabled: last || blocked,
+                                        onchange: move |_| {
+                                            let mut next = spec.read().clone();
+                                            next.toggle(m);
+                                            // A split survives only while it
+                                            // still has its one splittable
+                                            // measure to describe.
+                                            let keeps_split = next.measures.len() == 1
+                                                && next
+                                                    .measures
+                                                    .first()
+                                                    .is_some_and(|f| f.supports_breakdown());
+                                            if !keeps_split {
+                                                next.breakdown = ChartBreakdown::None;
+                                            }
+                                            spec.set(next);
+                                        },
+                                    }
+                                    label { r#for: "cb-m-{m.as_query()}", "{m.label()}" }
+                                    span { class: "cb-measure-meta",
+                                        "{m.unit().label()} · {m.grain().label()}"
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-                span { class: "cb-hint", "measured {primary.grain().label()}" }
-            }
-
-            div { class: "cb-field",
-                label { r#for: "cb-measure-b", "Compare with" }
-                select {
-                    id: "cb-measure-b",
-                    class: "cb-select",
-                    onchange: move |e| {
-                        let raw = e.value();
-                        let mut next = spec.read().clone();
-                        next.measures.truncate(1);
-                        if let Some(m) = ChartMeasure::from_query(&raw) {
-                            next.measures.push(m);
-                            // A second measure needs both axes, leaving no
-                            // room for a split (rule: a breakdown is a
-                            // single-measure chart).
-                            next.breakdown = ChartBreakdown::None;
-                        }
-                        spec.set(next);
-                    },
-                    option {
-                        value: "{NONE_VALUE}",
-                        selected: secondary.is_none(),
-                        "Nothing"
-                    }
-                    // The primary is excluded rather than offered and then
-                    // rejected — the same measure twice is not a comparison.
-                    for m in ChartMeasure::ALL.into_iter().filter(|m| *m != primary) {
-                        option {
-                            value: "{m.as_query()}",
-                            selected: Some(m) == secondary,
-                            "{m.label()}"
-                        }
-                    }
-                }
-                span { class: "cb-hint",
-                    match secondary {
-                        Some(m) => format!("measured {}", m.grain().label()),
-                        None => "one measure, one axis".to_string(),
-                    }
-                }
-            }
-
-            div { class: "cb-field",
-                label { r#for: "cb-bucket", "Group by" }
-                select {
-                    id: "cb-bucket",
-                    class: "cb-select",
-                    onchange: move |e| {
-                        let raw = e.value();
-                        if let Some(b) = ChartBucket::ALL.into_iter().find(|b| b.as_query() == raw) {
-                            let mut next = spec.read().clone();
-                            next.bucket = b;
-                            spec.set(next);
-                        }
-                    },
-                    for b in ChartBucket::ALL {
-                        option {
-                            value: "{b.as_query()}",
-                            selected: b == current.bucket,
-                            "{b.label()}"
-                        }
-                    }
-                }
-            }
-
-            div { class: "cb-field",
-                label { r#for: "cb-range", "Period" }
-                select {
-                    id: "cb-range",
-                    class: "cb-select",
-                    onchange: move |e| {
-                        let raw = e.value();
-                        if let Some(r) = StatsRange::ALL.into_iter().find(|r| r.as_query() == raw) {
-                            let mut next = spec.read().clone();
-                            next.range = r;
-                            spec.set(next);
-                        }
-                    },
-                    for r in StatsRange::ALL {
-                        option {
-                            value: "{r.as_query()}",
-                            selected: r == current.range,
-                            "{r.label()}"
-                        }
-                    }
-                }
-            }
-
-            div { class: "cb-field",
-                label { r#for: "cb-breakdown", "Split" }
-                select {
-                    id: "cb-breakdown",
-                    class: "cb-select",
-                    // A split needs one measure, and one that belongs to a
-                    // book rather than a sitting — so the control says why it
-                    // is unavailable instead of silently doing nothing.
-                    disabled: secondary.is_some() || !primary.supports_breakdown(),
-                    onchange: move |e| {
-                        let raw = e.value();
-                        let mut next = spec.read().clone();
-                        next.breakdown = if raw == "genre" {
-                            ChartBreakdown::Genre
-                        } else {
-                            ChartBreakdown::None
-                        };
-                        spec.set(next);
-                    },
-                    option {
-                        value: "none",
-                        selected: current.breakdown == ChartBreakdown::None,
-                        "{ChartBreakdown::None.label()}"
-                    }
-                    option {
-                        value: "genre",
-                        selected: current.breakdown == ChartBreakdown::Genre,
-                        "{ChartBreakdown::Genre.label()}"
-                    }
-                }
-                span { class: "cb-hint",
-                    if secondary.is_some() {
-                        "drop the comparison to split"
-                    } else if !primary.supports_breakdown() {
-                        "only per-book measures split"
+                p { class: "cb-hint", "data-testid": "chart-scales",
+                    if units.len() < omnibus_shared::MAX_AXES {
+                        "One scale in use — anything else can still join."
                     } else {
-                        "top genres, rest folded"
+                        "Both scales in use. Measures in other units are greyed out until you free one."
+                    }
+                }
+            }
+
+            div { class: "cb-fields",
+                div { class: "cb-field",
+                    label { r#for: "cb-bucket", "Group by" }
+                    select {
+                        id: "cb-bucket",
+                        class: "cb-select",
+                        onchange: move |e| {
+                            let raw = e.value();
+                            if let Some(b) = ChartBucket::ALL.into_iter().find(|b| b.as_query() == raw) {
+                                let mut next = spec.read().clone();
+                                next.bucket = b;
+                                spec.set(next);
+                            }
+                        },
+                        for b in ChartBucket::ALL {
+                            option {
+                                value: "{b.as_query()}",
+                                selected: b == current.bucket,
+                                "{b.label()}"
+                            }
+                        }
+                    }
+                }
+
+                div { class: "cb-field",
+                    label { r#for: "cb-range", "Period" }
+                    select {
+                        id: "cb-range",
+                        class: "cb-select",
+                        onchange: move |e| {
+                            let raw = e.value();
+                            if let Some(r) = StatsRange::ALL.into_iter().find(|r| r.as_query() == raw) {
+                                let mut next = spec.read().clone();
+                                next.range = r;
+                                spec.set(next);
+                            }
+                        },
+                        for r in StatsRange::ALL {
+                            option {
+                                value: "{r.as_query()}",
+                                selected: r == current.range,
+                                "{r.label()}"
+                            }
+                        }
+                    }
+                }
+
+                div { class: "cb-field",
+                    label { r#for: "cb-breakdown", "Split" }
+                    select {
+                        id: "cb-breakdown",
+                        class: "cb-select",
+                        // A split needs one measure, and one that belongs to a
+                        // book — so the control says why it is unavailable
+                        // instead of silently doing nothing.
+                        disabled: !solo.is_some_and(|m| m.supports_breakdown()),
+                        onchange: move |e| {
+                            let raw = e.value();
+                            let mut next = spec.read().clone();
+                            next.breakdown = if raw == "genre" {
+                                ChartBreakdown::Genre
+                            } else {
+                                ChartBreakdown::None
+                            };
+                            spec.set(next);
+                        },
+                        option {
+                            value: "none",
+                            selected: current.breakdown == ChartBreakdown::None,
+                            "{ChartBreakdown::None.label()}"
+                        }
+                        option {
+                            value: "genre",
+                            selected: current.breakdown == ChartBreakdown::Genre,
+                            "{ChartBreakdown::Genre.label()}"
+                        }
+                    }
+                    span { class: "cb-hint",
+                        match solo {
+                            None => "one measure only",
+                            Some(m) if !m.supports_breakdown() => "only per-book measures split",
+                            Some(_) => "top genres, rest folded",
+                        }
                     }
                 }
             }
@@ -276,7 +258,6 @@ fn ChartControls(spec: Signal<ChartSpec>) -> Element {
     }
 }
 
-/// The chart itself, plus everything the result says about its own limits.
 #[component]
 fn ChartCanvas(
     result: Signal<Option<ChartResult>>,
@@ -323,21 +304,6 @@ fn ChartCanvas(
                 p { class: "cb-note", "data-testid": "chart-caveat", "{caveat}" }
             }
         }
-    }
-}
-
-/// A default measure for the impossible empty-selection state.
-///
-/// `ChartSpec::validate` rejects an empty measure list before it can reach the
-/// server, and the picker never produces one — but the render path still has
-/// to name something, and an `unwrap` in a production path is banned.
-trait DefaultMeasure {
-    fn unwrap_or_default_measure(self) -> ChartMeasure;
-}
-
-impl DefaultMeasure for Option<ChartMeasure> {
-    fn unwrap_or_default_measure(self) -> ChartMeasure {
-        self.unwrap_or(ChartMeasure::BooksFinished)
     }
 }
 

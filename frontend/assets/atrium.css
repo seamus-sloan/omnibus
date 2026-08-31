@@ -11569,14 +11569,74 @@ html {
 
 /* ── Picker ───────────────────────────────────────────────────────── */
 .cb-controls {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
   padding: 18px 20px;
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
 }
+.cb-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px;
+}
+
+/* Measures are a checkbox group, not a fixed pair of dropdowns: the bound is
+   on the number of y-scales, so any number of measures sharing a unit can be
+   on screen at once. A row greys out only once both scales are claimed. */
+.cb-measures { border: 0; margin: 0; padding: 0; min-width: 0; }
+.cb-measures legend {
+  padding: 0;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.cb-measure-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 6px 18px;
+  margin: 10px 0 8px;
+}
+.cb-measure {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 0;
+}
+/* A default checkbox is a ~13px target, well under a comfortable click or
+   tap. The box is enlarged and the row padded so the label — which is a
+   second target via `for` — sits in a band tall enough to hit. */
+.cb-measure input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.cb-measure label {
+  font-size: 13.5px;
+  color: var(--ink-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cb-measure.is-on label { color: var(--ink-0); }
+.cb-measure-meta {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A blocked row is dimmed rather than hidden — a reader should be able to see
+   what a chart could hold, and the hint beneath says why it can't right now. */
+.cb-measure:has(input:disabled) label,
+.cb-measure:has(input:disabled) .cb-measure-meta { opacity: 0.4; }
+.cb-measure:has(input:disabled) label { cursor: default; }
+.cb-measure input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .cb-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .cb-field label {
   font-size: 11px;
@@ -11690,7 +11750,9 @@ html {
 
 @media (max-width: 720px) {
   .cb-title { font-size: 30px; }
-  .cb-controls { grid-template-columns: 1fr 1fr; padding: 14px; }
+  .cb-controls { padding: 14px; }
+  .cb-fields { grid-template-columns: 1fr 1fr; }
+  .cb-measure-list { grid-template-columns: 1fr; }
   /* The plot gets taller as it narrows so the bars keep usable height. */
   .cb-svg { aspect-ratio: 4 / 3; }
 }

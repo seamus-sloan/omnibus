@@ -4,26 +4,20 @@
 use super::*;
 use crate::test_support::render_in_vdom;
 
-#[test]
-fn the_page_renders_every_picker_control() {
-    let html = render_in_vdom(|| {
-        rsx! {
-            ChartControls { spec: Signal::new(ChartSpec::default()) }
-        }
-    });
-    for id in [
-        "cb-measure-a",
-        "cb-measure-b",
-        "cb-bucket",
-        "cb-range",
-        "cb-breakdown",
-    ] {
-        assert!(html.contains(id), "missing control {id}: {html}");
-    }
+/// A checkbox row's rendered `<input …>` tag, so a test can assert on its
+/// attributes without matching the whole document.
+fn input_tag(html: &str, measure: ChartMeasure) -> String {
+    let id = format!(r#"id="cb-m-{}""#, measure.as_query());
+    let at = html
+        .find(&id)
+        .unwrap_or_else(|| panic!("no row for {id}: {html}"));
+    let start = html[..at].rfind("<input").expect("an input opening tag");
+    let end = at + html[at..].find('>').expect("a closing bracket");
+    html[start..=end].to_string()
 }
 
 #[test]
-fn the_measure_picker_offers_every_measure_in_the_vocabulary() {
+fn the_measure_group_offers_every_measure_with_its_unit_and_grain() {
     let html = render_in_vdom(|| {
         rsx! {
             ChartControls { spec: Signal::new(ChartSpec::default()) }
@@ -35,37 +29,148 @@ fn the_measure_picker_offers_every_measure_in_the_vocabulary() {
             "missing measure {}: {html}",
             m.label()
         );
+        assert!(
+            html.contains(&format!(r#"id="cb-m-{}""#, m.as_query())),
+            "missing checkbox for {}",
+            m.label()
+        );
+    }
+    // The unit is what decides compatibility, so the row states it.
+    assert!(html.contains("books · per book finished"));
+    assert!(html.contains("minutes · per sitting"));
+}
+
+#[test]
+fn a_measure_is_offered_while_a_scale_is_free_and_greyed_once_both_are_claimed() {
+    // One measure: one scale free, so nothing is blocked.
+    let one = render_in_vdom(|| {
+        rsx! {
+            ChartControls {
+                spec: Signal::new(ChartSpec {
+                    measures: vec![ChartMeasure::BooksFinished],
+                    ..ChartSpec::default()
+                })
+            }
+        }
+    });
+    assert!(!input_tag(&one, ChartMeasure::AvgRating).contains("disabled"));
+    assert!(!input_tag(&one, ChartMeasure::ReadingMinutes).contains("disabled"));
+
+    // Books + pages claims both scales. A third unit is greyed out; a second
+    // pages measure is not, because it joins a scale that already exists.
+    let two = render_in_vdom(|| {
+        rsx! {
+            ChartControls { spec: Signal::new(ChartSpec::default()) }
+        }
+    });
+    assert!(input_tag(&two, ChartMeasure::AvgRating).contains("disabled"));
+    assert!(input_tag(&two, ChartMeasure::ReadingMinutes).contains("disabled"));
+    assert!(!input_tag(&two, ChartMeasure::PagesRead).contains("disabled"));
+}
+
+#[test]
+fn the_last_remaining_measure_cannot_be_unchecked() {
+    let html = render_in_vdom(|| {
+        rsx! {
+            ChartControls {
+                spec: Signal::new(ChartSpec {
+                    measures: vec![ChartMeasure::BooksFinished],
+                    ..ChartSpec::default()
+                })
+            }
+        }
+    });
+    // An empty chart is not a state the picker should be able to reach.
+    let tag = input_tag(&html, ChartMeasure::BooksFinished);
+    assert!(tag.contains("checked"), "{tag}");
+    assert!(tag.contains("disabled"), "{tag}");
+}
+
+#[test]
+fn a_selected_measure_stays_uncheckable_off_only_while_others_remain() {
+    let html = render_in_vdom(|| {
+        rsx! {
+            ChartControls { spec: Signal::new(ChartSpec::default()) }
+        }
+    });
+    // Two selected, so either may be removed.
+    for m in [ChartMeasure::BooksFinished, ChartMeasure::AvgPageLength] {
+        let tag = input_tag(&html, m);
+        assert!(tag.contains("checked"), "{m:?}: {tag}");
+        assert!(!tag.contains("disabled"), "{m:?}: {tag}");
     }
 }
 
 #[test]
-fn the_picker_names_the_grain_each_selected_measure_is_measured_at() {
+fn the_scales_hint_says_whether_another_unit_can_still_join() {
+    let free = render_in_vdom(|| {
+        rsx! {
+            ChartControls {
+                spec: Signal::new(ChartSpec {
+                    measures: vec![ChartMeasure::BooksFinished],
+                    ..ChartSpec::default()
+                })
+            }
+        }
+    });
+    assert!(free.contains("anything else can still join"));
+
+    let full = render_in_vdom(|| {
+        rsx! {
+            ChartControls { spec: Signal::new(ChartSpec::default()) }
+        }
+    });
+    assert!(full.contains("Both scales in use"));
+}
+
+#[test]
+fn the_split_control_is_disabled_while_more_than_one_measure_is_selected() {
     let html = render_in_vdom(|| {
         rsx! {
             ChartControls { spec: Signal::new(ChartSpec::default()) }
         }
     });
-    // The default spec is two completion-grain measures, so the hint that
-    // explains *why* they can share a bucket is on screen.
+    assert!(html.contains("one measure only"));
+}
+
+#[test]
+fn the_bucket_and_period_selects_mark_the_spec_s_current_choice() {
+    // A `value` on <select> does not pick an option in server-rendered
+    // markup; `selected` on the option does.
+    let html = render_in_vdom(|| {
+        rsx! {
+            ChartControls {
+                spec: Signal::new(ChartSpec {
+                    measures: vec![ChartMeasure::PagesRead],
+                    bucket: ChartBucket::Year,
+                    range: omnibus_shared::StatsRange::AllTime,
+                    breakdown: ChartBreakdown::None,
+                })
+            }
+        }
+    });
+    assert!(html.contains(r#"<option value="year" selected"#), "{html}");
     assert!(
-        html.contains("measured per book finished"),
-        "expected a grain hint: {html}"
+        html.contains(r#"<option value="all_time" selected"#),
+        "{html}"
     );
 }
 
 #[test]
-fn the_split_control_is_disabled_while_a_comparison_is_selected() {
-    // The default spec carries two measures, which leaves no axis for a split.
+fn the_page_renders_every_picker_control() {
     let html = render_in_vdom(|| {
         rsx! {
             ChartControls { spec: Signal::new(ChartSpec::default()) }
         }
     });
-    assert!(
-        html.contains("disabled"),
-        "expected a disabled split: {html}"
-    );
-    assert!(html.contains("drop the comparison to split"));
+    for id in [
+        "cb-m-books_finished",
+        "cb-bucket",
+        "cb-range",
+        "cb-breakdown",
+    ] {
+        assert!(html.contains(id), "missing control {id}: {html}");
+    }
 }
 
 #[test]
@@ -96,41 +201,6 @@ fn the_split_control_explains_itself_on_a_measure_that_cannot_split() {
         }
     });
     assert!(html.contains("only per-book measures split"));
-}
-
-#[test]
-fn the_comparison_picker_excludes_the_measure_already_on_the_primary_axis() {
-    let html = render_in_vdom(|| {
-        rsx! {
-            ChartControls {
-                spec: Signal::new(ChartSpec {
-                    measures: vec![ChartMeasure::BooksFinished],
-                    ..ChartSpec::default()
-                })
-            }
-        }
-    });
-    // One option carries it — the primary select's. The comparison select
-    // omits it: the same measure on both axes is not a comparison.
-    assert_eq!(
-        html.matches(r#"<option value="books_finished""#).count(),
-        1,
-        "the primary must not be offered as its own comparison: {html}"
-    );
-}
-
-#[test]
-fn an_empty_measure_list_still_names_a_measure_rather_than_unwrapping() {
-    // `validate` rejects this before the wire and the picker cannot produce
-    // it, but the render path must still be total.
-    assert_eq!(
-        None.unwrap_or_default_measure(),
-        ChartMeasure::BooksFinished
-    );
-    assert_eq!(
-        Some(ChartMeasure::PagesRead).unwrap_or_default_measure(),
-        ChartMeasure::PagesRead
-    );
 }
 
 #[test]
@@ -220,50 +290,5 @@ fn the_canvas_keeps_the_previous_chart_on_screen_while_a_refetch_is_in_flight() 
     assert!(
         html.contains("<rect"),
         "expected the previous chart: {html}"
-    );
-}
-
-#[test]
-fn each_select_marks_the_spec_s_current_choice_as_selected() {
-    // A `value` on <select> does not pick an option in server-rendered
-    // markup, so without `selected` on the option every control renders
-    // showing its first entry regardless of the spec behind it.
-    let html = render_in_vdom(|| {
-        rsx! {
-            ChartControls {
-                spec: Signal::new(ChartSpec {
-                    measures: vec![ChartMeasure::PagesRead, ChartMeasure::AvgRating],
-                    bucket: ChartBucket::Year,
-                    range: omnibus_shared::StatsRange::AllTime,
-                    breakdown: ChartBreakdown::None,
-                })
-            }
-        }
-    });
-    for expected in [
-        r#"<option value="pages_read" selected"#,
-        r#"<option value="avg_rating" selected"#,
-        r#"<option value="year" selected"#,
-        r#"<option value="all_time" selected"#,
-    ] {
-        assert!(html.contains(expected), "missing {expected}: {html}");
-    }
-}
-
-#[test]
-fn the_comparison_select_marks_nothing_when_only_one_measure_is_chosen() {
-    let html = render_in_vdom(|| {
-        rsx! {
-            ChartControls {
-                spec: Signal::new(ChartSpec {
-                    measures: vec![ChartMeasure::BooksFinished],
-                    ..ChartSpec::default()
-                })
-            }
-        }
-    });
-    assert!(
-        html.contains(r#"<option value="__none" selected"#),
-        "{html}"
     );
 }

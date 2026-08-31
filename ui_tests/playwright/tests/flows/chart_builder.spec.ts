@@ -28,15 +28,10 @@ test("renders the chart builder layout", async ({ page }) => {
     page.getByRole("heading", { name: "Chart builder" }),
   ).toBeVisible();
   await expect(page.getByTestId("chart-controls")).toBeVisible();
+  await expect(page.getByTestId("chart-measures")).toBeVisible();
   await expect(page.getByTestId("chart-canvas")).toBeVisible();
 
-  for (const label of [
-    "Measure",
-    "Compare with",
-    "Group by",
-    "Period",
-    "Split",
-  ]) {
+  for (const label of ["Group by", "Period", "Split"]) {
     await expect(control(page, label)).toBeVisible();
   }
 });
@@ -48,63 +43,103 @@ test("opens on the two-measure comparison the builder exists for", async ({
 
   // The default spec is a count against an average — the case a single pivot
   // query cannot serve, and the reason the page exists.
-  await expect(control(page, "Measure")).toHaveValue("books_finished");
-  await expect(control(page, "Compare with")).toHaveValue("avg_page_length");
+  await expect(control(page, "Books finished")).toBeChecked();
+  await expect(control(page, "Avg book length")).toBeChecked();
   await expect(control(page, "Group by")).toHaveValue("month");
   await expect(control(page, "Period")).toHaveValue("year");
 });
 
-test("naming a measure reports the grain it is measured at", async ({
+test("offers every measure with the unit that decides its compatibility", async ({
   page,
 }) => {
   await gotoReady(page, CHART);
-  const controls = page.getByTestId("chart-controls");
+  const measures = page.getByTestId("chart-measures");
 
-  await expect(controls).toContainText("measured per book finished");
+  for (const name of [
+    "Books finished",
+    "Avg book length",
+    "Avg rating",
+    "Reading minutes",
+    "Listening minutes",
+    "Sittings",
+    "Avg sitting length",
+    "Pages read",
+  ]) {
+    await expect(measures.getByLabel(name)).toBeVisible();
+  }
+  await expect(measures).toContainText("books · per book finished");
+  await expect(measures).toContainText("minutes · per sitting");
+});
 
-  // A sitting-grain measure reports a different grain — the fact that lets a
-  // reader see why two measures can share a bucket but not a query.
-  await control(page, "Measure").selectOption("reading_minutes");
-  await expect(controls).toContainText("measured per sitting");
+test("narrows the list only once both scales are claimed", async ({ page }) => {
+  await gotoReady(page, CHART);
 
-  await control(page, "Measure").selectOption("pages_read");
-  await expect(controls).toContainText("measured per day read");
+  // Books + pages, so both scales are in use: a third unit is blocked, but a
+  // second pages measure still joins the scale pages already own.
+  await expect(page.getByTestId("chart-scales")).toContainText(
+    "Both scales in use",
+  );
+  await expect(control(page, "Avg rating")).toBeDisabled();
+  await expect(control(page, "Reading minutes")).toBeDisabled();
+  await expect(control(page, "Pages read")).toBeEnabled();
+
+  // Freeing the pages scale reopens every unit.
+  await control(page, "Avg book length").uncheck();
+  await expect(page.getByTestId("chart-scales")).toContainText(
+    "anything else can still join",
+  );
+  await expect(control(page, "Avg rating")).toBeEnabled();
+  await expect(control(page, "Reading minutes")).toBeEnabled();
+});
+
+test("plots more measures than there are scales", async ({ page }) => {
+  await gotoReady(page, CHART);
+
+  // A third measure sharing an existing unit is allowed — the bound is on
+  // scales, not on how many measures use them.
+  await control(page, "Pages read").check();
+  await expect(control(page, "Pages read")).toBeChecked();
+
+  await expect
+    .poll(async () => page.getByTestId("chart-legend").count())
+    .toBeGreaterThan(0);
+  const legend = page.getByTestId("chart-legend");
+  await expect(legend).toContainText("Books finished");
+  await expect(legend).toContainText("Avg book length");
+  await expect(legend).toContainText("Pages read");
+});
+
+test("never lets the last measure be removed", async ({ page }) => {
+  await gotoReady(page, CHART);
+
+  await control(page, "Avg book length").uncheck();
+  // One left, so it is held checked — an empty chart is not a reachable state.
+  await expect(control(page, "Books finished")).toBeChecked();
+  await expect(control(page, "Books finished")).toBeDisabled();
 });
 
 test("offers a split only for a single per-book measure", async ({ page }) => {
   await gotoReady(page, CHART);
   const split = control(page, "Split");
 
-  // Two measures need both axes, so there is no room for a split.
+  // Two measures, so no single population for a split to describe.
   await expect(split).toBeDisabled();
   await expect(page.getByTestId("chart-controls")).toContainText(
-    "drop the comparison to split",
+    "one measure only",
   );
 
-  await control(page, "Compare with").selectOption("__none");
+  await control(page, "Avg book length").uncheck();
   await expect(split).toBeEnabled();
 
   // A sitting cannot carry a genre — a sitting may cover several books, and a
   // book several genres, so splitting one would double-count its minutes.
-  await control(page, "Measure").selectOption("reading_minutes");
+  await control(page, "Books finished").check();
+  await control(page, "Reading minutes").check();
+  await control(page, "Books finished").uncheck();
   await expect(split).toBeDisabled();
   await expect(page.getByTestId("chart-controls")).toContainText(
     "only per-book measures split",
   );
-});
-
-test("never offers the primary measure as its own comparison", async ({
-  page,
-}) => {
-  await gotoReady(page, CHART);
-
-  const options = control(page, "Compare with").locator("option");
-  await expect(options.filter({ hasText: "Books finished" })).toHaveCount(0);
-
-  // Swapping the primary frees the one it displaced.
-  await control(page, "Measure").selectOption("avg_rating");
-  await expect(options.filter({ hasText: "Books finished" })).toHaveCount(1);
-  await expect(options.filter({ hasText: "Avg rating" })).toHaveCount(0);
 });
 
 test("redraws when the selection changes", async ({ page }) => {
@@ -126,13 +161,17 @@ test("redraws when the selection changes", async ({ page }) => {
       .not.toBe("pending");
 
   await settled();
-  await control(page, "Measure").selectOption("session_count");
+
+  // Add before removing — the last remaining measure is held checked, so the
+  // selection can never pass through empty.
+  await control(page, "Pages read").check();
+  await control(page, "Books finished").uncheck();
+  await control(page, "Avg book length").uncheck();
   await settled();
   await expect(canvas).toBeVisible();
 
   // A measure with a bounded coverage window states that under the chart.
-  await control(page, "Measure").selectOption("pages_read");
-  await settled();
+  await expect(control(page, "Pages read")).toBeChecked();
   await expect(page.getByTestId("chart-caveat").first()).toContainText(
     "progress ledger",
   );
