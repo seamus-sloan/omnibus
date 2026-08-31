@@ -122,20 +122,23 @@ enum DetailStats {
         )
     }
 
-    /// Minutes of activity per day for the trailing `days` days, oldest
-    /// first — the spark strip. Always exactly `days` entries.
+    /// Minutes of activity per calendar day for the trailing `days` days,
+    /// oldest first — the spark strip. Always exactly `days` entries.
+    /// Bucketed on `startOfDay`, not trailing 24-hour windows: "today" means
+    /// the local calendar day, and DST days keep their sittings.
     static func sparkMinutes(
-        from sessions: [SessionLogEntry], days: Int = 21, now: Date = Date()
+        from sessions: [SessionLogEntry], days: Int = 21, now: Date = Date(),
+        calendar: Calendar = .current
     ) -> [Int] {
         var buckets = [Int](repeating: 0, count: days)
-        let dayLength = 86_400.0
-        let end = now.timeIntervalSince1970
+        let today = calendar.startOfDay(for: now)
         for session in sessions {
-            let age = end - Double(session.startedAt)
-            guard age >= 0, age < Double(days) * dayLength else { continue }
-            let index = days - 1 - Int(age / dayLength)
-            guard buckets.indices.contains(index) else { continue }
-            buckets[index] += Int(session.seconds / 60)
+            let day = calendar.startOfDay(
+                for: Date(timeIntervalSince1970: Double(session.startedAt)))
+            guard let offset = calendar.dateComponents([.day], from: day, to: today).day,
+                  offset >= 0, offset < days
+            else { continue }
+            buckets[days - 1 - offset] += Int(session.seconds / 60)
         }
         return buckets
     }
@@ -1096,12 +1099,21 @@ struct JournalRow: View {
 
     @Environment(\.palette) private var palette
 
-    /// The opening line, stripped of markdown furniture.
+    /// The opening line as plain text. Parsed as markdown rather than
+    /// regex-stripped, so prose that happens to contain `#` or `_` (C#,
+    /// snake_case) keeps its characters while real syntax is dropped.
     static func preview(_ md: String) -> String {
-        md.split(separator: "\n").first.map {
-            String($0).replacingOccurrences(of: "[*_#]", with: "", options: .regularExpression)
-                .trimmingCharacters(in: .whitespaces)
-        } ?? ""
+        guard let first = md.split(separator: "\n").first else { return "" }
+        let line = String(first)
+            // A leading list or heading marker is block syntax the inline
+            // parser would pass through verbatim.
+            .replacingOccurrences(
+                of: #"^\s*([-*+]\s+|#{1,6}\s+)"#, with: "", options: .regularExpression)
+        let parsed = (try? AttributedString(
+            markdown: line,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )).map { String($0.characters) }
+        return (parsed ?? line).trimmingCharacters(in: .whitespaces)
     }
 
     var body: some View {
@@ -1350,6 +1362,29 @@ struct DownloadBadge: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Downloading — tap to cancel")
 
+            case .failed:
+                // Visibly a failure, not a fresh download — and the reason
+                // travels with it, so the tap that retries isn't a mystery.
+                Button {
+                    Haptics.tap()
+                    Task { await downloads.start(book: book, kind: kind) }
+                } label: {
+                    HStack(spacing: 5) {
+                        if let message = record?.error {
+                            Text(message)
+                                .font(.monoUI(9))
+                                .foregroundStyle(palette.badColor)
+                                .lineLimit(1)
+                                .frame(maxWidth: 130, alignment: .trailing)
+                        }
+                        Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(palette.badColor)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Download failed — retry")
+
             default:
                 Button {
                     Haptics.tap()
@@ -1360,7 +1395,7 @@ struct DownloadBadge: View {
                         .foregroundStyle(palette.accentColor)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(record?.state == .failed ? "Retry download" : "Download")
+                .accessibilityLabel("Download")
             }
         }
     }
@@ -1552,9 +1587,11 @@ struct AllHighlightsSheet: View {
 }
 
 /// Every journal entry, in full — where the Journals stop overflows to.
+/// Tapping an entry hands it back to the drawer, where Edit and Delete live.
 struct AllJournalsSheet: View {
     let book: Book
     let entries: [JournalEntry]
+    var onOpen: (JournalEntry) -> Void
 
     @Environment(\.palette) private var palette
 
@@ -1574,10 +1611,17 @@ struct AllJournalsSheet: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 26) {
                     ForEach(entries) { entry in
-                        VStack(alignment: .leading, spacing: 9) {
-                            JournalByline(entry: entry, avatarSize: 26)
-                            JournalBody(md: entry.bodyMd)
+                        Button {
+                            Haptics.tap()
+                            onOpen(entry)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 9) {
+                                JournalByline(entry: entry, avatarSize: 26)
+                                JournalBody(md: entry.bodyMd)
+                            }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(PressableStyle())
                     }
                 }
                 .padding(.horizontal, 18)

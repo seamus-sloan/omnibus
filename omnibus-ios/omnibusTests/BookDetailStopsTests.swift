@@ -174,17 +174,24 @@ private func sitting(
     #expect(DetailStats.record(from: []) == nil)
 }
 
-@Test func sparkMinutesBucketsTheTrailingDaysOldestFirst() {
-    let now = Date(timeIntervalSince1970: 2_000_000)
+@Test func sparkMinutesBucketsByCalendarDayOldestFirst() {
+    // A fixed calendar so the day boundaries don't move with the test host.
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "UTC")!
+
+    let now = Date(timeIntervalSince1970: 2_000_000)  // Jan 24 1970, 03:33 UTC
     let minutes = DetailStats.sparkMinutes(
         from: [
-            // 30 minutes today, 10 minutes yesterday, one sitting too old.
+            // 30 minutes today, 10 minutes the previous calendar day —
+            // late-evening Jan 23, which a trailing-24h window would misfile
+            // as "today" — and one sitting far too old.
             sitting(start: 1_999_000, seconds: 1_800),
-            sitting(start: 2_000_000 - 90_000, seconds: 600),
+            sitting(start: 1_978_000, seconds: 600),
             sitting(start: 100, seconds: 6_000),
         ],
         days: 21,
-        now: now
+        now: now,
+        calendar: calendar
     )
 
     #expect(minutes.count == 21)
@@ -221,4 +228,38 @@ private func sitting(
 @Test func journalRowPreviewStripsMarkdownFromTheOpeningLine() {
     let preview = JournalRow.preview("**Kvothe** is an *unreliable* narrator\n\nSecond para")
     #expect(preview == "Kvothe is an unreliable narrator")
+}
+
+@Test func journalRowPreviewKeepsProseCharactersThatLookLikeSyntax() {
+    let preview = JournalRow.preview("Wrote a C# parser in snake_case style")
+    #expect(preview == "Wrote a C# parser in snake_case style")
+}
+
+@Test func journalRowPreviewUnwrapsAListMarker() {
+    let preview = JournalRow.preview("- The Cinder scene lands differently in audio")
+    #expect(preview == "The Cinder scene lands differently in audio")
+}
+
+// MARK: - Immersive chrome depth
+
+@Test @MainActor func immersiveDepthSurvivesNestedDetailsAndClampsAtZero() {
+    let presentation = Presentation.shared
+    #expect(!presentation.isImmersiveDetail)
+
+    // A detail pushed over a detail: the bar stays hidden until both pop.
+    presentation.pushImmersiveDetail()
+    presentation.pushImmersiveDetail()
+    #expect(presentation.isImmersiveDetail)
+    presentation.popImmersiveDetail()
+    #expect(presentation.isImmersiveDetail)
+    presentation.popImmersiveDetail()
+    #expect(!presentation.isImmersiveDetail)
+
+    // An interleaved extra pop must clamp, not go negative and swallow the
+    // next push.
+    presentation.popImmersiveDetail()
+    presentation.pushImmersiveDetail()
+    #expect(presentation.isImmersiveDetail)
+    presentation.popImmersiveDetail()
+    #expect(!presentation.isImmersiveDetail)
 }

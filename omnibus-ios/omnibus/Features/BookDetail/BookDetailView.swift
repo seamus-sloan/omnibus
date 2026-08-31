@@ -43,9 +43,10 @@ final class BookDetailModel {
     var isLoading = true
     var error: String?
 
-    /// Which book the related fetches (series, author, manifest) were run
-    /// for, so a re-emitting book stream doesn't refetch them.
-    private var relatedKey: Int64?
+    /// Guards the related fetches (series, author, manifest) against running
+    /// concurrently; a fetch that came back empty is retried on the next book
+    /// emission or refresh rather than skipped forever.
+    private var relatedInFlight = false
 
     /// Every section is its own live read, so each paints from the replica at
     /// once and updates independently if the server disagrees. Nothing here
@@ -142,42 +143,58 @@ final class BookDetailModel {
     }
 
     /// Fetches keyed on facts only the book record carries — the series, the
-    /// first author, whether there is audio to measure. Run once per book.
+    /// first author, whether there is audio to measure. Each leg runs only
+    /// while its answer is still missing, so a transient failure is retried
+    /// on the next book emission or pull-to-refresh instead of being skipped
+    /// for the life of the model.
     private func loadRelated(_ book: Book) {
-        guard relatedKey != book.id else { return }
-        relatedKey = book.id
+        guard !relatedInFlight else { return }
 
-        if let seriesId = book.seriesId {
-            Task { @MainActor in
-                for await detail in LibraryService.series(id: seriesId).values() {
-                    self.seriesBooks = detail.books
+        let seriesId = seriesBooks.isEmpty ? book.seriesId : nil
+        let authorId = authorBooks.isEmpty ? book.creators.first?.id : nil
+        let wantsDuration = book.hasAudiobook && audioDuration == nil
+        guard seriesId != nil || authorId != nil || wantsDuration else { return }
+
+        relatedInFlight = true
+        Task { @MainActor in
+            defer { relatedInFlight = false }
+            await withTaskGroup(of: Void.self) { group in
+                if let seriesId {
+                    group.addTask { @MainActor in
+                        for await detail in LibraryService.series(id: seriesId).values() {
+                            self.seriesBooks = detail.books
+                        }
+                    }
                 }
-            }
-        }
-        if let authorId = book.creators.first?.id {
-            Task { @MainActor in
-                for await detail in LibraryService.author(id: authorId).values() {
-                    self.authorBooks = detail.books.filter { $0.id != book.id }
+                if let authorId {
+                    group.addTask { @MainActor in
+                        for await detail in LibraryService.author(id: authorId).values() {
+                            self.authorBooks = detail.books.filter { $0.id != book.id }
+                        }
+                    }
                 }
-            }
-        }
-        if book.hasAudiobook {
-            Task { @MainActor in
-                self.audioDuration =
-                    (try? await LibraryService.audiobookManifest(uuid: book.uuid))?.totalDuration
+                if wantsDuration {
+                    group.addTask { @MainActor in
+                        self.audioDuration =
+                            (try? await LibraryService.audiobookManifest(uuid: book.uuid))?
+                                .totalDuration
+                    }
+                }
             }
         }
     }
 
     /// Pages the whole per-book session log. A single book's log is small —
     /// dozens of sittings, not thousands — but the cap keeps a pathological
-    /// one from looping forever.
+    /// one from looping forever. Committed only after every page landed: a
+    /// failed page must not publish a partial accumulator as the complete
+    /// history, wiping stats a previous load showed.
     private func loadSessions(uuid: String) async {
         var entries: [SessionLogEntry] = []
         var before: String?
         for _ in 0..<12 {
             guard let page = try? await UserDataService.sessionLog(book: uuid, before: before)
-            else { break }
+            else { return }
             entries += page.entries
             guard let next = page.nextBefore else { break }
             before = next
@@ -260,6 +277,9 @@ struct BookDetailView: View {
     @State private var showAllJournals = false
     /// The entry open in the journal drawer.
     @State private var openJournal: JournalEntry?
+    /// An entry picked inside the all-entries sheet; opened in the drawer
+    /// once that sheet has dismissed — two sheets can't be up at once.
+    @State private var pendingJournal: JournalEntry?
     /// The file chosen in the picker, opened from the sheet's `onDismiss` —
     /// presenting the full-screen player while the sheet is still up would
     /// be refused.
@@ -351,9 +371,16 @@ struct BookDetailView: View {
                 AllHighlightsSheet(book: book, highlights: model.highlights)
             }
         }
-        .sheet(isPresented: $showAllJournals) {
+        .sheet(isPresented: $showAllJournals, onDismiss: {
+            guard let pending = pendingJournal else { return }
+            pendingJournal = nil
+            openJournal = pending
+        }) {
             if let book = model.book {
-                AllJournalsSheet(book: book, entries: model.journals)
+                AllJournalsSheet(book: book, entries: model.journals) { entry in
+                    pendingJournal = entry
+                    showAllJournals = false
+                }
             }
         }
         .sheet(item: $openJournal) { entry in
@@ -634,6 +661,19 @@ struct BookDetailView: View {
                 }
                 .buttonStyle(BarGlassStyle())
                 .accessibilityLabel("Check in a copy")
+            } else if !book.hasEbook, !book.hasAudiobook {
+                // A physical-only record (a check-in): there is nothing to
+                // open, so the bar states that instead of routing into a
+                // reader or player that would come up empty.
+                Text(book.hasPhysical ? "On your shelf — physical copy" : "No readable copy")
+                    .font(.ui(14, weight: .medium))
+                    .foregroundStyle(palette.ink2Color)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(palette.bg2Color.opacity(0.6))
+                    )
             } else {
                 // Label and destination stay in lockstep: a CTA speaking an
                 // audio position opens the player, not the reader at page one.
