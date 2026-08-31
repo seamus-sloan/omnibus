@@ -8,7 +8,10 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::physical::WishlistEntry;
 use omnibus_shared::summary::summary_is_sparse;
-use omnibus_shared::{AlignmentView, BookFileInfo, BookInsights, EbookMetadata, MetadataOverrides};
+use omnibus_shared::{
+    AlignmentEbookChapter, AlignmentView, BookFileInfo, BookInsights, EbookMetadata,
+    MetadataOverrides, ProgressRecord,
+};
 
 use crate::components::alignment_modal::{fmt_hm, listening_frac};
 use crate::components::FetchSummaryButton;
@@ -202,27 +205,45 @@ fn short_chapter_title(title: &str) -> String {
     )
 }
 
+/// The 1-based current chapter + its capped title for the resume readout.
+///
+/// Prefers the reading position's CFI spine step — the reader navigates by
+/// spine document, so this names the chapter it actually opens — and falls
+/// back to the rounded whole-book percent only when no CFI is stored. The old
+/// percent-only path picked the last chapter starting at or below the
+/// *rounded* integer percent, landing one chapter ahead whenever a boundary
+/// fell inside the rounding window (#2345).
+fn chapter_now(
+    chapters: &[AlignmentEbookChapter],
+    reading: Option<&ProgressRecord>,
+) -> Option<(usize, String)> {
+    if chapters.is_empty() {
+        return None;
+    }
+    let reading = reading?;
+    let idx = reading
+        .epub_cfi
+        .as_deref()
+        .and_then(|cfi| {
+            let spines: Vec<i64> = chapters.iter().map(|c| c.spine_index).collect();
+            super::super::chapter_ref::chapter_index_for_cfi(&spines, cfi)
+        })
+        .or_else(|| {
+            // No CFI: chapter starts are whole-book percents (0..=100), the same
+            // scale as the saved position. Only meaningful past the start.
+            let pct = reading.progress_percent.filter(|p| *p > 0)?;
+            chapters.iter().rposition(|c| c.percent <= pct as f64)
+        })?;
+    Some((idx + 1, short_chapter_title(&chapters[idx].title)))
+}
+
 fn derive_readout(alignment: Option<&AlignmentView>, progress: &MarqueeProgress) -> HomeReadout {
     let Some(v) = alignment else {
         return HomeReadout::default();
     };
     let chapters = v.ebook.as_ref().map(|e| &e.chapters);
     let ch_total = chapters.map(|c| c.len()).filter(|n| *n > 1);
-    let ch_now = match (
-        chapters,
-        progress.reading.as_ref().and_then(|r| r.progress_percent),
-    ) {
-        (Some(chapters), Some(pct)) if !chapters.is_empty() && pct > 0 => {
-            // Chapter starts are whole-book percents (0..=100), same scale
-            // as the saved position.
-            let idx = chapters
-                .iter()
-                .rposition(|c| c.percent <= pct as f64)
-                .unwrap_or(0);
-            Some((idx + 1, short_chapter_title(&chapters[idx].title)))
-        }
-        _ => None,
-    };
+    let ch_now = chapters.and_then(|c| chapter_now(c, progress.reading.as_ref()));
     let total_secs: f64 = v.audio_files.iter().map(|f| f.duration_seconds).sum();
     let audio_total = (total_secs > 0.0).then(|| fmt_hm(total_secs));
     let files: Vec<_> = v.audio_files.iter().collect();

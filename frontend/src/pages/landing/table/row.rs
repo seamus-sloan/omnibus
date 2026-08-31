@@ -5,7 +5,6 @@
 //! Per-cell rendering lives in [`super::cells`].
 
 use dioxus::prelude::*;
-use dioxus_router::use_navigator;
 use omnibus_shared::EbookMetadata;
 
 use super::super::sorting::{contributor_names, row_ident};
@@ -15,7 +14,6 @@ use super::cells::{
     RowScalarCellDisplay, RowSeriesCell, RowTitleCell,
 };
 use super::{BookTableContext, EditField};
-use crate::Route;
 
 /// One row in the power-user table for `book`.
 #[component]
@@ -62,7 +60,7 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
     };
 
     rsx! {
-        EbookRowMarkup { display, uuid, ctx }
+        EbookRowMarkup { display, ctx }
     }
 }
 
@@ -224,53 +222,30 @@ fn derive_row_display(
 /// so the parent stays a thin state-setup shell. All inputs are already
 /// derived; this component does no signal seeding of its own.
 #[component]
-fn EbookRowMarkup(display: RowDisplay, uuid: String, ctx: RowContext) -> Element {
+fn EbookRowMarkup(display: RowDisplay, ctx: RowContext) -> Element {
     let mut editing = ctx.editing;
-    let nav = use_navigator();
-    let uuid_click = uuid.clone();
-    let uuid_key = uuid;
     let row_testid = display.row_testid.clone();
-    let aria_title = display.title.clone();
 
     rsx! {
         tr {
             class: "ebook-row",
             "data-testid": "{row_testid}",
             id: "{row_testid}",
-            role: "button",
-            tabindex: "0",
-            aria_label: "Open details for {aria_title}",
-            onclick: move |_| {
-                // Row-level click navigates only when no cell-level edit
-                // is in progress. Each editable cell stops propagation on
-                // click already, but a click on a non-editable area
-                // (cover, formats, dates) while a cell is open would
-                // otherwise blur+save the input AND fire the navigation.
-                // Bailing on the editing-is-some path keeps the user on
-                // the page while the blur-save lands.
-                if editing().is_some() {
-                    return;
-                }
-                nav.push(Route::BookDetail { uuid: uuid_click.clone() });
-            },
             onkeydown: move |evt: Event<KeyboardData>| {
-                if editing().is_some() {
-                    // Fallback close: the open cell's own input handles
-                    // Escape (and stops propagation) when it holds focus,
-                    // but focus can end up elsewhere in the row — a chip's
-                    // remove button, or a fresh editor whose autofocus
-                    // didn't land — leaving `editing` stuck with no input
-                    // listening for Escape. Catch it here so the amber
-                    // highlight can always be dismissed.
-                    if evt.key() == Key::Escape {
-                        editing.set(None);
-                    }
-                    return;
-                }
-                let key = evt.key();
-                if key == Key::Enter || key == Key::Character(" ".to_string()) {
-                    evt.prevent_default();
-                    nav.push(Route::BookDetail { uuid: uuid_key.clone() });
+                // Fallback close: the open cell's own input handles Escape
+                // (and stops propagation) when it holds focus, but focus can
+                // end up elsewhere in the row — a chip's remove button, or a
+                // fresh editor whose autofocus didn't land — leaving `editing`
+                // stuck with no input listening for Escape. Catch the bubbled
+                // keydown here so the amber highlight can always be dismissed.
+                //
+                // The row is no longer a `role="button"`: it holds interactive
+                // editable cells, so it must not announce itself as a single
+                // button that "opens details" while a click on those cells
+                // edits instead. The announced, keyboard-reachable navigate
+                // affordance is the cover cell's link (#2350).
+                if editing().is_some() && evt.key() == Key::Escape {
+                    editing.set(None);
                 }
             },
             EbookRowCells { display, ctx }
@@ -335,9 +310,15 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
 
     rsx! {
         if is_admin {
-            EbookRowSelectCell { select_uuid, select_aria, is_selected, selected }
+            EbookRowSelectCell { select_uuid: select_uuid.clone(), select_aria, is_selected, selected }
         }
-        EbookRowCoverCell { thumb_src, thumb_srcset, has_cover, alt_title: cover_alt }
+        EbookRowCoverCell {
+            uuid: select_uuid,
+            thumb_src,
+            thumb_srcset,
+            has_cover,
+            alt_title: cover_alt,
+        }
         RowTitleCell { title, error: book.error, ctx: cell_ctx.clone() }
         EbookRowAuthorsCell {
             is_admin,

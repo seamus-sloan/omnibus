@@ -185,6 +185,83 @@ fn normalize_never_panics_over_varied_unicode() {
     }
 }
 
+#[test]
+fn author_sort_key_reshapes_given_surname_to_surname_first() {
+    assert_eq!(author_sort_key("Andy Weir"), "Weir, Andy");
+    // Last whitespace token becomes the surname — same rule the frontend
+    // authors-index sort_key uses, so multi-word surnames split identically.
+    assert_eq!(author_sort_key("Ursula K. Le Guin"), "Guin, Ursula K. Le");
+}
+
+#[test]
+fn author_sort_key_keeps_comma_and_mononym_forms_verbatim() {
+    assert_eq!(author_sort_key("Weir, Andy"), "Weir, Andy");
+    assert_eq!(author_sort_key("Plato"), "Plato");
+    assert_eq!(author_sort_key("  Madonna  "), "Madonna");
+}
+
+#[test]
+fn author_sort_key_is_idempotent() {
+    for name in ["Andy Weir", "Weir, Andy", "Plato", "Ursula K. Le Guin"] {
+        let once = author_sort_key(name);
+        assert_eq!(author_sort_key(&once), once, "not idempotent for {name:?}");
+    }
+}
+
+#[tokio::test]
+async fn backfill_author_sort_reshapes_given_first_rows_only_and_is_idempotent() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Given-first (needs reshaping), already surname-first (comma), mononym.
+    for (uuid, author_sort) in [("u1", "Andy Weir"), ("u2", "Weir, Andy"), ("u3", "Plato")] {
+        sqlx::query(
+            "INSERT INTO books (uuid, library_id, path, title, author_sort) \
+             VALUES (?, 1, '', 't', ?)",
+        )
+        .bind(uuid)
+        .bind(author_sort)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let read = |uuid: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT author_sort FROM books WHERE uuid = ?")
+                .bind(uuid)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+
+    backfill_author_sort(&pool).await.unwrap();
+    assert_eq!(read("u1").await, "Weir, Andy"); // reshaped
+    assert_eq!(read("u2").await, "Weir, Andy"); // already surname-first, untouched
+    assert_eq!(read("u3").await, "Plato"); // mononym, untouched
+
+    // Idempotent: a second pass skips the now-comma-bearing rows. Prove it by
+    // planting a sentinel the reshape would otherwise clobber.
+    sqlx::query("UPDATE books SET author_sort = 'Weir, Andy sentinel' WHERE uuid = 'u1'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    backfill_author_sort(&pool).await.unwrap();
+    assert_eq!(read("u1").await, "Weir, Andy sentinel");
+}
+
+#[tokio::test]
+async fn backfill_author_sort_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = backfill_author_sort(&pool).await.unwrap_err();
+    assert!(matches!(err, NormalizeError::Db(_)));
+}
+
 #[tokio::test]
 async fn backfill_norm_columns_propagates_db_error_when_pool_is_closed() {
     let pool = init_db("sqlite::memory:").await.unwrap();

@@ -45,6 +45,14 @@ tile (`components/cover_tile.rs`) is a router `Link` that also overrides
 matches nothing and times out. Use `bookTile()` from `utils/shelves.ts`
 (`getByRole("listitem", …)`) or the per-book `ebook-tile-<ident>` testid.
 
+**A landing *table* row is not a `button`.** The row (`landing/table/row.rs`)
+used to be `<tr role="button">` with an "Open details for …" name, but it
+wraps interactive editable cells (invalid ARIA), so that was dropped (#2350).
+The keyboard-reachable navigate affordance is now a `link` on the cover cell:
+`getByRole("link", { name: "Open details for …" })` **inside the row**, or the
+`ebook-cell-cover` testid — not a row-level button, and clicking an editable
+cell (title/author/…) still opens its inline editor rather than navigating.
+
 **The landing's continue surface is a fan, not a carousel.** `landing/stack.rs`
 replaced the hero carousel, so `continue-hero`, `continue-hero-track`,
 `hero-dot-<n>` and `hero-card-<uuid>` no longer exist. The section is

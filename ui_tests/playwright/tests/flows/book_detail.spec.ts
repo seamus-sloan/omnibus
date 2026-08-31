@@ -250,13 +250,16 @@ test("navigates from a landing row to the detail page and back", async ({
   await gotoReady(page, "/");
   await switchToTableView(page);
 
-  // Click the row's cover cell to follow the SPA navigation. We target the
-  // cover specifically because the seeded admin sees inline-editable cells
-  // (title, author, …) that intercept clicks to open their editor instead of
-  // navigating; the cover cell is non-editable, so its click bubbles to the
-  // row's navigate handler — what a user clicking a non-interactive part of
-  // the row gets.
-  await getRow(page, TARGET.slug).getByTestId("ebook-cell-cover").click();
+  // #2350: the row is a plain <tr> — its editable cells (title, author, …)
+  // are separate interactive controls, so it is no longer a role="button"
+  // that claims to "open details" while a click on those cells edits instead.
+  // The announced, keyboard-reachable navigate affordance is the cover cell's
+  // link; assert its accessible name matches its action, then activate it.
+  const openLink = getRow(page, TARGET.slug).getByRole("link", {
+    name: `Open details for ${TARGET.title}`,
+  });
+  await expect(openLink).toBeVisible();
+  await openLink.click();
   // `/books/:uuid` — UUIDv5 in canonical 8-4-4-4-12 hyphenated form.
   await expect(page).toHaveURL(/\/books\/[0-9a-fA-F-]{36}$/);
 
@@ -612,15 +615,22 @@ test("rates a book a half-star, persists across reload, then un-rates", async ({
   await gotoReady(page, `/books/${uuid}`);
   await expect(page.getByTestId("rating-meta")).toContainText("4.5 of 5");
 
-  // Re-clicking the active half-star clears the rating (un-rate) and cleans up
-  // shared server state for the next run.
+  // #2352: once rated, the active half-star becomes the un-rate control and
+  // announces it — "Clear your 4.5-star rating" — instead of keeping the
+  // misleading "Rate 4.5 stars". Re-clicking it clears the rating (and cleans
+  // up shared server state for the next run).
+  await expect(
+    page
+      .getByTestId("rating-stars")
+      .getByRole("button", { name: "Clear your 4.5-star rating" }),
+  ).toBeVisible();
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/ratings/clear", expectedStatus: 200 },
     async () =>
       page
         .getByTestId("rating-stars")
-        .getByRole("button", { name: "Rate 4.5 stars" })
+        .getByRole("button", { name: "Clear your 4.5-star rating" })
         .click(),
   );
   await expect(page.getByTestId("rating-meta")).toHaveText("Not rated yet");
@@ -828,9 +838,13 @@ test("lists a saved passage with its locator, note and date, then deletes it", a
   await expect(card.getByTestId("highlight-note")).toHaveText(
     "the line that stuck",
   );
-  // The locator is derived from the CFI's spine step (/14 → section 7); the
+  // The locator names the reader's chapter once the book's chapter structure
+  // is known, and falls back to the CFI's raw spine step (/14 → section 7)
+  // until then (#2356) — either is a valid locator for the same position. The
   // date comes from the server-assigned created_at.
-  await expect(card.getByTestId("highlight-meta")).toContainText("Section 7");
+  await expect(card.getByTestId("highlight-meta")).toContainText(
+    /(?:Chapter|Section) \d+/,
+  );
   await expect(card.getByTestId("highlight-meta")).toContainText("saved ");
 
   // Delete it — the RPC must fire and the card must leave the list.
