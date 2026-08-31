@@ -114,15 +114,26 @@ private struct DailyGoalRow: View {
     @Environment(\.palette) private var palette
 
     private var current: Int64 { goal?.current ?? todaysFigure }
+
+    /// The figure as it is drawn, and as it is measured.
+    ///
+    /// Built in `String` context on purpose. `Text("\(current)")` takes the
+    /// `LocalizedStringKey` path, which groups an integer — so the ring said
+    /// "of 2,000" beside an ungrouped "1965 to go" built the same way this is,
+    /// and the digit-count step-down below sized "1284" while "1,284" was what
+    /// got drawn. Inside a 62pt hole a separator buys nothing and costs a
+    /// glyph.
+    private var figure: String { "\(current)" }
     private var isMet: Bool { goal?.isMet ?? false }
     private var arcColor: Color { isMet ? palette.okColor : palette.accentColor }
 
     /// The bounds allow four digits (2,000 pages, 1,440 minutes), so the
-    /// figure steps down rather than crowding the ring's 54.8pt inner hole —
+    /// figure steps down rather than crowding the ring's 62.3pt inner hole —
     /// "1284" measures 40.3pt at the base size, and three digits already look
-    /// cramped without the step.
+    /// cramped without the step. Kept after the ring grew: the extra room went
+    /// to the `of N` line beneath, not to a bigger figure.
     private var ringFontSize: CGFloat {
-        switch String(current).count {
+        switch figure.count {
         case 4...: 20
         case 3: 22
         default: 24
@@ -130,7 +141,7 @@ private struct DailyGoalRow: View {
     }
 
     private var bareFontSize: CGFloat {
-        switch String(current).count {
+        switch figure.count {
         case 4...: 30
         case 3: 34
         default: 38
@@ -147,15 +158,18 @@ private struct DailyGoalRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 13) {
+        // 12 rather than 13, clawing back a point of the ring's extra width:
+        // the two kinds sit side by side, so every point the ring takes comes
+        // out of "370 to go" beside it.
+        HStack(spacing: 12) {
             if let goal {
                 GoalRing(fraction: goal.fraction, color: arcColor) {
-                    VStack(spacing: 3) {
-                        Text("\(current)")
+                    VStack(spacing: 4) {
+                        Text(verbatim: figure)
                             .font(.display(ringFontSize, weight: .semibold))
                             .foregroundStyle(palette.ink0Color)
                             .contentTransition(.numericText())
-                        Text("of \(goal.target)")
+                        Text(verbatim: "of \(goal.target)")
                             .font(.monoUI(8.5))
                             .foregroundStyle(palette.ink3Color)
                     }
@@ -164,12 +178,13 @@ private struct DailyGoalRow: View {
                     .padding(.horizontal, 4)
                 }
             } else {
-                Text("\(current)")
+                Text(verbatim: figure)
                     .font(.display(bareFontSize, weight: .semibold))
                     .foregroundStyle(palette.ink0Color)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
-                    .frame(width: 74, height: 74)
+                    // The ring's own slot, so a mixed card still aligns.
+                    .frame(width: 82, height: 82)
             }
 
             VStack(alignment: .leading, spacing: 2) {

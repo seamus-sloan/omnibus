@@ -102,10 +102,16 @@ struct StatsSection<Content: View>: View {
 struct GoalRing<Center: View>: View {
     let fraction: Double
     let color: Color
-    var diameter: CGFloat = 74
-    /// The inner disc as a share of the diameter — 74% in the handoff, which
-    /// is what fixes the stroke at 13% of the diameter either side.
-    var innerScale: CGFloat = 0.74
+    /// Grown from the handoff's 74pt, which left the `of N` line short of the
+    /// arc. A circle's hole is only its full width across the middle, and that
+    /// line sits *below* the middle: at 74/0.74 the hole is 54.8pt wide at the
+    /// centre but 45.8pt at the line's own height, against a 25.5pt "of 40".
+    var diameter: CGFloat = 82
+    /// The inner disc as a share of the diameter. Raised with it, so the hole
+    /// gains more than the growth alone would give — 54.8pt → 62.3pt, and
+    /// 45.8 → 54.6 at the line that needed it — while the stroke stays the
+    /// weight the handoff drew (9.6pt → 9.8pt).
+    var innerScale: CGFloat = 0.76
     @ViewBuilder var center: () -> Center
 
     @Environment(\.palette) private var palette
