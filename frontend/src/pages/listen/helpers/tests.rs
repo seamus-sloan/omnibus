@@ -131,24 +131,22 @@ fn remaining_at_rate_keeps_chapter_durations_summing_to_the_total() {
 }
 
 #[test]
-fn remaining_at_rate_keeps_elapsed_and_remaining_labels_on_one_basis() {
-    // The scrubber-row contract (mirrors the iOS `scrubberRowLabelsAgree`
-    // test for #2108): a 60-minute span at 2x, 20 book-minutes in, reads
-    // 10:00 elapsed and 20:00 remaining, summing to the 30-minute
-    // rate-adjusted total. An elapsed label left in 1x book-time would show
-    // 20:00 beside 20:00 remaining at the one-third mark.
+fn only_the_time_left_is_rate_adjusted_now() {
+    // Issue #2344: the player's elapsed and total readouts show real book-time
+    // — matching the bookmark stamps and the book detail page — and do NOT
+    // scale with the rate. Only the "time left" estimate is rate-adjusted.
     let duration = 3600.0;
-    let elapsed = 1200.0;
-    let rate = 2.0;
-    assert_eq!(format_hms(remaining_at_rate(elapsed, rate)), "10:00");
+    let elapsed = 600.0;
+    // Elapsed and total are raw book-time, identical whatever the rate.
+    assert_eq!(format_hms(elapsed), "10:00");
+    assert_eq!(format_hms(duration), "1:00:00");
+    // The time-left halves as the speed doubles.
     assert_eq!(
-        format_hms(remaining_at_rate(duration - elapsed, rate)),
-        "20:00"
+        format_hms(remaining_at_rate(duration - elapsed, 1.0)),
+        "50:00"
     );
-    assert!(
-        (remaining_at_rate(elapsed, rate) + remaining_at_rate(duration - elapsed, rate)
-            - remaining_at_rate(duration, rate))
-        .abs()
-            < f64::EPSILON
+    assert_eq!(
+        format_hms(remaining_at_rate(duration - elapsed, 2.0)),
+        "25:00"
     );
 }
