@@ -164,7 +164,15 @@ private struct DailyGoalRow: View {
         HStack(spacing: 12) {
             if let goal {
                 GoalRing(fraction: goal.fraction, color: arcColor) {
-                    VStack(spacing: 4) {
+                    // Tighter than it reads: Cormorant's descender space sits
+                    // empty under lining digits (~6pt at 24pt) and Space Mono
+                    // carries its own ascender gap, so a nominal 4pt left ~12pt
+                    // of air between the figure's baseline and the "of"
+                    // glyphs. Pulling the line boxes together closes that to
+                    // about half, and since the pair is centred it lifts the
+                    // "of N" line toward the middle of the hole — where the
+                    // circle is widest — instead of leaving it low and pinched.
+                    VStack(spacing: 0) {
                         Text(verbatim: figure)
                             .font(.display(ringFontSize, weight: .semibold))
                             .foregroundStyle(palette.ink0Color)
@@ -172,6 +180,7 @@ private struct DailyGoalRow: View {
                         Text(verbatim: "of \(goal.target)")
                             .font(.monoUI(8.5))
                             .foregroundStyle(palette.ink3Color)
+                            .padding(.top, -2)
                     }
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
