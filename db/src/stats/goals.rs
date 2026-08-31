@@ -73,14 +73,40 @@ async fn year_bounds(pool: &SqlitePool, year: i64) -> Result<(i64, i64), StatsEr
     Ok((row.try_get("lo")?, row.try_get("hi")?))
 }
 
-/// The caller's goal for the current calendar year, `None` when unset — the
-/// value `compute` hangs off [`omnibus_shared::StatsSummary::goal`].
-pub(super) async fn current_goal(
+/// The caller's goal for the current calendar year, and that year's finished
+/// count whether or not a goal exists — the two values `compute` hangs off
+/// [`omnibus_shared::StatsSummary::goal`] and `books_this_year`.
+///
+/// The count runs unconditionally so a surface can report the year before a
+/// reader commits to a target, the same reason `daily_goals` measures both
+/// kinds. It is computed once and handed to both, so a goal's `current` and
+/// the bare figure can never disagree.
+///
+/// The cost is one extra bounded count for a reader with no annual goal, on an
+/// uncached summary only.
+pub(super) async fn current_goal_and_progress(
     pool: &SqlitePool,
     user_id: i64,
-) -> Result<Option<ReadingGoal>, StatsError> {
+) -> Result<(Option<ReadingGoal>, i64), StatsError> {
     let year = current_year(pool).await?;
-    goal_for_year(pool, user_id, year).await
+    let (start, end) = year_bounds(pool, year).await?;
+    let current = compute::finished_count_bounded(pool, user_id, start, end).await?;
+    let target: Option<i64> = sqlx::query_scalar(
+        "SELECT target FROM reading_goals
+         WHERE user_id = ? AND scope = 'year' AND year = ? AND kind = ?",
+    )
+    .bind(user_id)
+    .bind(year)
+    .bind(GOAL_KIND_BOOKS)
+    .fetch_optional(pool)
+    .await?;
+    let goal = target.map(|target| ReadingGoal {
+        kind: GOAL_KIND_BOOKS.to_string(),
+        target,
+        current,
+        year,
+    });
+    Ok((goal, current))
 }
 
 /// The caller's goal for `year`, paired with that year's completion count.
@@ -238,12 +264,25 @@ pub async fn set_daily_goal(
     Ok(daily_goals(pool, user_id).await?)
 }
 
-/// The caller's standing daily goals with today's progress toward each.
+/// The caller's standing daily goals, and today's figure for each kind
+/// whether or not it carries a target.
 ///
-/// Each kind's progress is measured **only when that kind has a target**. The
-/// two measurements are unrelated queries — one over the pages ledger, one
-/// over the session tables — and running the ledger scan for a reader who only
-/// set a minutes goal would be work with nowhere to go.
+/// Both measurements run unconditionally so a surface can show what a reader
+/// has done today *before* they commit to a goal — the figure iOS renders in
+/// the ring's slot when there is no ring to draw. The alternative, deriving it
+/// client-side, was rejected: today's pages happen to be recoverable from
+/// `pages_detail.daily`, but today's minutes are only recoverable from the
+/// heatmap's UTC buckets, which include unzoned seconds and so would disagree
+/// with what the minutes goal reports the moment one is set.
+///
+/// The cost is two day-scoped queries on every uncached summary, including for
+/// readers with no goals at all. They are the same two the goal path already
+/// ran, hoisted rather than added, and the summary sits behind the 60-second
+/// aggregate cache.
+///
+/// A kind's [`DailyGoal::current`] and its `*_today` figure are the same
+/// number by construction — computed once and shared — so setting a target
+/// never appears to move the ground it measures.
 ///
 /// # Which day each kind is measured over
 ///
@@ -279,46 +318,38 @@ pub async fn daily_goals(pool: &SqlitePool, user_id: i64) -> Result<DailyGoals, 
         }
     }
 
-    // Nothing set means nothing to measure, and nothing to ask the clock for.
-    if pages_target.is_none() && minutes_target.is_none() {
-        return Ok(DailyGoals::default());
-    }
     let utc = utc_today(pool).await?;
+    let local_day = local_today(pool, user_id).await?;
+    let pages_today = pages::pages_read_on_day(pool, user_id, &utc).await?;
+    let (seconds, unzoned) = day_seconds(pool, user_id, &local_day, &utc).await?;
+    // Truncating, not rounding: a reader 59 seconds into their first minute
+    // has not read a minute yet, and a goal that rounds up hands out progress
+    // nobody earned.
+    let minutes_today = seconds / 60;
 
-    let pages = match pages_target {
-        Some(target) => Some(DailyGoal {
-            kind: GOAL_KIND_PAGES.to_string(),
-            target,
-            current: pages::pages_read_on_day(pool, user_id, &utc).await?,
-            day: utc.clone(),
-        }),
-        None => None,
-    };
-
-    let (minutes, unzoned_seconds) = match minutes_target {
-        Some(target) => {
-            let day = local_today(pool, user_id).await?;
-            let (seconds, unzoned) = day_seconds(pool, user_id, &day, &utc).await?;
-            (
-                Some(DailyGoal {
-                    kind: GOAL_KIND_MINUTES.to_string(),
-                    target,
-                    // Truncating, not rounding: a reader 59 seconds into their
-                    // first minute has not read a minute yet, and a goal that
-                    // rounds up hands out progress nobody earned.
-                    current: seconds / 60,
-                    day,
-                }),
-                unzoned,
-            )
-        }
-        None => (None, 0),
-    };
+    let pages = pages_target.map(|target| DailyGoal {
+        kind: GOAL_KIND_PAGES.to_string(),
+        target,
+        current: pages_today,
+        day: utc.clone(),
+    });
+    let minutes = minutes_target.map(|target| DailyGoal {
+        kind: GOAL_KIND_MINUTES.to_string(),
+        target,
+        current: minutes_today,
+        day: local_day,
+    });
 
     Ok(DailyGoals {
         pages,
         minutes,
-        unzoned_seconds,
+        // Still gated on the minutes *goal*: the disclosure exists to explain a
+        // shortfall in a figure being measured against a target, and attaching
+        // it to a bare readout would raise a caveat about a number nobody has
+        // asked anything of yet.
+        unzoned_seconds: if minutes_target.is_some() { unzoned } else { 0 },
+        pages_today: Some(pages_today),
+        minutes_today: Some(minutes_today),
     })
 }
 

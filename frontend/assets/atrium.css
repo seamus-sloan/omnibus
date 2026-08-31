@@ -5174,6 +5174,41 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   appearance: none;
 }
 
+/* ── Reading goals card (Settings → Account) ───────────────────────────
+   The three targets in read mode. One row per goal, the figure in the display
+   serif so the card reads as a summary rather than as a disabled form — the
+   form itself is behind the single Edit control. */
+.goal-readout {
+  margin: 1.25rem 0 0;
+  display: flex;
+  flex-direction: column;
+}
+.goal-readout-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--line-2);
+}
+.goal-readout-row:last-child { border-bottom: 0; }
+.goal-readout-label { font-size: 0.875rem; color: var(--ink-1); }
+.goal-readout-value {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--ink-0);
+}
+/* An absent target is not a figure, so it doesn't get the figure's treatment —
+   "Not set" in the UI face reads as a state, where 22px serif reads as a value. */
+.goal-readout-value.unset {
+  font-family: var(--sans);
+  font-size: 0.875rem;
+  color: var(--ink-3);
+}
+.goal-readout + .settings-actions { margin-top: 1.25rem; }
+
 .settings-status { font-size: 0.875rem; margin-top: 0.5rem; min-height: 1.2em; }
 .settings-status.success, .success-msg { color: #34d399; }
 .settings-status.error, .error { color: #f87171; font-size: 0.85rem; }
@@ -8717,200 +8752,779 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 /* ═══════════════════════════════════════════════════════════════════
    Stats page (/stats)
 
-   Period-scoped modules driven by the Week / Month / Year / Lifetime
-   dropdown embedded in the page title (the italic period word is the
-   trigger), then an "All-time" section that never re-queries.
+   The page is split on the boundary the payload itself draws. The hero
+   and the "Outside the window" band carry standing figures — the streak,
+   the goals, the trailing-year heatmap — and the "In this window" band
+   carries everything the Week / Month / Year / Lifetime pills govern.
+   The pills live in that band's own sticky header, immediately above the
+   figures they move, so the boundary is visible rather than implied.
 
    Motion mirrors the iOS app's vocabulary (omnibus-ios Motion.swift):
-   `settle` for entrances (cascade-in with a capped stagger), `lift` for
-   the dropdown popover, all disabled under prefers-reduced-motion.
+   `settle` for entrances (cascade-in with a capped stagger), all
+   disabled under prefers-reduced-motion.
    ═══════════════════════════════════════════════════════════════════ */
 
 .st-page {
-  max-width: 1080px;
+  /* The page is full-bleed: the hero band and the sticky scope switch
+     both reach the viewport edge, so the page cancels its shell's own
+     horizontal padding rather than sitting inside it. The two shells pad
+     differently, hence the var. */
+  --st-bleed: clamp(1.25rem, 4vw, 3.5rem);
+  /* Height of the sticky top bar the band headers pin beneath. */
+  --st-nav-h: 65px;
+  --st-modes-h: 66px;
+  --st-gutter: 28px;
+  --st-max: 1120px;
+
+  --st-donut-c0: var(--accent);
+  --st-donut-c1: color-mix(in oklch, var(--accent) 65%, var(--bg-3));
+  --st-donut-c2: color-mix(in oklch, var(--accent) 40%, var(--bg-3));
+  --st-donut-c3: color-mix(in oklch, var(--accent) 22%, var(--bg-3));
+  --st-donut-other: var(--bg-3);
+  /* Between `--bg-0` and `--bg-1`, so the hero lifts off the page without
+     reading as a card. Mixed rather than pinned to a literal so every
+     theme keeps the same relationship. */
+  --st-hero-bg: color-mix(in oklch, var(--bg-0) 62%, var(--bg-1));
+  /* The quietest mark on a chart: present, but not claiming a value. */
+  --st-idle: color-mix(in oklch, var(--bg-2) 70%, var(--bg-3));
+
+  margin-inline: calc(-1 * var(--st-bleed));
+}
+/* The mobile shell pads 1rem and reserves a notch inset up top; the hero
+   has to cancel both to reach the edge. */
+.screen .st-page {
+  --st-bleed: 1rem;
+  --st-nav-h: 0px;
+  --st-gutter: 18px;
+  margin-top: calc(-1 * var(--screen-pad-top, 1.5rem));
+}
+
+.st-body {
+  max-width: var(--st-max);
   margin: 0 auto;
-  padding: 24px 0 60px;
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-  /* iOS Motion.settle (spring 0.44/0.82) and Motion.lift (0.28/0.74),
-     approximated as eased curves with a whisper of overshoot. */
-  --st-ease-settle: cubic-bezier(0.22, 1, 0.36, 1);
-  --st-ease-lift: cubic-bezier(0.2, 0.9, 0.35, 1.08);
+  padding: 26px var(--st-gutter) 64px;
 }
 
-/* ── Editorial header ─────────────────────────────────────────────── */
-.st-head { display: flex; flex-direction: column; gap: 8px; }
-.st-title { margin: 0; }
-.st-sub { margin: 0; color: var(--ink-2); }
-
-/* ── In-title period dropdown ─────────────────────────────────────── */
-.st-period-picker { position: relative; display: inline-block; }
-/* The trigger inherits the h1's serif so the period word reads as part
-   of the headline, not as a control bolted next to it. */
-.st-period-trigger {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.28em;
+/* ── Hero: the run, the spark, the goals ──────────────────────────── */
+.st-hero {
+  position: relative;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line-2);
+  background:
+    radial-gradient(680px 320px at 78% -10%,
+      color-mix(in oklch, var(--accent) 16%, transparent), transparent 70%),
+    var(--st-hero-bg);
 }
-.st-period-word {
-  border-bottom: 2px solid var(--accent);
-  padding-bottom: 2px;
-}
-.st-period-chevron {
-  font-size: 0.38em;
-  color: var(--accent);
-  align-self: center;
-  transition: transform 0.28s var(--st-ease-lift);
-}
-.st-period-trigger[aria-expanded="true"] .st-period-chevron {
-  transform: rotate(180deg);
-}
-.st-period-scrim {
-  position: fixed; inset: 0; z-index: 60;
-  background: transparent; cursor: default;
-}
-.st-period-menu {
-  position: absolute; top: calc(100% + 10px); left: 0;
-  min-width: 210px; z-index: 61;
-  background: var(--bg-1); border: 1px solid var(--line-2);
-  border-radius: 12px; padding: 6px;
-  display: flex; flex-direction: column; gap: 2px;
-  /* Reset the h1 context the menu inherits from its place in the title. */
-  font-family: var(--sans); font-size: 14px;
-  font-style: normal; font-weight: 400; letter-spacing: normal;
-  box-shadow:
-    0 18px 40px color-mix(in oklch, black 55%, transparent),
-    0 2px 0 color-mix(in oklch, black 25%, transparent);
-  transform-origin: top left;
-  animation: st-menu-in 0.28s var(--st-ease-lift) both;
-}
-@keyframes st-menu-in {
-  from { opacity: 0; transform: translateY(-6px) scale(0.96); }
-}
-.st-range-row {
-  display: flex;
+.st-hero-inner {
+  max-width: var(--st-max);
+  margin: 0 auto;
+  padding: 40px var(--st-gutter) 34px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 48px;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  border: 0;
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: transparent;
+}
+.st-hero-run { animation: st-settle .5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.st-hero-kicker {
+  display: block;
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--accent);
+}
+.atrium .st-hero-figure {
+  margin: 8px 0 0;
+  font-family: var(--serif); font-weight: 600;
+  font-size: 88px; line-height: 0.95; letter-spacing: -0.01em;
+  color: var(--ink-0);
+}
+.st-hero-unit { font-size: 88px; }
+/* The full stop is the design's only punctuation at this size — muted, so
+   it reads as a typographic beat rather than as part of the figure. */
+.st-hero-stop { color: var(--ink-3); }
+.st-hero-line { margin: 12px 0 0; font-size: 15px; color: var(--ink-1); max-width: 46ch; }
+
+.st-spark {
+  display: flex; align-items: flex-end; gap: 3px;
+  height: 44px; margin-top: 22px; width: 504px; max-width: 100%;
+}
+/* `min-height` leaves a stub on a quiet day, so a gap in the run reads as
+   an empty slot rather than as a missing column. */
+.st-spark-bar {
+  flex: 1 1 0; min-width: 0; min-height: 4px;
+  border-radius: 2px;
+  background: color-mix(in oklch, var(--ink-3) 45%, var(--bg-2));
+}
+.st-spark-bar.on { background: var(--accent); }
+.st-spark-bar.off { background: var(--st-idle); }
+.st-spark-axis {
+  display: flex; justify-content: space-between;
+  width: 504px; max-width: 100%; margin-top: 8px;
+  font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+}
+
+.st-hero-goals {
+  width: 320px;
+  display: flex; flex-direction: column; gap: 16px;
+  animation: st-settle .5s .08s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ── Annual goal ring ─────────────────────────────────────────────── */
+.st-year { display: flex; align-items: center; gap: 18px; }
+.st-year-ring {
+  width: 132px; height: 132px; flex: none;
+  border-radius: 999px;
+  display: grid; place-items: center;
+  background: conic-gradient(var(--accent) 0% var(--st-ring-pct, 0%),
+                             var(--bg-2) var(--st-ring-pct, 0%) 100%);
+  transition: background .45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.st-year-disc {
+  width: 76%; height: 76%;
+  border-radius: 999px;
+  background: var(--st-hero-bg);
+  display: grid; place-items: center; align-content: center; text-align: center;
+}
+.st-year-figure { font-family: var(--serif); font-weight: 600; font-size: 38px; line-height: 1; }
+.st-year-target { font-size: 18px; color: var(--ink-3); }
+.st-year-caption {
+  font-family: var(--mono); font-size: 9px;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--ink-2); margin-top: 4px;
+}
+.st-year-side { min-width: 0; }
+.st-year-kicker {
+  display: block;
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3);
+}
+.st-year-line { margin: 5px 0 0; font-size: 14px; color: var(--ink-1); }
+.st-year-invite { margin: 5px 0 0; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+/* The year's count with no target behind it. Carries the weight the ring would
+   have had, so the hero's right column doesn't collapse to a paragraph, but in
+   the muted ink: it is a readout, not progress toward anything. */
+.st-year-bare { margin-top: 6px; }
+.atrium .st-year-figure.bare {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 34px;
+  line-height: 1;
   color: var(--ink-1);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
+}
+.st-year-bare-unit { font-size: 17px; color: var(--ink-3); }
+.st-year-bare .st-year-note { margin-top: 4px; }
+.st-year-note { margin: 3px 0 0; font-size: 12.5px; color: var(--ink-2); }
+.st-year-pace { color: var(--accent); }
+
+/* ── Daily goals card ─────────────────────────────────────────────── */
+.st-daily {
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  padding: 16px 18px 14px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.st-daily-head { display: flex; align-items: center; gap: 8px; }
+.st-daily-eyebrow {
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-2);
+}
+.st-daily-row { display: flex; flex-direction: column; gap: 7px; }
+.st-daily-top { display: flex; align-items: baseline; gap: 10px; }
+.st-daily-label { font-size: 13px; color: var(--ink-1); }
+.st-daily-figures { display: flex; align-items: baseline; gap: 8px; }
+.st-daily-figure {
+  margin: 0;
+  font-family: var(--serif); font-size: 26px; line-height: 1; color: var(--ink-0);
+}
+/* A figure with no target behind it: same size and face as the goal ratio, so
+   a half-set card aligns, but in the muted ink — it is a readout, not progress
+   toward anything. */
+/* A count with no target behind it: the same size and face as the goal ratio,
+   so a half-set card aligns, but in the muted ink — it is a readout, not
+   progress toward anything. The row's label names what is being counted, so
+   the figure carries no unit of its own. */
+.st-daily-figure.bare { color: var(--ink-1); }
+/* `.atrium p { margin: 0 }` is 0,1,1 and outranks a bare class, so the
+   auto-margin that right-aligns this note has to match it on specificity —
+   without it the note sits against the figure instead of the card's edge. */
+.atrium .st-daily-note {
+  margin: 0 0 0 auto;
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3);
+}
+.st-daily-note.met { color: var(--accent); }
+.st-daily-invite { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+/* The disclosure sits under a hairline: it qualifies both rows above it,
+   not the one it happens to follow. */
+.st-daily-unzoned {
+  margin: 0; padding-top: 8px;
+  border-top: 1px solid var(--line-2);
+  font-size: 11px; line-height: 1.5; color: var(--ink-3);
+}
+
+.st-goal-track { height: 5px; border-radius: 999px; background: var(--bg-2); overflow: hidden; }
+.st-goal-fill {
+  height: 100%; border-radius: 999px;
+  background: color-mix(in oklch, var(--accent) 55%, var(--bg-3));
+  transition: width .45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.st-goal-fill.met { background: var(--accent); }
+
+/* ── Goal editors ─────────────────────────────────────────────────── */
+.st-goal-trigger {
+  margin-left: auto;
+  border: 0; background: transparent; padding: 0;
+  color: var(--ink-2); cursor: pointer;
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+}
+@media (hover: hover) { .st-goal-trigger:hover:not(:disabled) { color: var(--accent); } }
+.st-goal-trigger:disabled { opacity: 0.5; cursor: not-allowed; }
+/* The ring's own trigger is a button under a paragraph, not a row's
+   trailing action, so it must not be pushed to the right edge. */
+.st-year-side .st-goal-trigger {
+  margin: 9px 0 0;
+  padding: 4px 11px;
+  border: 1px solid var(--line); border-radius: 999px;
+  color: var(--ink-1);
+}
+/* The hero's link to the one place goals are set. A link, not a button: the
+   editing happens in Settings → Account, and dressing it as a control here
+   would promise an editor this page deliberately does not have. */
+.st-goal-link {
+  display: inline-block;
+  /* The daily card is a flex column, which would otherwise stretch the link
+     to the card's full width and make it read as a primary action. */
+  align-self: flex-start;
+  margin-top: 9px;
+  padding: 4px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-1);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: color .18s ease, border-color .18s ease;
 }
 @media (hover: hover) {
-  .st-range-row:hover { background: var(--bg-2); color: var(--ink-0); }
+  .st-goal-link:hover { color: var(--accent); border-color: var(--accent); }
 }
-.st-range-row.on { background: var(--bg-2); color: var(--ink-0); }
-.st-range-check { color: var(--accent); }
 
-/* ── Entrance cascade (iOS CascadeIn: fade + 12px lift + settle) ──── */
-/* Page-load only: the cards stay mounted across period switches, so the
-   cascade never replays mid-session — the stagger is short and capped,
-   the point is that the page *fills*, not that the user waits for it. */
-.st-tiles .st-tile,
-.st-compose > *,
-.st-alltime > * {
-  animation: st-cascade-in 0.44s var(--st-ease-settle) both;
+.st-goal-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.st-goal-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+.st-goal-input {
+  width: 76px;
+  background: var(--bg-0);
+  border: 1px solid var(--line); border-radius: 8px;
+  color: var(--ink-0); padding: 5px 8px;
+  font-family: var(--mono); font-size: 12px;
 }
-@keyframes st-cascade-in {
-  from { opacity: 0; transform: translateY(12px) scale(0.985); }
+.st-goal-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.st-goal-actions { display: flex; align-items: center; gap: 6px; }
+.st-goal-actions .btn {
+  padding: 5px 11px; border-radius: 999px;
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+.st-goal-error { margin: 6px 0 0; font-size: 11.5px; color: var(--bad); }
+.st-goal-offline { margin: 6px 0 0; font-size: 11.5px; color: var(--ink-3); flex-basis: 100%; }
+
+/* ── Scope switch (User / Library) ────────────────────────────────── */
+.st-modes {
+  position: sticky;
+  top: var(--st-nav-h);
+  z-index: 4;
+  background: color-mix(in oklch, var(--bg-0) 92%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line-2);
+}
+.st-modes-inner {
+  max-width: var(--st-max);
+  margin: 0 auto;
+  padding: 0 var(--st-gutter);
+  display: flex; align-items: stretch;
+}
+.st-mode {
+  border: 0; background: transparent; cursor: pointer;
+  padding: 16px 0; margin-right: 34px;
+  text-align: left;
+  display: flex; flex-direction: column; gap: 3px;
+  border-bottom: 2px solid transparent;
+  transition: border-color .18s ease, color .18s ease;
+}
+.st-mode-name {
+  font-family: var(--mono); font-size: 11px;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-2);
+}
+.st-mode-blurb { font-size: 11.5px; color: var(--ink-3); }
+.st-mode.on { border-bottom-color: var(--accent); }
+.st-mode.on .st-mode-name { color: var(--ink-0); }
+@media (hover: hover) { .st-mode:hover .st-mode-name { color: var(--ink-0); } }
+/* Stated on the Library scope only: it is the answer to "will the pills
+   move this?", and on the User scope the pills are right there instead. */
+.st-modes-note {
+  margin-left: auto; align-self: center;
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3);
+}
+
+/* ── Bands ────────────────────────────────────────────────────────── */
+.st-scope { display: flex; flex-direction: column; gap: 34px; animation: st-settle .4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.st-scope[data-testid="stats-scope-library"] { gap: 18px; }
+.st-band { display: flex; flex-direction: column; gap: 16px; }
+.st-band-body { display: flex; flex-direction: column; gap: 16px; }
+/* The windowed band's header pins under the scope switch so the pills stay
+   with the figures they govern; the standing band's header does not, which
+   is half the point — nothing under it moves. */
+.st-band-head {
+  position: sticky;
+  top: calc(var(--st-nav-h) + var(--st-modes-h));
+  z-index: 3;
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 0 12px; margin-bottom: -2px;
+  background: linear-gradient(var(--bg-0) 62%, transparent);
+}
+.st-band-head-plain { position: static; padding-top: 6px; }
+.st-band-heading { display: flex; align-items: baseline; gap: 12px; }
+.st-band-kicker {
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent);
+}
+.st-band-kicker-quiet { color: var(--ink-2); }
+.st-band-window { font-size: 12.5px; color: var(--ink-3); }
+.st-band-rule { flex: 1; height: 1px; background: var(--line); }
+.st-band-rule-accent { background: color-mix(in oklch, var(--accent) 28%, var(--line)); }
+
+.st-ranges { display: flex; align-items: center; gap: 8px; }
+.st-range-pill {
+  border: 1px solid transparent; background: transparent;
+  color: var(--ink-3); cursor: pointer;
+  padding: 6px 13px; border-radius: 999px;
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  transition: color .18s ease, background .18s ease, border-color .18s ease;
+}
+@media (hover: hover) { .st-range-pill:hover { color: var(--ink-1); } }
+.st-range-pill.on { background: var(--bg-2); border-color: var(--line); color: var(--ink-0); }
+
+/* ── Headline tiles ───────────────────────────────────────────────── */
+.st-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.st-tile {
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  padding: 16px 18px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease;
+  /* Lifetime drops the whole comparison row — it has no previous window to
+     measure against — so the tile reserves that height rather than the row
+     of four changing size under the reader's cursor on a period switch. */
+  min-height: 112px;
+}
+@media (hover: hover) {
+  .st-tile:hover { border-color: var(--line); background: var(--bg-2); }
+}
+.st-tile-top { display: flex; align-items: baseline; gap: 8px; }
+.st-tile-value {
+  font-family: var(--serif); font-weight: 600;
+  font-size: 44px; line-height: 1; color: var(--ink-0);
+  animation: st-swap .28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.st-tile.accent .st-tile-value { color: var(--accent); }
+.st-tile-unit { font-family: var(--serif); font-size: 20px; color: var(--ink-3); }
+.st-tile-delta {
+  margin-left: auto;
+  font-family: var(--mono); font-size: 11px; color: var(--ink-2);
+}
+.st-tile-delta.up { color: var(--accent); }
+.st-tile-delta.flat { color: var(--ink-3); }
+.st-tile-label {
+  margin-top: 8px;
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-2);
+}
+.st-tile-track {
+  margin-top: 10px; height: 4px; border-radius: 999px;
+  background: var(--bg-2); overflow: hidden;
+}
+.st-tile-fill {
+  height: 100%; border-radius: 999px; background: var(--accent);
+  transition: width .45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.st-tile:not(.accent) .st-tile-fill { background: var(--st-donut-c1); }
+
+/* ── Paired cards ─────────────────────────────────────────────────── */
+/* The band's cards run wider than the shared `.card` 20px, which the design
+   sizes at 22/24 so a 200px dial and a seven-row weekday strip both breathe. */
+.st-clock, .st-spend, .st-heat, .st-open, .st-finished, .st-monthly {
+  padding: 22px 24px;
+}
+.st-duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.st-card-empty { margin: 14px 0 0; font-size: 13px; color: var(--ink-3); }
+.st-card-note { margin: 12px 0 0; font-size: 11px; color: var(--ink-3); }
+
+/* ── Reading clock ────────────────────────────────────────────────── */
+.st-clock-body { display: flex; align-items: center; gap: 26px; margin-top: 16px; }
+.st-clock-dial { position: relative; width: 200px; height: 200px; flex: none; }
+/* `transform-origin` puts the pivot at the tick's own top-centre, which the
+   negative margin has placed exactly on the dial's centre — without both,
+   every tick pivots 4px off and the rim comes out eccentric to the hub. */
+.st-clock-tick {
+  position: absolute;
+  left: 50%; top: 50%;
+  margin-left: -4px;
+  width: 8px;
+  transform-origin: 4px 0;
+  border-radius: 4px;
+  background: var(--st-idle);
+  transition: height .45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.st-clock-tick.hot { background: var(--accent); }
+.st-clock-tick.warm { background: var(--st-donut-c1); }
+.st-clock-tick.cool { background: var(--st-donut-c2); }
+.st-clock-hub {
+  position: absolute; inset: 48px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  display: grid; place-items: center; align-content: center;
+  text-align: center; padding: 10px; box-sizing: border-box;
+}
+.st-clock-peak { font-family: var(--serif); font-size: 27px; line-height: 1; color: var(--accent); }
+.st-clock-peak-label {
+  font-family: var(--mono); font-size: 9px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-3); margin-top: 5px;
+}
+.st-clock-side { flex: 1; min-width: 0; }
+.st-clock-line {
+  margin: 0;
+  font-family: var(--serif); font-size: 22px; line-height: 1.3; color: var(--ink-0);
+}
+.st-days { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
+.st-day { display: flex; align-items: center; gap: 10px; }
+.st-day-label { width: 28px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+.st-day-track { flex: 1; height: 6px; border-radius: 999px; background: var(--bg-2); overflow: hidden; }
+.st-day-bar {
+  height: 100%; border-radius: 999px; background: var(--st-donut-c1);
+  transition: width .45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.st-day-bar.hot { background: var(--accent); }
+.st-day-bar.idle { background: var(--bg-3); }
+.st-day-readout {
+  width: 52px; text-align: right;
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-2);
+}
+
+/* ── Where the time went: genre ring + read/listen split ──────────── */
+.st-spend-body { display: flex; align-items: center; gap: 22px; margin-top: 18px; }
+.st-donut {
+  width: 140px; height: 140px; flex: 0 0 140px;
+  border-radius: 999px;
+  display: grid; place-items: center;
+}
+.st-donut-hole {
+  width: 62%; height: 62%;
+  border-radius: 999px; background: var(--bg-1);
+  display: grid; place-items: center; align-content: center; text-align: center;
+}
+.st-donut-count { font-family: var(--serif); font-weight: 600; font-size: 26px; line-height: 1; }
+.st-donut-count-label { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); margin-top: 2px; }
+.st-donut-legend {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 9px; flex: 1;
+}
+.st-donut-row { display: flex; align-items: center; gap: 10px; }
+.st-donut-swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.st-donut-name { flex: 1; font-size: 13px; color: var(--ink-1); }
+.st-donut-pct { font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+
+.st-split {
+  margin-top: 20px; padding-top: 16px;
+  border-top: 1px solid var(--line-2);
+  display: flex; gap: 24px;
+}
+.st-split-half { flex: 1; }
+.st-split-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.st-split-name { font-size: 13px; color: var(--ink-1); }
+.st-split-pct { font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+.st-split-track { height: 6px; border-radius: 999px; background: var(--bg-2); overflow: hidden; }
+.st-split-fill {
+  height: 100%; border-radius: 999px;
+  transition: width .45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.st-length-rows { display: flex; flex-direction: column; gap: 12px; }
+
+/* ── The standouts ────────────────────────────────────────────────── */
+.st-standouts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.st-standout {
+  position: relative; overflow: hidden;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  padding: 20px;
+}
+.st-standout.lead {
+  background: linear-gradient(150deg,
+    color-mix(in oklch, var(--accent) 18%, var(--bg-1)), var(--bg-1));
+  border-color: color-mix(in oklch, var(--accent) 40%, transparent);
+}
+.st-standout-label {
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3);
+}
+.st-standout.lead .st-standout-label { color: var(--accent); }
+.st-standout-headline {
+  font-family: var(--serif); font-size: 30px; line-height: 1.15;
+  margin-top: 10px; color: var(--ink-0);
+}
+.st-standout-detail { font-family: var(--mono); font-size: 12px; color: var(--ink-2); margin-top: 8px; }
+.st-standouts-note {
+  grid-column: 1 / -1;
+  margin: 2px 0 0; font-size: 11.5px; line-height: 1.5; color: var(--ink-3);
+}
+
+/* ── Heatmap ──────────────────────────────────────────────────────── */
+.st-heat-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; margin-bottom: 20px;
+}
+.st-heat-sub { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
+.st-heat-figures { display: flex; gap: 28px; text-align: right; }
+.st-heat-value {
+  font-family: var(--serif); font-size: 34px; line-height: 1; color: var(--ink-0);
+}
+.st-heat-value.accent { color: var(--accent); }
+.st-heat-value-unit { font-size: 18px; color: var(--ink-3); }
+.st-heat-figure .label { margin-top: 4px; }
+.st-heatmap {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, auto);
+  grid-auto-columns: 1fr;
+  gap: 3px;
+}
+.st-hm-cell { aspect-ratio: 1 / 1; border-radius: 3px; }
+.st-hm-0 { background: var(--bg-2); }
+.st-hm-1 { background: color-mix(in oklch, var(--accent) 28%, var(--bg-2)); }
+.st-hm-2 { background: color-mix(in oklch, var(--accent) 52%, var(--bg-2)); }
+.st-hm-3 { background: color-mix(in oklch, var(--accent) 78%, var(--bg-2)); }
+.st-hm-4 { background: var(--accent); }
+.st-hm-future { background: transparent; }
+/* An inset ring rather than an outline: a border would resize the cell and
+   push the whole grid a pixel out of alignment on the streak's column. */
+.st-hm-cell.run { box-shadow: inset 0 0 0 1px var(--accent); }
+.st-hm-months {
+  display: flex; justify-content: space-between; margin-top: 12px;
+  font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+}
+.st-hm-legend {
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+  margin-top: 10px;
+  font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+}
+.st-hm-legend .st-hm-cell { width: 9px; }
+
+/* ── In progress / recently finished ──────────────────────────────── */
+.st-open { display: flex; flex-direction: column; }
+.st-open-list { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; flex: 1; }
+.st-open-row, .st-finished-row {
+  display: flex; align-items: center; gap: 14px;
+  color: inherit; text-decoration: none;
+}
+.st-open-cover { width: 44px; flex: none; }
+.st-open-body { flex: 1; min-width: 0; }
+.st-open-title, .st-finished-title {
+  font-family: var(--serif); font-size: 19px; color: var(--ink-0);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.st-open-author, .st-finished-author { font-size: 12px; color: var(--ink-3); }
+.st-open-author { margin-bottom: 8px; }
+@media (hover: hover) {
+  .st-open-row:hover .st-open-title,
+  .st-finished-row:hover .st-finished-title { color: var(--accent); }
+}
+.st-open-track { height: 3px; border-radius: 999px; background: var(--bg-3); overflow: hidden; }
+.st-open-fill { height: 100%; border-radius: 999px; background: var(--accent); }
+.st-open-readout { font-family: var(--mono); font-size: 11px; color: var(--ink-2); flex: none; }
+.st-open-foot {
+  margin-top: 18px; padding-top: 16px;
+  border-top: 1px solid var(--line-2);
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+}
+.st-open-foot-label { font-size: 13px; color: var(--ink-2); }
+.st-open-foot-value { font-family: var(--serif); font-size: 24px; color: var(--accent); }
+
+.st-finished-list { display: flex; flex-direction: column; gap: 2px; margin-top: 14px; }
+.st-finished-row { padding: 10px 0; border-bottom: 1px solid var(--line-2); }
+.st-finished-row:last-child { border-bottom: 0; }
+.st-finished-cover { width: 34px; flex: none; }
+.st-finished-body { flex: 1; min-width: 0; }
+.st-finished-title { font-size: 18px; }
+.st-finished-author { font-size: 11.5px; }
+.st-finished-stars { font-family: var(--mono); font-size: 11px; color: var(--accent); flex: none; }
+
+/* ── Books-per-month trend chart ──────────────────────────────────── */
+.st-monthly-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 22px;
+}
+.st-monthly-avg { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+.st-monthly-bars {
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  gap: 10px; height: 150px;
+}
+.st-mo-col { display: flex; flex-direction: column; align-items: center; height: 100%; }
+.st-mo-count { font-family: var(--mono); font-size: 10px; color: var(--ink-3); margin-bottom: 6px; }
+.st-mo-track { flex: 1 1 auto; width: 100%; display: flex; align-items: flex-end; justify-content: center; }
+.st-mo-bar {
+  width: 100%; min-height: 3px;
+  border-radius: 5px 5px 0 0;
+  background: var(--bg-3);
+  transition: height .45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.st-mo-col.peak .st-mo-bar { background: var(--st-donut-c1); }
+.st-mo-col.current .st-mo-bar { background: var(--accent); }
+.st-mo-label { margin-top: 8px; font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.st-mo-col.current .st-mo-label { color: var(--accent); }
+
+/* ── Library scope ────────────────────────────────────────────────── */
+.st-lib { padding: 30px 28px; }
+.st-lib-sentence {
+  margin: 0;
+  font-family: var(--serif); font-size: 34px; line-height: 1.25;
+  color: var(--ink-0); max-width: 34ch;
+}
+.st-lib-accent { color: var(--accent); }
+.st-lib-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 28px; }
+.st-lib-figure { border-left: 2px solid var(--accent); padding-left: 16px; }
+.st-lib-value {
+  font-family: var(--serif); font-size: 38px; line-height: 1.05; color: var(--ink-0);
+}
+.st-lib-unit { font-size: 16px; color: var(--ink-2); }
+.st-lib-coverage { font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin-top: 6px; }
+
+/* Columns rather than a grid: the decade histogram is deliberately unfolded
+   and untruncated, so one panel runs several times the height of its
+   neighbours and a grid row would size every panel beside it to match. */
+.st-comp { columns: 3; column-gap: 14px; }
+.st-comp-panel { padding: 20px 22px; margin-bottom: 14px; break-inside: avoid; }
+.st-comp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.st-comp-title {
+  margin: 0;
+  font-family: var(--serif); font-weight: 600; font-size: 19px; color: var(--ink-0);
+  flex: none;
+}
+.st-comp-note {
+  font-family: var(--mono); font-size: 10px; line-height: 1.5;
+  color: var(--ink-3); text-align: right; min-width: 0;
+}
+.st-comp-rows { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.st-comp-ghosted { margin: 12px 0 0; font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+
+/* ── Scaffold, empty state, footnote ──────────────────────────────── */
+.st-card-placeholder { min-height: 84px; background: var(--bg-1); border-radius: var(--r-lg); }
+.st-empty { padding: 40px 24px; text-align: center; }
+.st-empty-title { margin: 0 0 6px; font-family: var(--serif); }
+.st-empty-sub { margin: 0; color: var(--ink-2); }
+.st-footnote { margin: 26px 0 0; font-size: 12.5px; color: var(--ink-3); text-align: center; }
+
+/* ── Motion (iOS Motion.swift vocabulary) ─────────────────────────── */
+@keyframes st-settle { from { opacity: 0; transform: translateY(14px); } }
+@keyframes st-swap { from { opacity: 0; } }
+
+.st-tiles .st-tile,
+.st-duo > *,
+.st-standouts > * {
+  animation: st-settle .42s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .st-tiles .st-tile:nth-child(2) { animation-delay: 0.04s; }
 .st-tiles .st-tile:nth-child(3) { animation-delay: 0.08s; }
 .st-tiles .st-tile:nth-child(4) { animation-delay: 0.12s; }
-.st-compose > *:nth-child(1) { animation-delay: 0.16s; }
-.st-compose > *:nth-child(2) { animation-delay: 0.2s; }
-.st-compose > *:nth-child(3) { animation-delay: 0.24s; }
-.st-alltime > *:nth-child(2) { animation-delay: 0.06s; }
-
-/* ── Content swap (iOS contentTransition(.numericText()) analogue) ── */
-/* These nodes are keyed on their rendered data, so a period switch
-   remounts just the contents when the new summary lands — the cards
-   around them never move. */
-.st-tile-value,
-.st-donut-body,
-.st-format-pct {
-  animation: st-content-in 0.34s var(--st-ease-settle) both;
-}
-@keyframes st-content-in {
-  from { opacity: 0; transform: translateY(6px); }
-}
-/* The split bar grows/shrinks in place rather than remounting. */
-.st-format-fill { transition: width 0.44s var(--st-ease-settle); }
+.st-duo > *:nth-child(2) { animation-delay: 0.06s; }
+.st-standouts > *:nth-child(2) { animation-delay: 0.04s; }
+.st-standouts > *:nth-child(3) { animation-delay: 0.08s; }
 
 @media (prefers-reduced-motion: reduce) {
-  .st-period-menu,
+  .st-hero-run,
+  .st-hero-goals,
+  .st-scope,
   .st-tiles .st-tile,
-  .st-compose > *,
-  .st-alltime > *,
+  .st-duo > *,
+  .st-standouts > *,
   .st-tile-value,
-  .st-donut-body,
-  .st-format-pct { animation: none; }
-  .st-period-chevron { transition: none; }
-  .st-format-fill { transition: none; }
+  .st-goal-fill,
+  .st-tile-fill,
+  .st-split-fill,
+  .st-day-bar,
+  .st-mo-bar,
+  .st-clock-tick,
+  .st-year-ring,
+  .st-mode,
+  .st-range-pill,
+  .st-tile { transition: none; }
 }
 
-/* ── Sections ─────────────────────────────────────────────────────── */
-.st-period, .st-alltime { display: flex; flex-direction: column; gap: 16px; }
-
-.st-divider { border-top: 1px solid var(--line-2); padding-top: 16px; }
-.st-divider-title { margin: 0 0 4px; font-family: var(--serif); font-weight: 600; font-size: 23px; }
-.st-divider-sub { margin: 0; font-size: 12.5px; color: var(--ink-3); }
-
-/* ── Headline metric tiles ────────────────────────────────────────── */
-.st-tiles {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 18px;
+/* ── Narrow layouts ───────────────────────────────────────────────── */
+@media (max-width: 1000px) {
+  .st-hero-inner { grid-template-columns: 1fr; gap: 28px; }
+  .st-hero-goals { width: 100%; }
+  .atrium .st-hero-figure, .st-hero-unit { font-size: 64px; }
+  .st-standouts { grid-template-columns: repeat(2, 1fr); }
+  .st-comp { columns: 2; }
 }
-.st-tile {
-  padding: 16px 16px 22px;
-  position: relative;
-  /* Tiles render as <button>; undo UA button chrome so `.card` styling
-     (background/border/radius) is the only thing that shows. */
-  display: block;
-  width: 100%;
-  text-align: left;
-  font: inherit;
-  cursor: pointer;
-}
-.st-tile-value {
-  font-family: var(--serif); font-weight: 600;
-  font-size: 48px;
-  line-height: 1;
-  color: var(--ink-0);
-}
-.st-tile-accent .st-tile-value { color: var(--accent); }
-.st-tile-unit { font-size: 0.45em; color: var(--ink-3); }
-.st-tile-accent .st-tile-unit { color: var(--accent); }
-.st-tile-label { margin-top: 6px; }
 
-/* Pull-to-expand grip: a small handle glyph pinned to the tile's bottom
-   edge, signaling the drill-in affordance without adding a text label. */
-.st-tile-grip {
-  position: absolute;
-  left: 50%;
-  bottom: 8px;
-  transform: translateX(-50%);
-  width: 28px;
-  height: 3px;
-  border-radius: 999px;
-  background: var(--line-2);
-}
-.st-tile:focus-visible .st-tile-grip { background: var(--accent); }
-@media (hover: hover) { .st-tile:hover .st-tile-grip { background: var(--accent); } }
+@media (max-width: 720px) {
+  .st-hero-inner { padding: 24px var(--st-gutter) 26px; }
+  .atrium .st-hero-figure, .st-hero-unit { font-size: 52px; }
+  .st-spark, .st-spark-axis { width: 100%; }
+  .st-body { padding: 20px var(--st-gutter) 48px; }
+  .st-scope { gap: 26px; }
 
+  /* The band header's pills wrap under the label rather than squeezing the
+     rule to nothing; the rule itself goes, since it has no span left. */
+  .st-band-head { flex-wrap: wrap; gap: 8px 12px; }
+  .st-band-rule { display: none; }
+  .st-ranges { width: 100%; }
+  .st-range-pill { flex: 1; padding: 8px 6px; text-align: center; }
+
+  .st-tiles { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .st-tile-value { font-size: 34px; }
+  .st-duo { grid-template-columns: 1fr; gap: 12px; }
+  .st-standouts { grid-template-columns: 1fr; }
+  .st-comp { columns: 1; }
+  .st-lib { padding: 22px 20px; }
+  .st-lib-sentence { font-size: 26px; }
+  .st-lib-grid { grid-template-columns: 1fr; gap: 14px; }
+
+  /* The dial and its readouts stack; 200px of dial beside seven rows of
+     weekday leaves neither enough width to read. */
+  .st-clock-body { flex-direction: column; align-items: stretch; gap: 18px; }
+  .st-clock-dial { align-self: center; }
+  .st-clock-line { font-size: 19px; }
+  .st-spend-body { flex-direction: column; gap: 16px; }
+  .st-split { flex-direction: column; gap: 14px; }
+
+  .st-heat-head { flex-direction: column; align-items: flex-start; gap: 14px; }
+  .st-heat-figures { gap: 22px; text-align: left; }
+  .st-heat-value { font-size: 28px; }
+
+  /* 52 heatmap columns don't fit a phone. Scroll the grid inside a
+     block-level wrapper (iOS WebKit clips a block scroll container far more
+     reliably than a grid-as-scroller, which bled off-screen — #1076), and
+     contain the overscroll so the horizontal swipe can't chain to the page. */
+  .st-heatmap-scroll {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding-bottom: 4px;
+  }
+  .st-heatmap { grid-auto-columns: 8px; }
+  .st-hm-months { display: none; }
+  .st-monthly-bars { height: 110px; gap: 5px; }
+  .st-mo-count { display: none; }
+}
 /* ── Metric drill-in: bottom sheet (mobile) / centered modal (desktop) ──
    Same markup on every target — the breakpoint below (mirrors .st-page's
    720px) is the only thing that switches presentation, so SSR and first
@@ -8991,309 +9605,6 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .st-drill-grabber { display: none; }
 }
 
-/* ── Composition row: genre donut + format split ──────────────────── */
-.st-page {
-  --st-donut-c0: var(--accent);
-  --st-donut-c1: color-mix(in oklch, var(--accent) 65%, var(--bg-3));
-  --st-donut-c2: color-mix(in oklch, var(--accent) 40%, var(--bg-3));
-  --st-donut-c3: color-mix(in oklch, var(--accent) 22%, var(--bg-3));
-  --st-donut-other: var(--bg-3);
-}
-.st-compose {
-  display: grid;
-  grid-template-columns: 1.15fr 1fr;
-  gap: 18px;
-}
-.st-donut-body { display: flex; align-items: center; gap: 22px; margin-top: 14px; }
-.st-donut {
-  width: 150px;
-  height: 150px;
-  flex: 0 0 150px;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-}
-.st-donut-hole {
-  width: 62%;
-  height: 62%;
-  border-radius: 999px;
-  background: var(--bg-1);
-  display: grid;
-  place-items: center;
-  text-align: center;
-  align-content: center;
-}
-.st-donut-count { font-family: var(--serif); font-weight: 600; font-size: 28px; line-height: 1; }
-.st-donut-count-label { font-size: 10px; color: var(--ink-3); margin-top: 2px; }
-.st-donut-legend {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  flex: 1;
-  justify-content: center;
-}
-.st-donut-row { display: flex; align-items: center; gap: 10px; }
-.st-donut-swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
-.st-donut-name { flex: 1; font-size: 13px; color: var(--ink-1); }
-.st-donut-pct { font-size: 11px; color: var(--ink-2); }
-.st-donut-empty { margin: 14px 0 0; font-size: 13px; color: var(--ink-3); }
-/* Reading the ring can't describe — deliberately outside `.st-donut-body`, so
-   it never reads as a slice or as part of the hole's count. */
-.st-donut-untagged { margin: 12px 0 0; font-size: 11px; color: var(--ink-3); }
-
-.st-format-card { display: flex; flex-direction: column; justify-content: center; gap: 14px; }
-.st-format-row-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 6px;
-}
-.st-format-name { font-size: 14px; color: var(--ink-1); }
-.st-format-pct { font-size: 12px; color: var(--ink-2); }
-.st-format-track { height: 8px; border-radius: 999px; background: var(--bg-2); overflow: hidden; }
-.st-format-fill { height: 100%; border-radius: 999px; }
-
-/* The length distribution takes the full row under the donut/format pair:
-   four labelled bars want the width, and side-by-side they wrapped. */
-.st-length-card { grid-column: 1 / -1; }
-.st-length-rows { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
-
-/* ── Reading-days heatmap card ────────────────────────────────────── */
-.st-heatmap-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
-}
-.st-heatmap-sub { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
-.st-streaks { display: flex; align-items: flex-end; gap: 26px; }
-.st-streak { text-align: right; }
-.st-streak-value {
-  font-family: var(--serif); font-weight: 600;
-  font-size: 40px;
-  line-height: 1;
-  color: var(--accent);
-}
-.st-streak-unit { font-size: 17px; color: var(--ink-3); }
-.st-streak .label { margin-top: 4px; }
-/* The record stands beside the live run, deliberately quieter: two equally
-   loud numbers side by side make the reader work out which one is theirs. */
-.st-streak-minor .st-streak-value { font-size: 26px; color: var(--ink-2); }
-.st-streak-minor .st-streak-unit { font-size: 12px; }
-.st-heatmap {
-  display: grid;
-  grid-auto-flow: column;
-  grid-template-rows: repeat(7, auto);
-  grid-auto-columns: 1fr;
-  gap: 3px;
-}
-.st-hm-cell { aspect-ratio: 1 / 1; border-radius: 2px; }
-.st-hm-0 { background: var(--bg-2); }
-.st-hm-1 { background: color-mix(in oklch, var(--accent) 30%, var(--bg-2)); }
-.st-hm-2 { background: color-mix(in oklch, var(--accent) 55%, var(--bg-2)); }
-.st-hm-3 { background: color-mix(in oklch, var(--accent) 80%, var(--bg-2)); }
-.st-hm-4 { background: var(--accent); }
-.st-hm-future { background: transparent; }
-.st-hm-months {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 12px;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--ink-3);
-}
-.st-hm-legend {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 10px;
-  font-size: 11px;
-  color: var(--ink-3);
-}
-.st-hm-legend .st-hm-cell { width: 12px; }
-
-/* ── Books-per-month trend chart ──────────────────────────────────── */
-.st-monthly-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 18px;
-}
-.st-monthly-avg { font-size: 12.5px; color: var(--ink-3); }
-.st-monthly-bars {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  gap: 8px;
-  height: 128px;
-}
-.st-mo-col { display: flex; flex-direction: column; align-items: center; height: 100%; }
-.st-mo-track {
-  flex: 1 1 auto;
-  width: 100%;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-}
-.st-mo-bar {
-  width: 60%;
-  min-height: 2px;
-  border-radius: 3px 3px 0 0;
-  background: var(--bg-3);
-}
-.st-mo-current .st-mo-bar { background: var(--accent); }
-.st-mo-label { margin-top: 6px; font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
-.st-mo-current .st-mo-label { color: var(--accent); font-weight: 600; }
-
-/* ── Library-size card ────────────────────────────────────────────── */
-.st-lib-card { display: flex; flex-direction: column; gap: 14px; }
-/* auto-fit: the card renders only the figures the library has been measured
-   for, so it holds anywhere from one column to three. */
-.st-lib-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px 20px;
-}
-.st-lib-figure { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.st-lib-value {
-  font-family: var(--serif); font-size: 30px; color: var(--ink-0); line-height: 1.1;
-}
-.st-lib-unit { font-size: 14px; color: var(--ink-2); }
-.st-lib-coverage { font-size: 11px; color: var(--ink-3); }
-/* ── Superlatives card ────────────────────────────────────────────── */
-.st-sup-card { display: flex; flex-direction: column; gap: 14px; }
-/* auto-fit rather than a fixed column count: the card renders only the rows
-   the window supports, so its length varies from one to eight. */
-.st-sup-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 16px 20px;
-}
-.st-sup-row { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.st-sup-label { color: var(--ink-3); }
-.st-sup-headline {
-  font-family: var(--serif);
-  font-size: 17px;
-  color: var(--ink-0);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.st-sup-detail { font-size: 12px; color: var(--ink-2); }
-.st-sup-note { margin: 0; font-size: 11.5px; color: var(--ink-3); }
-
-/* ── Library-composition card ─────────────────────────────────────── */
-.st-comp-card { display: flex; flex-direction: column; gap: 14px; }
-/* auto-fit: a dimension the library carries no metadata for renders a
-   sentence rather than an axis, so the panel count varies. */
-.st-comp-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 22px 24px;
-}
-.st-comp-panel { min-width: 0; }
-.st-comp-title {
-  margin: 0; font-family: var(--serif); font-weight: 600;
-  font-size: 15px; color: var(--ink-1);
-}
-/* The coverage line beneath each panel's bars — the denominator that keeps a
-   partial distribution from reading as the whole library. */
-.st-comp-note { margin: 12px 0 0; font-size: 11px; color: var(--ink-3); }
-.st-comp-ghosted { margin: 2px 0 0; font-size: 11px; color: var(--ink-3); }
-
-/* ── Scaffold cards (shown while a section's fetch is in flight) ──── */
-.st-summary-card { display: flex; flex-direction: column; gap: 8px; }
-.st-summary-line { font-size: 14px; color: var(--ink-1); }
-.st-card-placeholder { min-height: 84px; }
-
-/* ── Empty state ──────────────────────────────────────────────────── */
-.st-empty { padding: 40px 24px; text-align: center; }
-.st-empty-title { margin: 0 0 6px; font-family: var(--serif); }
-.st-empty-sub { margin: 0; color: var(--ink-2); }
-
-/* ── Freshness footnote ───────────────────────────────────────────── */
-.st-footnote { margin: 4px 0 0; font-size: 12.5px; color: var(--ink-3); text-align: center; }
-
-@media (max-width: 720px) {
-  .st-page { padding-top: 8px; }
-
-  /* Tiles collapse to a 2×2 grid; the hero pair (Finished, Avg rating)
-     stays larger, per the converged design. */
-  .st-tiles { grid-template-columns: repeat(2, 1fr); gap: 12px; }
-  .st-tile-value { font-size: 28px; }
-  .st-tile-hero .st-tile-value { font-size: 40px; }
-
-  /* Composition cards stack; the donut legend flows below the ring. */
-  .st-compose { grid-template-columns: 1fr; gap: 12px; }
-  .st-comp-grid { grid-template-columns: 1fr; gap: 18px; }
-  .st-donut-body { flex-direction: column; gap: 16px; }
-  .st-donut-legend { width: 100%; }
-
-  /* 52 heatmap columns don't fit a phone. Scroll the grid inside a
-     block-level wrapper (iOS WebKit clips a block scroll container far more
-     reliably than a grid-as-scroller, which bled off-screen — #1076), and
-     contain the overscroll so the horizontal swipe can't chain to the page. */
-  .st-heatmap-scroll {
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    padding-bottom: 4px;
-  }
-  .st-heatmap { grid-auto-columns: 8px; }
-  .st-hm-months { display: none; }
-  .st-streaks { gap: 16px; }
-  .st-streak-value { font-size: 28px; }
-  .st-streak-unit { font-size: 13px; }
-  /* Restated at this breakpoint because `.st-streak-minor .st-streak-value`
-     outranks the bare class above on specificity — without it the record
-     would come out *larger* than the live run on a phone. */
-  .st-streak-minor .st-streak-value { font-size: 19px; }
-  .st-streak-minor .st-streak-unit { font-size: 10px; }
-
-  .st-monthly-bars { height: 96px; gap: 4px; }
-}
-
-/* ── "When you read": hour-of-day + day-of-week strips ───────────────
-   The same normalized-column treatment as the drill-in trend, on its own
-   classes so a 24-column strip can size tighter than a 12-point chart
-   without either having to compromise. */
-.st-when-strips { display: flex; flex-direction: column; gap: 18px; margin-top: 14px; }
-.st-when-strip-label { font-size: 10px; color: var(--ink-3); margin-bottom: 6px; }
-.st-when-cols {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(8px, 1fr);
-  gap: 4px;
-  height: 84px;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  padding-bottom: 2px;
-}
-.st-when-col { display: flex; flex-direction: column; align-items: center; height: 100%; }
-.st-when-track {
-  flex: 1 1 auto;
-  width: 100%;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-}
-/* `min-height` leaves a stub on an empty hour, so a quiet bucket reads as an
-   empty slot in the day rather than as a missing column. */
-.st-when-bar { width: 70%; min-height: 2px; border-radius: 3px 3px 0 0; background: var(--accent); }
-/* Reserved even where the axis is unlabelled — two of every three hour
-   columns carry no text, and without the reserve their bars would sit 12px
-   taller than their labelled neighbours. */
-.st-when-label { margin-top: 6px; min-height: 12px; font-size: 10px; color: var(--ink-3); }
-.st-when-note { margin: 12px 0 0; font-size: 12.5px; color: var(--ink-3); }
-
-@media (max-width: 720px) {
-  .st-when-cols { height: 72px; gap: 3px; }
-  .st-when-strips { gap: 14px; }
-}
 
 /* ══ Check-in flow (/check-in) ═════════════════════════════════════════ */
 
@@ -11341,122 +11652,6 @@ html {
   .lmq-fan:hover .lmq-fcard:hover { transform: rotate(var(--rot)) translateY(var(--dy)); }
   .lmq .lib-tile:hover .lib-tile-art { transform: none; }
   .lmq-scrollhint .arr { animation: none; }
-}
-
-/* ═══════════════════════════════════════════════════════════════════
-   ANNUAL READING GOAL — the band under the /stats masthead.
-
-   Anchored to the calendar year, so it sits outside the
-   period-scoped section and is untouched by the switcher. Its eyebrow
-   is a span rather than a heading: the band is one figure, not a
-   section of the document outline.
-   ═══════════════════════════════════════════════════════════════════ */
-.st-goal { display: flex; flex-direction: column; gap: 10px; }
-.st-goal-top {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-.st-goal-eyebrow {
-  font-size: 11px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-}
-.st-goal-trigger {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  font: inherit;
-  font-size: 12.5px;
-  color: var(--accent);
-  cursor: pointer;
-  border-bottom: 1px solid transparent;
-}
-@media (hover: hover) { .st-goal-trigger:hover { border-bottom-color: var(--accent); } }
-.st-goal-trigger:disabled { color: var(--ink-3); cursor: not-allowed; }
-
-.st-goal-figure {
-  margin: 0;
-  font-family: var(--serif);
-  font-size: 30px;
-  line-height: 1.1;
-}
-.st-goal-track {
-  height: 8px;
-  border-radius: 999px;
-  background: var(--bg-3);
-  overflow: hidden;
-}
-.st-goal-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: var(--accent);
-  /* Width is the only animated property; a just-saved target should slide
-     rather than jump. */
-  transition: width .35s var(--st-ease-settle, ease);
-}
-.st-goal-fill.met { background: color-mix(in oklch, var(--accent) 78%, var(--ink-0)); }
-.st-goal-note { margin: 0; font-size: 12.5px; color: var(--ink-2); }
-.st-goal-invite { margin: 0; color: var(--ink-2); max-width: 56ch; }
-
-.st-goal-editor { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
-.st-goal-label {
-  flex: 0 0 100%;
-  font-size: 11px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-}
-.st-goal-input {
-  width: 120px;
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
-  border-radius: 8px;
-  color: var(--ink-0);
-  font: inherit;
-  padding: 0.5rem 0.7rem;
-}
-.st-goal-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-.st-goal-actions { display: flex; gap: 8px; }
-.st-goal-offline { flex: 0 0 100%; margin: 0; font-size: 12.5px; color: var(--ink-3); }
-.st-goal-error { margin: 0; font-size: 12.5px; color: var(--bad); }
-
-/* Daily goals — the standing pages/minutes targets under the annual band.
-   Deliberately quieter than the annual figure above them: they share the
-   track and fill, but the numbers are captions rather than a headline, so the
-   card still reads as one goal with two supporting rows. */
-.st-daily {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: 4px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line-1);
-}
-.st-daily-eyebrow {
-  font-size: 11px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-}
-.st-daily-row { display: flex; flex-direction: column; gap: 6px; }
-.st-daily-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.st-daily-label { font-size: 13px; color: var(--ink-1); }
-.st-daily-figure { margin: 0; font-size: 15px; color: var(--ink-0); }
-.st-daily-invite { margin: 0; font-size: 12.5px; color: var(--ink-3); }
-.st-daily-unzoned { margin: 0; font-size: 12.5px; color: var(--ink-3); max-width: 56ch; }
-
-@media (max-width: 720px) {
-  .st-goal-figure { font-size: 26px; }
-  .st-goal-input { width: 100%; }
-  .st-goal-actions { width: 100%; }
-  .st-goal-actions .btn { flex: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .st-goal-fill { transition: none; }
 }
 
 /* ── Session log ──────────────────────────────────────────────────────

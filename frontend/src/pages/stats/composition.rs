@@ -1,8 +1,7 @@
-//! Library-composition card: what the collection is made of, by format,
-//! language, publisher, publication decade, and genre. Sits in the all-time
-//! section beside the library-size card and never moves with the switcher.
-//! Titled apart from `donut.rs`'s period-scoped "How you consumed them", which
-//! is read-vs-listened *seconds*, not the shelf's own mix.
+//! The Library scope's composition panels: what the collection is made of, by
+//! format, language, publisher, publication decade, and genre. Library-scoped
+//! rather than user-scoped, so the period switcher cannot reach any of it —
+//! which is what the scope switch above these panels says outright.
 
 use dioxus::prelude::*;
 use omnibus_shared::{CompositionDimension, CompositionSlice, LibraryComposition};
@@ -120,13 +119,13 @@ fn build_panels(c: &LibraryComposition) -> Vec<Panel> {
     ]
 }
 
-/// "What your library is made of" — format, language, publisher, publication
-/// decade, and genre.
+/// The composition panels — format, language, publisher, publication decade,
+/// and genre, one card each.
 ///
 /// Renders nothing at all until the fetch lands, or for a library with no live
 /// books: five empty panels describe a collection that doesn't exist.
 #[component]
-pub(super) fn LibraryCompositionCard(composition: Option<LibraryComposition>) -> Element {
+pub(super) fn LibraryCompositionPanels(composition: Option<LibraryComposition>) -> Element {
     let Some(composition) = composition else {
         return rsx! {};
     };
@@ -136,68 +135,78 @@ pub(super) fn LibraryCompositionCard(composition: Option<LibraryComposition>) ->
     let panels = build_panels(&composition);
     let ghosted = ghosted_note(composition.ghosted_books);
     rsx! {
-        div { class: "card st-comp-card", "data-testid": "stats-library-composition",
-            div { class: "label", "What your library is made of" }
-            div { class: "st-comp-grid",
-                for panel in panels.iter() {
-                    CompositionPanel { key: "{panel.testid}", panel: panel.clone() }
-                }
+        div { class: "st-comp", "data-testid": "stats-library-composition",
+            for panel in panels.iter() {
+                CompositionPanel { key: "{panel.testid}", panel: panel.clone() }
             }
-            if let Some(note) = ghosted {
-                p { class: "mono st-comp-ghosted", "data-testid": "stats-composition-ghosted",
-                    "{note}"
-                }
-            }
+        }
+        if let Some(note) = ghosted {
+            p { class: "st-comp-ghosted", "data-testid": "stats-composition-ghosted", "{note}" }
         }
     }
 }
 
 /// One dimension's bars, or its empty state. A dimension nothing in the
 /// library carries renders a sentence rather than an axis with no bars on it.
+///
+/// Every slice the server sent is drawn — the decade histogram in particular
+/// is documented as unfolded and untruncated, since a histogram cut to its
+/// tallest few bars is a bar chart of nothing.
 #[component]
 fn CompositionPanel(panel: Panel) -> Element {
-    let guard = &panel;
-    let max = guard.slices.iter().map(|s| s.books).max().unwrap_or(0);
+    let max = panel.slices.iter().map(|s| s.books).max().unwrap_or(0);
     rsx! {
-        section { class: "st-comp-panel", "data-testid": "{guard.testid}",
-            h4 { class: "st-comp-title", "{guard.title}" }
-            if guard.slices.is_empty() {
-                p { class: "st-donut-empty", "data-testid": "stats-composition-empty",
-                    "{guard.empty}"
+        section { class: "card st-comp-panel", "data-testid": "{panel.testid}",
+            div { class: "st-comp-head",
+                h4 { class: "st-comp-title", "{panel.title}" }
+                if let Some(note) = panel.note.clone() {
+                    span { class: "st-comp-note", "data-testid": "stats-composition-note", "{note}" }
+                }
+            }
+            if panel.slices.is_empty() {
+                p { class: "st-card-empty", "data-testid": "stats-composition-empty",
+                    "{panel.empty}"
                 }
             } else {
-                div { class: "st-length-rows",
-                    for (i, slice) in guard.slices.iter().enumerate() {
+                div { class: "st-comp-rows",
+                    for (i, slice) in panel.slices.iter().enumerate() {
                         // Indexed rather than label-keyed: the server folds a
                         // tail into a synthetic "Other" row that a real
                         // publisher of that name could collide with.
-                        div { key: "{i}", class: "st-format-row", "data-testid": "stats-composition-bar",
-                            div { class: "st-format-row-head",
-                                span { class: "st-format-name", "{slice.label}" }
+                        div { key: "{i}", class: "st-split-half", "data-testid": "stats-composition-bar",
+                            div { class: "st-split-head",
+                                span { class: "st-split-name", "{slice.label}" }
                                 // The count, not the share: "48 books" answers
                                 // the question a reader brought to a
                                 // composition chart. Grouped like every other
-                                // figure on the card, so a four-digit bucket
-                                // doesn't read differently from its own note.
-                                span { class: "mono st-format-pct", "{group_thousands(slice.books)}" }
+                                // figure here, so a four-digit bucket doesn't
+                                // read differently from its own note.
+                                span { class: "st-split-pct", "{group_thousands(slice.books)}" }
                             }
-                            div { class: "st-format-track",
+                            div { class: "st-split-track",
                                 div {
-                                    class: "st-format-fill",
-                                    style: "width: {bar_width(slice.books, max)}%; background: var(--st-donut-c0);",
+                                    class: "st-split-fill",
+                                    style: "width: {bar_width(slice.books, max)}%; background: {slice_color(i)};",
                                 }
                             }
                         }
                     }
                 }
-                if let Some(note) = guard.note.clone() {
-                    p { class: "mono st-comp-note", "data-testid": "stats-composition-note",
-                        "{note}"
-                    }
-                }
             }
         }
     }
+}
+
+/// The bar colour for a slice at `index`, cycling the shared donut ramp so a
+/// panel reads as a ranked set rather than as one colour repeated.
+fn slice_color(index: usize) -> &'static str {
+    const RAMP: [&str; 4] = [
+        "var(--st-donut-c0)",
+        "var(--st-donut-c1)",
+        "var(--st-donut-c2)",
+        "var(--st-donut-c3)",
+    ];
+    RAMP[index.min(RAMP.len() - 1)]
 }
 
 #[cfg(test)]

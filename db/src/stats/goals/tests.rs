@@ -177,6 +177,36 @@ async fn set_goal_propagates_a_db_error_when_the_pool_is_closed() {
     assert!(matches!(err, GoalError::Sqlx(_)), "got {err:?}");
 }
 
+/// The year's count is reported whether or not a goal exists, and it is the
+/// same number the goal's own `current` carries — setting a target must not
+/// appear to move the count it measures.
+#[tokio::test]
+async fn current_goal_and_progress_counts_the_year_with_or_without_a_target() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 3).await;
+    let user = seed_user(&pool, "alice").await;
+    let year = current_year(&pool).await.unwrap();
+    let when = early_in(&pool, year).await;
+    for uuid in ["uuid-1", "uuid-2"] {
+        finish(&pool, user, uuid, when).await;
+    }
+
+    let (goal, count) = current_goal_and_progress(&pool, user).await.unwrap();
+    assert!(goal.is_none(), "no target set");
+    assert_eq!(count, 2, "the year is counted anyway");
+
+    set_goal(&pool, user, &ReadingGoalUpdate::books(30))
+        .await
+        .unwrap();
+    let (goal, after) = current_goal_and_progress(&pool, user).await.unwrap();
+    assert_eq!(after, count, "the count did not move when the goal was set");
+    assert_eq!(
+        goal.map(|g| g.current),
+        Some(count),
+        "the goal's progress and the bare figure are one number"
+    );
+}
+
 #[tokio::test]
 async fn goal_for_year_is_none_when_the_user_has_set_nothing() {
     let pool = init_db("sqlite::memory:").await.unwrap();
@@ -666,7 +696,7 @@ async fn set_daily_goal_propagates_a_db_error_when_the_pool_is_closed() {
 }
 
 #[tokio::test]
-async fn daily_goals_is_empty_and_measures_nothing_when_no_target_is_set() {
+async fn daily_goals_still_reports_todays_figures_when_no_target_is_set() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 1).await;
     let user = seed_user(&pool, "alice").await;
@@ -675,9 +705,39 @@ async fn daily_goals_is_empty_and_measures_nothing_when_no_target_is_set() {
     accrue(&pool, user, "uuid-1", &today, 10).await;
 
     let goals = daily_goals(&pool, user).await.unwrap();
+    // No goal is still no goal — the surfaces gate their rings on this.
     assert!(goals.is_empty());
     assert!(goals.pages.is_none() && goals.minutes.is_none());
     assert_eq!(goals.unzoned_seconds, 0, "nothing to disclose against");
+    // But the day's figures are measured anyway, so a surface can show what
+    // the reader has done before they commit to a target.
+    assert_eq!(goals.pages_today, Some(30), "10% of a 300-page book");
+    assert_eq!(goals.minutes_today, Some(0));
+}
+
+/// The figure must not move the moment a target is set: `current` and the
+/// `*_today` field are the same measurement, computed once and shared.
+#[tokio::test]
+async fn daily_goals_report_the_same_figure_with_and_without_a_target() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    set_pages(&pool, "uuid-1", 300).await;
+    let today = utc_day(&pool).await;
+    accrue(&pool, user, "uuid-1", &today, 10).await;
+
+    let before = daily_goals(&pool, user).await.unwrap();
+    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_PAGES, 50))
+        .await
+        .unwrap();
+    let after = daily_goals(&pool, user).await.unwrap();
+
+    assert_eq!(before.pages_today, after.pages_today);
+    assert_eq!(
+        after.pages.as_ref().map(|g| g.current),
+        after.pages_today,
+        "the goal's progress and the bare figure are one number"
+    );
 }
 
 #[tokio::test]

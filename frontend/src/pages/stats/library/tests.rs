@@ -106,7 +106,7 @@ fn library_size_card_renders_each_figure_with_its_coverage() {
         listening_seconds: measured(94 * 24 * 3600, 88),
     };
 
-    let html = crate::test_support::render(rsx! { LibrarySizeCard { size: Some(size) } });
+    let html = crate::test_support::render(rsx! { LibrarySizeHero { size: Some(size) } });
 
     assert!(html.contains("stats-library-size"), "{html}");
     assert!(html.contains("412M"), "{html}");
@@ -119,11 +119,11 @@ fn library_size_card_renders_each_figure_with_its_coverage() {
 #[cfg(feature = "server")]
 #[test]
 fn library_size_card_renders_nothing_before_the_fetch_lands_or_with_no_measurements() {
-    let pending = crate::test_support::render(rsx! { LibrarySizeCard { size: None } });
+    let pending = crate::test_support::render(rsx! { LibrarySizeHero { size: None } });
     assert!(!pending.contains("stats-library-size"), "{pending}");
 
     let unmeasured = crate::test_support::render(rsx! {
-        LibrarySizeCard { size: Some(LibrarySize { books: 40, ..Default::default() }) }
+        LibrarySizeHero { size: Some(LibrarySize { books: 40, ..Default::default() }) }
     });
     assert!(!unmeasured.contains("stats-library-size"), "{unmeasured}");
 }

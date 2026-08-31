@@ -69,6 +69,33 @@ spec on the usual grounds: it needs two books on the stack at once, and
 `db::progress::recent_progress` drops `unread` and `finished`, so any book
 another spec sets read status on could be filtered off the fan mid-run.
 
+**The stats period pills are not a menu, and half the page is not behind
+them.** `/stats` splits on the windowed / standing boundary: the Week / Month /
+Year / Lifetime pills (`stats-range-week` … `stats-range-all`) live in the
+"In this window" band's own sticky header and govern that band alone. There is
+no `role="dialog"` period menu and no `stats-range-trigger` — a spec that opens
+one is asserting a control that no longer exists. Three consequences:
+
+- **The hero and the standing band must not move on a switch.** The streak,
+  both goals, the heatmap, the open-books list and the trailing-12 chart are
+  standing figures; `stats.spec.ts` pins that with a before/after `textContent`
+  comparison, and that test is the redesign's load-bearing assertion.
+- **The library figures are behind a scope tab**, not below the fold —
+  `stats-scope-tab-library` has to be clicked before `stats-library-size` or
+  `stats-library-composition` exist in the DOM at all.
+- **Lifetime drops every tile comparison.** `PeriodComparison` is `Default` for
+  `AllTime`, so a delta drawn against it would report a reader's whole history
+  as new; `stats-tile-*-delta` is absent there by design, not missing.
+- **The page reports goals but never edits them.** All three are set together
+  in Settings → Account, so the goal-editing specs live in `account.spec.ts`
+  (serial — they reset the same three per-user rows). `stats.spec.ts` asserts
+  only that the editors stay gone and that the read-only states render.
+- **An unset goal is not an empty state.** With no target the surface drops the
+  ring and the bar but still reports the real figure — `stats-goal-today`,
+  `stats-daily-{kind}-today` — so a spec asserting "no goal" must look for
+  those, not for an invite. `*-invite` now renders only when the server sent no
+  figure at all.
+
 ## Navigation — only routes the UI can actually reach
 
 A spec must arrive at a page the way a user does. `page.goto` is for entry
