@@ -1,9 +1,9 @@
 //  StatsLibrarySections.swift
-//  The library's own scale and make-up, and the session log beneath them.
+//  The library's own scale and make-up.
 //
-//  All three are standing sections: `LibrarySize` and `LibraryComposition` are
-//  library-scoped and deliberately off `StatsSummary` so a period switch never
-//  recomputes them, and the log is its own keyset-paged read.
+//  Both are standing sections: `LibrarySize` and `LibraryComposition` are
+//  library-scoped and deliberately off `StatsSummary`, so a period switch never
+//  recomputes them.
 
 import SwiftUI
 
@@ -281,46 +281,6 @@ private struct CompositionBar: View {
             }
             StatsBar(fraction: fraction, height: 8)
         }
-        .accessibilityElement(children: .combine)
-    }
-}
-
-// MARK: - Session log
-
-/// One sitting: when it started, what it was, and how long it ran.
-struct SessionLogRow: View {
-    let entry: SessionLogEntry
-
-    @Environment(\.palette) private var palette
-
-    /// Device-local, unlike the web log's UTC: this is a native app on a
-    /// reader's own phone, and a sitting they remember starting at 9pm should
-    /// say so.
-    private var when: String {
-        Date(timeIntervalSince1970: TimeInterval(entry.startedAt))
-            .formatted(date: .abbreviated, time: .shortened)
-    }
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(entry.title)
-                    .font(.ui(13.5, weight: .medium))
-                    .foregroundStyle(palette.ink0Color)
-                    .lineLimit(1)
-                Text("\(when) \u{b7} \(entry.format.label)")
-                    .font(.monoUI(10))
-                    .foregroundStyle(palette.ink3Color)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            Text(Format.humanDuration(entry.seconds))
-                .font(.ui(12.5))
-                .foregroundStyle(palette.ink2Color)
-        }
-        .padding(.vertical, 9)
-        .overlay(alignment: .top) { Hairline() }
-        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
 }

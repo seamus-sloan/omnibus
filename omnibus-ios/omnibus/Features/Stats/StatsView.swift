@@ -43,12 +43,6 @@ struct StatsView: View {
     /// are edited on a screen pushed onto this stack, and returning from it has
     /// to re-read a summary the write has already invalidated.
     @State private var path = NavigationPath()
-    // The log is its own paged read rather than a rollup of the window above
-    // it, so it holds its own state and never reloads on a range change.
-    @State private var sessions: [SessionLogEntry] = []
-    @State private var sessionCursor: String?
-    @State private var sessionsLoading = false
-    @State private var sessionsError: String?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -66,10 +60,7 @@ struct StatsView: View {
             // root; a stock large title alongside it would state it twice.
             .toolbar(.hidden, for: .navigationBar)
             .topEdgeScrim()
-            .refreshTask {
-                await load(force: true)
-                await loadSessions()
-            }
+            .refreshTask { await load(force: true) }
             .withDestinations()
         }
         .task {
@@ -78,7 +69,6 @@ struct StatsView: View {
             await loadLibraryComposition()
             await loadStandingSummary()
             await loadResumePoints()
-            await loadSessions()
         }
         .onChange(of: range) { _, _ in Task { await load() } }
         // Popping back from the goals screen. The write already dropped every
@@ -221,8 +211,6 @@ struct StatsView: View {
                 LibraryCompositionSection(composition: libraryComposition)
             }
         }
-
-        sessionLogSection
     }
 
     private func tiles(_ summary: StatsSummary) -> some View {
@@ -428,71 +416,6 @@ struct StatsView: View {
         days == 1 ? "in a day" : "in \(days) days"
     }
 
-    // MARK: - Session log
-
-    /// The sittings behind every number above — one row per *sit*, not per
-    /// heartbeat flush: the server stitches adjacent checkpoint rows before it
-    /// pages them.
-    @ViewBuilder private var sessionLogSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            StatsSectionLabel("Session log")
-
-            if sessions.isEmpty, let sessionsError {
-                // Distinct from the empty state below: "we couldn't load this"
-                // and "you have no sittings" are different answers, and only
-                // one of them is worth offering a retry for.
-                VStack(alignment: .leading, spacing: Spacing.sm) {
-                    Text(sessionsError)
-                        .font(.ui(12.5))
-                        .foregroundStyle(palette.ink2Color)
-                    Button("Try again") { Task { await loadSessions() } }
-                        .font(.monoUI(10.5, weight: .medium))
-                        .disabled(sessionsLoading)
-                }
-            } else if sessions.isEmpty {
-                Text("No sittings recorded yet.")
-                    .font(.ui(12.5))
-                    .foregroundStyle(palette.ink3Color)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(sessions) { entry in
-                        NavigationLink(value: Destination.book(uuid: entry.bookUUID)) {
-                            SessionLogRow(entry: entry)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                // Keyset paging: the cursor names the last row already shown,
-                // so a sitting landing mid-scroll can't shift the next page
-                // the way an offset would.
-                if sessionCursor != nil {
-                    Button {
-                        Task { await loadMoreSessions() }
-                    } label: {
-                        Text(sessionsLoading ? "Loading\u{2026}" : "Show more")
-                            .font(.monoUI(10.5, weight: .medium))
-                            .tracking(0.8)
-                            .textCase(.uppercase)
-                            .foregroundStyle(palette.ink2Color)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .background(Capsule().fill(palette.bg2Color))
-                            .overlay(Capsule().strokeBorder(palette.line2.color, lineWidth: 0.5))
-                    }
-                    .disabled(sessionsLoading)
-                }
-
-                if let sessionsError {
-                    Text(sessionsError)
-                        .font(.ui(12))
-                        .foregroundStyle(palette.ink3Color)
-                }
-            }
-        }
-        .screenPadding()
-    }
-
     // MARK: - Loading
 
     private func load(force: Bool = false) async {
@@ -557,36 +480,6 @@ struct StatsView: View {
         } catch {
             // Nothing to say: the section simply doesn't appear.
         }
-    }
-
-    private func loadSessions() async {
-        guard !sessionsLoading else { return }
-        sessionsLoading = true
-        do {
-            let page = try await UserDataService.sessionLog()
-            sessions = page.entries
-            sessionCursor = page.nextBefore
-            sessionsError = nil
-        } catch {
-            sessionsError =
-                (error as? APIError)?.errorDescription ?? error.localizedDescription
-        }
-        sessionsLoading = false
-    }
-
-    private func loadMoreSessions() async {
-        guard let cursor = sessionCursor, !sessionsLoading else { return }
-        sessionsLoading = true
-        do {
-            let page = try await UserDataService.sessionLog(before: cursor)
-            sessions.append(contentsOf: page.entries)
-            sessionCursor = page.nextBefore
-            sessionsError = nil
-        } catch {
-            sessionsError =
-                (error as? APIError)?.errorDescription ?? error.localizedDescription
-        }
-        sessionsLoading = false
     }
 }
 

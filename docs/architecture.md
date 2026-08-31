@@ -404,7 +404,16 @@ Features/           — one directory per surface: Account, AddBooks, Auth,
                       today's figures doesn't also look like a button and the
                       editor isn't in two places at once. The tab reloads when
                       its navigation path empties, since the write that happened
-                      up there has already invalidated the summary down here
+                      up there has already invalidated the summary down here.
+                      The tab carries **no session log**: the web `/stats` has
+                      one and `GET /api/stats/sessions` still backs it, but a
+                      keyset-paged list of every sitting is a different kind of
+                      surface from a page of aggregates and was cut from this
+                      one. `SessionLogEntry` / `SessionLogPage` and
+                      `UserDataService.sessionLog(book:before:)` are kept — the
+                      wire contract stays mirrored and tested, and the `book`
+                      parameter is there for the per-book log the web already
+                      renders
                       `ReadingGoalsView` (Features/Account/) owns all three
                       targets — the annual books goal and the two dailies — on
                       one pushed screen under the You tab, which is where rule
