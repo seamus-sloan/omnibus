@@ -475,6 +475,102 @@ async fn chart_series_aligns_two_different_grains_on_one_bucket_key() {
 }
 
 #[tokio::test]
+async fn chart_series_plots_more_measures_than_there_are_axes() {
+    let (pool, user) = fixture(2).await;
+    let now = months_ago_secs(&pool, 0).await;
+    set_pages(&pool, "uuid-1", 250).await;
+    finish_journal(&pool, user, "uuid-1", now).await;
+    let today: String = sqlx::query_scalar("SELECT date('now')")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    ledger_day(&pool, user, "uuid-1", &today, 20).await;
+
+    // Three measures, two units: books on the left, both page measures on the
+    // right. The axis count is what's bounded, never the measure count.
+    let r = chart_series(
+        &pool,
+        user,
+        &spec(
+            vec![
+                ChartMeasure::BooksFinished,
+                ChartMeasure::AvgPageLength,
+                ChartMeasure::PagesRead,
+            ],
+            ChartBucket::Month,
+            StatsRange::Year,
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(r.series.len(), 3);
+    assert_eq!(r.axes.len(), 2);
+    assert_eq!(r.series[0].axis, 0);
+    assert_eq!(r.series[1].axis, 1);
+    assert_eq!(r.series[2].axis, 1);
+    assert_eq!(r.axes[0].unit, ChartUnit::Books);
+    assert_eq!(r.axes[1].unit, ChartUnit::Pages);
+    // Every series still spans the one shared axis.
+    assert!(r.series.iter().all(|s| s.values.len() == r.buckets.len()));
+}
+
+#[tokio::test]
+async fn chart_series_scales_two_measures_sharing_a_unit_against_one_axis() {
+    let (pool, user) = fixture(2).await;
+    let now = months_ago_secs(&pool, 0).await;
+    reading_session(&pool, user, "uuid-1", now, 1_800).await;
+    listening_session(&pool, user, "uuid-2", now, 600).await;
+
+    let r = chart_series(
+        &pool,
+        user,
+        &spec(
+            vec![
+                ChartMeasure::ReadingMinutes,
+                ChartMeasure::ListeningMinutes,
+                ChartMeasure::AvgSessionMinutes,
+            ],
+            ChartBucket::Month,
+            StatsRange::Year,
+        ),
+    )
+    .await
+    .unwrap();
+
+    // All minutes, so one scale — and with one scale there is no second axis
+    // to misread a crossing against.
+    assert_eq!(r.series.len(), 3);
+    assert_eq!(r.axes.len(), 1);
+    assert!(r.series.iter().all(|s| s.axis == 0));
+}
+
+#[tokio::test]
+async fn chart_series_rejects_a_measure_that_would_need_a_third_axis() {
+    let (pool, user) = fixture(1).await;
+    let err = chart_series(
+        &pool,
+        user,
+        &spec(
+            vec![
+                ChartMeasure::BooksFinished,
+                ChartMeasure::AvgPageLength,
+                ChartMeasure::AvgRating,
+            ],
+            ChartBucket::Month,
+            StatsRange::Year,
+        ),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ChartError::Spec(omnibus_shared::ChartSpecError::TooManyUnits(_))
+    ));
+}
+
+#[tokio::test]
 async fn chart_series_opens_a_second_axis_only_for_a_differing_unit() {
     let (pool, user) = fixture(2).await;
     let now = months_ago_secs(&pool, 0).await;
