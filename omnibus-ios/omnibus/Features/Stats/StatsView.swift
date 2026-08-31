@@ -1,9 +1,15 @@
 //  StatsView.swift
-//  Reading stats: a headline panel, supporting tiles, an activity heatmap,
-//  rankings, the finished-books rail, and the per-sitting session log behind
-//  all of them.
+//  Reading stats, in two bands.
+//
+//  The period switcher governs only part of this screen, and the screen says
+//  so. Windowed figures live under one boundary — the accent "In this window"
+//  header, whose control pins while you are inside it and releases the moment
+//  the standing rule reaches the top. Everything else — the streak, the goals,
+//  the heatmap, the trailing twelve months, the library's own scale — sits
+//  outside it, because `shared/src/stats.rs` says those fields are not
+//  windowed and a page that interleaved the two left a reader unable to tell
+//  what a period switch would move.
 
-import Charts
 import SwiftUI
 
 struct StatsView: View {
@@ -17,11 +23,23 @@ struct StatsView: View {
     /// Fetched separately for the same reason: what the collection is *made
     /// of* is a library-wide answer that only moves on a reindex.
     @State private var libraryComposition: LibraryComposition?
+    /// What is open right now. Its own read for the third time over: being
+    /// mid-book is a standing fact, so it belongs below the standing rule and
+    /// must not reload on a period switch.
+    @State private var resumePoints: [ResumePoint] = []
+    /// The all-time summary, held only for the two surfaces drawn off
+    /// `heatmap` — the activity grid and the four-week strip.
+    ///
+    /// `db::stats::compute` scopes the heatmap to the *window's* start, so on
+    /// Week the payload carries fourteen days and the grid a reader is told is
+    /// "not tied to the window" would visibly empty out on a period switch.
+    /// Reading those two off the widest window instead is what makes the claim
+    /// true. Cached like `librarySize`, so it costs a replica read after the
+    /// first fetch — and it is the same entry the All pill warms anyway.
+    @State private var standingSummary: StatsSummary?
     @State private var isLoading = true
     @State private var error: String?
-    @State private var isEditingGoal = false
-    @State private var goalDraft = ""
-    @State private var goalError: String?
+    @State private var goalEditor: GoalEditorTarget?
     // The log is its own paged read rather than a rollup of the window above
     // it, so it holds its own state and never reloads on a range change.
     @State private var sessions: [SessionLogEntry] = []
@@ -55,483 +73,271 @@ struct StatsView: View {
             await load()
             await loadLibrarySize()
             await loadLibraryComposition()
+            await loadStandingSummary()
+            await loadResumePoints()
             await loadSessions()
         }
         .onChange(of: range) { _, _ in Task { await load() } }
+        .sheet(item: $goalEditor) { target in
+            if let summary {
+                GoalEditorSheet(
+                    target: target,
+                    summary: summary,
+                    // Folded straight into the rendered summary rather than
+                    // waiting on the reload, so the ring moves at once.
+                    onDailySaved: { goals in
+                        self.summary?.dailyGoals = goals
+                        Task { await load(force: true) }
+                    },
+                    onAnnualSaved: { goal in
+                        self.summary?.goal = goal
+                        Task { await load(force: true) }
+                    }
+                )
+            }
+        }
     }
+
+    // MARK: - The screen
 
     private func content(_ summary: StatsSummary) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 30) {
-                Masthead(title: "Stats") { rangeMenu }
+            LazyVStack(alignment: .leading, spacing: 30, pinnedViews: [.sectionHeaders]) {
+                // The masthead reserves its own bottom margin, which the
+                // stack's spacing would then double.
+                Masthead(title: "Stats")
+                    .padding(.bottom, -Spacing.lg)
 
-                // Above the range menu's own section stack and never keyed on
-                // it: the goal is annual, so a period switch must not move it.
-                if let year = goalYear(summary) {
-                    goalCard(summary.goal, year: year)
+                StreakHeadline(summary: summary)
+                DailyGoalsCard(summary: summary) { goalEditor = .daily }
+                if let year = Self.goalYear(summary) {
+                    YearGoalCard(summary: summary, year: year) {
+                        goalEditor = .annual(year: year)
+                    }
                 }
+                // Both off the unwindowed summary — see `standingSummary`.
+                let unwindowed = standingSummary ?? summary
+                LastFourWeeksCard(summary: unwindowed)
 
-                headline(summary)
-                tiles(summary)
-
-                if let note = Self.pagesCutoverNote(summary) {
-                    Text(note)
-                        .font(.footnote)
-                        .foregroundStyle(palette.ink3Color)
-                        .screenPadding()
-                }
-
-                if !summary.heatmap.isEmpty {
-                    section("Activity") {
-                        HeatmapView(days: summary.heatmap, asOf: summary.asOfDay)
+                if !unwindowed.heatmap.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        StatsSectionLabel("Activity").screenPadding()
+                        HeatmapView(days: unwindowed.heatmap, asOf: unwindowed.asOfDay)
                     }
                 }
 
-                if !summary.booksPerMonth.isEmpty {
-                    section("Books finished") {
-                        Chart(summary.booksPerMonth) { point in
-                            BarMark(
-                                x: .value("Month", point.month),
-                                y: .value("Books", point.books)
-                            )
-                            .foregroundStyle(palette.accentColor)
-                            .cornerRadius(3)
-                        }
-                        .chartXAxis {
-                            AxisMarks { value in
-                                AxisValueLabel {
-                                    if let month = value.as(String.self) {
-                                        Text(String(month.suffix(2)))
-                                            .font(.monoUI(9))
-                                    }
-                                }
-                            }
-                        }
-                        .chartYAxis {
-                            AxisMarks(position: .leading) { _ in
-                                AxisGridLine().foregroundStyle(palette.line2.color)
-                                AxisValueLabel().font(.monoUI(9))
-                            }
-                        }
-                        .frame(height: 132)
-                    }
+                Section {
+                    windowed(summary)
+                } header: {
+                    WindowBandHeader(range: $range, caption: Self.rangeCaption(summary))
                 }
 
-                // Only when something was actually rated: ten flat bars
-                // describe an empty window less honestly than no chart does.
-                if summary.ratingHistogram.contains(where: { $0.books > 0 }) {
-                    section("How you rated them") {
-                        Chart(summary.ratingHistogram) { bucket in
-                            BarMark(
-                                x: .value("Rating", bucket.starLabel),
-                                y: .value("Books", bucket.books)
-                            )
-                            .foregroundStyle(palette.accentColor)
-                            .cornerRadius(3)
-                        }
-                        .chartXAxis {
-                            AxisMarks { value in
-                                AxisValueLabel {
-                                    // Whole stars only: ten labels crowd
-                                    // illegibly at a phone's width, and the
-                                    // half-star bars sit between the ones kept.
-                                    if let label = value.as(String.self),
-                                        !label.contains(".")
-                                    {
-                                        Text(label).font(.monoUI(9))
-                                    }
-                                }
-                            }
-                        }
-                        .chartYAxis {
-                            AxisMarks(position: .leading) { _ in
-                                AxisGridLine().foregroundStyle(palette.line2.color)
-                                AxisValueLabel().font(.monoUI(9))
-                            }
-                        }
-                        .frame(height: 132)
-                    }
+                // Its own section, and that is the whole mechanism: a pinned
+                // header is displaced by the *next* one, so the standing rule
+                // being a header is what makes the period control release
+                // exactly as the rule reaches the top. Left as loose content
+                // the control stayed pinned over the sections it does not
+                // govern, which is the one thing this layout must not do.
+                Section {
+                    standing(summary)
+                } header: {
+                    StandingBandHeader()
                 }
-
-                // Same rule as the rating chart: nothing finished in the window
-                // is an absent chart, not a row of flat bars. The Unknown
-                // bucket is rendered whenever it has books in it — an
-                // audiobook has no page count, and hiding that would report
-                // the distribution over fewer books than were finished.
-                if summary.lengthBuckets.contains(where: { $0.books > 0 }) {
-                    section("How long they were") {
-                        Chart(summary.lengthBuckets) { bucket in
-                            BarMark(
-                                x: .value("Books", bucket.books),
-                                y: .value("Length", bucket.label)
-                            )
-                            .foregroundStyle(palette.accentColor)
-                            .cornerRadius(3)
-                        }
-                        // Horizontal: the labels are page ranges, which don't
-                        // fit under a column but read fine beside a bar.
-                        .chartXAxis {
-                            AxisMarks { _ in
-                                AxisGridLine().foregroundStyle(palette.line2.color)
-                                AxisValueLabel().font(.monoUI(9))
-                            }
-                        }
-                        .chartYAxis {
-                            AxisMarks(position: .leading) { _ in
-                                AxisValueLabel().font(.monoUI(9))
-                            }
-                        }
-                        .frame(height: 132)
-                    }
-                }
-
-                // Zero-filled to 24 and 7 columns, so an empty period has the
-                // same shape as a full one — `hasTimePatterns` is what tells
-                // them apart, and without it the section would draw two rows
-                // of flat bars and call it a reading pattern. It still shows
-                // for a period that is *only* unplaceable activity, because
-                // that is the one case a reader needs the note to explain.
-                if summary.hasTimePatterns || summary.unzonedSeconds > 0 {
-                    section("When you read") {
-                        TimePatternCharts(summary: summary)
-                    }
-                }
-
-                // Omitted rather than emptied: the section's own length is
-                // what reports how much the window holds.
-                let standouts = Self.standoutRows(summary)
-                if !standouts.isEmpty {
-                    section("The standouts") {
-                        StandoutList(
-                            rows: standouts,
-                            showFastestReadNote: summary.superlatives.fastestRead != nil
-                        )
-                    }
-                }
-
-                if !summary.topAuthors.isEmpty {
-                    section("Top authors") {
-                        RankedList(entries: summary.topAuthors) { entry in
-                            .searchResults(query: entry.name)
-                        }
-                    }
-                }
-
-                if !summary.topTags.isEmpty {
-                    section("Top tags") {
-                        RankedList(entries: summary.topTags) { entry in
-                            .tag(name: entry.name)
-                        }
-                    }
-                }
-
-                if !summary.finishedBooks.isEmpty {
-                    finishedRail(summary.finishedBooks)
-                }
-
-                // Absent until it lands, and absent when the library has been
-                // measured for nothing — three zeroes would read as a claim
-                // about the collection rather than about the backfill.
-                if let librarySize, !librarySize.isEmpty {
-                    section("Your library, in reading terms") {
-                        LibrarySizeSection(size: librarySize)
-                    }
-                }
-
-                // Named apart from "How you consumed them" above, which is
-                // read-vs-listened seconds. This is the shelf's own mix.
-                if let libraryComposition, !libraryComposition.isEmpty {
-                    section("What your library is made of") {
-                        LibraryCompositionSection(composition: libraryComposition)
-                    }
-                }
-
-                sessionLogSection
             }
             .padding(.bottom, 40)
         }
         .scrollIndicators(.hidden)
     }
 
-    /// An explicit `Menu` rather than a `Picker`: a toolbar picker stretches to
-    /// fill the empty bar next to a title.
-    private var rangeMenu: some View {
-        Menu {
-            ForEach(StatsRange.allCases, id: \.self) { option in
-                Button {
-                    range = option
-                } label: {
-                    if range == option {
-                        Label(option.label, systemImage: "checkmark")
-                    } else {
-                        Text(option.label)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 5) {
-                Text(range.label)
-                    .font(.ui(12.5, weight: .medium))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-            }
-            .foregroundStyle(palette.ink1Color)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(Capsule().fill(palette.bg2Color))
-            .overlay(Capsule().strokeBorder(palette.line2.color, lineWidth: 0.5))
+    /// Everything the control above it governs.
+    @ViewBuilder
+    private func windowed(_ summary: StatsSummary) -> some View {
+        WindowHeadline(summary: summary, eyebrow: Self.windowLabel(range))
+        tiles(summary)
+
+        if let note = Self.pagesCutoverNote(summary) {
+            Text(note)
+                .font(.footnote)
+                .foregroundStyle(palette.ink3Color)
+                .screenPadding()
         }
-        .accessibilityLabel("Time range")
-    }
 
-    // MARK: - Annual goal
-
-    /// The calendar year the card labels itself with, taken from the server's
-    /// `asOfDay` rather than the device clock so the card and the count it
-    /// renders can never straddle different years. `nil` on a server too old
-    /// to send the day, which also hides the card.
-    private func goalYear(_ summary: StatsSummary) -> String? {
-        let day = summary.asOfDay
-        guard day.count >= 4 else { return nil }
-        return String(day.prefix(4))
-    }
-
-    private var isOnline: Bool { Connectivity.shared.isOnline }
-
-    /// Progress toward the year's goal, or an invitation to set one — never a
-    /// zero-of-zero ring, which reports a goal the reader never made.
-    private func goalCard(_ goal: ReadingGoal?, year: String) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("\(year) READING GOAL")
-                    .font(.monoUI(10, weight: .medium))
-                    .tracking(0.8)
-                    .foregroundStyle(palette.accentColor)
-                Spacer(minLength: 8)
-                Button(goal == nil ? "Set a goal" : "Edit") {
-                    goalDraft = goal.map { "\($0.target)" } ?? ""
-                    goalError = nil
-                    isEditingGoal = true
-                }
-                .font(.ui(12.5, weight: .medium))
-                .foregroundStyle(isOnline ? palette.accentColor : palette.ink3Color)
-                .disabled(!isOnline)
-            }
-
-            if let goal {
-                Text("\(goal.current) of \(goal.target) \(goal.target == 1 ? "book" : "books")")
-                    .font(.display(30))
-                    .foregroundStyle(palette.ink0Color)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .contentTransition(.numericText())
-
-                GoalBar(fraction: goal.fraction, isMet: goal.isMet)
-                    .frame(height: 8)
-
-                Text(goal.isMet ? "Goal met" : "\(goal.remaining) to go")
-                    .font(.ui(12.5))
-                    .foregroundStyle(palette.ink2Color)
-            } else {
-                Text("Set a target for how many books you'd like to finish this year.")
-                    .font(.ui(13))
-                    .foregroundStyle(palette.ink2Color)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let goalError {
-                Text(goalError)
-                    .font(.ui(12))
-                    .foregroundStyle(palette.warnColor)
+        if summary.hasTimePatterns || summary.unzonedSeconds > 0 {
+            StatsSection("When you read") {
+                StatsCard { ReadingClock(summary: summary) }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Spacing.lg)
-        .background(
-            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                .fill(palette.bg1Color)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                .strokeBorder(palette.line2.color, lineWidth: 0.5)
-        )
-        .animation(Motion.settle, value: goal?.current)
-        .screenPadding()
-        .alert("Reading goal", isPresented: $isEditingGoal) {
-            TextField("Books this year", text: $goalDraft)
-                .keyboardType(.numberPad)
-            Button("Save") { Task { await saveGoal() } }
-            if goal != nil {
-                Button("Clear", role: .destructive) { Task { await clearGoal() } }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("How many books would you like to finish in \(year)?")
+
+        if !summary.genreShare.isEmpty {
+            StatsSection("How you spent it") { GenreDonut(summary: summary) }
         }
-    }
 
-    /// Rule 08 test 1: a goal is account configuration, so this is a direct
-    /// call whose failure is surfaced — never a queued op, and the control
-    /// that reaches it is disabled while offline.
-    private func saveGoal() async {
-        guard let target = Int64(goalDraft.trimmingCharacters(in: .whitespaces)),
-            target >= 1, target <= 10_000
-        else {
-            goalError = "Enter a whole number of books between 1 and 10,000."
-            return
-        }
-        await writeGoal(target)
-    }
-
-    private func clearGoal() async {
-        await writeGoal(nil)
-    }
-
-    private func writeGoal(_ target: Int64?) async {
-        do {
-            let saved = try await UserDataService.setReadingGoal(target: target)
-            // Fold the server's answer straight into the rendered summary
-            // rather than waiting on the reload, so the bar moves at once.
-            summary?.goal = saved
-            goalError = nil
-            await load(force: true)
-        } catch {
-            goalError = (error as? APIError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-
-    // MARK: - Numbers
-
-    /// One number leads, because there is one number anybody opens this screen
-    /// for. A flat grid of six equal tiles made the reader do the ranking.
-    private func headline(_ summary: StatsSummary) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            Text(range.label.uppercased())
-                .font(.monoUI(10, weight: .medium))
-                .tracking(0.8)
-                .foregroundStyle(palette.accentColor)
-
-            Text(Format.humanDuration(summary.totalSeconds))
-                .font(.display(52))
-                .foregroundStyle(palette.ink0Color)
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
-                .contentTransition(.numericText())
-
-            Text(splitLabel(summary))
-                .font(.ui(12.5))
-                .foregroundStyle(palette.ink2Color)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Spacing.lg)
-        .background(
-            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                .fill(palette.bg1Color)
-        )
-        .overlay(alignment: .bottom) {
-            // The split, drawn: reading against listening along the foot of the
-            // panel, so the ratio is visible without reading the caption. Only
-            // when there are two things to split — a full-width bar stating
-            // "100% reading" is a decoration that looks like information.
-            if summary.readingSeconds > 0, summary.listeningSeconds > 0 {
-                SplitBar(
-                    reading: summary.readingSeconds,
-                    listening: summary.listeningSeconds
-                )
-                .clipShape(
-                    UnevenRoundedRectangle(
-                        bottomLeadingRadius: Radius.lg,
-                        bottomTrailingRadius: Radius.lg,
-                        style: .continuous
-                    )
+        // Omitted rather than emptied: the section's own length is what
+        // reports how much the window holds.
+        let standouts = Self.standoutRows(summary)
+        if !standouts.isEmpty {
+            StatsSection("The standouts") {
+                StandoutsCard(
+                    rows: standouts,
+                    showFastestReadNote: summary.superlatives.fastestRead != nil
                 )
             }
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                .strokeBorder(palette.line2.color, lineWidth: 0.5)
-        )
-        .animation(Motion.settle, value: summary.totalSeconds)
-        .screenPadding()
+
+        // Kept from the previous tab and left inside this band because every
+        // one of them is windowed: they are the drill-in the redesign's tiles
+        // summarise, not standing figures.
+        RatingDistribution(buckets: summary.ratingHistogram)
+        LengthDistribution(buckets: summary.lengthBuckets)
+
+        if !summary.topAuthors.isEmpty {
+            StatsSection("Top authors") {
+                RankedList(entries: summary.topAuthors) { .searchResults(query: $0.name) }
+            }
+        }
+        if !summary.topTags.isEmpty {
+            StatsSection("Top tags") {
+                RankedList(entries: summary.topTags) { .tag(name: $0.name) }
+            }
+        }
+        if !summary.finishedBooks.isEmpty {
+            FinishedRail(books: summary.finishedBooks)
+        }
     }
 
-    /// The headline already states the total, so the caption breaks it down
-    /// only when there is a breakdown — otherwise it restated the same number
-    /// one line below itself ("11m" over "11m reading").
-    private func splitLabel(_ summary: StatsSummary) -> String {
-        guard summary.totalSeconds > 0 else { return "Nothing logged in this range yet" }
+    /// Everything it does not. The absence of the accent boundary is the
+    /// signal, and the rule above says it in words.
+    @ViewBuilder
+    private func standing(_ summary: StatsSummary) -> some View {
+        if !resumePoints.isEmpty {
+            StatsSection("In progress") { InProgressCard(points: resumePoints) }
+        }
 
-        var parts: [String] = []
-        if summary.readingSeconds > 0, summary.listeningSeconds > 0 {
-            parts.append("\(Format.humanDuration(summary.readingSeconds)) reading")
-            parts.append("\(Format.humanDuration(summary.listeningSeconds)) listening")
-        } else {
-            parts.append(summary.listeningSeconds > 0 ? "Listening" : "Reading")
+        if !summary.booksPerMonth.isEmpty {
+            StatsSection("Books finished") { TrailingYearCard(months: summary.booksPerMonth) }
         }
-        if summary.sessions > 0 {
-            parts.append("\(summary.sessions) session\(summary.sessions == 1 ? "" : "s")")
+
+        // Absent until it lands, and absent when the library has been measured
+        // for nothing — three zeroes would read as a claim about the
+        // collection rather than about the backfill.
+        if let librarySize, !librarySize.isEmpty {
+            StatsSection("Your library, in reading terms") {
+                LibrarySizeSection(size: librarySize)
+            }
         }
-        if summary.activeDays > 0 {
-            parts.append("\(summary.activeDays) day\(summary.activeDays == 1 ? "" : "s")")
+        // Named apart from "How you spent it" above, which is the reader's own
+        // genre mix in the window. This is the shelf's own make-up.
+        if let libraryComposition, !libraryComposition.isEmpty {
+            StatsSection("What your library is made of", spacing: 18) {
+                LibraryCompositionSection(composition: libraryComposition)
+            }
         }
-        return parts.joined(separator: " · ")
+
+        sessionLogSection
     }
 
     private func tiles(_ summary: StatsSummary) -> some View {
-        LazyVGrid(
+        // Deltas are suppressed on Lifetime: there is no window before all of
+        // them, and `previous` is zeroed there rather than absent.
+        let comparable = range != .allTime
+        return LazyVGrid(
             columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
             spacing: 12
         ) {
-            StatTile(
+            WindowTile(
                 label: "Books finished",
                 value: "\(summary.booksFinished)",
-                icon: "checkmark.circle"
+                icon: "checkmark.circle",
+                delta: comparable
+                    ? StatsFormat.delta(summary.booksFinished, summary.previous.booksFinished)
+                    : nil
             )
-            // Current before longest: the run you're on is what opens the tab,
-            // and the record then reads as context beside it rather than as
-            // the headline. The flame follows the live run; the record keeps
-            // the trophy.
-            StatTile(
-                label: "Current streak",
-                value: summary.currentStreakDays > 0 ? "\(summary.currentStreakDays)d" : "—",
-                icon: "flame"
-            )
-            StatTile(
-                label: "Longest streak",
-                value: summary.longestStreakDays > 0 ? "\(summary.longestStreakDays)d" : "—",
-                icon: "trophy"
-            )
-            StatTile(
+            WindowTile(
                 label: "Days active",
-                value: summary.activeDays > 0 ? "\(summary.activeDays)" : "—",
+                value: summary.activeDays > 0 ? "\(summary.activeDays)" : "\u{2014}",
                 icon: "calendar"
             )
-            StatTile(
+            WindowTile(
                 label: "Pages read",
                 value: Self.pagesValue(summary),
-                icon: "doc.text"
+                icon: "doc.text",
+                delta: comparable
+                    ? StatsFormat.percentDelta(summary.pagesRead ?? 0, summary.previous.pagesRead)
+                    : nil
             )
-            // Directly after Pages so the two share a row of the two-column
-            // grid: the total says how much, this says how fast, and the pair
-            // is the reader's own speed to compare against.
-            StatTile(
+            // Directly after Pages so the two share a row: the total says how
+            // much, this says how fast, and the pair is the reader's own speed
+            // to compare against.
+            WindowTile(
                 label: "Pages an hour",
-                value: summary.pagesPerHour.map(Self.rateValue) ?? "—",
+                value: summary.pagesPerHour.map(Self.rateValue) ?? "\u{2014}",
                 icon: "speedometer"
             )
-            StatTile(
+            WindowTile(
                 label: "Avg rating",
-                value: summary.avgStars.map { String(format: "%.1f", $0) } ?? "—",
+                value: summary.avgStars.map { String(format: "%.1f", $0) } ?? "\u{2014}",
                 icon: "star"
             )
-            StatTile(
+            WindowTile(
                 label: "Books open",
-                value: summary.booksActive > 0 ? "\(summary.booksActive)" : "—",
+                value: summary.booksActive > 0 ? "\(summary.booksActive)" : "\u{2014}",
                 icon: "book"
             )
         }
         .screenPadding()
     }
+
+    // MARK: - Window labels
+
+    /// What the band's eyebrow calls the period. `StatsRange.label` is the
+    /// control's own short form ("Week"); the headline wants the sentence
+    /// form, and "Lifetime" is already one.
+    static func windowLabel(_ range: StatsRange) -> String {
+        switch range {
+        case .week: "This week"
+        case .month: "This month"
+        case .year: "This year"
+        case .allTime: "All time"
+        }
+    }
+
+    /// The window the control currently names, spelled out beside it — a
+    /// switcher that says "Week" without saying *which* week is a control
+    /// whose effect you have to infer from the figures moving.
+    ///
+    /// Every bound is read off `asOfDay`, the server's own day, and matches
+    /// `window_start_expr` in `db/src/stats/compute.rs`: Week is a rolling
+    /// seven days ending today, not a calendar week.
+    static func rangeCaption(_ summary: StatsSummary) -> String {
+        guard let asOf = StatsFormat.wireDay.date(from: summary.asOfDay) else {
+            return windowLabel(summary.range)
+        }
+        switch summary.range {
+        case .week:
+            guard let start = StatsFormat.utc.date(byAdding: .day, value: -6, to: asOf) else {
+                return "Last 7 days"
+            }
+            return "Week of \(StatsFormat.day(start, "d MMM"))"
+        case .month:
+            return StatsFormat.day(asOf, "MMMM yyyy")
+        case .year:
+            return "\(StatsFormat.day(asOf, "yyyy")) to date"
+        case .allTime:
+            return "Everything recorded"
+        }
+    }
+
+    /// The calendar year the goal card labels itself with, taken from the
+    /// server's `asOfDay` rather than the device clock so the card and the
+    /// count it renders can never straddle different years. `nil` on a server
+    /// too old to send the day, which also hides the card.
+    static func goalYear(_ summary: StatsSummary) -> String? {
+        let day = summary.asOfDay
+        guard day.count >= 4 else { return nil }
+        return String(day.prefix(4))
+    }
+
+    // MARK: - Tile values
 
     /// A reading rate for display: one decimal under ten pages an hour, whole
     /// pages above. Mirrors the web drill-in's `rate_value` — nobody reads at
@@ -540,7 +346,7 @@ struct StatsView: View {
     ///
     /// The branch tests the **rounded** figure, not the raw one: 9.96 at one
     /// decimal is "10.0", which is not "under ten" however it got there.
-    private static func rateValue(_ rate: Double) -> String {
+    static func rateValue(_ rate: Double) -> String {
         let oneDecimal = (rate * 10).rounded() / 10
         return oneDecimal < 10
             ? String(format: "%.1f", oneDecimal)
@@ -574,48 +380,7 @@ struct StatsView: View {
         return "Page tracking began \(since); reading before then isn\u{2019}t counted."
     }
 
-    private func finishedRail(_ books: [FinishedBook]) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            SectionLabel("Finished")
-                .screenPadding()
-
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: 14) {
-                    ForEach(books) { finished in
-                        NavigationLink(value: Destination.book(uuid: finished.bookUUID)) {
-                            VStack(alignment: .leading, spacing: 7) {
-                                BookCover(
-                                    identity: CoverIdentity(
-                                        uuid: finished.bookUUID,
-                                        title: finished.title,
-                                        author: finished.author,
-                                        hasCover: finished.coverURL != nil
-                                    )
-                                )
-                                .coverShadow()
-
-                                Text(finished.title)
-                                    .font(.ui(12, weight: .medium))
-                                    .foregroundStyle(palette.ink0Color)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-
-                                if let rating = finished.rating {
-                                    StarRating(stars: rating, size: 9)
-                                }
-                            }
-                            .frame(width: 88)
-                        }
-                        .buttonStyle(BookPressStyle())
-                    }
-                }
-                .screenPadding()
-                .scrollTargetLayout()
-            }
-            .scrollIndicators(.hidden)
-            .scrollTargetBehavior(.viewAligned)
-        }
-    }
+    // MARK: - Standouts
 
     /// Every standout the window supports, in the same order as the web card,
     /// so a reader switching surfaces reads the same list.
@@ -655,44 +420,17 @@ struct StatsView: View {
         ].compactMap { $0 }
     }
 
-    /// Parses the server's UTC `YYYY-MM-DD`. Fixed-format, so it is pinned to
-    /// `en_US_POSIX` and Gregorian — a device on a non-Gregorian calendar
-    /// would otherwise fail to read the wire format at all.
-    private static let wireDayFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.calendar = Calendar(identifier: .gregorian)
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "UTC")
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
-
-    /// Renders "14 Nov 2023". Also pinned to `en_US_POSIX`: the surrounding
-    /// copy ("Week of …", "Biggest day") is English, and the device locale
-    /// would splice a translated month into it — "Week of 13 nov. 2023".
-    private static let displayDayFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.calendar = Calendar(identifier: .gregorian)
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "UTC")
-        f.dateFormat = "d MMM yyyy"
-        return f
-    }()
-
     /// A UTC `YYYY-MM-DD` as "14 Nov 2023", passing anything unparseable
     /// through — a malformed day is better company for its figure than none.
-    ///
-    /// Both formatters are cached statics: `DateFormatter` construction is
-    /// expensive and this runs for every standout row on every render.
     static func prettyDay(_ day: String) -> String {
-        guard let date = wireDayFormatter.date(from: day) else { return day }
-        return displayDayFormatter.string(from: date)
+        guard let date = StatsFormat.wireDay.date(from: day) else { return day }
+        return StatsFormat.day(date, "d MMM yyyy")
     }
 
     /// "412 pages" / "1 page" — the unit is the row's, since
     /// `BookSuperlative.value` carries a bare number.
     static func pagesDetail(_ pages: Int64) -> String {
-        "\(pages) page\(pages == 1 ? "" : "s")"
+        StatsFormat.counted(pages, "page")
     }
 
     /// "in 3 days" / "in a day" — the server already collapses a same-day
@@ -708,7 +446,7 @@ struct StatsView: View {
     /// pages them.
     @ViewBuilder private var sessionLogSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            SectionLabel("Session log")
+            StatsSectionLabel("Session log")
 
             if sessions.isEmpty, let sessionsError {
                 // Distinct from the empty state below: "we couldn't load this"
@@ -766,6 +504,72 @@ struct StatsView: View {
         .screenPadding()
     }
 
+    // MARK: - Loading
+
+    private func load(force: Bool = false) async {
+        if force { await OfflineStore.shared.cacheDelete(CacheKey.stats(range)) }
+        do {
+            for try await read in UserDataService.stats(range: range) {
+                summary = read.value
+                error = nil
+                isLoading = false
+            }
+        } catch {
+            if summary == nil {
+                self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+        isLoading = false
+    }
+
+    /// Best-effort by design: this card is context beside the reader's own
+    /// numbers, so a library-size fetch that fails must not take the tab's
+    /// error state with it. The cached read lands first and the live one
+    /// replaces it, same as `load`.
+    private func loadLibrarySize() async {
+        do {
+            for try await read in UserDataService.librarySize() {
+                librarySize = read.value
+            }
+        } catch {
+            // Nothing to say: the section simply doesn't appear.
+        }
+    }
+
+    /// Best-effort by design, exactly like `loadLibrarySize`.
+    private func loadLibraryComposition() async {
+        do {
+            for try await read in UserDataService.libraryComposition() {
+                libraryComposition = read.value
+            }
+        } catch {
+            // Nothing to say: the section simply doesn't appear.
+        }
+    }
+
+    /// The widest window, for the heatmap alone. Best-effort: the two strips
+    /// fall back to the rendered summary's own heatmap if it never lands.
+    private func loadStandingSummary() async {
+        do {
+            for try await read in UserDataService.stats(range: .allTime) {
+                standingSummary = read.value
+            }
+        } catch {
+            // Nothing to say: the grid falls back to the window's own days.
+        }
+    }
+
+    /// Best-effort by design, exactly like `loadLibrarySize`.
+    private func loadResumePoints() async {
+        do {
+            for try await read in UserDataService.recentProgress() {
+                resumePoints = read.value
+            }
+        } catch {
+            // Nothing to say: the section simply doesn't appear.
+        }
+    }
+
     private func loadSessions() async {
         guard !sessionsLoading else { return }
         sessionsLoading = true
@@ -795,381 +599,6 @@ struct StatsView: View {
         }
         sessionsLoading = false
     }
-
-    private func section<Content: View>(
-        _ title: String, @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            SectionLabel(title)
-            content()
-        }
-        .screenPadding()
-    }
-
-    /// Best-effort by design: this card is context beside the reader's own
-    /// numbers, so a library-size fetch that fails must not take the tab's
-    /// error state with it. The cached read lands first and the live one
-    /// replaces it, same as `load`.
-    private func loadLibrarySize() async {
-        do {
-            for try await read in UserDataService.librarySize() {
-                librarySize = read.value
-            }
-        } catch {
-            // Nothing to say: the section simply doesn't appear.
-        }
-    }
-
-    /// Best-effort by design, exactly like `loadLibrarySize`.
-    private func loadLibraryComposition() async {
-        do {
-            for try await read in UserDataService.libraryComposition() {
-                libraryComposition = read.value
-            }
-        } catch {
-            // Nothing to say: the section simply doesn't appear.
-        }
-    }
-
-    /// The five panels, in the order they read: what the files are, then what
-    /// the books are. Mirrors the web card's `build_panels`.
-    static func compositionPanels(_ c: LibraryComposition) -> [CompositionPanel] {
-        [
-            CompositionPanel(
-                title: "Formats", dimension: c.formats,
-                // Coverage is always the whole library here (a live book has a
-                // file by definition), so the useful disclosure is the overlap.
-                note: overlapNote(c.formats),
-                empty: "No files indexed yet."),
-            CompositionPanel(
-                title: "Languages", dimension: c.languages,
-                note: coverageNote(c.languages, of: c.books),
-                empty: "No language metadata yet."),
-            CompositionPanel(
-                title: "Publishers", dimension: c.publishers,
-                note: coverageNote(c.publishers, of: c.books),
-                empty: "No publisher metadata yet."),
-            CompositionPanel(
-                title: "Published", dimension: c.decades,
-                // The uncovered books here are the ones with an absent or
-                // unparseable pubdate — unknown, never bucketed into a decade.
-                note: coverageNote(c.decades, of: c.books),
-                empty: "No publication dates yet."),
-            CompositionPanel(
-                title: "Genres", dimension: c.genres,
-                note: "hand-assigned \u{2014} " + coverageNote(c.genres, of: c.books),
-                empty: "No genres assigned yet."),
-        ]
-    }
-
-    /// "across 58 of 1,510 books" — the denominator, always. A distribution
-    /// without its coverage is a guess wearing a chart.
-    static func coverageNote(_ dimension: CompositionDimension, of libraryBooks: Int64) -> String {
-        coverageLabel(dimension.coverage, of: libraryBooks)
-    }
-
-    /// How many books are held in more than one format, and so counted in more
-    /// than one bar. Without it the bars simply don't add up to the library.
-    static func overlapNote(_ dimension: CompositionDimension) -> String? {
-        let overlap = dimension.overlap
-        guard overlap > 0 else { return nil }
-        return "+\(overlap) \(overlap == 1 ? "book" : "books") held in more than one format"
-    }
-
-    /// The footnote for `books` rows whose files are gone. They carry no
-    /// format, so they'd otherwise vanish from the bars and leave the counts
-    /// failing to reconcile against the library.
-    static func ghostedNote(_ ghosted: Int64) -> String? {
-        guard ghosted > 0 else { return nil }
-        return "\(ghosted) \(ghosted == 1 ? "book" : "books") excluded \u{2014} indexed once, no files on disk now"
-    }
-
-    /// The library figures worth rendering, skipping anything nothing has
-    /// been measured for — a "0 words" row describes a library that doesn't
-    /// exist. Mirrors the web card's `build_figures`.
-    static func libraryFigures(_ size: LibrarySize) -> [LibraryFigure] {
-        var figures: [LibraryFigure] = []
-        if !size.words.isEmpty {
-            figures.append(
-                LibraryFigure(
-                    value: compactCount(size.words.total),
-                    unit: "words",
-                    coverage: coverageLabel(size.words, of: size.books)
-                ))
-        }
-        if !size.pages.isEmpty {
-            figures.append(
-                LibraryFigure(
-                    value: compactCount(size.pages.total),
-                    unit: "est. pages",
-                    coverage: coverageLabel(size.pages, of: size.books)
-                ))
-        }
-        if !size.listeningSeconds.isEmpty {
-            let (value, unit) = audioValue(size.listeningSeconds.total)
-            figures.append(
-                LibraryFigure(
-                    value: value,
-                    unit: unit,
-                    coverage: coverageLabel(size.listeningSeconds, of: size.books)
-                ))
-        }
-        return figures
-    }
-
-    /// A large count in the form a reader can hold — "412M", "1.6M", "94.2K",
-    /// "812". Nobody needs the last four digits of a word count.
-    static func compactCount(_ n: Int64) -> String {
-        let v = Double(n)
-        // Each tier opens at 999.5 of the one below rather than at a clean
-        // power of ten: 999_999 rounds to 1000 at "K", so it has to render as
-        // "1.0M". Mirrors `compact` in frontend/src/pages/stats/library.rs.
-        for (limit, div, suffix) in [(999.5e6, 1e9, "B"), (999.5e3, 1e6, "M"), (1e4, 1e3, "K")] {
-            if v >= limit {
-                let scaled = v / div
-                return String(format: scaled < 100 ? "%.1f\(suffix)" : "%.0f\(suffix)", scaled)
-            }
-        }
-        return "\(n)"
-    }
-
-    /// Audio length in the unit that fits it: hours below a week, days beyond.
-    /// "94 days of audio" is the sentence this section exists to let a reader
-    /// say; 2,256 hours is the same fact nobody can picture.
-    static func audioValue(_ seconds: Int64) -> (String, String) {
-        let hours = Double(seconds) / 3600
-        // Round first, then pick the unit off the rounded figure: branching on
-        // the raw hours renders 1h40m as "2 hour", and promotes to days only
-        // after the hours reading has already rounded to 168.
-        let wholeHours = Int64(hours.rounded())
-        if wholeHours < 168 {
-            return ("\(wholeHours)", wholeHours == 1 ? "hour" : "hours")
-        }
-        return (String(format: "%.0f", hours / 24), "days")
-    }
-
-    /// "across 1,204 of 1,510 books" — the denominator, always. A figure
-    /// without it is a guess wearing a number.
-    static func coverageLabel(_ measured: MeasuredTotal, of libraryBooks: Int64) -> String {
-        "across \(groupedCount(measured.books)) of \(groupedCount(libraryBooks)) books"
-    }
-
-    /// A count with its thousands separators. Shared so a bar's own number and
-    /// the coverage line beneath it can't render the same figure two ways.
-    static func groupedCount(_ n: Int64) -> String {
-        NumberFormatter.localizedString(from: NSNumber(value: n), number: .decimal)
-    }
-
-    private func load(force: Bool = false) async {
-        if force { await OfflineStore.shared.cacheDelete(CacheKey.stats(range)) }
-        do {
-            for try await read in UserDataService.stats(range: range) {
-                summary = read.value
-                error = nil
-                isLoading = false
-            }
-        } catch {
-            if summary == nil {
-                self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
-            }
-        }
-        isLoading = false
-    }
-}
-
-/// One library-scale figure: the total, its unit, and the coverage behind it.
-struct LibraryFigure: Identifiable, Hashable {
-    let value: String
-    let unit: String
-    let coverage: String
-
-    var id: String { unit }
-}
-
-private struct LibrarySizeSection: View {
-    let size: LibrarySize
-
-    @Environment(\.palette) private var palette
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            ForEach(StatsView.libraryFigures(size)) { figure in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(figure.value)
-                            .font(.display(28))
-                            .foregroundStyle(palette.ink0Color)
-                        Text(figure.unit)
-                            .font(.ui(13))
-                            .foregroundStyle(palette.ink2Color)
-                    }
-                    Text(figure.coverage)
-                        .font(.monoUI(11))
-                        .foregroundStyle(palette.ink3Color)
-                }
-                .accessibilityElement(children: .combine)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// The annual goal's progress bar. Its own view so the width animation is
-/// driven by `fraction` alone rather than by every summary field changing.
-private struct GoalBar: View {
-    let fraction: Double
-    let isMet: Bool
-
-    @Environment(\.palette) private var palette
-
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                Capsule().fill(palette.bg2Color)
-                Capsule()
-                    .fill(isMet ? palette.okColor : palette.accentColor)
-                    .frame(width: max(0, geometry.size.width * fraction))
-            }
-        }
-        .animation(Motion.settle, value: fraction)
-        .accessibilityElement()
-        .accessibilityLabel("Reading goal progress")
-        .accessibilityValue("\(Int((fraction * 100).rounded())) percent")
-    }
-}
-
-/// One rendered dimension: its heading, its bars, and the line beneath them
-/// that says what the bars can't speak for.
-struct CompositionPanel: Identifiable, Hashable {
-    let title: String
-    let dimension: CompositionDimension
-    let note: String?
-    let empty: String
-
-    var id: String { title }
-}
-
-private struct LibraryCompositionSection: View {
-    let composition: LibraryComposition
-    @Environment(\.palette) private var palette
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.lg) {
-            ForEach(StatsView.compositionPanels(composition)) { panel in
-                CompositionPanelView(panel: panel)
-            }
-            if let ghosted = StatsView.ghostedNote(composition.ghostedBooks) {
-                Text(ghosted)
-                    .font(.monoUI(11))
-                    .foregroundStyle(palette.ink3Color)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// One dimension's bars, or its empty state. A dimension nothing in the
-/// library carries renders a sentence rather than an axis with no bars on it.
-private struct CompositionPanelView: View {
-    let panel: CompositionPanel
-
-    @Environment(\.palette) private var palette
-
-    /// Scaled to the tallest bar rather than to the library total: a histogram
-    /// whose bars are all four points wide has drawn the shape out of itself.
-    private var peak: Int64 { panel.dimension.slices.map(\.books).max() ?? 0 }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            Text(panel.title)
-                .font(.display(15))
-                .foregroundStyle(palette.ink1Color)
-            if panel.dimension.slices.isEmpty {
-                Text(panel.empty)
-                    .font(.ui(13))
-                    .foregroundStyle(palette.ink3Color)
-            } else {
-                ForEach(panel.dimension.slices) { slice in
-                    CompositionBar(slice: slice, peak: peak)
-                }
-                if let note = panel.note {
-                    Text(note)
-                        .font(.monoUI(11))
-                        .foregroundStyle(palette.ink3Color)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct CompositionBar: View {
-    let slice: CompositionSlice
-    let peak: Int64
-
-    @Environment(\.palette) private var palette
-
-    private var fraction: Double {
-        guard peak > 0 else { return 0 }
-        return min(1, Double(slice.books) / Double(peak))
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(slice.label)
-                    .font(.ui(14))
-                    .foregroundStyle(palette.ink1Color)
-                    .lineLimit(1)
-                Spacer(minLength: Spacing.sm)
-                // The count, not the share: "48 books" answers the question a
-                // reader brought to a composition chart. Grouped like the
-                // coverage line, so a four-digit bucket doesn't read
-                // differently from its own note.
-                Text(StatsView.groupedCount(slice.books))
-                    .font(.monoUI(12))
-                    .foregroundStyle(palette.ink2Color)
-            }
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(palette.bg2Color)
-                    Capsule()
-                        .fill(palette.accentColor)
-                        .frame(width: geometry.size.width * fraction)
-                }
-            }
-            .frame(height: 8)
-        }
-        .accessibilityElement(children: .combine)
-    }
-}
-
-/// Reading against listening as one two-tone rule.
-private struct SplitBar: View {
-    let reading: Int64
-    let listening: Int64
-
-    @Environment(\.palette) private var palette
-
-    private var total: Double { Double(max(1, reading + listening)) }
-
-    var body: some View {
-        GeometryReader { geometry in
-            HStack(spacing: 0) {
-                Rectangle()
-                    .fill(palette.accentColor)
-                    .frame(width: geometry.size.width * Double(reading) / total)
-                Rectangle()
-                    .fill(palette.accentColor.opacity(0.4))
-                    .frame(width: geometry.size.width * Double(listening) / total)
-                Spacer(minLength: 0)
-            }
-        }
-        .frame(height: 3)
-        .frame(maxHeight: .infinity, alignment: .bottom)
-        .opacity(reading + listening > 0 ? 1 : 0)
-        .accessibilityHidden(true)
-    }
 }
 
 /// One standout: what it measures, what won, and by how much. Built by
@@ -1180,356 +609,4 @@ struct StandoutRow: Identifiable, Hashable {
     let detail: String
 
     var id: String { label }
-}
-
-private struct StandoutList: View {
-    let rows: [StandoutRow]
-    let showFastestReadNote: Bool
-
-    @Environment(\.palette) private var palette
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            ForEach(rows) { row in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(row.label)
-                        .font(.ui(11.5))
-                        .foregroundStyle(palette.ink3Color)
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(row.headline)
-                            .font(.display(17))
-                            .foregroundStyle(palette.ink0Color)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                        Spacer(minLength: 0)
-                        Text(row.detail)
-                            .font(.monoUI(11.5))
-                            .foregroundStyle(palette.ink2Color)
-                            .layoutPriority(1)
-                    }
-                }
-                .accessibilityElement(children: .combine)
-            }
-            if showFastestReadNote {
-                // The floor is part of the claim, not an aside: without it a
-                // book read mostly on another device reads as a sprint. The
-                // lower-bound clause mirrors the web note — `shared`'s
-                // `fastest_read` doc requires every surface to state it.
-                Text(
-                    "Fastest read counts days from your first tracked session, over books with "
-                        + "at least \(Format.humanDuration(Superlatives.fastestReadMinSeconds)) "
-                        + "of recorded time — reading done before tracking, or on a device that "
-                        + "reports nothing, can only make a book look faster than it was."
-                )
-                .font(.ui(11))
-                .foregroundStyle(palette.ink3Color)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct StatTile: View {
-    let label: String
-    let value: String
-    let icon: String
-
-    @Environment(\.palette) private var palette
-
-    private var isEmpty: Bool { value == "—" }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(isEmpty ? palette.ink3Color : palette.accentColor)
-            // A serif em dash at 25pt draws a 25pt rule, which reads as a
-            // divider rather than as "no value". The mono face keeps the
-            // placeholder the size of a character.
-            Text(value)
-                .font(isEmpty ? .monoUI(22) : .display(28))
-                .foregroundStyle(isEmpty ? palette.ink3Color : palette.ink0Color)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .contentTransition(.numericText())
-            Text(label)
-                .font(.ui(11.5))
-                .foregroundStyle(palette.ink3Color)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: Radius.md, style: .continuous).fill(palette.bg1Color)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                .strokeBorder(palette.line2.color, lineWidth: 0.5)
-        )
-        .accessibilityElement(children: .combine)
-    }
-}
-
-private struct RankedList: View {
-    let entries: [RankedEntity]
-    /// Where a row leads. A ranking you can't act on is a picture of a ranking.
-    let destination: (RankedEntity) -> Destination
-
-    @Environment(\.palette) private var palette
-
-    private var maximum: Int64 {
-        max(1, entries.map(\.seconds).max() ?? 1)
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(entries.prefix(6).enumerated()), id: \.element.id) { index, entry in
-                NavigationLink(value: destination(entry)) {
-                    row(entry, isFirst: index == 0)
-                }
-                .buttonStyle(PressableStyle())
-            }
-        }
-    }
-
-    private func row(_ entry: RankedEntity, isFirst: Bool) -> some View {
-        VStack(spacing: 0) {
-            if !isFirst { Hairline() }
-
-            HStack(spacing: Spacing.md) {
-                Text(entry.name)
-                    .font(.ui(13.5))
-                    .foregroundStyle(palette.ink1Color)
-                    .lineLimit(1)
-                    .frame(width: 128, alignment: .leading)
-
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(palette.line2.color)
-                            .frame(height: 7)
-                        Capsule()
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        palette.accentColor.opacity(0.65),
-                                        palette.accentColor,
-                                    ],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .frame(
-                                width: max(7, geometry.size.width * CGFloat(entry.seconds) / CGFloat(maximum)),
-                                height: 7
-                            )
-                    }
-                    .frame(maxHeight: .infinity, alignment: .center)
-                }
-                .frame(height: 14)
-
-                Text(Format.humanDuration(entry.seconds))
-                    .font(.monoUI(10.5))
-                    .foregroundStyle(palette.ink3Color)
-                    .frame(width: 52, alignment: .trailing)
-            }
-            .padding(.vertical, 9)
-            .contentShape(Rectangle())
-        }
-    }
-}
-
-/// GitHub-style trailing half-year activity grid, anchored on the server's day
-/// so the client's clock never shifts the columns.
-private struct HeatmapView: View {
-    let days: [DayActivity]
-    let asOf: String
-
-    @Environment(\.palette) private var palette
-
-    private static let cell: CGFloat = 11
-    private static let gap: CGFloat = 3
-
-    private var lookup: [String: Int64] {
-        Dictionary(days.map { ($0.day, $0.seconds) }, uniquingKeysWith: +)
-    }
-
-    private var maximum: Int64 { max(1, days.map(\.seconds).max() ?? 1) }
-
-    private var calendar: Calendar {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
-        return calendar
-    }
-
-    private static func dayFormatter() -> DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        return formatter
-    }
-
-    private var weeks: [[Date]] {
-        let formatter = Self.dayFormatter()
-        let end = formatter.date(from: asOf) ?? Date()
-        guard let start = calendar.date(byAdding: .day, value: -181, to: end) else { return [] }
-
-        var result: [[Date]] = []
-        var current: [Date] = []
-        var cursor = start
-        while cursor <= end {
-            current.append(cursor)
-            if current.count == 7 {
-                result.append(current)
-                current = []
-            }
-            cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? end.addingTimeInterval(1)
-        }
-        if !current.isEmpty { result.append(current) }
-        return result
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            ScrollView(.horizontal) {
-                VStack(alignment: .leading, spacing: 5) {
-                    monthRuler
-                    grid
-                }
-                .padding(.vertical, 2)
-            }
-            .scrollIndicators(.hidden)
-            .defaultScrollAnchor(.trailing)
-
-            legend
-        }
-    }
-
-    private var grid: some View {
-        HStack(spacing: Self.gap) {
-            ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
-                VStack(spacing: Self.gap) {
-                    ForEach(week, id: \.self) { day in
-                        RoundedRectangle(cornerRadius: 2.5, style: .continuous)
-                            .fill(color(for: day))
-                            .frame(width: Self.cell, height: Self.cell)
-                    }
-                }
-            }
-        }
-    }
-
-    /// Month names over the column each month starts in. Without them the grid
-    /// is 26 anonymous columns and a lit square means nothing.
-    ///
-    /// Each label is laid out in a zero-width overlay so it can overhang its
-    /// own 11pt column: constrained to the column it wraps to two lines, which
-    /// is how the ruler came out reading "Fe / b".
-    private var monthRuler: some View {
-        HStack(spacing: Self.gap) {
-            ForEach(Array(monthLabels.enumerated()), id: \.offset) { _, label in
-                Color.clear
-                    .frame(width: Self.cell, height: 11)
-                    .overlay(alignment: .leading) {
-                        if let label {
-                            Text(label)
-                                .font(.monoUI(8.5, weight: .medium))
-                                .foregroundStyle(palette.ink3Color)
-                                .fixedSize()
-                        }
-                    }
-            }
-        }
-    }
-
-    /// One label per column, and only where the month actually turns over —
-    /// testing each column for "contains a day in the first week" labelled two
-    /// adjacent columns whenever a month started mid-week ("Ap Ap").
-    private var monthLabels: [String?] {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM"
-        formatter.timeZone = TimeZone(identifier: "UTC")
-
-        var lastLabelled: Int?
-        return weeks.enumerated().map { index, week in
-            guard let first = week.first else { return nil }
-            let month = calendar.component(.month, from: first)
-            defer { lastLabelled = month }
-            // The leading column is usually a partial week whose label would
-            // sit half off the edge, and its month is labelled again a few
-            // columns along anyway.
-            guard index > 0, month != lastLabelled else { return nil }
-            return formatter.string(from: first)
-        }
-    }
-
-    private var legend: some View {
-        HStack(spacing: 5) {
-            Spacer(minLength: 0)
-            Text("Less")
-                .font(.ui(10))
-                .foregroundStyle(palette.ink3Color)
-            ForEach([0.0, 0.25, 0.5, 0.75, 1.0], id: \.self) { step in
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(step == 0 ? restColor : palette.accentColor.opacity(0.25 + step * 0.75))
-                    .frame(width: 9, height: 9)
-            }
-            Text("More")
-                .font(.ui(10))
-                .foregroundStyle(palette.ink3Color)
-        }
-    }
-
-    /// A day with nothing on it needs to read as an empty slot in a calendar:
-    /// at full `bg2` the grid was a wall of chips, at `bg1` it vanished into
-    /// the page. Between the two it reads as ruled paper.
-    private var restColor: Color {
-        palette.bg2Color.opacity(0.75)
-    }
-
-    private func color(for day: Date) -> Color {
-        let seconds = lookup[Self.dayFormatter().string(from: day)] ?? 0
-        guard seconds > 0 else { return restColor }
-        let intensity = min(1, Double(seconds) / Double(maximum))
-        return palette.accentColor.opacity(0.25 + intensity * 0.75)
-    }
-}
-
-/// One sitting: when it started, what it was, and how long it ran.
-private struct SessionLogRow: View {
-    let entry: SessionLogEntry
-
-    @Environment(\.palette) private var palette
-
-    /// Device-local, unlike the web log's UTC: this is a native app on a
-    /// reader's own phone, and a sitting they remember starting at 9pm should
-    /// say so.
-    private var when: String {
-        Date(timeIntervalSince1970: TimeInterval(entry.startedAt))
-            .formatted(date: .abbreviated, time: .shortened)
-    }
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(entry.title)
-                    .font(.ui(13.5, weight: .medium))
-                    .foregroundStyle(palette.ink0Color)
-                    .lineLimit(1)
-                Text("\(when) \u{b7} \(entry.format.label)")
-                    .font(.monoUI(10))
-                    .foregroundStyle(palette.ink3Color)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            Text(Format.humanDuration(entry.seconds))
-                .font(.ui(12.5))
-                .foregroundStyle(palette.ink2Color)
-        }
-        .padding(.vertical, 9)
-        .overlay(alignment: .top) {
-            Rectangle().fill(palette.line2.color).frame(height: 0.5)
-        }
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-    }
 }
