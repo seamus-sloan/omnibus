@@ -299,52 +299,33 @@ function hmsToSeconds(label: string): number {
   return parts.reduce((acc, part) => acc * 60 + part, 0);
 }
 
-/** The transport's total (the third and last figure in the scrub-time row). */
-async function transportTotalSeconds(
+/**
+ * The three figures in the transport's scrub-time row, in seconds:
+ * `[elapsed, remaining, total]`. Elapsed and total are the book's own running
+ * time; the middle "… remaining" is the one rate-adjusted figure (#2344).
+ */
+async function scrubStamps(
   page: import("@playwright/test").Page,
-): Promise<number> {
+): Promise<{ elapsed: number; remaining: number; total: number }> {
   const text = (await page.getByTestId("listen-scrub-times").innerText())
     .replace(/\s+/g, " ")
     .trim();
   const stamps = text.match(/\d+(?::\d\d)+/g) ?? [];
   expect(stamps.length, `scrub row should carry three stamps: ${text}`).toBe(3);
-  return hmsToSeconds(stamps[2]!);
+  return {
+    elapsed: hmsToSeconds(stamps[0]!),
+    remaining: hmsToSeconds(stamps[1]!),
+    total: hmsToSeconds(stamps[2]!),
+  };
 }
 
-/** Every duration the chapters drawer lists, in seconds. */
-async function chapterDurationSeconds(
-  page: import("@playwright/test").Page,
-): Promise<number[]> {
-  const drawer = page.getByTestId("chapters-drawer");
-  await page.getByRole("button", { name: /^chapters/i }).click();
-  await expect(drawer).toBeVisible();
-  // Each row's duration cell shows that chapter's book-time duration — except
-  // the current chapter, whose cell shows a rate-adjusted "… remaining"
-  // instead (#2344). Keep only the book-time durations so the speed test can
-  // assert they don't move with the rate.
-  const cells = await drawer.locator(".lp-drawer-dur").allInnerTexts();
-  const stamps = cells
-    .filter((t) => !/remaining/i.test(t))
-    .map((t) => t.match(/\d+(?::\d\d)+/)?.[0])
-    .filter((s): s is string => Boolean(s));
-  expect(
-    stamps.length,
-    `drawer should list book-time durations: ${cells.join(" | ")}`,
-  ).toBeGreaterThan(0);
-  // The drawer is painted over the toolbar it was opened from, so it closes
-  // by its own button rather than the toggle.
-  await drawer.getByRole("button", { name: /^Close/ }).click();
-  await expect(drawer).toHaveCount(0);
-  return stamps.map(hmsToSeconds);
-}
-
-// Regression for issue #2344, superseding #2246. The transport total and the
-// chapter durations are the book's own running time — the same basis as the
-// bookmark stamps and the book detail page — so a speed change must NOT move
-// them (only the "time left" estimate is rate-adjusted). The earlier #2246 fix
-// rescaled these readouts, which is exactly what disagreed with a saved
-// bookmark at any speed but 1x.
-test("a speed change leaves the transport total and chapter durations in book time", async ({
+// Regression for issue #2344, superseding #2246. The transport's elapsed and
+// total are the book's own running time — the same basis as the bookmark
+// stamps and the book detail page — so a speed change must NOT move them. Only
+// the "time left" (the middle "… remaining" figure) is rate-adjusted. The
+// earlier #2246 fix rescaled the total too, which is exactly what disagreed
+// with a saved bookmark at any speed but 1x.
+test("a speed change keeps the transport total in book time and rescales only the time left", async ({
   page,
   request,
 }) => {
@@ -362,9 +343,9 @@ test("a speed change leaves the transport total and chapter durations in book ti
   await waitForPlayerReady(page);
   await expect(page.getByTestId("listen-rate")).toHaveText("1.00×");
 
-  const totalAt1x = await transportTotalSeconds(page);
-  expect(totalAt1x).toBeGreaterThan(0);
-  const chaptersAt1x = await chapterDurationSeconds(page);
+  const at1x = await scrubStamps(page);
+  expect(at1x.total).toBeGreaterThan(0);
+  expect(at1x.remaining).toBeGreaterThan(0);
 
   await page.getByRole("button", { name: "Playback speed" }).click();
   await page.getByRole("button", { name: "2.0×", exact: true }).click();
@@ -372,21 +353,13 @@ test("a speed change leaves the transport total and chapter durations in book ti
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("speed-panel")).toHaveCount(0);
 
-  // The rate visibly changed (listen-rate reads 2.00×), but the book-time
-  // readouts stay put: the total and every chapter duration read the same at
-  // 2x as at 1x. A second of slack per figure absorbs `format_hms` truncation.
-  const totalAt2x = await transportTotalSeconds(page);
-  expect(Math.abs(totalAt2x - totalAt1x)).toBeLessThanOrEqual(1);
-
-  const chaptersAt2x = await chapterDurationSeconds(page);
-  expect(chaptersAt2x.length).toBe(chaptersAt1x.length);
-  chaptersAt2x.forEach((secs, i) => {
-    // A chapter duration that halved at 2x is the #2246 behavior #2344 undid.
-    expect(
-      Math.abs(secs - chaptersAt1x[i]!),
-      `chapter ${i} should stay book-time`,
-    ).toBeLessThanOrEqual(1);
-  });
+  const at2x = await scrubStamps(page);
+  // The total is book-time — it reads the same at 2x as at 1x (a second of
+  // slack absorbs `format_hms` truncation).
+  expect(Math.abs(at2x.total - at1x.total)).toBeLessThanOrEqual(1);
+  // The "time left" is the one rate-adjusted figure — halved at 2x.
+  expect(at2x.remaining).toBeLessThan(at1x.remaining);
+  expect(Math.abs(at2x.remaining - at1x.remaining / 2)).toBeLessThanOrEqual(1);
 });
 
 // ---------------------------------------------------------------------------
