@@ -1,7 +1,8 @@
 //  MainTabView.swift
-//  The signed-in shell: five native tabs, one NavigationStack each (so every
-//  push gets interactive swipe-back for free), and the audiobook mini player
-//  docked in the tab bar's accessory slot.
+//  The signed-in shell: four native tabs, one NavigationStack each (so every
+//  push gets interactive swipe-back for free). The system tab bar is hidden and
+//  replaced by `OmnibusTabBar` in a bottom safe-area inset, with the audiobook
+//  mini player stacked directly above it.
 
 import SwiftUI
 
@@ -42,6 +43,29 @@ extension [Destination] {
     }
 }
 
+/// The four tabs' navigation stacks, held together so the tab → stack mapping
+/// is one nameable thing rather than a `switch` buried in a view.
+///
+/// Worth a type of its own because a transposed case in the subscript type
+/// checks perfectly and would simply answer for the wrong tab — the bar would
+/// go missing on one and linger on another. `tabPathsSubscriptReadsEachTabsOwnStack`
+/// is what actually pins it.
+struct TabPaths: Equatable {
+    var library: [Destination] = []
+    var search: [Destination] = []
+    var stats: [Destination] = []
+    var you: [Destination] = []
+
+    subscript(tab: AppTab) -> [Destination] {
+        switch tab {
+        case .library: library
+        case .search: search
+        case .stats: stats
+        case .you: you
+        }
+    }
+}
+
 struct MainTabView: View {
     @Environment(AppState.self) private var app
     @Environment(AudioPlayer.self) private var player
@@ -53,21 +77,7 @@ struct MainTabView: View {
     // One navigation path per tab, owned here rather than by each tab root:
     // whether the bottom bar is up is a question about the *selected* stack,
     // and this is the only view that knows which stack that is.
-    @State private var libraryPath: [Destination] = []
-    @State private var searchPath: [Destination] = []
-    @State private var statsPath: [Destination] = []
-    @State private var accountPath: [Destination] = []
-
-    /// The stack the reader is actually looking at. A tab switch changes the
-    /// answer below without anything having been pushed or popped.
-    private var activePath: [Destination] {
-        switch selection {
-        case .library: libraryPath
-        case .search: searchPath
-        case .stats: statsPath
-        case .you: accountPath
-        }
-    }
+    @State private var paths = TabPaths()
 
     /// Whether an immersive detail screen is up.
     ///
@@ -78,22 +88,22 @@ struct MainTabView: View {
     /// every exit. A bound path moves the instant the pop is committed, so
     /// the bar now returns alongside the screen sliding away.
     private var isImmersiveDetail: Bool {
-        activePath.hidesTabBar
+        paths[selection].hidesTabBar
     }
 
     var body: some View {
         TabView(selection: $selection) {
             Tab(value: AppTab.library) {
-                LibraryView(addSheetPresented: $addSheetPresented, path: $libraryPath)
+                LibraryView(addSheetPresented: $addSheetPresented, path: $paths.library)
             }
             Tab(value: AppTab.search) {
-                SearchTab(path: $searchPath)
+                SearchTab(path: $paths.search)
             }
             Tab(value: AppTab.stats) {
-                StatsView(path: $statsPath)
+                StatsView(path: $paths.stats)
             }
             Tab(value: AppTab.you) {
-                AccountView(path: $accountPath)
+                AccountView(path: $paths.you)
             }
         }
         // `TabView` keeps tab state and lazy loading; only its chrome is

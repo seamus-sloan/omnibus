@@ -29,7 +29,7 @@ struct SearchTab: View {
         // page — unwinding any pushed authors/series/tags screens.
         .onChange(of: reselect.token) { _, _ in
             guard reselect.tab == .search, !path.isEmpty else { return }
-            withAnimation(Motion.glide) { path.removeLast(path.count) }
+            withAnimation(Motion.glide) { path.removeAll() }
         }
     }
 }
