@@ -43,6 +43,10 @@ struct StatsView: View {
     /// are edited on a screen pushed onto this stack, and returning from it has
     /// to re-read a summary the write has already invalidated.
     @State private var path = NavigationPath()
+    /// Whether the tab has been on screen once. `onAppear` and `task` both
+    /// fire on the first appearance, so without this the reload below doubles
+    /// the opening fetch on every launch.
+    @State private var hasAppeared = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -83,8 +87,14 @@ struct StatsView: View {
         // re-fire `.task`, so the rings kept the target the reader had just
         // changed until a pull-to-refresh. Cheap to repeat: a cached read
         // unless a write invalidated the entry, which is exactly the case
-        // this exists for.
-        .onAppear { Task { await load() } }
+        // this exists for. The first appearance is `task`'s, not this one's.
+        .onAppear {
+            guard hasAppeared else {
+                hasAppeared = true
+                return
+            }
+            Task { await load() }
+        }
     }
 
     // MARK: - The screen
