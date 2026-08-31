@@ -992,3 +992,36 @@ async fn chart_series_clips_a_long_axis_to_the_most_recent_buckets_and_says_so()
         .unwrap();
     assert_eq!(r.buckets.last().unwrap(), &today);
 }
+
+#[tokio::test]
+async fn chart_series_drops_activity_dated_after_today() {
+    let (pool, user) = fixture(1).await;
+    let now = months_ago_secs(&pool, 0).await;
+    reading_session(&pool, user, "uuid-1", now, 600).await;
+    // Nothing bounds `SessionReport.started_at` above, so a device with a fast
+    // clock can file one — `streak` guards against the same thing.
+    let ahead: i64 = sqlx::query_scalar("SELECT CAST(strftime('%s','now','+5 months') AS INTEGER)")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    reading_session(&pool, user, "uuid-1", ahead, 6_000).await;
+
+    let r = chart_series(
+        &pool,
+        user,
+        &spec(
+            vec![ChartMeasure::ReadingMinutes],
+            ChartBucket::Month,
+            StatsRange::AllTime,
+        ),
+    )
+    .await
+    .unwrap();
+
+    // The axis stops at today rather than stretching five empty months to
+    // reach it, so the future sitting is left out — and only the real one is
+    // plotted. The `/stats` totals still count it, which is the cost.
+    assert!(!r.buckets.iter().any(|b| b.as_str() > "2026-08"));
+    let charted: f64 = r.series[0].values.iter().flatten().sum();
+    assert_eq!(charted, 10.0);
+}

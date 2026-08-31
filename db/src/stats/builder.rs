@@ -421,6 +421,12 @@ pub async fn chart_series(
         return Ok(empty_result(spec, caveats));
     };
 
+    // The axis ends at today, so activity dated *after* today has no bucket to
+    // land in and is dropped. That is deliberate and matches `streak`, which
+    // discards future-dated days for the same reason — nothing bounds
+    // `SessionReport.started_at` above, so a device with a fast clock would
+    // otherwise stretch the axis months into an empty future. The cost is that
+    // such a session is missing here while the `/stats` totals still count it.
     let all = axis(pool, spec.bucket, start, first).await?;
     let truncated = all.len() > MAX_BUCKETS;
     // Keep the most recent window — a clipped axis that dropped the newest
