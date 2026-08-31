@@ -62,6 +62,16 @@ interface EpubInput {
   /** Optional publisher colour applied through a class on the chapter body. */
   publisherBodyColor?: string;
   /**
+   * When true, emit a `publisher.css` that references an embedded asset via a
+   * relative `url()` (a body background image), forcing epub.js to rewrite the
+   * reference and serve the rewritten stylesheet as a `blob:` URL on render —
+   * the real-book shape a trivial inlined rule (`publisherBodyColor`) never
+   * reproduces. This is the ONLY generated fixture that exercises the reader's
+   * `style-src blob:` CSP path (issue #2213). Mutually exclusive with
+   * `publisherBodyColor`: both own `OEBPS/publisher.css`.
+   */
+  blobStylesheet?: boolean;
+  /**
    * When true, fill the chapter with ~32KB of deterministic prose (~32
    * epub.js 1024-char locations) instead of one short paragraph. The
    * cross-format specs need a jump target that is *visually* distinct: a
@@ -535,6 +545,25 @@ const FIXTURES: EpubInput[] = [
       },
     ],
   },
+
+  // Reserved for the CSP blob-stylesheet regression in reader.spec.ts (issue
+  // #2213). The ONLY generated fixture whose `publisher.css` references an
+  // embedded asset via a relative `url()`, so epub.js mints a `blob:`
+  // stylesheet on render and the reader exercises the `style-src blob:` CSP
+  // path a trivial inlined rule never triggers. No other spec may open it in
+  // the reader. "Dorothy Vaughan" is unique across ALL fixtures (ebook +
+  // audiobook) — shelves.spec.ts asserts exact author-scoped match counts.
+  {
+    filename: "standalone-reef.epub",
+    id: "urn:omnibus-test:standalone-reef",
+    title: "Reef of Cascades",
+    authors: ["Dorothy Vaughan"],
+    publisher: "Omnibus Test Press",
+    published: "1962-02-20",
+    language: "en",
+    withCover: true,
+    blobStylesheet: true,
+  },
 ];
 
 /**
@@ -589,8 +618,15 @@ function buildOpf(input: EpubInput): string {
   const coverManifestItem = input.withCover
     ? `\n    <item id="cover-image" href="cover.png" media-type="image/png" properties="cover-image"/>`
     : "";
-  const styleManifestItem = input.publisherBodyColor
-    ? `\n    <item id="publisher-style" href="publisher.css" media-type="text/css"/>`
+  const styleManifestItem =
+    input.publisherBodyColor || input.blobStylesheet
+      ? `\n    <item id="publisher-style" href="publisher.css" media-type="text/css"/>`
+      : "";
+  // The blob-stylesheet fixture's `publisher.css` references `bg.png` via a
+  // relative `url()`; epub.js only rewrites (and thus blob-ifies) that
+  // reference if the asset is a real manifest item it can resolve.
+  const blobAssetManifestItem = input.blobStylesheet
+    ? `\n    <item id="publisher-bg" href="bg.png" media-type="image/png"/>`
     : "";
   const sections = input.sections ?? [];
   // Each front-matter section contributes an XHTML manifest item (and, for
@@ -621,7 +657,7 @@ ${creators}${series}
   </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
-    <item id="chap1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>${coverManifestItem}${styleManifestItem}${sectionManifestItems}
+    <item id="chap1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>${coverManifestItem}${styleManifestItem}${blobAssetManifestItem}${sectionManifestItems}
   </manifest>
   <spine>${sectionSpineItems}
     <itemref idref="chap1"/>
@@ -659,9 +695,10 @@ function buildNav(input: EpubInput): string {
 }
 
 function buildChapter(input: EpubInput): string {
-  const stylesheet = input.publisherBodyColor
-    ? `<link href="publisher.css" rel="stylesheet" type="text/css"/>`
-    : "";
+  const stylesheet =
+    input.publisherBodyColor || input.blobStylesheet
+      ? `<link href="publisher.css" rel="stylesheet" type="text/css"/>`
+      : "";
   const bodyClass = input.publisherBodyColor ? ` class="calibre"` : "";
   // Deterministic (no randomness) so the generated zip stays byte-stable.
   const prose = input.longBody
@@ -721,6 +758,17 @@ function buildSection(s: BookSection): string {
 const FIXED_DATE = new Date("2024-01-01T00:00:00Z");
 
 async function buildEpub(input: EpubInput): Promise<Buffer> {
+  // publisher.css has a single owner: publisherBodyColor writes a colour rule,
+  // blobStylesheet writes a url()-bearing rule referencing bg.png. Setting both
+  // would emit the bg.png manifest item (buildOpf keys it on blobStylesheet)
+  // without ever writing the file (buildEpub's css branch prefers
+  // publisherBodyColor) — a manifest that references a missing asset. Fail fast
+  // rather than generate a broken EPUB.
+  if (input.publisherBodyColor && input.blobStylesheet) {
+    throw new Error(
+      `${input.filename}: publisherBodyColor and blobStylesheet are mutually exclusive`,
+    );
+  }
   const zip = new JSZip();
   // The mimetype file MUST be the first entry and stored without compression
   // for the EPUB to validate.
@@ -744,6 +792,18 @@ async function buildEpub(input: EpubInput): Promise<Buffer> {
       `.calibre { color: ${input.publisherBodyColor}; }\n`,
       { date: FIXED_DATE },
     );
+  } else if (input.blobStylesheet) {
+    // A relative url() to an embedded asset is what forces epub.js to rewrite
+    // the reference and serve the rewritten stylesheet as a blob: URL — the
+    // real-book shape a trivial inlined rule never triggers (issue #2213). The
+    // 1×1 transparent PNG keeps the rule invisible while still forcing the
+    // rewrite.
+    zip.file(
+      "OEBPS/publisher.css",
+      `body { background-image: url("bg.png"); background-repeat: no-repeat; }\n`,
+      { date: FIXED_DATE },
+    );
+    zip.file("OEBPS/bg.png", TINY_PNG, { date: FIXED_DATE });
   }
   if (input.withCover) {
     zip.file("OEBPS/cover.png", TINY_PNG, { date: FIXED_DATE });

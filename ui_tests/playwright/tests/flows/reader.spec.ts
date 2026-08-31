@@ -55,6 +55,11 @@ const TOC_JUMP_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "dracula")!;
 const FRONTMATTER_BOOK = FIXTURE_BOOKS.find(
   (b) => b.slug === "frontmatter-relay",
 )!;
+// Reserved for the CSP blob-stylesheet regression (issue #2213): its
+// publisher.css references an embedded asset via a relative url(), so epub.js
+// mints a blob: stylesheet on render — the one fixture that exercises the
+// `style-src blob:` CSP path. No other spec may open it in the reader.
+const BLOB_CSS_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "standalone-reef")!;
 
 // The epub.js progress POST fires on the reader's relocate events; pin the
 // exact pathname so the sibling `/api/rpc/progress/get` reads never match.
@@ -799,6 +804,74 @@ test("pages through image front matter without blanking the rendition, even at r
   await page.getByTestId("reader-prev").click();
   await expect(page.getByTestId("reader-error")).toHaveCount(0);
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
+});
+
+// Regression for issue #2213: epub.js renders a book's own stylesheets
+// through URL.createObjectURL when a rule references an internal asset (a
+// relative url()), so reading such a book loads a blob: stylesheet. If
+// style-src omits blob:, the browser refuses it and every forward page-turn
+// breaks with "This book couldn't be loaded." No generated fixture exercised
+// this before `standalone-reef`, whose publisher.css carries a relative
+// url() — the trivial inlined rule the other fixtures ship (alpha's
+// `.calibre { color }`) is never rewritten to a blob, so 54 specs missed the
+// broken CSP entirely.
+test("reads a book whose stylesheet becomes a blob: URL without a CSP refusal", async ({
+  page,
+  request,
+}) => {
+  // Capture only stylesheet CSP refusals — an unrelated CSP console message
+  // must neither mask this guard nor falsely trip it. CSP violations reach
+  // page.on("console") as browser-emitted error entries, section-iframe ones
+  // included.
+  const cspStyleViolations: string[] = [];
+  page.on("console", (msg) => {
+    const text = msg.text();
+    if (
+      /content security policy/i.test(text) &&
+      /style-src|stylesheet/i.test(text)
+    ) {
+      cspStyleViolations.push(text);
+    }
+  });
+
+  const uuid = await fetchBookUuidByTitle(request, BLOB_CSS_BOOK.title);
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Prove the blob path is actually exercised (not a vacuous pass): epub.js
+  // rewrites publisher.css's url() and links the rewritten sheet as a blob:
+  // inside the section iframe. That link is present whether or not the CSP
+  // then blocks it, so it is the honest precondition for the guard below —
+  // and its render is what loads (or refuses) the blob stylesheet.
+  const blobStylesheetCount = () =>
+    page.evaluate(() => {
+      const iframe = document.querySelector(
+        "#omnibus-viewer iframe",
+      ) as HTMLIFrameElement | null;
+      const doc = iframe?.contentDocument;
+      if (!doc) return -1;
+      return Array.from(doc.querySelectorAll("link")).filter((l) =>
+        (l as HTMLLinkElement).href.startsWith("blob:"),
+      ).length;
+    });
+  await expect
+    .poll(blobStylesheetCount, { timeout: 20_000 })
+    .toBeGreaterThan(0);
+
+  // Turn forward — the reported symptom is a forward page-turn breaking on
+  // the blob stylesheet load. The reader must stay on its content, never
+  // dropping into the "couldn't be loaded" error surface.
+  await page.getByTestId("reader-next").click();
+  await expect(page.getByTestId("reader-error")).toHaveCount(0);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // The blob: stylesheet loaded without a style-src refusal (issue #2213).
+  // Asserted last: the awaits above outlast the browser's console delivery,
+  // so a refusal that fired on the styled render is already collected.
+  expect(
+    cspStyleViolations,
+    `blob: stylesheet must load without a CSP refusal:\n${cspStyleViolations.join("\n")}`,
+  ).toEqual([]);
 });
 
 // The reader is one shared component: the native mobile shell renders the

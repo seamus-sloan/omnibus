@@ -315,6 +315,8 @@ struct BookDetailView: View {
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(true)
+        // Hiding the bar kills the system's edge-swipe pop; bring it back.
+        .keepsEdgeSwipeBack()
         .bookZoomDestination(uuid, in: bookZoom)
         .task { await model.load(uuid: uuid) }
         .refreshTask { await model.load(uuid: uuid) }
@@ -399,6 +401,18 @@ struct BookDetailView: View {
                 }
             }
         }
+        // Outermost, so the stops, bars, chrome, and every sheet above all
+        // inherit the book-toned accent.
+        .environment(\.palette, bookPalette)
+        .tint(bookPalette.accentColor)
+    }
+
+    /// The screen's palette: the theme re-keyed to this book's tone, resolved
+    /// the same way the cover plate and art halo resolve it — so a coverless
+    /// book's controls match the plate it is showing.
+    private var bookPalette: Palette {
+        guard let book = model.book else { return palette }
+        return palette.accented(by: CoverIdentity(book).tone)
     }
 
     /// Open the player on the file the picker chose, once its sheet is gone.
@@ -470,7 +484,9 @@ struct BookDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(EdgeInsets(
-            top: isHome ? 14 : 104,
+            // A full stop's label must clear the chrome discs, which end
+            // ~105pt below the top edge on current devices.
+            top: isHome ? 14 : 128,
             leading: 22,
             bottom: Self.barClearance,
             trailing: 30
@@ -807,8 +823,12 @@ struct DetailArtLayer: View {
                 path: "/api/covers/\(book.uuid)",
                 alternates: ["/api/thumbs/\(book.uuid)/lg"]
             ) {
-                GeneratedCoverPlate(identity: CoverIdentity(book))
+                Color.clear
             }
+            // Permanent backdrop, not a loading placeholder — the same rule
+            // as `BookCover`: a transparent or degenerate cover image loads
+            // "successfully" and would otherwise leave a black band.
+            .background { GeneratedCoverPlate(identity: CoverIdentity(book)) }
             .frame(width: width, height: imageHeight)
             .offset(y: -progress * travel)
             .frame(width: width, height: BookDetailView.artHeight, alignment: .top)

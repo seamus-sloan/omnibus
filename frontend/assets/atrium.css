@@ -16,6 +16,14 @@
  */
 
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400..700;1,400..700&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
+/* Reader Aa-panel typeface chips preview their prose faces (Editorial =
+   Instrument Serif, Classic = EB Garamond), which the app-wide import above no
+   longer carries after the #2162 type slimming — so both chips fell back to a
+   generic serif and looked identical (#2163). Loaded here for the parent
+   document only, subset to the chips' "Aa" specimen glyphs so the cost is two
+   glyphs, not two families. The reader body itself gets these faces from
+   epub-reader-glue.js's own iframe import, which this does not touch. */
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond&family=Instrument+Serif&text=Aa&display=swap');
 
 /* ── Tokens · dark (default) ─────────────────────────────────────── */
 :root {
@@ -11084,7 +11092,9 @@ html {
   font-size: 10.5px; color: var(--ink-3); margin-top: 12px;
   display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
 }
-.bdmq-syncline-warn { color: var(--warn); }
+/* Scoped past `.atrium .mono`, which this line carries for its face and
+   which would otherwise win the colour on specificity alone. */
+.bdmq-syncline.bdmq-syncline-warn { color: var(--warn); }
 /* Reads as a control, not prose: the sync line's affordance is the only way
    into the alignment modal, so it carries button chrome rather than sitting
    inline as another run of mono text. */

@@ -164,6 +164,10 @@ fn MiniDockBar(
 #[component]
 fn MiniDockActions(uuid: String) -> Element {
     let playback = use_playback();
+    // The sleep timer is app-scoped and outlives the dock, so dismissing the
+    // player must cancel it — otherwise an armed countdown keeps running with
+    // no player open (#2353).
+    let sleep = super::sleep::use_sleep();
     let on_dismiss = {
         let mut uuid_sig = playback.uuid;
         let mut book_sig = playback.book;
@@ -175,6 +179,7 @@ fn MiniDockActions(uuid: String) -> Element {
             // and PlaybackState stays coherent for any other consumer.
             #[cfg(feature = "web")]
             super::helpers::audio_call("stop", "");
+            sleep.cancel();
             book_sig.set(None);
             playing_set.set(false);
             uuid_sig.set(None);

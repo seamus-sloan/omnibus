@@ -427,6 +427,21 @@ const EXPECTED: &[Expected] = &[
         series_index: None,
         has_cover: true,
     },
+    // Reserved for the CSP blob-stylesheet regression in reader.spec.ts — its
+    // publisher.css references an embedded asset via a relative url() so
+    // epub.js mints a blob: stylesheet (issue #2213). See the matching entry
+    // (and reservation comment) in `ui_tests/playwright/tests/fixtures/epubs.ts`.
+    Expected {
+        filename: "standalone-reef.epub",
+        title: "Reef of Cascades",
+        authors: &["Dorothy Vaughan"],
+        publisher: Some("Omnibus Test Press"),
+        published: Some("1962-02-20"),
+        language: "en",
+        series: None,
+        series_index: None,
+        has_cover: true,
+    },
     // The two CBZ fixtures from `tools/make_cbz.ts` — metadata comes from
     // `ComicInfo.xml` via the comic parser, which carries no publisher,
     // date, or language. The empty-string language mirrors the Playwright
