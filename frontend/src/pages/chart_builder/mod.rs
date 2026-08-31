@@ -17,8 +17,10 @@ use omnibus_shared::{
 use crate::components::{PageError, PageLoading};
 use crate::{data, use_page_title, use_server_url, Route};
 
+mod notes;
 mod plot;
 
+use notes::ChartNotes;
 use plot::{ChartLegend, ChartPlot, ChartTable};
 
 /// Fetch the current spec's series, dropping any answer a newer spec has
@@ -294,15 +296,10 @@ fn ChartCanvas(
                 ChartLegend { result: chart.clone() }
                 ChartTable { result: chart.clone() }
             }
-            if chart.truncated {
-                p { class: "cb-note", "data-testid": "chart-truncated",
-                    "Showing the most recent {omnibus_shared::MAX_BUCKETS} periods — "
-                    "the full range is longer than this axis can draw."
-                }
-            }
-            for caveat in chart.caveats.iter() {
-                p { class: "cb-note", "data-testid": "chart-caveat", "{caveat}" }
-            }
+            // The caveats and the truncation note live inside the notes now,
+            // under the heading that gives them their context — a bare line
+            // under a chart reads as a disclaimer nobody asked for.
+            ChartNotes { result: chart.clone() }
         }
     }
 }

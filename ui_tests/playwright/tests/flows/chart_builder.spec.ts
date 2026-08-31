@@ -170,8 +170,12 @@ test("redraws when the selection changes", async ({ page }) => {
   await settled();
   await expect(canvas).toBeVisible();
 
-  // A measure with a bounded coverage window states that under the chart.
+  // A measure with a bounded coverage window states that in the notes.
   await expect(control(page, "Pages read")).toBeChecked();
+  await page
+    .getByTestId("chart-notes")
+    .getByText("What this chart shows")
+    .click();
   await expect(page.getByTestId("chart-caveat").first()).toContainText(
     "progress ledger",
   );
@@ -217,6 +221,55 @@ test("stacks a split count into one column per bucket", async ({ page }) => {
   const labels = await page.locator("text.cb-xlabel").count();
   expect(xs.length).toBeGreaterThan(labels);
   expect(new Set(xs).size).toBeLessThanOrEqual(labels);
+});
+
+test("explains what the chart shows and why the list is narrowed", async ({
+  page,
+}) => {
+  await gotoReady(page, CHART);
+  const notes = page.getByTestId("chart-notes");
+  await expect(notes).toBeVisible();
+
+  // Closed by default, so it never pushes the chart off screen.
+  await expect(page.getByTestId("chart-notes-scales")).toBeHidden();
+  await notes.getByText("What this chart shows").click();
+
+  // Each measure says what it counts, at which grain, in which unit.
+  await expect(notes).toContainText("Books you marked finished");
+  await expect(notes).toContainText("Measured per book finished, in books.");
+
+  // Two units on screen, so the notes warn that a crossing means nothing and
+  // say which units are holding the scales.
+  await expect(page.getByTestId("chart-notes-scales")).toContainText(
+    "means nothing",
+  );
+  await expect(page.getByTestId("chart-notes-availability")).toContainText(
+    "books and pages",
+  );
+});
+
+test("rewrites the notes when the selection changes", async ({ page }) => {
+  await gotoReady(page, CHART);
+  await page
+    .getByTestId("chart-notes")
+    .getByText("What this chart shows")
+    .click();
+
+  // Down to one unit: a free scale, and nothing to misread across axes.
+  await control(page, "Avg book length").uncheck();
+  await expect(page.getByTestId("chart-notes-availability")).toContainText(
+    "still free",
+  );
+  await expect(page.getByTestId("chart-notes-scales")).not.toContainText(
+    "means nothing",
+  );
+
+  // A measure with a bounded window states that under its own heading.
+  await control(page, "Pages read").check();
+  await control(page, "Books finished").uncheck();
+  await expect(page.getByTestId("chart-caveat").first()).toContainText(
+    "progress ledger",
+  );
 });
 
 test("surfaces a rejected spec instead of failing silently", async ({

@@ -237,9 +237,20 @@ fn the_canvas_surfaces_a_measures_caveat_alongside_the_chart() {
             ChartCanvas {
                 result: Signal::new(Some(ChartResult {
                     bucket: ChartBucket::Month,
-                    buckets: vec![],
-                    series: vec![],
-                    axes: vec![],
+                    buckets: vec!["2026-01".into()],
+                    // The notes describe the chart, so they need one to
+                    // describe — an empty result has nothing to say.
+                    series: vec![omnibus_shared::ChartSeries {
+                        measure: ChartMeasure::PagesRead,
+                        slice: None,
+                        axis: 0,
+                        mark: omnibus_shared::ChartMark::Bar,
+                        values: vec![Some(2.0)],
+                    }],
+                    axes: vec![omnibus_shared::ChartAxis {
+                        unit: omnibus_shared::ChartUnit::Pages,
+                        max: 5.0,
+                    }],
                     divisions: 4,
                     stacked: false,
                     truncated: true,
