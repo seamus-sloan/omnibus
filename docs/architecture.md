@@ -302,7 +302,9 @@ surface as `mobile/`, never the `/api/rpc/*` server functions.
 omnibusApp.swift    — @main OmnibusApp: audio session + appearance bootstrap
 App/                — AppState (server URL, auth, theme), RootView phase router
                       (launching → connect → login → tabs), MainTabView shell +
-                      destination routing + global reader/player presentation
+                      destination routing + the four tabs' navigation paths
+                      (which is what decides whether the bottom bar is up) +
+                      global reader/player presentation
 Design/             — Theme (Atrium tokens + the type scale), Fonts/ (static
                       cuts of Cormorant Garamond / Instrument Sans / Space Mono,
                       the three families the web pulls from Google Fonts, each

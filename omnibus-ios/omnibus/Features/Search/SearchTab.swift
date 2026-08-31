@@ -10,9 +10,15 @@
 import SwiftUI
 
 struct SearchTab: View {
+    /// Owned by `MainTabView` — see `isImmersiveDetail` there.
+    @Binding var path: [Destination]
+
+    init(path: Binding<[Destination]>) {
+        _path = path
+    }
+
     @Environment(\.palette) private var palette
     @Environment(TabReselect.self) private var reselect
-    @State private var path = NavigationPath()
 
     var body: some View {
         NavigationStack(path: $path) {

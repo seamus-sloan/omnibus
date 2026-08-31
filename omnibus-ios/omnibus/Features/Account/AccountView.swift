@@ -10,6 +10,13 @@
 import SwiftUI
 
 struct AccountView: View {
+    /// Owned by `MainTabView` — see `isImmersiveDetail` there.
+    @Binding var path: [Destination]
+
+    init(path: Binding<[Destination]>) {
+        _path = path
+    }
+
     @Environment(AppState.self) private var app
     @Environment(\.palette) private var palette
 
@@ -33,7 +40,7 @@ struct AccountView: View {
     var body: some View {
         @Bindable var app = app
 
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 30) {
                     Masthead(title: "You")

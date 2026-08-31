@@ -13,6 +13,16 @@
 import SwiftUI
 
 struct StatsView: View {
+    /// Owned by `MainTabView` (see `isImmersiveDetail` there) and read here so
+    /// the tab can tell a pop apart from a tab switch: the goals are edited on
+    /// a screen pushed onto this stack, and returning from it has to re-read a
+    /// summary the write has already invalidated.
+    @Binding var path: [Destination]
+
+    init(path: Binding<[Destination]>) {
+        _path = path
+    }
+
     @Environment(\.palette) private var palette
 
     @State private var range: StatsRange = .month
@@ -39,10 +49,6 @@ struct StatsView: View {
     @State private var standingSummary: StatsSummary?
     @State private var isLoading = true
     @State private var error: String?
-    /// Owned here so the tab can tell a pop apart from a tab switch: the goals
-    /// are edited on a screen pushed onto this stack, and returning from it has
-    /// to re-read a summary the write has already invalidated.
-    @State private var path = NavigationPath()
     /// Whether the tab has been on screen once. `onAppear` and `task` both
     /// fire on the first appearance, so without this the reload below doubles
     /// the opening fetch on every launch.

@@ -22,6 +22,24 @@ enum Destination: Hashable {
     case authorsIndex
     case searchResults(query: String)
     case metadataEdit(uuid: String)
+
+    /// Whether this screen draws its own bottom-edge chrome, so the tab bar
+    /// and mini player must step aside for it.
+    var hidesTabBar: Bool {
+        if case .book = self { return true }
+        return false
+    }
+}
+
+extension [Destination] {
+    /// Whether anything in this stack is holding the bottom edge.
+    ///
+    /// The whole stack, not just its top: a book detail with the metadata
+    /// editor pushed over it still owns that edge, and the bar stays away
+    /// until the detail itself pops.
+    var hidesTabBar: Bool {
+        contains { $0.hidesTabBar }
+    }
 }
 
 struct MainTabView: View {
@@ -32,20 +50,50 @@ struct MainTabView: View {
     @State private var selection: AppTab = .library
     @State private var addSheetPresented = false
     @State private var reselect = TabReselect()
+    // One navigation path per tab, owned here rather than by each tab root:
+    // whether the bottom bar is up is a question about the *selected* stack,
+    // and this is the only view that knows which stack that is.
+    @State private var libraryPath: [Destination] = []
+    @State private var searchPath: [Destination] = []
+    @State private var statsPath: [Destination] = []
+    @State private var accountPath: [Destination] = []
+
+    /// The stack the reader is actually looking at. A tab switch changes the
+    /// answer below without anything having been pushed or popped.
+    private var activePath: [Destination] {
+        switch selection {
+        case .library: libraryPath
+        case .search: searchPath
+        case .stats: statsPath
+        case .you: accountPath
+        }
+    }
+
+    /// Whether an immersive detail screen is up.
+    ///
+    /// Derived from the navigation path rather than that screen's own
+    /// `onAppear` / `onDisappear`, because a `NavigationStack` fires the
+    /// latter only once the pop has *finished*: the bar used to sit out the
+    /// whole transition and only then spring back, which read as a lag on
+    /// every exit. A bound path moves the instant the pop is committed, so
+    /// the bar now returns alongside the screen sliding away.
+    private var isImmersiveDetail: Bool {
+        activePath.hidesTabBar
+    }
 
     var body: some View {
         TabView(selection: $selection) {
             Tab(value: AppTab.library) {
-                LibraryView(addSheetPresented: $addSheetPresented)
+                LibraryView(addSheetPresented: $addSheetPresented, path: $libraryPath)
             }
             Tab(value: AppTab.search) {
-                SearchTab()
+                SearchTab(path: $searchPath)
             }
             Tab(value: AppTab.stats) {
-                StatsView()
+                StatsView(path: $statsPath)
             }
             Tab(value: AppTab.you) {
-                AccountView()
+                AccountView(path: $accountPath)
             }
         }
         // `TabView` keeps tab state and lazy loading; only its chrome is
@@ -57,7 +105,7 @@ struct MainTabView: View {
             // bar sits where the tabs do — so the whole block steps aside
             // while one is up. Audio keeps playing; the mini player returns
             // with the bar on pop.
-            if !Presentation.shared.isImmersiveDetail {
+            if !isImmersiveDetail {
                 VStack(spacing: 0) {
                     if player.isActive {
                         MiniPlayerBar()
@@ -71,7 +119,7 @@ struct MainTabView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(Motion.glide, value: Presentation.shared.isImmersiveDetail)
+        .animation(Motion.glide, value: isImmersiveDetail)
         // The keyboard belongs over the tab bar, not under it. Has to sit on
         // the modified view — on the inset's content it is a no-op (#2102).
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -165,22 +213,6 @@ final class Presentation {
 
     var reader: ReaderSession?
     var player: ReaderSession?
-
-    /// How many immersive detail screens are on screen — pushed book details
-    /// hide the tab bar and mini player. A count, not a flag: a series-strip
-    /// tap pushes a second detail over the first, and appear/disappear of the
-    /// two interleave during the transition.
-    private(set) var immersiveDetailDepth = 0
-
-    var isImmersiveDetail: Bool { immersiveDetailDepth > 0 }
-
-    func pushImmersiveDetail() {
-        immersiveDetailDepth += 1
-    }
-
-    func popImmersiveDetail() {
-        immersiveDetailDepth = max(0, immersiveDetailDepth - 1)
-    }
 
     /// Bumped once a reading or listening session has *persisted* its final
     /// position. Surfaces that show resume state observe this instead of
