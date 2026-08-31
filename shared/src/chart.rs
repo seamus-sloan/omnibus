@@ -253,6 +253,27 @@ impl ChartMeasure {
         }
     }
 
+    /// One line saying what this measure actually counts, for the notes
+    /// under the chart.
+    ///
+    /// Kept beside `grain`/`unit` rather than in the UI because it describes
+    /// the *query*, not the presentation — a measure whose SQL changes needs
+    /// its sentence changed in the same edit.
+    pub fn description(&self) -> &'static str {
+        match self {
+            ChartMeasure::BooksFinished => {
+                "Books you marked finished — counted once each, however you marked them."
+            }
+            ChartMeasure::AvgPageLength => "How long those finished books were, averaged.",
+            ChartMeasure::AvgRating => "Stars you gave, averaged over the books you rated.",
+            ChartMeasure::ReadingMinutes => "Time with an ebook open.",
+            ChartMeasure::ListeningMinutes => "Time with an audiobook playing.",
+            ChartMeasure::SessionCount => "Sittings — a glance too short to count is left out.",
+            ChartMeasure::AvgSessionMinutes => "How long a typical sitting ran.",
+            ChartMeasure::PagesRead => "Ground covered, from how far through each book you got.",
+        }
+    }
+
     /// The table this measure is computed over.
     pub fn grain(&self) -> ChartGrain {
         match self {
