@@ -50,7 +50,7 @@ fn sync_line(view: &AlignmentView, mut open_modal: Signal<bool>) -> Element {
                     r#type: "button",
                     "data-testid": "sync-link-open",
                     onclick: move |_| open_modal.set(true),
-                    "link formats \u{2192}"
+                    "Link Formats"
                 }
             }
         },
@@ -62,7 +62,7 @@ fn sync_line(view: &AlignmentView, mut open_modal: Signal<bool>) -> Element {
                     r#type: "button",
                     "data-testid": "sync-link-review",
                     onclick: move |_| open_modal.set(true),
-                    "review alignment \u{2192}"
+                    "Review Alignment"
                 }
             }
         },
@@ -159,7 +159,7 @@ pub(super) fn BdSyncPanel(
                             r#type: "button",
                             "data-testid": "sync-link-retry",
                             onclick: move |_| epoch.set(epoch() + 1),
-                            "retry \u{2192}"
+                            "Retry"
                         }
                     }
                 },
