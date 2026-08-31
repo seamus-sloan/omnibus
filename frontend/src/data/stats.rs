@@ -5,6 +5,8 @@
 //! signatures so the stats page stays platform-agnostic; the `#[cfg]` gates
 //! carry the split.
 
+#[cfg(not(feature = "mobile"))]
+use omnibus_shared::{ChartResult, ChartSpec};
 use omnibus_shared::{
     DailyGoalUpdate, DailyGoals, LibraryComposition, LibrarySize, ReadingGoal, ReadingGoalUpdate,
     SessionLogPage, StatsRange, StatsSummary,
@@ -211,6 +213,21 @@ pub async fn fetch_session_log(
     before: Option<&str>,
 ) -> Result<SessionLogPage, DataError> {
     crate::rpc::rpc_session_log(book.map(str::to_string), before.map(str::to_string))
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Run a chart-builder spec — web/SSR only.
+///
+/// No mobile arm and no REST counterpart: the builder is a web surface, so
+/// there is nothing on the native side to serve. Uncached for the same reason
+/// `rpc_chart_series` is — an open spec space has no small key to cache on.
+#[cfg(not(feature = "mobile"))]
+pub async fn fetch_chart_series(
+    _server_url: &str,
+    spec: ChartSpec,
+) -> Result<ChartResult, DataError> {
+    crate::rpc::rpc_chart_series(spec)
         .await
         .map_err(note_server_fn_err)
 }

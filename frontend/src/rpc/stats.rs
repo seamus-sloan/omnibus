@@ -9,8 +9,8 @@ use omnibus_db as db;
 #[cfg(feature = "server")]
 use omnibus_shared::SessionCursor;
 use omnibus_shared::{
-    BookInsights, DailyGoalUpdate, DailyGoals, LibraryComposition, LibrarySize, ReadingGoal,
-    ReadingGoalUpdate, SessionLogPage, StatsRange, StatsSummary,
+    BookInsights, ChartResult, ChartSpec, DailyGoalUpdate, DailyGoals, LibraryComposition,
+    LibrarySize, ReadingGoal, ReadingGoalUpdate, SessionLogPage, StatsRange, StatsSummary,
 };
 
 #[cfg(feature = "server")]
@@ -122,4 +122,27 @@ pub async fn rpc_session_log(
     )
     .await
     .map_err(|e| internal_rpc_error("session log", e))?)
+}
+
+/// Run a chart-builder spec and return its aligned series.
+///
+/// Uncached, unlike [`rpc_stats`]: the spec space is open, so there is no
+/// small key to cache on. Web-only — the builder page doesn't compile on
+/// mobile — so there is no REST counterpart in `server::backend`.
+///
+/// A rejected spec surfaces its own message, because it describes the
+/// reader's own selection and is the thing they can act on; a DB failure is
+/// logged and generalized like every other handler here. The spec is
+/// re-validated server-side inside `db::stats::chart_series` — the builder
+/// UI's guards are a convenience, not the contract.
+#[post("/api/rpc/chart-series", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_chart_series(spec: ChartSpec) -> Result<ChartResult> {
+    Ok(db::stats::chart_series(&pool.0, user.id, &spec)
+        .await
+        .map_err(|e| match e {
+            db::stats::ChartError::Spec(inner) => {
+                dioxus::prelude::ServerFnError::new(inner.to_string())
+            }
+            db::stats::ChartError::Stats(inner) => internal_rpc_error("chart series", inner),
+        })?)
 }

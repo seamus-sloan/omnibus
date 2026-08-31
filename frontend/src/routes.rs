@@ -52,6 +52,8 @@ pub enum Route {
     TagCloud {},
     #[route("/stats")]
     Stats {},
+    #[route("/stats/chart")]
+    StatsChart {},
     #[route("/shelves")]
     Shelves {},
     #[route("/shelves/:id")]
@@ -402,6 +404,30 @@ pub fn Stats() -> Element {
     rsx! {
         ScreenLayout { StatsPage {} }
     }
+}
+
+/// Route target for `/stats/chart` — the configurable chart builder.
+///
+/// A standalone surface while `/stats` is being redesigned, rather than a card
+/// on it. Web/server only; mobile has no builder, so it redirects like every
+/// other web-only route here.
+#[cfg(not(feature = "mobile"))]
+#[component]
+pub fn StatsChart() -> Element {
+    rsx! {
+        ScreenLayout { ChartBuilderPage {} }
+    }
+}
+
+/// Mobile stub for `/stats/chart`: redirect to the landing page.
+#[cfg(feature = "mobile")]
+#[component]
+pub fn StatsChart() -> Element {
+    let nav = dioxus_router::use_navigator();
+    use_effect(move || {
+        nav.replace(Route::Landing {});
+    });
+    rsx! {}
 }
 
 /// Route target for `/shelves` — the shelves index (mobile-first; web renders a plain list).

@@ -11516,3 +11516,181 @@ html {
   .st-log-row { grid-template-columns: 1fr auto; }
   .st-log-when { grid-column: 1 / -1; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   CHART BUILDER (/stats/chart)
+
+   A standalone surface while /stats is being redesigned. The picker
+   composes a ChartSpec out of closed enums; the plot is a hand-rolled
+   SVG that scales to its container.
+
+   The series palette is the one part of this file that does NOT derive
+   from --accent. A categorical scale has to stay distinguishable under
+   colour-vision deficiency, and one accent's shades do not — the black
+   theme's accent is achromatic, so a derived ramp would collapse there
+   entirely. These six hues are validated as a set against both a light
+   and a dark surface (adjacent-pair CVD ΔE ≥ 8, normal-vision ΔE ≥ 15).
+   Three of the light steps sit below 3:1 on the page, which is why the
+   plot ships an openable data table rather than a screen-reader-only one.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.cb-page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px 0 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+
+  /* Dark steps — the default and [data-theme="black"] grounds. */
+  --cb-s0: #3987e5;
+  --cb-s1: #d95926;
+  --cb-s2: #199e70;
+  --cb-s3: #c98500;
+  --cb-s4: #d55181;
+  --cb-s5: #008300;
+}
+
+[data-theme="light"] .cb-page,
+[data-theme="sepia"] .cb-page {
+  /* The same six hues re-stepped for a light ground, not an auto-flip. */
+  --cb-s0: #2a78d6;
+  --cb-s1: #eb6834;
+  --cb-s2: #1baf7a;
+  --cb-s3: #eda100;
+  --cb-s4: #e87ba4;
+  --cb-s5: #008300;
+}
+
+/* ── Masthead ─────────────────────────────────────────────────────── */
+.cb-masthead { display: flex; flex-direction: column; gap: 8px; }
+.cb-title { margin: 0; font-family: var(--serif); font-size: 40px; font-weight: 600; }
+.cb-sub { margin: 0; max-width: 62ch; color: var(--ink-2); font-size: 14px; line-height: 1.5; }
+
+/* ── Picker ───────────────────────────────────────────────────────── */
+.cb-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px;
+  padding: 18px 20px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+}
+.cb-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cb-field label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.cb-select {
+  width: 100%;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink-1);
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.cb-select:disabled { opacity: 0.45; cursor: not-allowed; }
+.cb-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cb-hint { font-size: 11.5px; color: var(--ink-3); }
+
+/* ── Canvas ───────────────────────────────────────────────────────── */
+.cb-canvas {
+  padding: 20px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* A refetch dims the previous chart rather than replacing it with a
+   spinner, so a picker change doesn't flash the surface. */
+.cb-canvas.is-loading .cb-plot { opacity: 0.55; transition: opacity 120ms ease; }
+
+.cb-plot { width: 100%; }
+.cb-svg { display: block; width: 100%; height: auto; aspect-ratio: 760 / 340; overflow: visible; }
+
+/* Recessive grid and axis; the data carries the ink. */
+.cb-grid { stroke: var(--line-2); stroke-width: 1; }
+.cb-axis { stroke: var(--line); stroke-width: 1; }
+.cb-tick, .cb-xlabel { fill: var(--ink-3); font-size: 11px; font-family: var(--sans); }
+
+/* Series colour is set once per group and consumed by whichever mark
+   the group holds, so a bar and a line of the same series can't drift. */
+.cb-s0 { --cb-c: var(--cb-s0); }
+.cb-s1 { --cb-c: var(--cb-s1); }
+.cb-s2 { --cb-c: var(--cb-s2); }
+.cb-s3 { --cb-c: var(--cb-s3); }
+.cb-s4 { --cb-c: var(--cb-s4); }
+.cb-s5 { --cb-c: var(--cb-s5); }
+
+.cb-bar { fill: var(--cb-c); }
+.cb-stroke { fill: none; stroke: var(--cb-c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+/* A 2px surface ring keeps a dot legible where it overlaps a bar. */
+.cb-dot { fill: var(--cb-c); stroke: var(--bg-2); stroke-width: 2; }
+
+/* ── Legend ───────────────────────────────────────────────────────── */
+.cb-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+.cb-legend-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.cb-legend-swatch { width: 12px; height: 12px; border-radius: 3px; background: var(--cb-c); flex: none; }
+/* A line series gets a bar-height rule instead of a block, so the legend
+   says which mark it is without relying on colour alone. */
+.cb-legend-swatch[data-mark="line"] { height: 3px; border-radius: 2px; }
+.cb-legend-name { color: var(--ink-1); }
+.cb-legend-axis {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ── Data table ───────────────────────────────────────────────────── */
+.cb-table-wrap { font-size: 12.5px; }
+.cb-table-toggle { cursor: pointer; color: var(--ink-2); }
+.cb-table-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Wide tables scroll inside their own box; the page never scrolls sideways. */
+.cb-table {
+  width: 100%;
+  margin-top: 12px;
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.cb-table caption { text-align: left; color: var(--ink-3); padding-bottom: 6px; }
+.cb-table th, .cb-table td {
+  padding: 5px 12px 5px 0;
+  text-align: right;
+  border-bottom: 1px solid var(--line-2);
+  font-variant-numeric: tabular-nums;
+}
+.cb-table th[scope="row"], .cb-table thead th:first-child { text-align: left; }
+.cb-table thead th { color: var(--ink-2); font-weight: 500; }
+.cb-table td { color: var(--ink-1); }
+
+/* ── Notes & empty ────────────────────────────────────────────────── */
+.cb-empty { margin: 0; padding: 40px 0; text-align: center; color: var(--ink-3); font-size: 14px; }
+.cb-note { margin: 0; color: var(--ink-3); font-size: 11.5px; line-height: 1.5; }
+
+@media (max-width: 720px) {
+  .cb-title { font-size: 30px; }
+  .cb-controls { grid-template-columns: 1fr 1fr; padding: 14px; }
+  /* The plot gets taller as it narrows so the bars keep usable height. */
+  .cb-svg { aspect-ratio: 4 / 3; }
+}
