@@ -763,6 +763,45 @@ async fn chart_series_splits_a_completion_measure_by_genre_and_folds_the_tail() 
 }
 
 #[tokio::test]
+async fn chart_series_stacks_a_split_count_but_never_a_split_average() {
+    let (pool, user) = fixture(4).await;
+    let now = months_ago_secs(&pool, 0).await;
+    for (i, g) in ["Fantasy", "Horror"].iter().enumerate() {
+        let uuid = format!("uuid-{}", i + 1);
+        set_pages(&pool, &uuid, 200).await;
+        set_genres(&pool, &uuid, &[g], user).await;
+        finish_journal(&pool, user, &uuid, now).await;
+    }
+
+    // Books finished is a count, so its slices are parts of a whole.
+    let mut counted = spec(
+        vec![ChartMeasure::BooksFinished],
+        ChartBucket::Month,
+        StatsRange::Year,
+    );
+    counted.breakdown = ChartBreakdown::Genre;
+    assert!(chart_series(&pool, user, &counted).await.unwrap().stacked);
+
+    // Average book length is a mean, and means do not add.
+    let mut averaged = spec(
+        vec![ChartMeasure::AvgPageLength],
+        ChartBucket::Month,
+        StatsRange::Year,
+    );
+    averaged.breakdown = ChartBreakdown::Genre;
+    assert!(!chart_series(&pool, user, &averaged).await.unwrap().stacked);
+
+    // Two separate measures never stack — books on top of pages is not a
+    // quantity.
+    let unsplit = spec(
+        vec![ChartMeasure::BooksFinished, ChartMeasure::AvgPageLength],
+        ChartBucket::Month,
+        StatsRange::Year,
+    );
+    assert!(!chart_series(&pool, user, &unsplit).await.unwrap().stacked);
+}
+
+#[tokio::test]
 async fn chart_series_re_averages_a_folded_genre_slice_from_sums() {
     let (pool, user) = fixture(17).await;
     let now = months_ago_secs(&pool, 0).await;

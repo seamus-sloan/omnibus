@@ -504,6 +504,7 @@ pub async fn chart_series(
             series: vec![],
             axes: vec![],
             divisions: AXIS_DIVISION_CHOICES[0] as u8,
+            stacked: false,
             truncated: false,
             caveats,
         });
@@ -524,6 +525,14 @@ pub async fn chart_series(
     } else {
         build_measure_series(&buckets, &fetched)
     };
+    // Slices of one additive measure are parts of a whole, so they stack and
+    // the column height is the figure the unsplit chart would show. A split
+    // average must not: means do not add.
+    let stacked = breakdown_on
+        && spec
+            .measures
+            .first()
+            .is_some_and(|m| m.aggregate() != ChartAggregate::Average);
     let (axes, divisions) = build_axes(&series);
 
     Ok(ChartResult {
@@ -532,6 +541,7 @@ pub async fn chart_series(
         series,
         axes,
         divisions: divisions as u8,
+        stacked,
         truncated,
         caveats,
     })
