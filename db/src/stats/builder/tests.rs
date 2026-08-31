@@ -802,6 +802,42 @@ async fn chart_series_stacks_a_split_count_but_never_a_split_average() {
 }
 
 #[tokio::test]
+async fn a_stacked_axis_clears_the_tallest_column_not_the_tallest_slice() {
+    let (pool, user) = fixture(6).await;
+    let now = months_ago_secs(&pool, 0).await;
+    // Six books across three genres, all finished in one month: no slice is
+    // taller than two, but the column is six.
+    for (i, g) in ["Fantasy", "Fantasy", "Horror", "Horror", "Crime", "Crime"]
+        .iter()
+        .enumerate()
+    {
+        let uuid = format!("uuid-{}", i + 1);
+        set_genres(&pool, &uuid, &[g], user).await;
+        finish_journal(&pool, user, &uuid, now).await;
+    }
+
+    let mut s = spec(
+        vec![ChartMeasure::BooksFinished],
+        ChartBucket::Month,
+        StatsRange::Year,
+    );
+    s.breakdown = ChartBreakdown::Genre;
+    let r = chart_series(&pool, user, &s).await.unwrap();
+
+    assert!(r.stacked);
+    let last = r.buckets.len() - 1;
+    let column: f64 = r.series.iter().filter_map(|x| x.values[last]).sum();
+    assert_eq!(column, 6.0);
+    // Scaling to the tallest slice would give a 2-high axis and clip every
+    // column above it.
+    assert!(
+        r.axes[0].max >= column,
+        "axis {} clips a column of {column}",
+        r.axes[0].max
+    );
+}
+
+#[tokio::test]
 async fn chart_series_re_averages_a_folded_genre_slice_from_sums() {
     let (pool, user) = fixture(17).await;
     let now = months_ago_secs(&pool, 0).await;

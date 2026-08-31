@@ -533,7 +533,7 @@ pub async fn chart_series(
             .measures
             .first()
             .is_some_and(|m| m.aggregate() != ChartAggregate::Average);
-    let (axes, divisions) = build_axes(&series);
+    let (axes, divisions) = build_axes(&series, stacked, buckets.len());
 
     Ok(ChartResult {
         bucket: spec.bucket,
@@ -632,19 +632,34 @@ fn build_split_series(
 ///
 /// The left axis picks the tick count; the right is then fitted to it, because
 /// one set of gridlines serves both.
-fn build_axes(series: &[ChartSeries]) -> (Vec<ChartAxis>, usize) {
+fn build_axes(series: &[ChartSeries], stacked: bool, buckets: usize) -> (Vec<ChartAxis>, usize) {
     let unit_of = |axis: u8| -> Option<ChartUnit> {
         series
             .iter()
             .find(|s| s.axis == axis)
             .map(|s| s.measure.unit())
     };
+    // A stacked axis has to clear the tallest **column**, not the tallest
+    // slice — scaling to the largest single series clips every column whose
+    // parts add up past it, which is most of them.
     let peak_of = |axis: u8| -> f64 {
-        series
-            .iter()
-            .filter(|s| s.axis == axis)
-            .filter_map(ChartSeries::max)
-            .fold(0.0, f64::max)
+        if stacked {
+            (0..buckets)
+                .map(|b| {
+                    series
+                        .iter()
+                        .filter(|s| s.axis == axis)
+                        .filter_map(|s| s.values.get(b).copied().flatten())
+                        .sum::<f64>()
+                })
+                .fold(0.0, f64::max)
+        } else {
+            series
+                .iter()
+                .filter(|s| s.axis == axis)
+                .filter_map(ChartSeries::max)
+                .fold(0.0, f64::max)
+        }
     };
 
     // An axis is whole-numbered only when every series on it counts rows.
