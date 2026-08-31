@@ -1,38 +1,55 @@
-//! Reading-stats page (`/stats`). Period-scoped modules up top driven by the
-//! Week / Month / Year / Lifetime dropdown embedded in the page title, then an
-//! explicitly separated All-time section that never re-queries on period
-//! change. Mirrors the converged Stats design (`screens/stats-converged.jsx`).
+//! Reading-stats page (`/stats`). The page is split on the one boundary the
+//! payload itself draws: figures the period switcher governs sit inside the
+//! "In this window" band, and figures that are true right now — the streak,
+//! the goals, the trailing-year heatmap, the library — sit outside it, so a
+//! reader can see what a period switch will and won't move.
 
 use dioxus::prelude::*;
 use omnibus_shared::{
-    DailyGoals, LibraryComposition, LibrarySize, ReadingGoal, StatsRange, StatsSummary,
-    STATS_TTL_SECS,
+    LibraryComposition, LibrarySize, ResumePoint, StatsRange, StatsSummary, STATS_TTL_SECS,
 };
 
-use crate::components::{PageError, PageLoading, SessionLogList};
+use crate::components::{PageError, PageLoading};
 use crate::{data, use_server_url, Route};
 
+mod clock;
 mod composition;
 mod donut;
 mod drill_in;
 mod goal;
 mod heatmap;
+mod hero;
 mod library;
 mod monthly;
-mod patterns;
+mod reading_now;
 mod superlatives;
 mod tiles;
 
-use composition::LibraryCompositionCard;
-use donut::{FormatSplit, GenreDonut, LengthSplit};
+use clock::ReadingClock;
+use composition::LibraryCompositionPanels;
+use donut::GenreDonut;
 use drill_in::{DrillIn, Metric};
-use goal::GoalBand;
 use heatmap::HeatmapCard;
-use library::LibrarySizeCard;
+use hero::StatsHero;
+use library::LibrarySizeHero;
 use monthly::MonthlyChart;
-use patterns::TimePatternsCard;
-use superlatives::SuperlativesCard;
+use reading_now::{InProgressCard, RecentlyFinishedCard};
+use superlatives::StandoutsGrid;
 use tiles::HeadlineTiles;
+
+/// How many in-progress books the standing band lists.
+const IN_PROGRESS_LIMIT: i64 = 3;
+
+/// Which scope the page is showing: the reader's own figures, or the shelf's.
+///
+/// Two rather than three, because scope is the only real boundary left — the
+/// period switcher governs every user-scoped module on the page and none of
+/// the library ones, so a third tab would split one governed set in half.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    User,
+    Library,
+}
 
 /// Group a non-negative integer's digits in threes with `,` separators.
 /// Negative inputs (never produced by `db::stats`) fall back to a plain
@@ -52,53 +69,82 @@ fn group_thousands(n: i64) -> String {
     out
 }
 
-/// The italicized period word in the page title.
-fn period_word(range: StatsRange) -> &'static str {
-    match range {
-        StatsRange::Week => "week",
-        StatsRange::Month => "month",
-        StatsRange::Year => "year",
-        StatsRange::AllTime => "lifetime",
+/// Full month name for a 1-based month number — the window label reads as
+/// prose ("August 2026"), where the heatmap's ruler wants the abbreviation.
+fn month_name(m: i64) -> &'static str {
+    match m {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        _ => "December",
     }
 }
 
-/// Reading-stats page — period switcher, period-scoped summary, and the
-/// all-time section.
+/// What the switcher's current window actually covers, spelled out under the
+/// band's label — "August 2026 · month to date".
+///
+/// Anchored to the server's `as_of_day` rather than a client clock, for the
+/// same reason the goal band's year is: a client-derived date in markup is a
+/// hydration hazard (rule 07), and the two sides would disagree across a
+/// timezone gap. Falls back to the range's own label when the summary carries
+/// no day — a server too old to send one.
+fn window_label(range: StatsRange, as_of_day: &str) -> String {
+    let Some((y, m, _)) = heatmap::day_number(as_of_day).map(heatmap::civil_from_days) else {
+        return range.label().to_string();
+    };
+    match range {
+        StatsRange::Week => {
+            let n = heatmap::day_number(as_of_day).unwrap_or(0);
+            // Unix day 0 is a Thursday, so Monday-aligning subtracts (n+3)%7 —
+            // the same convention `db::stats` buckets its weeks on.
+            let (wy, wm, wd) = heatmap::civil_from_days(n - (n + 3).rem_euclid(7));
+            format!(
+                "Week of {wd} {} {wy} \u{00B7} to date",
+                heatmap::month_abbr(wm)
+            )
+        }
+        StatsRange::Month => format!("{} {y} \u{00B7} month to date", month_name(m)),
+        StatsRange::Year => format!("{y} \u{00B7} year to date"),
+        StatsRange::AllTime => "Everything you have tracked".to_string(),
+    }
+}
+
+/// Reading-stats page — the standing hero, the scope switcher, and the two
+/// bands beneath it.
 #[component]
 pub fn StatsPage() -> Element {
     let server_url = use_server_url();
-    // Seeded to the default on every target so SSR and first WASM paint
-    // match (rule 07); no localStorage seeding.
+    // Every signal below is seeded to the same value on every target so SSR
+    // and the first WASM paint agree (rule 07); nothing is read from
+    // localStorage or a client clock at render time.
     let range = use_signal(StatsRange::default);
+    let scope = use_signal(|| Scope::User);
     let period: Signal<Option<StatsSummary>> = use_signal(|| None);
     let all_time: Signal<Option<StatsSummary>> = use_signal(|| None);
-    // Library-scale rather than per-user, so it rides its own fetch: folding
-    // it into the summary would recompute and re-send it on every switcher
-    // change. `None` until it lands, and the card renders nothing then.
+    // Library-scale rather than per-user, so these ride their own fetches:
+    // folding them into the summary would recompute and re-send them on every
+    // switcher change. `None` until they land, and their cards render nothing.
     let library_size: Signal<Option<LibrarySize>> = use_signal(|| None);
-    // Same reasoning, same shape: what the library is *made of* is a
-    // library-wide answer that only moves on a reindex.
     let library_composition: Signal<Option<LibraryComposition>> = use_signal(|| None);
+    let in_progress: Signal<Vec<ResumePoint>> = use_signal(Vec::new);
     let loading = use_signal(|| true);
     let error: Signal<Option<String>> = use_signal(|| None);
-    // Seeded closed on every target (rule 07): the title dropdown only ever
-    // opens from a client click.
-    let menu_open = use_signal(|| false);
-    // Which tile's drill-in is open, if any — seeded closed on every target
-    // (rule 07): the sheet/modal only ever opens from a client click.
+    // Which tile's drill-in is open, if any — the sheet only ever opens from a
+    // client click.
     let expanded: Signal<Option<Metric>> = use_signal(|| None);
-    // The current-year goal, owned by the page rather than read straight off
-    // the summary: a save writes the server's answer back here, so the band
-    // updates without waiting on a refetch.
-    let goal: Signal<Option<ReadingGoal>> = use_signal(|| None);
-    // The daily goals, owned here for the same reason and seeded to the same
-    // empty value on every target (rule 07).
-    let daily: Signal<DailyGoals> = use_signal(DailyGoals::default);
-
     use_period_fetch_effect(server_url.clone(), range, period, error);
-    use_all_time_fetch_effect(server_url.clone(), all_time, loading, error, goal, daily);
+    use_all_time_fetch_effect(server_url.clone(), all_time, loading, error);
     use_library_size_fetch_effect(server_url.clone(), library_size);
     use_library_composition_fetch_effect(server_url.clone(), library_composition);
+    use_in_progress_fetch_effect(server_url.clone(), in_progress);
 
     if loading() {
         return rsx! { PageLoading {} };
@@ -107,63 +153,209 @@ pub fn StatsPage() -> Element {
         return rsx! { PageError { message: msg, back_to: Route::Landing {} } };
     }
 
-    let empty = all_time.read().as_ref().is_none_or(StatsSummary::is_empty);
-
-    // The goal is annual, so it is anchored *outside* the period-scoped
-    // section and sourced from the all-time summary — the one fetch that never
-    // re-runs on a range change. It sits under the masthead rather than over
-    // it so the page still opens with its `h1`, and so the title's period
-    // dropdown keeps opening into the same space (a band above it pushes the
-    // menu down over the page's midpoint).
-    let goal_year = goal_year_from(all_time.read().as_ref());
+    let standing = all_time.read().clone();
+    let empty = standing.as_ref().is_none_or(StatsSummary::is_empty);
 
     rsx! {
         div { class: "st-page",
-            StatsHeader { range, menu_open }
-            if let Some(year) = goal_year {
-                GoalBand { goal, daily, year, server_url: server_url.clone() }
-            }
-            if empty {
-                StatsEmpty {}
-            } else {
-                // Deliberately not keyed on the range: a period switch keeps
-                // the cards mounted (the entrance cascade plays on page load
-                // only) and each card's *contents* transition when the new
-                // summary lands — the web analogue of iOS numericText.
-                section { class: "st-period", "data-testid": "stats-period-section",
-                    PeriodSummary { period, expanded }
+            StatsHero { summary: standing.clone() }
+            ScopeSwitch { scope }
+            div { class: "st-body",
+                if empty {
+                    StatsEmpty {}
+                } else if scope() == Scope::User {
+                    UserScope { range, period, all_time, in_progress, expanded }
+                } else {
+                    LibraryScope { size: library_size(), composition: library_composition() }
                 }
-                div { class: "st-divider",
-                    h3 { class: "st-divider-title", "All" span { class: "st-divider-em", "-time" } }
-                    p { class: "st-divider-sub", "Not tied to the period above." }
-                }
-                section { class: "st-alltime", "data-testid": "stats-alltime-section",
-                    AllTimeSummary { all_time }
-                    LibrarySizeCard { size: library_size() }
-                    LibraryCompositionCard { composition: library_composition() }
-                }
-                // The log sits under the aggregates it details, and outside
-                // the period switcher's reach: it is its own paged read, not
-                // a window rollup.
-                SessionLogList { book: None, compact: false }
+                StatsFreshnessNote {}
             }
             if let (Some(metric), Some(summary)) = (expanded(), period.read().clone()) {
                 DrillIn { metric, summary, range: range(), expanded }
             }
-            StatsFreshnessNote {}
         }
     }
 }
 
-/// The calendar year the goal band labels itself with, taken from the
-/// server's `as_of_day` (`YYYY-MM-DD`) rather than a client clock — the band
-/// would otherwise disagree with the server across a New Year's Eve timezone
-/// gap, and a client-derived year in markup is a hydration hazard (rule 07).
-/// `None` until the summary lands, or if it carries no `as_of_day`.
-fn goal_year_from(summary: Option<&StatsSummary>) -> Option<String> {
-    // `get` rather than an index: a malformed non-ASCII value would panic on
-    // a char boundary, and a stats page must not die over a label.
-    Some(summary?.as_of_day.get(..4)?.to_string())
+/// The user-scoped stack: the windowed band, then the standing one.
+///
+/// Split out of [`StatsPage`] so the page component stays a shell — the two
+/// bands are the page's actual content and each has its own render gate.
+#[component]
+fn UserScope(
+    range: Signal<StatsRange>,
+    period: Signal<Option<StatsSummary>>,
+    all_time: Signal<Option<StatsSummary>>,
+    in_progress: Signal<Vec<ResumePoint>>,
+    expanded: Signal<Option<Metric>>,
+) -> Element {
+    rsx! {
+        div { class: "st-scope", "data-testid": "stats-scope-user",
+            WindowBand { range, period, expanded }
+            StandingBand { all_time, in_progress }
+        }
+    }
+}
+
+/// Everything the period switcher governs, under one label and one boundary.
+/// The pills live in the band's own sticky header — not in the page title —
+/// so the control sits immediately above the figures it moves.
+#[component]
+fn WindowBand(
+    range: Signal<StatsRange>,
+    period: Signal<Option<StatsSummary>>,
+    expanded: Signal<Option<Metric>>,
+) -> Element {
+    let current = range();
+    let guard = period.read();
+    let label = guard
+        .as_ref()
+        .map(|s| window_label(current, &s.as_of_day))
+        .unwrap_or_default();
+    rsx! {
+        section { class: "st-band", "data-testid": "stats-period-section",
+            div { class: "st-band-head", "data-testid": "stats-window-head",
+                div { class: "st-band-heading",
+                    span { class: "st-band-kicker", "In this window" }
+                    span { class: "st-band-window", "data-testid": "stats-window-label", {label} }
+                }
+                div { class: "st-band-rule st-band-rule-accent" }
+                div { class: "st-ranges", role: "group", "aria-label": "Period",
+                    for r in StatsRange::ALL {
+                        button {
+                            key: "{r.as_query()}",
+                            class: if r == current { "st-range-pill on" } else { "st-range-pill" },
+                            r#type: "button",
+                            "data-testid": "stats-range-{r.as_query()}",
+                            "aria-pressed": if r == current { "true" } else { "false" },
+                            onclick: move |_| range.set(r),
+                            {r.label()}
+                        }
+                    }
+                }
+            }
+            WindowContents { period, expanded }
+        }
+    }
+}
+
+/// The windowed modules themselves — a placeholder card until the first
+/// period fetch lands.
+#[component]
+fn WindowContents(
+    period: Signal<Option<StatsSummary>>,
+    expanded: Signal<Option<Metric>>,
+) -> Element {
+    let guard = period.read();
+    let Some(summary) = guard.as_ref() else {
+        return rsx! { div { class: "card st-card-placeholder", aria_hidden: "true" } };
+    };
+    rsx! {
+        div { class: "st-band-body",
+            HeadlineTiles { summary: summary.clone(), expanded }
+            div { class: "st-duo",
+                ReadingClock { summary: summary.clone() }
+                GenreDonut { summary: summary.clone() }
+            }
+            StandoutsGrid { summary: summary.clone() }
+        }
+    }
+}
+
+/// Everything the switcher does not govern. The absence of the band header's
+/// accent rule is the signal: nothing under this label moves when the pills
+/// do.
+#[component]
+fn StandingBand(
+    all_time: Signal<Option<StatsSummary>>,
+    in_progress: Signal<Vec<ResumePoint>>,
+) -> Element {
+    let guard = all_time.read();
+    let Some(summary) = guard.as_ref() else {
+        return rsx! { div { class: "card st-card-placeholder", aria_hidden: "true" } };
+    };
+    rsx! {
+        section { class: "st-band", "data-testid": "stats-alltime-section",
+            div { class: "st-band-head st-band-head-plain",
+                div { class: "st-band-heading",
+                    span { class: "st-band-kicker st-band-kicker-quiet", "Outside the window" }
+                }
+                div { class: "st-band-rule" }
+            }
+            div { class: "st-band-body",
+                HeatmapCard { summary: summary.clone() }
+                div { class: "st-duo",
+                    InProgressCard { books: in_progress(), summary: summary.clone() }
+                    RecentlyFinishedCard { books: summary.finished_books.clone() }
+                }
+                MonthlyChart { summary: summary.clone() }
+            }
+        }
+    }
+}
+
+/// The library-scoped stack — the shelf's own size and composition, neither of
+/// which the period switcher can reach.
+#[component]
+fn LibraryScope(size: Option<LibrarySize>, composition: Option<LibraryComposition>) -> Element {
+    rsx! {
+        div { class: "st-scope", "data-testid": "stats-scope-library",
+            LibrarySizeHero { size }
+            LibraryCompositionPanels { composition }
+        }
+    }
+}
+
+/// The User / Library switch, pinned under the top bar so the reader always
+/// knows which scope the figures below belong to.
+#[component]
+fn ScopeSwitch(scope: Signal<Scope>) -> Element {
+    let current = scope();
+    rsx! {
+        div { class: "st-modes", "data-testid": "stats-scope-switch",
+            div { class: "st-modes-inner",
+                ScopeTab {
+                    name: "User",
+                    blurb: "Your reading, this period",
+                    testid: "stats-scope-tab-user",
+                    on: current == Scope::User,
+                    onpick: move |_| scope.set(Scope::User),
+                }
+                ScopeTab {
+                    name: "Library",
+                    blurb: "The shelf itself",
+                    testid: "stats-scope-tab-library",
+                    on: current == Scope::Library,
+                    onpick: move |_| scope.set(Scope::Library),
+                }
+                if current == Scope::Library {
+                    span { class: "st-modes-note", "Whole shelf \u{00B7} not period-scoped" }
+                }
+            }
+        }
+    }
+}
+
+/// One scope tab: its name over the blurb that says what it covers.
+#[component]
+fn ScopeTab(
+    name: &'static str,
+    blurb: &'static str,
+    testid: &'static str,
+    on: bool,
+    onpick: EventHandler<()>,
+) -> Element {
+    rsx! {
+        button {
+            class: if on { "st-mode on" } else { "st-mode" },
+            r#type: "button",
+            "data-testid": testid,
+            "aria-pressed": if on { "true" } else { "false" },
+            onclick: move |_| onpick.call(()),
+            span { class: "st-mode-name", {name} }
+            span { class: "st-mode-blurb", {blurb} }
+        }
+    }
 }
 
 /// The footer note's text, deriving its number from [`STATS_TTL_SECS`]
@@ -227,14 +419,16 @@ fn use_period_fetch_effect(
 }
 
 /// One-shot fetch of the all-time summary. Deliberately not keyed on the
-/// switcher so the all-time section never re-queries on range change.
+/// switcher: it feeds the standing hero and the standing band, neither of
+/// which a range change may move.
+///
+/// The goals ride this payload and are rendered straight off it — nothing on
+/// this page writes them, so there is no saved answer to fold back in.
 fn use_all_time_fetch_effect(
     server_url: String,
     all_time: Signal<Option<StatsSummary>>,
     loading: Signal<bool>,
     error: Signal<Option<String>>,
-    goal: Signal<Option<ReadingGoal>>,
-    daily: Signal<DailyGoals>,
 ) {
     let generation = crate::use_cache_generation();
     use_effect(move || {
@@ -244,15 +438,9 @@ fn use_all_time_fetch_effect(
         let mut all_time = all_time;
         let mut loading = loading;
         let mut error = error;
-        let mut goal = goal;
-        let mut daily = daily;
         spawn(async move {
             match data::fetch_stats(&url, StatsRange::AllTime).await {
-                Ok(summary) => {
-                    goal.set(summary.goal.clone());
-                    daily.set(summary.daily_goals.clone());
-                    all_time.set(Some(summary));
-                }
+                Ok(summary) => all_time.set(Some(summary)),
                 Err(e) => error.set(Some(e.to_string())),
             }
             loading.set(false);
@@ -281,9 +469,7 @@ fn use_library_size_fetch_effect(server_url: String, library_size: Signal<Option
 
 /// One-shot fetch of the library composition. Never keyed on the switcher —
 /// what the collection is made of is not a reporting period's figure — and
-/// silent on failure for the same reason its size sibling is: this card is
-/// context beside the reader's own numbers, and a failed fetch must not blank
-/// the page they came for.
+/// silent on failure for the same reason its size sibling is.
 fn use_library_composition_fetch_effect(
     server_url: String,
     library_composition: Signal<Option<LibraryComposition>>,
@@ -302,171 +488,24 @@ fn use_library_composition_fetch_effect(
     });
 }
 
-/// Editorial header: the title's italic period word doubles as the period
-/// switcher — a trigger that drops the Week / Month / Year / Lifetime menu
-/// straight out of the headline, one control across every form factor.
-#[component]
-fn StatsHeader(range: Signal<StatsRange>, menu_open: Signal<bool>) -> Element {
-    let current = range();
-    rsx! {
-        header { class: "st-head",
-            h1 { class: "st-title",
-                "Your reading "
-                span { class: "st-period-picker",
-                    button {
-                        class: "st-period-trigger",
-                        r#type: "button",
-                        "data-testid": "stats-range-trigger",
-                        "aria-haspopup": "dialog",
-                        "aria-expanded": "{menu_open()}",
-                        "aria-describedby": "st-period-hint",
-                        onclick: move |_| {
-                            let next = !menu_open();
-                            menu_open.set(next);
-                        },
-                        span { class: "st-period-word", {period_word(current)} }
-                        span { class: "st-period-chevron", aria_hidden: "true", "\u{25BE}" }
-                    }
-                    if menu_open() {
-                        div {
-                            class: "st-period-scrim",
-                            "data-testid": "stats-range-scrim",
-                            onclick: move |_| menu_open.set(false),
-                        }
-                        RangeMenu { range, menu_open }
-                    }
-                }
+/// One-shot fetch of the books the reader currently has open. Its own read
+/// rather than a `StatsSummary` field: what is in progress is a fact about
+/// now, and hanging it off the windowed payload would make a period switch
+/// appear to change which books are open. Silent on failure, like the two
+/// library fetches — the card renders nothing rather than blanking the page.
+fn use_in_progress_fetch_effect(server_url: String, in_progress: Signal<Vec<ResumePoint>>) {
+    let generation = crate::use_cache_generation();
+    use_effect(move || {
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
+        let url = server_url.clone();
+        let mut in_progress = in_progress;
+        spawn(async move {
+            if let Ok(points) = data::recent_progress(&url, IN_PROGRESS_LIMIT).await {
+                in_progress.set(points);
             }
-            // aria-describedby target, outside the h1 so the hint text never
-            // joins the heading's accessible name ("Your reading month", not
-            // "Your reading Change period month"). An aria-label on the
-            // trigger would replace the period word as the button's name and
-            // distort the heading the same way — a description adds the
-            // action without touching either name.
-            span { id: "st-period-hint", class: "sr-only", "Change period" }
-            p { class: "st-sub", "Reading & listening, tracked over time." }
-        }
-    }
-}
-
-/// The open period dropdown, anchored under the title's period word.
-///
-/// `role="dialog"` (not `role="menu"`) to match the user-menu / export
-/// dropdowns: a scrim-dismissed popover with plain buttons, not an ARIA menu
-/// with roving-tabindex navigation.
-#[component]
-fn RangeMenu(range: Signal<StatsRange>, menu_open: Signal<bool>) -> Element {
-    let current = range();
-    let mut menu_open = menu_open;
-    let on_keydown = move |evt: Event<KeyboardData>| {
-        if evt.key() == Key::Escape {
-            evt.prevent_default();
-            menu_open.set(false);
-        }
-    };
-    rsx! {
-        div {
-            class: "st-period-menu",
-            role: "dialog",
-            "aria-label": "Period",
-            "data-testid": "stats-range-menu",
-            tabindex: "-1",
-            onkeydown: on_keydown,
-            onmounted: move |evt: MountedEvent| focus_range_menu(&evt),
-            for r in StatsRange::ALL {
-                button {
-                    key: "{r.as_query()}",
-                    class: if r == current { "st-range-row on" } else { "st-range-row" },
-                    r#type: "button",
-                    "aria-pressed": if r == current { "true" } else { "false" },
-                    onclick: move |_| {
-                        range.set(r);
-                        menu_open.set(false);
-                    },
-                    span { class: "st-range-row-label", {r.label()} }
-                    if r == current {
-                        span { class: "st-range-check", aria_hidden: "true", "\u{2713}" }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Focus the menu after paint so its `onkeydown` receives ESC — same
-/// requestAnimationFrame timing as the user-menu and export panels. Web-only;
-/// SSR never paints the menu, so the gate lives at the fn definition to keep
-/// the `onmounted` handler body identical across targets (rule 07).
-#[cfg(feature = "web")]
-fn focus_range_menu(evt: &MountedEvent) {
-    use dioxus::web::WebEventExt;
-    use wasm_bindgen::prelude::*;
-
-    let Some(element) = evt.try_as_web_event() else {
-        return;
-    };
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let cb = Closure::once_into_js(move || {
-        if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
-            let _ = html_el.focus();
-        }
+        });
     });
-    let _ = window.request_animation_frame(cb.unchecked_ref());
-}
-
-/// Non-web stub (SSR): nothing to focus before hydration.
-#[cfg(not(feature = "web"))]
-fn focus_range_menu(_evt: &MountedEvent) {}
-
-/// The period-scoped module stack: headline tiles, the composition row (genre
-/// donut + format split, with the length distribution beneath them), then the
-/// superlatives card. A placeholder card until the first fetch lands. `expanded` is forwarded to the
-/// tiles so a grip click can open that metric's drill-in.
-#[component]
-fn PeriodSummary(
-    period: Signal<Option<StatsSummary>>,
-    expanded: Signal<Option<Metric>>,
-) -> Element {
-    let guard = period.read();
-    let Some(summary) = guard.as_ref() else {
-        return rsx! { div { class: "card st-card-placeholder", aria_hidden: "true" } };
-    };
-    rsx! {
-        HeadlineTiles {
-            books_finished: summary.books_finished,
-            avg_stars: summary.avg_stars,
-            pages_read: summary.pages_read,
-            pages_audio_only: summary.pages_detail.audio_only(),
-            listening_seconds: summary.listening_seconds,
-            expanded,
-        }
-        div { class: "st-compose",
-            GenreDonut { summary: summary.clone() }
-            FormatSplit { summary: summary.clone() }
-            LengthSplit { summary: summary.clone() }
-        }
-        TimePatternsCard { summary: summary.clone() }
-        SuperlativesCard { summary: summary.clone() }
-    }
-}
-
-/// The all-time module stack: the reading-days heatmap card (with the
-/// longest-streak figure in its header), then the books-per-month trend
-/// chart. The library-size and library-composition cards sit alongside these
-/// in the same section but ride their own fetches, so the page mounts them
-/// rather than this component.
-#[component]
-fn AllTimeSummary(all_time: Signal<Option<StatsSummary>>) -> Element {
-    let guard = all_time.read();
-    let Some(summary) = guard.as_ref() else {
-        return rsx! { div { class: "card st-card-placeholder", aria_hidden: "true" } };
-    };
-    rsx! {
-        HeatmapCard { summary: summary.clone() }
-        MonthlyChart { summary: summary.clone() }
-    }
 }
 
 /// Friendly empty state for a user with no recorded activity.
@@ -483,46 +522,4 @@ fn StatsEmpty() -> Element {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn period_word_lowercases_labels_and_renders_all_time_as_lifetime() {
-        assert_eq!(period_word(StatsRange::Week), "week");
-        assert_eq!(period_word(StatsRange::Month), "month");
-        assert_eq!(period_word(StatsRange::Year), "year");
-        assert_eq!(period_word(StatsRange::AllTime), "lifetime");
-    }
-
-    #[test]
-    fn goal_year_from_takes_the_year_off_the_servers_as_of_day() {
-        let mut summary = StatsSummary {
-            as_of_day: "2026-08-28".to_string(),
-            ..StatsSummary::default()
-        };
-        assert_eq!(goal_year_from(Some(&summary)), Some("2026".to_string()));
-
-        // No summary yet, and a summary from a server too old to send the day.
-        assert_eq!(goal_year_from(None), None);
-        summary.as_of_day = String::new();
-        assert_eq!(goal_year_from(Some(&summary)), None);
-    }
-
-    #[test]
-    fn freshness_note_text_states_the_real_ttl_in_seconds() {
-        assert_eq!(
-            freshness_note_text(),
-            format!("Stats are accurate to the last ~{STATS_TTL_SECS} seconds.")
-        );
-    }
-
-    #[test]
-    fn group_thousands_handles_short_and_negative_inputs() {
-        assert_eq!(group_thousands(0), "0");
-        assert_eq!(group_thousands(9), "9");
-        assert_eq!(group_thousands(999), "999");
-        assert_eq!(group_thousands(1000), "1,000");
-        assert_eq!(group_thousands(1_234_567), "1,234,567");
-        assert_eq!(group_thousands(-42), "-42");
-    }
-}
+mod tests;

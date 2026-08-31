@@ -131,7 +131,7 @@ pub(super) async fn compute(
     // Deliberately not windowed on `range`: a goal is annual, so the same
     // current-year value rides every summary and a period switch never moves
     // it (the analogue of `current_streak_days`).
-    let goal = goals::current_goal(pool, user_id).await?;
+    let (goal, books_this_year) = goals::current_goal_and_progress(pool, user_id).await?;
     // Unwindowed for the same reason, one period down: a daily target recurs,
     // so today's progress is what every range shows.
     let daily_goals = goals::daily_goals(pool, user_id).await?;
@@ -170,6 +170,7 @@ pub(super) async fn compute(
         day_of_week: time_patterns.day_of_week,
         unzoned_seconds: time_patterns.unzoned_seconds,
         goal,
+        books_this_year: Some(books_this_year),
         daily_goals,
         superlatives,
         pages_detail,

@@ -1,8 +1,8 @@
-//! Reading-days heatmap card: a pure-CSS GitHub-style trailing-year calendar
-//! grid (in the all-time section, never re-queried by the switcher) with the
-//! server-computed current and longest streak figures in its header. Day math
-//! runs on epoch-day numbers via the civil-date algorithms below — no date
-//! crate — over the DTO's UTC `YYYY-MM-DD` strings.
+//! "Every day of the last year" — a pure-CSS trailing-year calendar grid, in
+//! the standing band so the switcher never re-queries it, with the days-read
+//! coverage and the streak record in its header and the live run outlined in
+//! the grid. Day math runs on epoch-day numbers via the civil-date algorithms
+//! below — no date crate — over the DTO's UTC `YYYY-MM-DD` strings.
 
 use std::collections::HashMap;
 
@@ -15,7 +15,7 @@ use crate::format::plural_noun;
 const WEEKS: i64 = 52;
 
 /// Days since 1970-01-01 for a civil date (Howard Hinnant's `days_from_civil`).
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+pub(super) fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400;
@@ -105,6 +105,34 @@ fn trailing_month_labels(anchor: i64) -> Vec<&'static str> {
         .collect()
 }
 
+/// The live streak's inclusive day range, as epoch-day numbers.
+///
+/// Anchored on the **last active day**, not on `anchor`: a run that ended
+/// yesterday still counts (today isn't over), so measuring back from the
+/// anchor would shade one day too far and leave the outlined run disagreeing
+/// with the figure reporting it. `None` when no run is live.
+pub(super) fn streak_span(anchor: i64, active: &[i64], streak_days: i64) -> Option<(i64, i64)> {
+    if streak_days <= 0 {
+        return None;
+    }
+    let last = active.iter().copied().filter(|&n| n <= anchor).max()?;
+    Some((last - (streak_days - 1), last))
+}
+
+/// Days with any recorded activity, and the share of the drawn window they
+/// are. The denominator stops at `anchor` — a year is not yet over, and
+/// counting the days after today against a reader would report every December
+/// as a failure.
+fn coverage(by_day: &HashMap<i64, i64>, start: i64, anchor: i64) -> (i64, i64) {
+    let read = by_day
+        .iter()
+        .filter(|(&day, &secs)| secs > 0 && day >= start && day <= anchor)
+        .count();
+    let read = i64::try_from(read).unwrap_or(0);
+    let elapsed = (anchor - start + 1).max(1);
+    (read, read.saturating_mul(100) / elapsed)
+}
+
 /// One rendered cell: its day, seconds, and intensity bucket.
 struct HeatCell {
     day: String,
@@ -112,6 +140,8 @@ struct HeatCell {
     level: u8,
     /// Days after the anchor in the final week render as invisible spacers.
     future: bool,
+    /// Part of the run the reader is currently on, which the grid outlines.
+    in_streak: bool,
 }
 
 /// Epoch day of the grid's first cell: the Monday of `anchor`'s week, 51 weeks
@@ -128,7 +158,12 @@ fn grid_start(anchor: i64) -> i64 {
 
 /// Build the cell list: 52 week columns of 7 rows (Monday-first), ending in
 /// the week containing `anchor`.
-fn build_cells(anchor: i64, by_day: &HashMap<i64, i64>, max: i64) -> Vec<HeatCell> {
+fn build_cells(
+    anchor: i64,
+    by_day: &HashMap<i64, i64>,
+    max: i64,
+    streak: Option<(i64, i64)>,
+) -> Vec<HeatCell> {
     let start = grid_start(anchor);
     (start..start + WEEKS * 7)
         .map(|n| {
@@ -138,13 +173,19 @@ fn build_cells(anchor: i64, by_day: &HashMap<i64, i64>, max: i64) -> Vec<HeatCel
                 secs,
                 level: intensity(secs, max),
                 future: n > anchor,
+                in_streak: secs > 0 && streak.is_some_and(|(from, to)| n >= from && n <= to),
             }
         })
         .collect()
 }
 
-/// The all-time heatmap card: header with the current and longest streak
-/// figures, the calendar grid, month labels, and the less/more legend.
+/// The standing heatmap card: the trailing-year grid with the live run
+/// outlined, the days-read coverage and the streak record in its header, the
+/// month ruler, and the less/more legend.
+///
+/// The run the reader is *on* is not restated here — the hero leads with it,
+/// and a second copy of the same figure two bands apart is where two surfaces
+/// start to disagree. The record stands beside the coverage instead.
 #[component]
 pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
     // Anchor to the server's clock; fall back to the newest active day so a
@@ -168,38 +209,46 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
         .filter(|(n, _)| *n >= window_start)
         .collect();
     let max = by_day.values().copied().max().unwrap_or(0);
-    let cells = build_cells(anchor, &by_day, max);
+    let active: Vec<i64> = by_day
+        .iter()
+        .filter(|(_, &secs)| secs > 0)
+        .map(|(&n, _)| n)
+        .collect();
+    let streak = streak_span(anchor, &active, summary.current_streak_days);
+    let cells = build_cells(anchor, &by_day, max, streak);
     let months = trailing_month_labels(anchor);
-    let current = summary.current_streak_days;
+    let (days_read, percent) = coverage(&by_day, window_start, anchor);
     let longest = summary.longest_streak_days;
-    let current_unit = plural_noun(current, "day");
-    let longest_unit = plural_noun(longest, "day");
 
     rsx! {
-        div { class: "card st-heatmap-card", "data-testid": "stats-heatmap",
-            div { class: "st-heatmap-head",
+        div { class: "card st-heat", "data-testid": "stats-heatmap",
+            div { class: "st-heat-head",
                 div {
-                    div { class: "label", "Reading days \u{00B7} trailing year" }
-                    div { class: "st-heatmap-sub",
-                        "Days in a row you read \u{2014} the run you\u{2019}re on, and your record."
+                    div { class: "label", "Every day of the last year" }
+                    div { class: "st-heat-sub",
+                        "Darker is longer. Your current run is outlined."
                     }
                 }
-                // Current leads: it's the figure a reader opens the page for,
-                // where the record is the trophy standing beside it.
-                div { class: "st-streaks",
-                    div { class: "st-streak", "data-testid": "stats-current-streak",
-                        div { class: "st-streak-value",
-                            "{current} "
-                            span { class: "st-streak-unit", "{current_unit}" }
-                        }
-                        div { class: "label", "Current streak" }
+                div { class: "st-heat-figures",
+                    div { class: "st-heat-figure", "data-testid": "stats-days-read",
+                        div { class: "st-heat-value", "{days_read}" }
+                        div { class: "label", "days read" }
                     }
-                    div { class: "st-streak st-streak-minor", "data-testid": "stats-longest-streak",
-                        div { class: "st-streak-value",
-                            "{longest} "
-                            span { class: "st-streak-unit", "{longest_unit}" }
+                    div { class: "st-heat-figure",
+                        div { class: "st-heat-value",
+                            "{percent}"
+                            span { class: "st-heat-value-unit", "%" }
                         }
-                        div { class: "label", "Longest streak" }
+                        div { class: "label", "of the year" }
+                    }
+                    div { class: "st-heat-figure", "data-testid": "stats-longest-streak",
+                        div { class: "st-heat-value accent",
+                            "{longest}"
+                            span { class: "st-heat-value-unit", {plural_noun(longest, " day")} }
+                        }
+                        // "best run", never "best runs": the figure is how
+                        // long the record run was, not how many there were.
+                        div { class: "label", "best run" }
                     }
                 }
             }
@@ -209,7 +258,11 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
                     for cell in cells {
                         div {
                             key: "{cell.day}",
-                            class: if cell.future { "st-hm-cell st-hm-future" } else { "st-hm-cell st-hm-{cell.level}" },
+                            class: match (cell.future, cell.in_streak) {
+                                (true, _) => "st-hm-cell st-hm-future".to_string(),
+                                (false, true) => format!("st-hm-cell st-hm-{} run", cell.level),
+                                (false, false) => format!("st-hm-cell st-hm-{}", cell.level),
+                            },
                             title: if !cell.future && cell.secs > 0 { "{format_active_time(cell.secs)} on {cell.day}" } else { "{cell.day}" },
                         }
                     }
@@ -221,174 +274,15 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
                 }
             }
             div { class: "st-hm-legend", aria_hidden: "true",
-                span { class: "mono", "less" }
+                span { "less" }
                 for level in 0..5 {
                     div { key: "{level}", class: "st-hm-cell st-hm-{level}" }
                 }
-                span { class: "mono", "more" }
+                span { "more" }
             }
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Issue #2250: a one-day streak reads "1 day", not "1 days".
-    #[cfg(feature = "server")]
-    #[test]
-    fn heatmap_card_pluralizes_each_streak_unit_on_its_own_figure() {
-        let summary = StatsSummary {
-            as_of_day: "2026-07-12".to_string(),
-            current_streak_days: 1,
-            longest_streak_days: 9,
-            ..Default::default()
-        };
-        let html = crate::test_support::render(rsx! { HeatmapCard { summary } });
-        assert!(html.contains(">day<"), "{html}");
-        assert!(html.contains(">days<"), "{html}");
-    }
-
-    /// The two streak figures land in their own slots, and neither takes the
-    /// other's. Asserting only that both labels appear can't tell them apart —
-    /// swapping the two bindings would leave such a test green while the card
-    /// reported a reader's record as the run they're on.
-    #[cfg(feature = "server")]
-    #[test]
-    fn heatmap_card_renders_current_and_longest_in_their_own_slots() {
-        let summary = StatsSummary {
-            as_of_day: "2026-07-12".to_string(),
-            current_streak_days: 3,
-            longest_streak_days: 9,
-            ..Default::default()
-        };
-        let html = crate::test_support::render(rsx! { HeatmapCard { summary } });
-
-        let at = |testid: &str| {
-            html.find(&format!(r#""{testid}""#))
-                .unwrap_or_else(|| panic!("{testid} missing from:\n{html}"))
-        };
-        let (current_at, longest_at) = (at("stats-current-streak"), at("stats-longest-streak"));
-        assert!(
-            current_at < longest_at,
-            "the live run leads, the record follows"
-        );
-
-        // Bounded at the record's slot, so a swapped binding shows up as the
-        // record's 9 appearing where the live run's 3 belongs.
-        let current = &html[current_at..longest_at];
-        assert!(current.contains('3'), "current slot: {current}");
-        assert!(
-            current.contains("Current streak"),
-            "current slot: {current}"
-        );
-        assert!(
-            !current.contains('9'),
-            "the record leaked into the current slot: {current}"
-        );
-
-        let longest = &html[longest_at..];
-        assert!(longest.contains('9'), "longest slot: {longest}");
-        assert!(
-            longest.contains("Longest streak"),
-            "longest slot: {longest}"
-        );
-    }
-
-    #[test]
-    fn day_number_round_trips_through_day_string() {
-        for day in ["1970-01-01", "2026-07-12", "2024-02-29", "1999-12-31"] {
-            let n = day_number(day).unwrap();
-            assert_eq!(day_string(n), day);
-        }
-        assert_eq!(day_number("1970-01-01"), Some(0));
-        assert_eq!(day_number("not-a-date"), None);
-        assert_eq!(day_number("2026-13-01"), None);
-    }
-
-    #[test]
-    fn intensity_buckets_zero_and_quartiles() {
-        assert_eq!(intensity(0, 100), 0);
-        assert_eq!(intensity(50, 0), 0);
-        assert_eq!(intensity(1, 100), 1);
-        assert_eq!(intensity(25, 100), 1);
-        assert_eq!(intensity(26, 100), 2);
-        assert_eq!(intensity(75, 100), 3);
-        assert_eq!(intensity(100, 100), 4);
-    }
-
-    #[test]
-    fn build_cells_ends_in_the_anchor_week_with_future_spacers() {
-        // 2026-07-12 is a Sunday: the final week is fully in the past.
-        let anchor = day_number("2026-07-12").unwrap();
-        let cells = build_cells(anchor, &HashMap::new(), 0);
-        assert_eq!(cells.len(), (WEEKS * 7) as usize);
-        assert_eq!(cells.last().unwrap().day, "2026-07-12");
-        assert!(cells.iter().all(|c| !c.future));
-
-        // Anchoring midweek (Wednesday) leaves the rest of that week future.
-        let wed = day_number("2026-07-08").unwrap();
-        let cells = build_cells(wed, &HashMap::new(), 0);
-        assert_eq!(cells.iter().filter(|c| c.future).count(), 4);
-        assert_eq!(cells.last().unwrap().day, "2026-07-12");
-    }
-
-    #[test]
-    fn grid_start_is_the_monday_of_the_anchor_week_fifty_one_weeks_back() {
-        // 2026-07-06 is a Monday, 2026-07-12 the Sunday that closes its week:
-        // both weeks start on the same Monday, so both grids start together.
-        let monday = day_number("2026-07-06").unwrap();
-        let sunday = day_number("2026-07-12").unwrap();
-        assert_eq!(grid_start(monday), grid_start(sunday));
-        assert_eq!(day_string(grid_start(sunday)), "2025-07-14");
-        // Every rendered cell sits at or after it.
-        let cells = build_cells(sunday, &HashMap::new(), 0);
-        assert_eq!(cells.first().unwrap().day, day_string(grid_start(sunday)));
-    }
-
-    #[test]
-    fn intensity_ignores_a_heavy_day_that_falls_before_the_first_cell() {
-        // A *Monday* anchor, deliberately: `grid_start` and the old fixed
-        // `anchor - 363` coincide on a Sunday, so only a non-Sunday anchor can
-        // tell the two windows apart. Here they differ by six days.
-        let anchor = day_number("2026-07-06").unwrap();
-        let start = grid_start(anchor);
-        assert_eq!(anchor - 363, start - 6, "the two windows must differ here");
-
-        // One modest day inside the grid, one huge day in the six-day gap the
-        // grid never draws.
-        let by_day = HashMap::from([(start, 100_i64), (start - 3, 10_000_i64)]);
-        let drawn: HashMap<i64, i64> = by_day
-            .iter()
-            .filter(|(n, _)| **n >= start)
-            .map(|(n, v)| (*n, *v))
-            .collect();
-        let max = drawn.values().copied().max().unwrap_or(0);
-
-        // Normalized over the drawn days, the visible day is the peak. Against
-        // the off-grid day it would bucket to 1 — the whole year flattened
-        // against a cell the reader cannot see.
-        let cells = build_cells(anchor, &drawn, max);
-        let first = cells.first().unwrap();
-        assert_eq!(first.day, day_string(start));
-        assert_eq!(first.level, 4);
-        assert_eq!(intensity(100, 10_000), 1, "the bug this guards against");
-    }
-
-    #[test]
-    fn trailing_month_labels_end_at_the_anchor_month() {
-        let anchor = day_number("2026-07-12").unwrap();
-        let months = trailing_month_labels(anchor);
-        assert_eq!(months.len(), 12);
-        assert_eq!(months[0], "Aug");
-        assert_eq!(months[11], "Jul");
-    }
-
-    #[test]
-    fn format_active_time_covers_minute_hour_and_mixed_spans() {
-        assert_eq!(format_active_time(42 * 60), "42 m");
-        assert_eq!(format_active_time(3 * 3600), "3 h");
-        assert_eq!(format_active_time(3 * 3600 + 20 * 60), "3 h 20 m");
-    }
-}
+mod tests;

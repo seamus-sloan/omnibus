@@ -12,6 +12,10 @@ mod downloads;
 // section.
 #[cfg(not(feature = "mobile"))]
 pub(crate) mod hidden_formats;
+// The one place all three reading goals are set (annual + the two dailies).
+// The stats page renders them and never edits them.
+#[cfg(not(feature = "mobile"))]
+mod goals;
 #[cfg(not(feature = "mobile"))]
 pub(crate) mod kobo;
 // Display name + avatar, at the top of the Account section.
@@ -291,6 +295,7 @@ fn kindle_email_form(
 fn account_web_body() -> Element {
     rsx! {
         profile::ProfileCard {}
+        goals::ReadingGoalsCard {}
         ChangePasswordCard {}
         sessions::SessionsCard {}
         hidden_formats::HiddenFormatsCard {}
