@@ -5556,6 +5556,19 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 
 .ebook-col-cover { width: 40px; }
+/* The row's "Open details" affordance (#2350): wraps the cover so a click or
+   keyboard activation navigates, with its own focus ring. `line-height:0`
+   keeps the anchor from adding inline space around the thumb. */
+.ebook-cover-link {
+  display: block;
+  line-height: 0;
+  color: inherit;
+  border-radius: 2px;
+}
+.ebook-cover-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .ebook-thumb {
   width: 26px;
   height: 38px;
