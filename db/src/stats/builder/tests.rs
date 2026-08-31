@@ -835,19 +835,45 @@ async fn chart_series_carries_a_bounded_measures_caveat_into_the_result() {
 }
 
 #[tokio::test]
-async fn chart_series_rejects_an_invalid_spec_before_running_any_sql() {
+async fn chart_series_answers_an_empty_selection_without_touching_the_db() {
+    let (pool, user) = fixture(1).await;
+    // Closed pool: any query at all would fail, so this passing is the proof
+    // that an empty selection short-circuits before the fan-out.
+    pool.close().await;
+
+    let r = chart_series(
+        &pool,
+        user,
+        &spec(vec![], ChartBucket::Month, StatsRange::Year),
+    )
+    .await
+    .unwrap();
+
+    assert!(r.is_empty());
+    assert!(r.series.is_empty());
+    assert!(r.buckets.is_empty());
+    // The bucket still comes back, so a surface can say what *would* be drawn.
+    assert_eq!(r.bucket, ChartBucket::Month);
+}
+
+#[tokio::test]
+async fn chart_series_rejects_a_spec_the_vocabulary_forbids() {
     let (pool, user) = fixture(1).await;
     let err = chart_series(
         &pool,
         user,
-        &spec(vec![], ChartBucket::Month, StatsRange::Year),
+        &spec(
+            vec![ChartMeasure::BooksFinished, ChartMeasure::BooksFinished],
+            ChartBucket::Month,
+            StatsRange::Year,
+        ),
     )
     .await
     .unwrap_err();
 
     assert!(matches!(
         err,
-        ChartError::Spec(omnibus_shared::ChartSpecError::NoMeasures)
+        ChartError::Spec(omnibus_shared::ChartSpecError::DuplicateMeasures(_))
     ));
 }
 
