@@ -11092,7 +11092,9 @@ html {
   font-size: 10.5px; color: var(--ink-3); margin-top: 12px;
   display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
 }
-.bdmq-syncline-warn { color: var(--warn); }
+/* Scoped past `.atrium .mono`, which this line carries for its face and
+   which would otherwise win the colour on specificity alone. */
+.bdmq-syncline.bdmq-syncline-warn { color: var(--warn); }
 .bdmq-synclink {
   border: 0; background: transparent; padding: 0; cursor: pointer;
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .02em;
