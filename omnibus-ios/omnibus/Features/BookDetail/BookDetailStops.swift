@@ -194,6 +194,77 @@ struct MonoNote: View {
     }
 }
 
+/// The shape of what a stop will hold, drawn as blank rules.
+///
+/// Every stop gets a whole screen, so one with nothing in it was one line of
+/// italic text above eight hundred points of black. Rather than pad that out,
+/// the stop shows the *form* its rows take — the same tick and hairline the
+/// real ones draw — fading down the page. It reads as a ruled page waiting to
+/// be written on rather than as a load that failed, and it costs nothing when
+/// the stop does have content, because it isn't drawn then.
+struct StopRuledVoid: View {
+    var rows = 3
+    /// Highlights carry a colour tick down their leading edge; journal rows
+    /// don't. Matching it is what keeps this reading as *this* stop's shape.
+    var ticked = false
+
+    @Environment(\.palette) private var palette
+
+    private static let barHeight: CGFloat = 5
+    private static let barGap: CGFloat = 8
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(0 ..< rows, id: \.self) { row in
+                VStack(spacing: 0) {
+                    HStack(alignment: .top, spacing: 11) {
+                        if ticked {
+                            Capsule()
+                                .fill(palette.line.color)
+                                .frame(width: 3, height: 30)
+                        }
+                        bars
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 12)
+
+                    Hairline()
+                }
+                // Fades out down the page, so the rules read as the page
+                // continuing rather than as N specific missing rows. Spread
+                // across `rows - 1` so the *last* row lands at 0.25 whatever
+                // the arity — dividing by `rows` would make a two-row void
+                // end brighter than a three-row one. The fixed 0.3 step this
+                // replaced went negative past four rows.
+                .opacity(1 - (Double(row) / Double(max(rows - 1, 1))) * 0.75)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    /// The two blank rules of one row.
+    ///
+    /// One `GeometryReader` for the pair rather than one each: it is the only
+    /// way to take a *fraction* of the row's width, but it has no intrinsic
+    /// height, so every use has to be given one back — and stating that once
+    /// per row beats stating it once per bar.
+    private var bars: some View {
+        GeometryReader { geometry in
+            VStack(alignment: .leading, spacing: Self.barGap) {
+                bar(geometry.size.width * 0.82)
+                bar(geometry.size.width * 0.54)
+            }
+        }
+        .frame(height: Self.barHeight * 2 + Self.barGap)
+    }
+
+    private func bar(_ width: CGFloat) -> some View {
+        Capsule()
+            .fill(palette.line2.color)
+            .frame(width: width, height: Self.barHeight)
+    }
+}
+
 /// A single-line horizontal chip shelf that scrolls past the panel edge
 /// instead of wrapping — vertical space at a stop is fixed.
 struct ChipStrip<Content: View>: View {
@@ -731,6 +802,15 @@ struct StopShelf: View {
             .map(\.name)
     }
 
+    /// Whether "this book is on none of your shelves" is a thing we can yet
+    /// say. `allShelves` and `shelvesContaining` are separate live reads, so
+    /// on a cold cache the stop renders before either lands — and asserting
+    /// "· none" then told the reader something the app did not know, and took
+    /// it back a moment later when the chips appeared. Derived from the data
+    /// rather than a load flag: naming the shelves a book is on requires the
+    /// shelf catalog, so having it *is* the precondition.
+    private var knowsMembership: Bool { !model.allShelves.isEmpty }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if series.count > 1, let name = book.series {
@@ -769,7 +849,21 @@ struct StopShelf: View {
                     .padding(.top, 14)
                 }
             } else {
-                DetailKicker(text: "On your shelves")
+                DetailKicker(text: knowsMembership && shelfNames.isEmpty
+                    ? "On your shelves · none"
+                    : shelfNames.isEmpty
+                        ? "On your shelves"
+                        : "On your shelves · \(shelfNames.count)")
+            }
+
+            // A lone "+ Shelf" chip under a bare kicker said nothing about
+            // what a shelf is or why this book has none.
+            if series.count <= 1, knowsMembership, shelfNames.isEmpty {
+                Text("This book isn't on a shelf yet.")
+                    .font(.displayItalic(21))
+                    .foregroundStyle(palette.ink2Color)
+                    .lineSpacing(4)
+                    .padding(.top, 12)
             }
 
             ChipStrip {
@@ -786,6 +880,13 @@ struct StopShelf: View {
                 .buttonStyle(PressableStyle())
             }
             .padding(.top, series.count > 1 ? 18 : 12)
+
+            if series.count <= 1, knowsMembership, model.authorBooks.isEmpty, shelfNames.isEmpty {
+                MonoNote(text: "a shelf gathers books by hand, or fills itself from a rule")
+                    .padding(.top, 20)
+                StopRuledVoid(rows: 2)
+                    .padding(.top, 18)
+            }
 
             if series.count <= 1, !model.authorBooks.isEmpty {
                 MonoNote(text: "more by \(book.authorDisplay)")
@@ -827,15 +928,23 @@ struct StopStats: View {
                 SparkBars(minutes: DetailStats.sparkMinutes(from: model.sessions))
                     .padding(.top, 18)
             } else {
+                DetailKicker(text: "This read · not begun")
+
                 Text("No stats yet.")
                     .font(.display(34))
                     .foregroundStyle(palette.ink0Color)
+                    .padding(.top, 10)
 
                 Text(emptyExplainer)
                     .font(.ui(13.5))
                     .foregroundStyle(palette.ink2Color)
                     .lineSpacing(4)
                     .padding(.top, 12)
+
+                // The four tiles this stop fills in, drawn empty — so the
+                // shape of what a read records is legible before there is one.
+                emptyStatGrid
+                    .padding(.top, 20)
             }
 
             ratingBlock
@@ -852,6 +961,22 @@ struct StopStats: View {
         model.isWishlistOnly
             ? "Stats begin when the book does — check in a copy to start the record."
             : "Open the book to start tracking your reading here."
+    }
+
+    /// The stat grid with its keys shown and its values withheld — the same
+    /// four tiles, so the layout doesn't jump the first time a sitting lands.
+    private var emptyStatGrid: some View {
+        VStack(spacing: 16) {
+            HStack(spacing: 14) {
+                DetailStatTile(key: "Started", value: "—", sub: nil)
+                DetailStatTile(key: "Time in book", value: "—", sub: nil)
+            }
+            HStack(spacing: 14) {
+                DetailStatTile(key: "Pickups", value: "—", sub: nil)
+                DetailStatTile(key: "Longest sit", value: "—", sub: nil)
+            }
+        }
+        .opacity(0.45)
     }
 
     private func statGrid(_ record: DetailReadRecord) -> some View {
@@ -959,6 +1084,8 @@ struct StopHighlights: View {
                     MonoNote(text: "find a copy first — check in when it arrives")
                         .padding(.top, 16)
                 }
+                StopRuledVoid(ticked: true)
+                    .padding(.top, 22)
             } else {
                 DetailKicker(text: "Kept lines · \(all.count)")
 
@@ -1052,6 +1179,8 @@ struct StopJournals: View {
                     .padding(.top, 12)
                 MonoNote(text: "a shared log — anyone reading this book can write here")
                     .padding(.top, 16)
+                StopRuledVoid()
+                    .padding(.top, 22)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(entries.prefix(Self.stopCount)) { entry in
@@ -1462,8 +1591,10 @@ struct StopRecommendations: View {
             .padding(.top, 18)
 
             if model.suggestions.isEmpty {
-                MonoNote(text: "no suggestions yet")
+                MonoNote(text: "nothing suggested for this book yet")
                     .padding(.top, 10)
+                StopRuledVoid(rows: 2)
+                    .padding(.top, 14)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(model.suggestions.prefix(4)) { suggestion in

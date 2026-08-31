@@ -289,7 +289,11 @@ struct SearchResultsView: View {
             if isLoading {
                 LoadingView()
             } else if books.isEmpty {
-                EmptyStateView(icon: "questionmark.circle", title: "No matches")
+                EmptyStateView(
+                    icon: "questionmark.circle",
+                    title: "No matches",
+                    message: "Nothing here matches \u{201C}\(query)\u{201D}."
+                )
             } else {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 20) {

@@ -641,7 +641,9 @@ struct DownloadsView: View {
                 EmptyStateView(
                     icon: "arrow.down.circle",
                     title: "Nothing downloaded",
-                    message: "Download a book from its detail screen to read or listen offline."
+                    message: "Download a book from its detail screen and it reads and plays with no server in reach.",
+                    kicker: "On this device",
+                    fanned: true
                 )
             } else {
                 // Record rows on the page ground rather than a `List`: a

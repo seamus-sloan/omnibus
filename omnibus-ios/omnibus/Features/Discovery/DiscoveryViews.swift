@@ -62,7 +62,12 @@ struct AuthorsView: View {
             } else if let error, authors.isEmpty {
                 ErrorStateView(message: error) { Task { await load() } }
             } else if authors.isEmpty {
-                EmptyStateView(icon: "person.2", title: "No authors yet")
+                EmptyStateView(
+                    icon: "person.2",
+                    title: "No authors yet",
+                    message: "Authors appear as the library is indexed — every name a book credits gets a page here.",
+                    kicker: "By author"
+                )
             } else if filtered.isEmpty {
                 EmptyStateView(
                     icon: "questionmark.circle",
@@ -309,9 +314,18 @@ struct SeriesIndexView: View {
             if isLoading {
                 LoadingView()
             } else if series.isEmpty {
-                EmptyStateView(icon: "square.grid.2x2", title: "No series yet")
+                EmptyStateView(
+                    icon: "square.grid.2x2",
+                    title: "No series yet",
+                    message: "A book that names the series it belongs to files itself here, in reading order.",
+                    kicker: "By series"
+                )
             } else if filtered.isEmpty {
-                EmptyStateView(icon: "questionmark.circle", title: "No series match")
+                EmptyStateView(
+                    icon: "questionmark.circle",
+                    title: "No series match",
+                    message: "Nothing in the library is filed under \u{201C}\(query)\u{201D}."
+                )
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
@@ -501,7 +515,12 @@ struct TagCloudView: View {
             if isLoading {
                 LoadingView()
             } else if tags.isEmpty {
-                EmptyStateView(icon: "tag", title: "No tags yet")
+                EmptyStateView(
+                    icon: "tag",
+                    title: "No tags yet",
+                    message: "Tags come from a book\u{2019}s own subjects, and from any you add on its detail page.",
+                    kicker: "By tag"
+                )
             } else {
                 ScrollView {
                     FlowLayout(spacing: 8, lineSpacing: 10) {
