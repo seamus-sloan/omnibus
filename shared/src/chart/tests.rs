@@ -20,14 +20,6 @@ fn validate_accepts_two_distinct_measures() {
 }
 
 #[test]
-fn validate_rejects_a_spec_with_no_measures() {
-    assert_eq!(
-        spec(vec![], ChartBreakdown::None).validate(),
-        Err(ChartSpecError::NoMeasures)
-    );
-}
-
-#[test]
 fn validate_accepts_any_number_of_measures_that_share_the_available_scales() {
     // Three measures, two units — books on one axis, two page measures on the
     // other. The cap is on scales, not on how many measures use them.
@@ -341,16 +333,24 @@ fn result_with_no_buckets_is_empty_even_when_a_series_exists() {
 }
 
 #[test]
-fn the_default_spec_is_the_comparison_the_builder_exists_for() {
+fn the_default_spec_plots_nothing_and_that_is_valid() {
     let d = ChartSpec::default();
+    assert!(d.measures.is_empty());
     assert_eq!(d.validate(), Ok(()));
-    assert_eq!(
-        d.measures,
-        vec![ChartMeasure::BooksFinished, ChartMeasure::AvgPageLength]
-    );
-    // Two grains, one shared bucket — the case a single pivot query cannot serve.
-    assert_eq!(d.measures[0].grain(), ChartGrain::Completion);
-    assert_eq!(d.measures[1].grain(), ChartGrain::Completion);
+    // Nothing has claimed a scale, so the whole vocabulary is available and
+    // the compatibility rule is visible rather than discovered by being
+    // blocked.
+    for m in ChartMeasure::ALL {
+        assert!(d.can_add(m), "{} unavailable on an empty chart", m.label());
+    }
+}
+
+#[test]
+fn an_emptied_selection_is_valid_rather_than_an_error() {
+    let mut s = spec(vec![ChartMeasure::BooksFinished], ChartBreakdown::None);
+    s.toggle(ChartMeasure::BooksFinished);
+    assert!(s.measures.is_empty());
+    assert_eq!(s.validate(), Ok(()));
 }
 
 #[test]

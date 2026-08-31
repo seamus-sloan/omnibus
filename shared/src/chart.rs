@@ -399,9 +399,14 @@ pub struct ChartSpec {
 }
 
 impl Default for ChartSpec {
+    /// **No measures.** A chart builder that opens with an opinion already
+    /// plotted invites a reader to accept it; opening empty asks them what
+    /// they want to know, and it is also the one state where nothing in the
+    /// picker is greyed out, so the compatibility rule is visible from the
+    /// first glance rather than discovered by being blocked.
     fn default() -> Self {
         Self {
-            measures: vec![ChartMeasure::BooksFinished, ChartMeasure::AvgPageLength],
+            measures: Vec::new(),
             bucket: ChartBucket::Month,
             range: crate::stats::StatsRange::Year,
             breakdown: ChartBreakdown::None,
@@ -415,8 +420,6 @@ impl Default for ChartSpec {
 /// message beside the offending control.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ChartSpecError {
-    #[error("pick at least one measure")]
-    NoMeasures,
     #[error("{0} needs a third scale — a chart has room for two")]
     TooManyUnits(&'static str),
     #[error("{0} is already on this chart")]
@@ -433,10 +436,10 @@ impl ChartSpec {
     /// Called on the server before any query runs, not merely in the UI: the
     /// spec arrives over RPC, so the UI's own guards are a convenience and
     /// this is the contract.
+    /// An **empty selection is valid** and answers with an empty result: a
+    /// reader who has cleared the chart has not made a mistake, and the
+    /// surface has a prompt for that state rather than an error.
     pub fn validate(&self) -> Result<(), ChartSpecError> {
-        if self.measures.is_empty() {
-            return Err(ChartSpecError::NoMeasures);
-        }
         let mut seen: Vec<ChartMeasure> = Vec::new();
         let mut units: Vec<ChartUnit> = Vec::new();
         for &m in &self.measures {

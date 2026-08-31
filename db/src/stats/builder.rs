@@ -384,6 +384,11 @@ pub async fn chart_series(
     spec: &ChartSpec,
 ) -> Result<ChartResult, ChartError> {
     spec.validate()?;
+    // Nothing selected is a real state, not a mistake — and it needs no
+    // window, no fan-out and no SQL at all.
+    if spec.measures.is_empty() {
+        return Ok(empty_result(spec, Vec::new()));
+    }
     let start = window_start(pool, spec.range).await?;
     let caveats: Vec<String> = spec.caveats().into_iter().map(str::to_string).collect();
 
@@ -413,16 +418,7 @@ pub async fn chart_series(
     let Some(first) = first else {
         // Nothing in the window at all: an empty axis, which the surface
         // renders as its empty state rather than as a chart of zeroes.
-        return Ok(ChartResult {
-            bucket: spec.bucket,
-            buckets: vec![],
-            series: vec![],
-            axes: vec![],
-            divisions: AXIS_DIVISION_CHOICES[0] as u8,
-            stacked: false,
-            truncated: false,
-            caveats,
-        });
+        return Ok(empty_result(spec, caveats));
     };
 
     let all = axis(pool, spec.bucket, start, first).await?;
@@ -460,6 +456,23 @@ pub async fn chart_series(
         truncated,
         caveats,
     })
+}
+
+/// A chart with nothing on it: no selection, or a window holding no data.
+///
+/// Still carries the spec's bucket and whatever caveats the selection brings,
+/// so a surface can describe what *would* be plotted.
+fn empty_result(spec: &ChartSpec, caveats: Vec<String>) -> ChartResult {
+    ChartResult {
+        bucket: spec.bucket,
+        buckets: Vec::new(),
+        series: Vec::new(),
+        axes: Vec::new(),
+        divisions: AXIS_DIVISION_CHOICES[0] as u8,
+        stacked: false,
+        truncated: false,
+        caveats,
+    }
 }
 
 /// One series per measure, each scaled against the axis its **unit** claims.
