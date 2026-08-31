@@ -94,6 +94,27 @@ fn split_note(result: &ChartResult) -> Option<String> {
     })
 }
 
+/// What dragging across the chart does, and the limit of what it can do.
+///
+/// Stated rather than left to be discovered: a zoom that silently refuses to
+/// subdivide looks broken, where one that says it only narrows what was
+/// already fetched is simply honest about being a client-side view.
+fn zoom_note(result: &ChartResult) -> String {
+    let base = "Drag across the chart to zoom into a stretch of it.".to_string();
+    if result.truncated {
+        return format!(
+            "{base} It narrows the periods already loaded — it can't reach \
+             past the ones this axis had to clip, and it won't break a period \
+             into smaller ones."
+        );
+    }
+    format!(
+        "{base} It narrows the periods already loaded rather than fetching \
+         finer ones, so zooming into three months shows three periods, not \
+         ninety days — change Group by for that."
+    )
+}
+
 /// What an empty bucket means, which differs by aggregate and is the other
 /// easy misreading on this chart.
 fn empty_note(result: &ChartResult) -> Option<String> {
@@ -159,6 +180,9 @@ pub fn ChartNotes(result: ReadSignal<ChartResult>) -> Element {
                 }
                 if let Some(note) = empty_note(&result) {
                     p { class: "cb-notes-line", "{note}" }
+                }
+                p { class: "cb-notes-line", "data-testid": "chart-notes-zoom",
+                    "{zoom_note(&result)}"
                 }
                 if !result.caveats.is_empty() {
                     p { class: "cb-notes-head", "What these numbers can't tell you" }

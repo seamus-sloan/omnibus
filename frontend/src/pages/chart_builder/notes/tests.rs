@@ -295,3 +295,21 @@ fn the_panel_renders_nothing_when_there_is_no_chart_to_describe() {
     });
     assert!(!html.contains("chart-notes"), "{html}");
 }
+
+#[test]
+fn the_zoom_note_says_it_only_narrows_what_was_already_fetched() {
+    // A zoom that silently refuses to subdivide looks broken; one that says
+    // so is simply honest about being a client-side view.
+    let note = zoom_note(&two_scales());
+    assert!(note.contains("Drag across the chart"), "{note}");
+    assert!(note.contains("not"), "{note}");
+    assert!(note.contains("Group by"), "{note}");
+}
+
+#[test]
+fn the_zoom_note_adds_the_clipped_range_when_the_axis_was_truncated() {
+    let mut r = two_scales();
+    r.truncated = true;
+    let note = zoom_note(&r);
+    assert!(note.contains("clip"), "{note}");
+}

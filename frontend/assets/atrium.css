@@ -11693,8 +11693,17 @@ html {
 
 /* ── Hover ────────────────────────────────────────────────────────── */
 /* One full-height target per bucket: a reader aiming at a short bar should
-   not have to hit the bar itself. */
-.cb-hit { fill: transparent; }
+   not have to hit the bar itself. Also the brush surface — dragging across
+   these is what selects a range. */
+.cb-hit { fill: transparent; cursor: col-resize; }
+/* The live selection, drawn while the pointer is down. */
+.cb-brush {
+  fill: var(--accent);
+  opacity: 0.14;
+  stroke: var(--accent);
+  stroke-width: 1;
+  pointer-events: none;
+}
 .cb-band { fill: var(--ink-1); opacity: 0.055; pointer-events: none; }
 
 /* Series colour is set once per group and consumed by whichever mark
@@ -11789,6 +11798,28 @@ html {
 /* The value wears text ink, never the series colour — the swatch carries
    identity, and a coloured number would fail contrast in light mode. */
 .cb-tip-value { color: var(--ink-0); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ── Zoom bar ─────────────────────────────────────────────────────── */
+/* Only present while a zoom is in effect, so it doubles as the indicator
+   that the chart is showing a slice rather than everything fetched. */
+.cb-zoombar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.cb-zoom-reset {
+  font: inherit;
+  color: var(--ink-1);
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.cb-zoom-reset:hover { background: var(--bg-2); }
+.cb-zoom-reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ── Legend ───────────────────────────────────────────────────────── */
 .cb-legend {

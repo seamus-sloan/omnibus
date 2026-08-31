@@ -19,9 +19,13 @@ use crate::{data, use_page_title, use_server_url, Route};
 
 mod notes;
 mod plot;
+mod tween;
+mod zoom;
 
 use notes::ChartNotes;
 use plot::{ChartLegend, ChartPlot, ChartTable};
+use tween::use_tweened;
+use zoom::ZoomRange;
 
 /// Fetch the current spec's series, dropping any answer a newer spec has
 /// already superseded.
@@ -278,9 +282,36 @@ fn ChartCanvas(
         return rsx! { PageLoading {} };
     }
 
-    let Some(chart) = result.read().clone() else {
+    // Held as bucket keys, so a regrouping that replaces the axis drops the
+    // zoom instead of framing a different stretch of the reader's history.
+    let mut zoomed: Signal<Option<ZoomRange>> = use_signal(|| None);
+    // The zoom is applied **before** the tween, not after: narrowing the
+    // window is itself a change worth animating, and every surviving bucket
+    // keeps its key, so the bars travel to their new places on the re-fitted
+    // scale rather than cutting to them.
+    let view = use_memo(move || {
+        result()
+            .as_ref()
+            .map(|r| zoom::apply(r, zoomed.read().as_ref()))
+    });
+    let frame = use_tweened(view);
+    let Some(chart) = frame.read().clone() else {
         return rsx! {};
     };
+    // One clone for the brush handler, rather than one per bucket.
+    let shown_keys = chart.buckets.clone();
+    // Measured against the *unzoomed* result, so the control can say what
+    // fraction is on screen — and so a zoom the current axis can no longer
+    // resolve reports itself as inactive rather than offering a reset for
+    // something `apply` is already ignoring.
+    let full_buckets = result.read().as_ref().map_or(0, |r| r.buckets.len());
+    let zoom_active = result.read().as_ref().is_some_and(|full| {
+        zoomed
+            .read()
+            .as_ref()
+            .and_then(|r| zoom::resolve(&full.buckets, r))
+            .is_some()
+    });
 
     rsx! {
         section {
@@ -292,7 +323,30 @@ fn ChartCanvas(
                     "or a measure you've got data for."
                 }
             } else {
-                ChartPlot { result: chart.clone() }
+                if zoom_active {
+                    div { class: "cb-zoombar", "data-testid": "chart-zoom",
+                        span { class: "cb-zoom-label",
+                            "Zoomed to {chart.buckets.len()} of {full_buckets} periods"
+                        }
+                        button {
+                            class: "cb-zoom-reset",
+                            r#type: "button",
+                            onclick: move |_| zoomed.set(None),
+                            "Show all"
+                        }
+                    }
+                }
+                ChartPlot {
+                    result: chart.clone(),
+                    on_brush: move |(a, b): (usize, usize)| {
+                        // `brush_range` is what tells a drag from a click, and
+                        // it resolves against the *displayed* buckets — so a
+                        // brush inside a zoom composes into a narrower one.
+                        if let Some(range) = zoom::brush_range(&shown_keys, a, b) {
+                            zoomed.set(Some(range));
+                        }
+                    },
+                }
                 ChartLegend { result: chart.clone() }
                 ChartTable { result: chart.clone() }
             }

@@ -313,10 +313,19 @@ fn stack_offsets(result: &ChartResult, bar_indices: &[usize]) -> Vec<Vec<f64>> {
 
 /// Render one chart.
 #[component]
-pub fn ChartPlot(result: ReadSignal<ChartResult>) -> Element {
+pub fn ChartPlot(
+    result: ReadSignal<ChartResult>,
+    /// Called with the first and last bucket **index** a completed drag
+    /// covered. Indices rather than keys so the handlers stay `Copy` — one
+    /// closure per bucket each holding its own copy of the key list would be
+    /// quadratic on a long axis.
+    on_brush: EventHandler<(usize, usize)>,
+) -> Element {
     // Seeded empty on every target so SSR and the first WASM paint agree
     // (rule 07); a hover only ever arrives from a client pointer.
     let mut hovered: Signal<Option<usize>> = use_signal(|| None);
+    // Where a drag started, while one is in progress.
+    let mut anchor: Signal<Option<usize>> = use_signal(|| None);
     let result = result.read();
     let plot = Plot::new(&result);
     let band_w = plot.band_w();
@@ -379,7 +388,13 @@ pub fn ChartPlot(result: ReadSignal<ChartResult>) -> Element {
                 role: "img",
                 "aria-label": "Chart of {summary} over {result.buckets.len()} periods",
                 preserve_aspect_ratio: "none",
-                onmouseleave: move |_| hovered.set(None),
+                onmouseleave: move |_| {
+                    hovered.set(None);
+                    // A drag that leaves the plot is abandoned rather than
+                    // committed to wherever the pointer happened to exit.
+                    anchor.set(None);
+                },
+                onmouseup: move |_| anchor.set(None),
 
                 // ── Gridlines and the axes' ticks ────────────────────────
                 for step in 0..=divisions {
@@ -418,6 +433,24 @@ pub fn ChartPlot(result: ReadSignal<ChartResult>) -> Element {
                         y: "{PAD_T}",
                         width: "{band_w:.1}",
                         height: "{plot.plot_h:.1}",
+                    }
+                }
+
+                // ── The live brush ──────────────────────────────────────
+                if let (Some(a), Some(b)) = (anchor(), active) {
+                    {
+                        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                        let x = plot.band_centre(lo) - band_w / 2.0;
+                        let w = band_w * (hi - lo + 1) as f64;
+                        rsx! {
+                            rect {
+                                class: "cb-brush",
+                                x: "{x:.1}",
+                                y: "{PAD_T}",
+                                width: "{w:.1}",
+                                height: "{plot.plot_h:.1}",
+                            }
+                        }
                     }
                 }
 
@@ -529,6 +562,15 @@ pub fn ChartPlot(result: ReadSignal<ChartResult>) -> Element {
                         width: "{band_w:.1}",
                         height: "{plot.plot_h:.1}",
                         onmouseenter: move |_| hovered.set(Some(i)),
+                        onmousedown: move |_| anchor.set(Some(i)),
+                        onmouseup: move |_| {
+                            // Commit on release; the canvas decides whether
+                            // the span is a drag or a click.
+                            if let Some(start) = anchor() {
+                                on_brush.call((start, i));
+                            }
+                            anchor.set(None);
+                        },
                     }
                 }
             }

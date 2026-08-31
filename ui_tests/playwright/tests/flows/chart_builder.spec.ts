@@ -20,6 +20,23 @@ const CHART = "/stats/chart";
 const control = (page: Page, label: string) =>
   page.getByTestId("chart-controls").getByLabel(label);
 
+// Drag across the plot from band `a` to band `b`. The plot sits below the
+// picker in a 720-high viewport, so it is scrolled into view first — a drag
+// aimed at a band's centre would otherwise land off-screen.
+async function brush(page: Page, a: number, b: number): Promise<void> {
+  await page.locator(".cb-svg").scrollIntoViewIfNeeded();
+  const bands = page.locator(".cb-hit");
+  const from = await bands.nth(a).boundingBox();
+  const to = await bands.nth(b).boundingBox();
+  if (!from || !to) throw new Error("no band geometry to brush across");
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, {
+    steps: 10,
+  });
+  await page.mouse.up();
+}
+
 test("renders the chart builder layout", async ({ page }) => {
   await gotoReady(page, CHART);
 
@@ -210,9 +227,13 @@ test("stacks a split count into one column per bucket", async ({ page }) => {
   await control(page, "Avg book length").uncheck();
   await control(page, "Split").selectOption("genre");
 
-  await expect
-    .poll(async () => page.getByTestId("chart-legend").count())
-    .toBeGreaterThan(0);
+  // The previous chart stays on screen until its replacement arrives, so a
+  // row count is not enough to tell the split has landed — the unsplit chart
+  // already has two. Wait for a slice-qualified label, which only a split
+  // produces.
+  await expect(page.getByTestId("chart-legend")).toContainText(
+    "Books finished ·",
+  );
 
   // Stacked bars share one lane, so every bar in a bucket has the same x.
   const xs = await page
@@ -270,6 +291,61 @@ test("rewrites the notes when the selection changes", async ({ page }) => {
   await expect(page.getByTestId("chart-caveat").first()).toContainText(
     "progress ledger",
   );
+});
+
+test("zooms to a brushed range and back", async ({ page }) => {
+  await gotoReady(page, CHART);
+  await expect
+    .poll(async () => page.getByTestId("chart-legend").count())
+    .toBeGreaterThan(0);
+
+  const bands = page.locator(".cb-hit");
+  const before = await bands.count();
+  expect(before).toBeGreaterThan(3);
+  // Nothing to reset before a zoom exists.
+  await expect(page.getByTestId("chart-zoom")).toHaveCount(0);
+
+  await brush(page, 1, before - 2);
+
+  const zoomBar = page.getByTestId("chart-zoom");
+  await expect(zoomBar).toBeVisible();
+  await expect(zoomBar).toContainText(`of ${before} periods`);
+  await expect.poll(async () => bands.count()).toBeLessThan(before);
+
+  await page.getByRole("button", { name: "Show all" }).click();
+  await expect(zoomBar).toHaveCount(0);
+  await expect.poll(async () => bands.count()).toBe(before);
+});
+
+test("drops a zoom the regrouped axis can no longer resolve", async ({
+  page,
+}) => {
+  await gotoReady(page, CHART);
+  await expect
+    .poll(async () => page.getByTestId("chart-legend").count())
+    .toBeGreaterThan(0);
+
+  const bands = page.locator(".cb-hit");
+  const before = await bands.count();
+  await brush(page, 1, before - 2);
+  await expect(page.getByTestId("chart-zoom")).toBeVisible();
+
+  // Regrouping replaces every bucket key, so the zoom has nothing to resolve
+  // against and drops itself rather than framing a different stretch.
+  await control(page, "Group by").selectOption("week");
+  await expect(page.getByTestId("chart-zoom")).toHaveCount(0);
+});
+
+test("says what zooming can and cannot do", async ({ page }) => {
+  await gotoReady(page, CHART);
+  await page
+    .getByTestId("chart-notes")
+    .getByText("What this chart shows")
+    .click();
+  const zoomNote = page.getByTestId("chart-notes-zoom");
+  await expect(zoomNote).toContainText("Drag across the chart");
+  // The limit of a client-side zoom, stated rather than left to be found.
+  await expect(zoomNote).toContainText("Group by");
 });
 
 test("surfaces a rejected spec instead of failing silently", async ({

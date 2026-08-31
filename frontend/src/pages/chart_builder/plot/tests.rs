@@ -210,7 +210,7 @@ fn line_runs_joins_a_fully_populated_series_into_one_segment() {
 fn the_plot_draws_bars_for_a_count_and_a_polyline_for_an_average() {
     let html = render_in_vdom(|| {
         rsx! {
-            ChartPlot { result: sample() }
+            ChartPlot { result: sample(), on_brush: move |_| {} }
         }
     });
     assert!(html.contains("<rect"), "expected bars: {html}");
@@ -224,7 +224,8 @@ fn the_plot_draws_the_gridline_count_the_result_names() {
     let html = render_in_vdom(|| {
         rsx! {
             ChartPlot {
-                result: ChartResult { divisions: 3, ..sample() }
+                result: ChartResult { divisions: 3, ..sample() },
+                on_brush: move |_| {},
             }
         }
     });
@@ -236,7 +237,7 @@ fn the_plot_draws_the_gridline_count_the_result_names() {
 fn the_plot_labels_both_axes_when_the_result_carries_two() {
     let html = render_in_vdom(|| {
         rsx! {
-            ChartPlot { result: sample() }
+            ChartPlot { result: sample(), on_brush: move |_| {} }
         }
     });
     assert!(html.contains("cb-tick-left"));
@@ -262,7 +263,8 @@ fn the_plot_omits_the_right_axis_when_there_is_only_one() {
                     )],
                     axes: vec![ChartAxis { unit: ChartUnit::Books, max: 5.0 }],
                     ..sample()
-                }
+                },
+                on_brush: move |_| {},
             }
         }
     });
@@ -437,7 +439,7 @@ fn stack_offsets_put_each_series_on_the_running_total_beneath_it() {
 fn a_stacked_chart_puts_every_bar_in_one_lane_per_bucket() {
     let html = render_in_vdom(|| {
         rsx! {
-            ChartPlot { result: stacked_sample() }
+            ChartPlot { result: stacked_sample(), on_brush: move |_| {} }
         }
     });
     // Two series, four buckets, one absent value — seven bars, all sharing a
@@ -465,7 +467,7 @@ fn a_grouped_chart_gives_each_bar_series_its_own_lane() {
     // than a captured local.
     let html = render_in_vdom(|| {
         rsx! {
-            ChartPlot { result: grouped_sample() }
+            ChartPlot { result: grouped_sample(), on_brush: move |_| {} }
         }
     });
     let xs: Vec<&str> = html
@@ -487,7 +489,7 @@ fn a_grouped_chart_gives_each_bar_series_its_own_lane() {
 fn the_plot_renders_a_hit_target_for_every_bucket() {
     let html = render_in_vdom(|| {
         rsx! {
-            ChartPlot { result: sample() }
+            ChartPlot { result: sample(), on_brush: move |_| {} }
         }
     });
     assert_eq!(html.matches("cb-hit").count(), 4);
@@ -497,7 +499,7 @@ fn the_plot_renders_a_hit_target_for_every_bucket() {
 fn the_plot_starts_with_no_hover_so_ssr_and_first_paint_agree() {
     let html = render_in_vdom(|| {
         rsx! {
-            ChartPlot { result: sample() }
+            ChartPlot { result: sample(), on_brush: move |_| {} }
         }
     });
     // Rule 07: the card and the band are client-only state, so neither may
