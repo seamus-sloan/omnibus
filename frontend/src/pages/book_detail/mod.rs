@@ -13,6 +13,7 @@ use omnibus_shared::{EbookMetadata, MergeBooksResult, SuggestionsResponse};
 use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
+mod chapter_ref;
 mod dates;
 mod delete;
 mod discovery;

@@ -201,6 +201,43 @@ fn short_chapter_title_keeps_a_terse_title_and_caps_a_verbose_one() {
     );
 }
 
+#[test]
+fn chapter_now_prefers_the_cfi_spine_over_the_rounded_percent() {
+    use omnibus_shared::progress::{ProgressFormat, ProgressRecord};
+    // Two adjacent chapters whose starts round to the same integer percent:
+    // the reader is in the first (spine 4), but a rounded 9% pulls the label
+    // one ahead to the second (spine 6).
+    let chapters = [
+        AlignmentEbookChapter { title: "Front".into(), percent: 0.0, spine_index: 0 },
+        AlignmentEbookChapter { title: "Chapter One".into(), percent: 8.4, spine_index: 4 },
+        AlignmentEbookChapter { title: "Chapter Two".into(), percent: 8.9, spine_index: 6 },
+    ];
+    let rec = |cfi: Option<&str>, pct: Option<i64>| ProgressRecord {
+        book_uuid: "b".into(),
+        format: ProgressFormat::Epub,
+        epub_cfi: cfi.map(Into::into),
+        audio_position_seconds: None,
+        progress_percent: pct,
+        kobo_location: None,
+        book_file_id: None,
+        updated_at: 0,
+        client_updated_at: 0,
+    };
+
+    // CFI in spine item 4 (package step 10 → ordinal 5 → 0-based 4) → Chapter One.
+    let r = rec(Some("epubcfi(/6/10!/4/2:0)"), Some(9));
+    assert_eq!(chapter_now(&chapters, Some(&r)), Some((2, "Chapter One".into())));
+
+    // No CFI: the rounded 9% falls back and lands one chapter ahead — the old
+    // behaviour the CFI path corrects.
+    let r = rec(None, Some(9));
+    assert_eq!(chapter_now(&chapters, Some(&r)), Some((3, "Chapter Two".into())));
+
+    // No position at all → no chapter named.
+    assert_eq!(chapter_now(&chapters, Some(&rec(None, Some(0)))), None);
+    assert_eq!(chapter_now(&chapters, None), None);
+}
+
 /// A series book with the given index, series name, and published date.
 fn series_book(index: Option<&str>, published: Option<&str>) -> EbookMetadata {
     EbookMetadata {
