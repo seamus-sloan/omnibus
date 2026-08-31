@@ -27,36 +27,54 @@ enum DetailRead {
         return lead
     }
 
-    /// The action bar's primary label. Speaks the position when one is saved,
-    /// otherwise just names the act.
+    /// The action bar's primary label. Speaks the position when one is saved
+    /// — the reading one when reading has started, else the listening one, so
+    /// a dual-format book someone has only listened to doesn't read as
+    /// unstarted. Falls back to naming the act.
     static func resumeLabel(
-        hasEbook: Bool, hasAudiobook: Bool, epubPercent: Int64?, audioSeconds: Double?
+        hasEbook: Bool, hasAudiobook: Bool, epubStarted: Bool,
+        epubPercent: Int64?, audioSeconds: Double?
     ) -> String {
-        if hasEbook {
-            if let epubPercent, epubPercent > 0 {
-                return "Resume — \(epubPercent)%"
-            }
-            return "Read"
+        if hasEbook, let epubPercent, epubPercent > 0 {
+            return "Resume — \(epubPercent)%"
         }
-        if hasAudiobook {
-            if let audioSeconds, audioSeconds > 1 {
-                return "Resume — \(Format.humanDuration(Int64(audioSeconds)))"
-            }
-            return "Listen"
+        // Reading has started but the save carries no percent (a bare CFI):
+        // still a resume, just one with no number to speak.
+        if hasEbook, epubStarted {
+            return "Resume"
         }
+        if hasAudiobook, let audioSeconds, audioSeconds > 1 {
+            return "Resume — \(Format.humanDuration(Int64(audioSeconds)))"
+        }
+        if hasEbook { return "Read" }
+        if hasAudiobook { return "Listen" }
         return "Open"
     }
 
-    /// Whole-book fraction for the Home ruler, from whichever format is the
-    /// book's primary read. `nil` when no honest fraction exists — a bare
-    /// CFI carries no percent, and audio needs a measured duration.
+    /// Whether the primary CTA opens the player rather than the reader —
+    /// kept in lockstep with `resumeLabel`, so a label speaking an audio
+    /// position never opens the reader at page one.
+    static func resumesIntoPlayer(
+        hasEbook: Bool, hasAudiobook: Bool, epubStarted: Bool, audioSeconds: Double?
+    ) -> Bool {
+        guard hasAudiobook else { return false }
+        guard hasEbook else { return true }
+        return !epubStarted && (audioSeconds ?? 0) > 1
+    }
+
+    /// Whole-book fraction for the Home ruler. The reading percent wins;
+    /// with no reading record at all the listening position stands in.
+    /// `nil` when no honest fraction exists — a bare CFI carries no percent,
+    /// and audio needs a measured duration.
     static func fraction(
-        hasEbook: Bool, epubPercent: Int64?, audioSeconds: Double?, audioDuration: Double?
+        epubStarted: Bool, epubPercent: Int64?, audioSeconds: Double?, audioDuration: Double?
     ) -> Double? {
-        if hasEbook {
-            guard let epubPercent else { return nil }
+        if let epubPercent {
             return min(1, max(0, Double(epubPercent) / 100))
         }
+        // A CFI-only save means reading is underway somewhere the percent
+        // can't say — drawing the (older) audio position would misplace it.
+        guard !epubStarted else { return nil }
         guard let audioSeconds, let audioDuration, audioDuration > 0 else { return nil }
         return min(1, max(0, audioSeconds / audioDuration))
     }
@@ -643,7 +661,7 @@ struct StopHome: View {
     @ViewBuilder
     private var ruler: some View {
         let fraction = DetailRead.fraction(
-            hasEbook: book.hasEbook,
+            epubStarted: model.epubProgress != nil,
             epubPercent: model.epubProgress?.progressPercent,
             audioSeconds: model.audioProgress?.audioPositionSeconds,
             audioDuration: model.audioDuration
@@ -657,13 +675,22 @@ struct StopHome: View {
                 left: leftLabel(fraction: fraction),
                 right: updatedLabel
             )
+        } else if model.epubProgress != nil || model.audioProgress != nil {
+            // A position exists but supports no honest bar (a bare CFI, or
+            // audio with no measured duration) — say so instead of "unread".
+            MonoNote(text: ["in progress", updatedLabel].compactMap { $0 }
+                .joined(separator: " · "))
         } else {
             MonoNote(text: book.hasEbook || book.hasAudiobook ? "not started yet" : " ")
         }
     }
 
+    /// Matches `DetailRead.fraction`'s source: percent text when the bar
+    /// draws the reading percent, listening time when it draws the audio
+    /// position.
     private func leftLabel(fraction: Double) -> String {
-        if !book.hasEbook, let seconds = model.audioProgress?.audioPositionSeconds,
+        if model.epubProgress?.progressPercent == nil,
+           let seconds = model.audioProgress?.audioPositionSeconds,
            let total = model.audioDuration
         {
             return "\(Format.humanDuration(Int64(seconds))) of \(Format.humanDuration(Int64(total)))"
@@ -672,7 +699,7 @@ struct StopHome: View {
     }
 
     private var updatedLabel: String? {
-        let record = book.hasEbook ? model.epubProgress : model.audioProgress
+        let record = model.epubProgress ?? model.audioProgress
         guard let clock = record?.orderingClock else { return nil }
         return "updated \(Format.relative(unix: clock))"
     }

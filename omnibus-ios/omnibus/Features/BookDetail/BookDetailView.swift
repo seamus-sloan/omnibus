@@ -34,7 +34,6 @@ final class BookDetailModel {
     var audioDuration: Double?
     /// This reader's sittings of this book, newest first — the stats stop.
     var sessions: [SessionLogEntry] = []
-    var sessionsLoaded = false
     /// The rest of the series, in reading order, when the book belongs to one.
     var seriesBooks: [Book] = []
     /// Other books by the same first author — the shelf and recommendation
@@ -184,7 +183,6 @@ final class BookDetailModel {
             before = next
         }
         sessions = entries
-        sessionsLoaded = true
     }
 
     func setRating(_ stars: Double, uuid: String) async {
@@ -563,7 +561,7 @@ struct BookDetailView: View {
 
     /// The desktop dot rail, moved to the panel's right edge.
     private var dotRail: some View {
-        VStack(spacing: 3) {
+        VStack(spacing: 0) {
             ForEach(DetailStop.allCases) { stop in
                 Button {
                     Haptics.select()
@@ -573,24 +571,23 @@ struct BookDetailView: View {
                         .fill(at == stop.rawValue ? palette.accentColor : palette.bg3Color)
                         .frame(width: 7, height: 7)
                         .scaleEffect(at == stop.rawValue ? 1.35 : 1)
-                        // The dot is the indicator, not the target — a 7pt
-                        // control is untappable.
-                        .frame(width: 24, height: 15)
+                        // The dot is the indicator, not the target — the row
+                        // is sized for a finger, near the 44pt guideline.
+                        .frame(width: 44, height: 26)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(stop.name)
             }
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 2)
+        .padding(.vertical, 5)
+        // The visible pill stays slim while the touch strip stays wide — the
+        // capsule is drawn narrower than the rail it backs.
         .background {
             Capsule().fill(palette.bg0Color.opacity(0.45))
+                .overlay(Capsule().strokeBorder(palette.line2.color, lineWidth: 0.5))
+                .frame(width: 19)
         }
-        .overlay {
-            Capsule().strokeBorder(palette.line2.color, lineWidth: 0.5)
-        }
-        .padding(.trailing, 5)
         .offset(y: 90)
         .animation(Motion.snap, value: at)
     }
@@ -638,13 +635,23 @@ struct BookDetailView: View {
                 .buttonStyle(BarGlassStyle())
                 .accessibilityLabel("Check in a copy")
             } else {
+                // Label and destination stay in lockstep: a CTA speaking an
+                // audio position opens the player, not the reader at page one.
+                let toPlayer = DetailRead.resumesIntoPlayer(
+                    hasEbook: book.hasEbook,
+                    hasAudiobook: book.hasAudiobook,
+                    epubStarted: model.epubProgress != nil,
+                    audioSeconds: model.audioProgress?.audioPositionSeconds
+                )
+
                 Button {
                     Haptics.tap()
-                    if book.hasEbook { read(book) } else { listen(book) }
+                    if toPlayer { listen(book) } else { read(book) }
                 } label: {
                     Text(DetailRead.resumeLabel(
                         hasEbook: book.hasEbook,
                         hasAudiobook: book.hasAudiobook,
+                        epubStarted: model.epubProgress != nil,
                         epubPercent: model.epubProgress?.progressPercent,
                         audioSeconds: model.audioProgress?.audioPositionSeconds
                     ))
@@ -652,15 +659,17 @@ struct BookDetailView: View {
                 .buttonStyle(BarCTAStyle())
 
                 if book.hasEbook, book.hasAudiobook {
+                    // The other format keeps a door: Listen beside a reading
+                    // CTA, Read beside a listening one.
                     Button {
                         Haptics.tap()
-                        listen(book)
+                        if toPlayer { read(book) } else { listen(book) }
                     } label: {
-                        Image(systemName: "headphones")
+                        Image(systemName: toPlayer ? "book" : "headphones")
                             .font(.system(size: 17, weight: .semibold))
                     }
                     .buttonStyle(BarGlassStyle())
-                    .accessibilityLabel("Listen")
+                    .accessibilityLabel(toPlayer ? "Read" : "Listen")
                 }
             }
         }

@@ -33,58 +33,106 @@ import Testing
 
 @Test func resumeLabelSpeaksTheEbookPercentWhenOneIsSaved() {
     let label = DetailRead.resumeLabel(
-        hasEbook: true, hasAudiobook: true, epubPercent: 55, audioSeconds: nil
+        hasEbook: true, hasAudiobook: true, epubStarted: true,
+        epubPercent: 55, audioSeconds: nil
     )
     #expect(label == "Resume — 55%")
 }
 
 @Test func resumeLabelSaysReadWhenNothingIsSaved() {
     let label = DetailRead.resumeLabel(
-        hasEbook: true, hasAudiobook: false, epubPercent: nil, audioSeconds: nil
+        hasEbook: true, hasAudiobook: false, epubStarted: false,
+        epubPercent: nil, audioSeconds: nil
     )
     #expect(label == "Read")
 }
 
+@Test func resumeLabelSpeaksTheAudioPositionWhenOnlyListeningHasStarted() {
+    // The dual-format case: reading never started, listening did.
+    let label = DetailRead.resumeLabel(
+        hasEbook: true, hasAudiobook: true, epubStarted: false,
+        epubPercent: nil, audioSeconds: 55_260
+    )
+    #expect(label == "Resume — 15h 21m")
+}
+
+@Test func resumeLabelIsABareResumeForACFIOnlySave() {
+    let label = DetailRead.resumeLabel(
+        hasEbook: true, hasAudiobook: true, epubStarted: true,
+        epubPercent: nil, audioSeconds: 55_260
+    )
+    #expect(label == "Resume")
+}
+
 @Test func resumeLabelSpeaksTheAudioPositionForAudioOnlyBooks() {
     let label = DetailRead.resumeLabel(
-        hasEbook: false, hasAudiobook: true, epubPercent: nil, audioSeconds: 55_260
+        hasEbook: false, hasAudiobook: true, epubStarted: false,
+        epubPercent: nil, audioSeconds: 55_260
     )
     #expect(label == "Resume — 15h 21m")
 }
 
 @Test func resumeLabelSaysListenForAnUnstartedAudiobook() {
     let label = DetailRead.resumeLabel(
-        hasEbook: false, hasAudiobook: true, epubPercent: nil, audioSeconds: 0
+        hasEbook: false, hasAudiobook: true, epubStarted: false,
+        epubPercent: nil, audioSeconds: 0
     )
     #expect(label == "Listen")
+}
+
+// MARK: - Resume destination
+
+@Test func resumeOpensThePlayerWhenOnlyListeningHasStarted() {
+    #expect(DetailRead.resumesIntoPlayer(
+        hasEbook: true, hasAudiobook: true, epubStarted: false, audioSeconds: 900
+    ))
+}
+
+@Test func resumeOpensTheReaderOnceReadingHasStarted() {
+    #expect(!DetailRead.resumesIntoPlayer(
+        hasEbook: true, hasAudiobook: true, epubStarted: true, audioSeconds: 900
+    ))
+}
+
+@Test func resumeOpensTheReaderForAnUnstartedDualFormatBook() {
+    #expect(!DetailRead.resumesIntoPlayer(
+        hasEbook: true, hasAudiobook: true, epubStarted: false, audioSeconds: nil
+    ))
+}
+
+@Test func resumeOpensThePlayerForAudioOnlyBooks() {
+    #expect(DetailRead.resumesIntoPlayer(
+        hasEbook: false, hasAudiobook: true, epubStarted: false, audioSeconds: nil
+    ))
 }
 
 // MARK: - Ruler fraction
 
 @Test func fractionComesFromTheEbookPercentWhenTheBookHasOne() {
     let fraction = DetailRead.fraction(
-        hasEbook: true, epubPercent: 55, audioSeconds: nil, audioDuration: nil
+        epubStarted: true, epubPercent: 55, audioSeconds: nil, audioDuration: nil
     )
     #expect(fraction == 0.55)
 }
 
 @Test func fractionIsNilWhenACFIOnlySaveCarriesNoPercent() {
+    // Reading is underway; the (older) audio position must not misplace it.
     let fraction = DetailRead.fraction(
-        hasEbook: true, epubPercent: nil, audioSeconds: 120, audioDuration: 240
+        epubStarted: true, epubPercent: nil, audioSeconds: 120, audioDuration: 240
     )
     #expect(fraction == nil)
 }
 
-@Test func fractionDerivesFromAudioPositionOverMeasuredDuration() {
+@Test func fractionFallsBackToAudioWhenReadingNeverStarted() {
     let fraction = DetailRead.fraction(
-        hasEbook: false, epubPercent: nil, audioSeconds: 90, audioDuration: 360
+        epubStarted: false, epubPercent: nil, audioSeconds: 90, audioDuration: 360
     )
     #expect(fraction == 0.25)
 }
 
 @Test func fractionIsNilWhenAudioDurationIsUnknown() {
     let fraction = DetailRead.fraction(
-        hasEbook: false, epubPercent: nil, audioSeconds: 90, audioDuration: nil
+        epubStarted: false, epubPercent: nil, audioSeconds: 90, audioDuration: nil
     )
     #expect(fraction == nil)
 }
