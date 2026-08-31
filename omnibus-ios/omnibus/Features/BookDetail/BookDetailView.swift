@@ -315,6 +315,8 @@ struct BookDetailView: View {
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(true)
+        // Hiding the bar kills the system's edge-swipe pop; bring it back.
+        .keepsEdgeSwipeBack()
         .bookZoomDestination(uuid, in: bookZoom)
         .task { await model.load(uuid: uuid) }
         .refreshTask { await model.load(uuid: uuid) }
@@ -482,7 +484,9 @@ struct BookDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(EdgeInsets(
-            top: isHome ? 14 : 104,
+            // A full stop's label must clear the chrome discs, which end
+            // ~105pt below the top edge on current devices.
+            top: isHome ? 14 : 128,
             leading: 22,
             bottom: Self.barClearance,
             trailing: 30
