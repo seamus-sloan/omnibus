@@ -20,10 +20,133 @@ const CHART = "/stats/chart";
 const control = (page: Page, label: string) =>
   page.getByTestId("chart-controls").getByLabel(label);
 
+// ── A stubbed chart ─────────────────────────────────────────────────────
+//
+// The series a chart draws come from the caller's own reading history, and
+// this suite has none it can rely on: it runs as the shared test user against
+// a database whose reading rows are whatever other specs happened to write.
+// Asserting on marks under those conditions passes locally, where a developer
+// database has accumulated sittings, and fails on a fresh CI one — which is
+// exactly what happened.
+//
+// So the wire is stubbed instead. That draws the line where it belongs: what
+// the *server* computes is covered by `db::stats::builder`'s tests, and what
+// the *page* does with a well-formed result is covered here, deterministically.
+// The stub echoes the spec it was posted so the page's own reactions — a
+// second scale appearing, a split stacking, a regrouping replacing the axis —
+// are still driven by the picker rather than hard-coded.
+
+const UNIT: Record<string, string> = {
+  books_finished: "books",
+  avg_page_length: "pages",
+  pages_read: "pages",
+  avg_rating: "stars",
+  reading_minutes: "minutes",
+  listening_minutes: "minutes",
+  avg_session_minutes: "minutes",
+  session_count: "sessions",
+};
+// Totals are bars, means are lines — mirroring `ChartMeasure::mark`.
+const IS_BAR: Record<string, boolean> = {
+  books_finished: true,
+  session_count: true,
+  reading_minutes: true,
+  listening_minutes: true,
+  pages_read: true,
+  avg_page_length: false,
+  avg_rating: false,
+  avg_session_minutes: false,
+};
+const STUB_GENRES = ["Fantasy", "Horror", "Crime"];
+
+function stubBuckets(bucket: string): string[] {
+  if (bucket === "year") return ["2024", "2025", "2026"];
+  if (bucket === "day")
+    return Array.from({ length: 8 }, (_, i) => `2026-08-0${i + 1}`);
+  if (bucket === "week")
+    return ["2026-06-01", "2026-06-08", "2026-06-15", "2026-06-22"];
+  return Array.from({ length: 8 }, (_, i) => `2026-0${i + 1}`);
+}
+
+function stubResult(spec: {
+  measures: string[];
+  bucket: string;
+  breakdown: string;
+}): unknown {
+  const buckets = stubBuckets(spec.bucket);
+  const value = (i: number, seed: number) => 1 + ((i + seed) % 4);
+
+  if (spec.breakdown === "genre" && spec.measures.length === 1) {
+    const m = spec.measures[0]!;
+    return {
+      bucket: spec.bucket,
+      buckets,
+      series: STUB_GENRES.map((g, gi) => ({
+        measure: m,
+        slice: g,
+        axis: 0,
+        mark: IS_BAR[m] ? "bar" : "line",
+        values: buckets.map((_, i) => value(i, gi)),
+      })),
+      axes: [{ unit: UNIT[m], max: 20 }],
+      divisions: 4,
+      // Slices of an additive measure are parts of a whole; means never stack.
+      stacked: IS_BAR[m] ?? false,
+      truncated: false,
+      caveats: [],
+    };
+  }
+
+  const units: string[] = [];
+  for (const m of spec.measures) {
+    const u = UNIT[m]!;
+    if (!units.includes(u)) units.push(u);
+  }
+  return {
+    bucket: spec.bucket,
+    buckets,
+    series: spec.measures.map((m, si) => ({
+      measure: m,
+      slice: null,
+      axis: units.indexOf(UNIT[m]!),
+      mark: IS_BAR[m] ? "bar" : "line",
+      values: buckets.map((_, i) => value(i, si)),
+    })),
+    axes: units.map((u) => ({ unit: u, max: 20 })),
+    divisions: 4,
+    stacked: false,
+    truncated: false,
+    // `pages_read` is the one measure whose coverage is bounded, and the
+    // server sends its caveat with the result.
+    caveats: spec.measures.includes("pages_read")
+      ? [
+          "Pages read is measured from the progress ledger, which only covers reading recorded after it was introduced. Earlier buckets read low.",
+        ]
+      : [],
+  };
+}
+
+async function stubChart(page: Page): Promise<void> {
+  await page.route("**/api/rpc/chart-series", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const posted = JSON.parse(route.request().postData() ?? "{}");
+    // The server function takes the spec as its single argument; accept either
+    // the bare object or a one-key wrapper so this does not hinge on the
+    // encoding's shape.
+    const spec = posted.spec ?? posted;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(stubResult(spec)),
+    });
+  });
+}
+
 // The builder opens with nothing plotted, so any test that needs a chart
-// selects one first. This pair — a count against an average, on two scales —
-// is the comparison the page exists for.
+// stubs the wire and selects one. This pair — a count against an average, on
+// two scales — is the comparison the page exists for.
 async function plotThePair(page: Page): Promise<void> {
+  await stubChart(page);
   await control(page, "Books finished").check();
   await control(page, "Avg book length").check();
   await expect
