@@ -690,10 +690,12 @@ build — `charts/omnibus/` packages the same `sesloan/omnibus` image the
 |---|---|
 | `Chart.yaml` | Chart metadata. `appVersion` tracks the upstream release tag. |
 | `values.yaml` | The whole configuration surface, commented in place. |
-| `templates/` | Deployment, Service, Ingress, PVCs, ConfigMap/Secret, ServiceMonitor, NetworkPolicy, and a `helm test` pod that asserts `/api/_health`. |
-| `README.md` | Design rationale — why one replica, the volume split, the two security modes. |
+| `templates/` | Deployment, Service, Ingress, PVCs, ConfigMap/Secret, and a `helm test` pod that asserts `/api/_health`. |
+| `README.md` | Design rationale — why one replica, the volume split, the CSRF-origin derivation. |
 
-The chart's shape is dictated by SQLite: one replica, `Recreate` rollouts, and
-`ReadWriteOnce` volumes, none of it configurable. It also pins
+Deliberately minimal — no NetworkPolicy, ServiceMonitor, or autoscaling; the
+homelab norm is a generic chart like bjw-s `app-template`, so this one carries
+only what is specific to Omnibus. Its shape is dictated by SQLite: one replica,
+`Recreate` rollouts, and `ReadWriteOnce` volumes, none of it configurable. It also pins
 `OMNIBUS_JOURNAL_IMAGES_DIR` into `/config`, because the image's default puts
 that durable user data under the regenerable `/cache` volume.

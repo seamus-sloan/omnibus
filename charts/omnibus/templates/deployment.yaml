@@ -43,33 +43,15 @@ spec:
       {{- with .Values.priorityClassName }}
       priorityClassName: {{ . }}
       {{- end }}
-      {{- if .Values.puid.enabled }}
-      # The image's entrypoint needs root to remap its user and chown the
-      # volume roots; it drops to {{ .Values.puid.uid }}:{{ .Values.puid.gid }} with gosu before serving.
-      securityContext:
-        runAsUser: 0
-        seccompProfile:
-          type: RuntimeDefault
-      {{- else }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- end }}
       containers:
         - name: omnibus
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          {{- if not .Values.puid.enabled }}
-          # Skip the PUID/PGID entrypoint: Kubernetes already owns uid/gid and
-          # volume ownership (fsGroup), and the entrypoint would need root.
+          # Skip the image's PUID/PGID entrypoint: it needs root, and
+          # Kubernetes already owns uid/gid and volume ownership (fsGroup).
           command: ["/app/server"]
-          {{- end }}
-          {{- if .Values.puid.enabled }}
-          env:
-            - name: PUID
-              value: {{ .Values.puid.uid | quote }}
-            - name: PGID
-              value: {{ .Values.puid.gid | quote }}
-          {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "omnibus.fullname" . }}
@@ -110,27 +92,8 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if .Values.puid.enabled }}
-          # usermod/groupmod rewrite /etc/passwd and /etc/group, so the root
-          # filesystem can't be read-only and the ownership capabilities have
-          # to stay.
-          securityContext:
-            runAsUser: 0
-            readOnlyRootFilesystem: false
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-              add:
-                - CHOWN
-                - DAC_OVERRIDE
-                - FOWNER
-                - SETGID
-                - SETUID
-          {{- else }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          {{- end }}
           volumeMounts:
             - name: config
               mountPath: /config
