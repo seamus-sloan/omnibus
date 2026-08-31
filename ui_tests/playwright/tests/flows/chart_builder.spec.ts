@@ -177,6 +177,48 @@ test("redraws when the selection changes", async ({ page }) => {
   );
 });
 
+test("reads every series at the hovered bucket", async ({ page }) => {
+  await gotoReady(page, CHART);
+  await expect
+    .poll(async () => page.getByTestId("chart-legend").count())
+    .toBeGreaterThan(0);
+
+  // No hover state in the server-rendered markup — it is client-only, so the
+  // first paint has to match it (rule 07).
+  await expect(page.getByTestId("chart-tooltip")).toHaveCount(0);
+
+  const bands = page.locator(".cb-hit");
+  await expect(bands.first()).toBeAttached();
+  await bands.nth(2).hover({ force: true });
+
+  const tip = page.getByTestId("chart-tooltip");
+  await expect(tip).toBeVisible();
+  // Both series at once, each with its own unit, since they may be on
+  // different scales.
+  await expect(tip).toContainText("Books finished");
+  await expect(tip).toContainText("books");
+  await expect(tip).toContainText("Avg book length");
+  await expect(tip).toContainText("pages");
+});
+
+test("stacks a split count into one column per bucket", async ({ page }) => {
+  await gotoReady(page, CHART);
+  await control(page, "Avg book length").uncheck();
+  await control(page, "Split").selectOption("genre");
+
+  await expect
+    .poll(async () => page.getByTestId("chart-legend").count())
+    .toBeGreaterThan(0);
+
+  // Stacked bars share one lane, so every bar in a bucket has the same x.
+  const xs = await page
+    .locator("rect.cb-bar")
+    .evaluateAll((nodes) => nodes.map((n) => n.getAttribute("x")));
+  const labels = await page.locator("text.cb-xlabel").count();
+  expect(xs.length).toBeGreaterThan(labels);
+  expect(new Set(xs).size).toBeLessThanOrEqual(labels);
+});
+
 test("surfaces a rejected spec instead of failing silently", async ({
   page,
 }) => {

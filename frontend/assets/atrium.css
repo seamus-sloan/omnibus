@@ -11673,13 +11673,29 @@ html {
    spinner, so a picker change doesn't flash the surface. */
 .cb-canvas.is-loading .cb-plot { opacity: 0.55; transition: opacity 120ms ease; }
 
-.cb-plot { width: 100%; }
+/* `position: relative` is what the hover card is placed against — it is HTML
+   over a stretching SVG, so it is positioned as a share of the plot's width
+   rather than in view units. */
+.cb-plot { width: 100%; position: relative; --cb-ease: cubic-bezier(0.22, 1, 0.36, 1); }
 .cb-svg { display: block; width: 100%; height: auto; aspect-ratio: 760 / 340; overflow: visible; }
 
 /* Recessive grid and axis; the data carries the ink. */
 .cb-grid { stroke: var(--line-2); stroke-width: 1; }
 .cb-axis { stroke: var(--line); stroke-width: 1; }
-.cb-tick, .cb-xlabel { fill: var(--ink-3); font-size: 11px; font-family: var(--sans); }
+.cb-tick, .cb-xlabel {
+  fill: var(--ink-3);
+  font-size: 11px;
+  font-family: var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+/* The hovered bucket's own label steps forward out of the thinned set. */
+.cb-xlabel.is-on { fill: var(--ink-0); font-weight: 600; }
+
+/* ── Hover ────────────────────────────────────────────────────────── */
+/* One full-height target per bucket: a reader aiming at a short bar should
+   not have to hit the bar itself. */
+.cb-hit { fill: transparent; }
+.cb-band { fill: var(--ink-1); opacity: 0.055; pointer-events: none; }
 
 /* Series colour is set once per group and consumed by whichever mark
    the group holds, so a bar and a line of the same series can't drift. */
@@ -11690,10 +11706,89 @@ html {
 .cb-s4 { --cb-c: var(--cb-s4); }
 .cb-s5 { --cb-c: var(--cb-s5); }
 
-.cb-bar { fill: var(--cb-c); }
-.cb-stroke { fill: none; stroke: var(--cb-c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.cb-bar {
+  fill: var(--cb-c);
+  transition: opacity 140ms ease;
+  /* Grow from the baseline rather than fading in place — `fill-box` is what
+     makes `bottom` mean the bar's own foot rather than the whole canvas. */
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: cb-rise 420ms var(--cb-ease) backwards;
+  animation-delay: var(--cb-delay, 0ms);
+}
+/* Everything outside the hovered bucket recedes rather than disappearing. */
+.cb-bar.is-dim { opacity: 0.34; }
+.cb-stroke {
+  fill: none;
+  stroke: var(--cb-c);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+/* A soft wash under the line: presence without competing with the bars. */
+.cb-area { fill: var(--cb-c); opacity: 0.08; stroke: none; }
+.cb-line { animation: cb-fade 520ms var(--cb-ease) 140ms backwards; }
 /* A 2px surface ring keeps a dot legible where it overlaps a bar. */
-.cb-dot { fill: var(--cb-c); stroke: var(--bg-2); stroke-width: 2; }
+.cb-dot {
+  fill: var(--cb-c);
+  stroke: var(--bg-2);
+  stroke-width: 2;
+  opacity: 0.9;
+  transition: opacity 120ms ease, stroke-width 120ms ease;
+}
+.cb-dot.is-on { opacity: 1; stroke-width: 3; }
+
+@keyframes cb-rise {
+  from { transform: scaleY(0); opacity: 0; }
+  to   { transform: scaleY(1); opacity: 1; }
+}
+@keyframes cb-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Hover card ───────────────────────────────────────────────────── */
+/* Never a pointer target itself — it sits over the hit rects that summoned
+   it, and swallowing their events would make it flicker. */
+.cb-tip {
+  position: absolute;
+  top: 8px;
+  z-index: 2;
+  pointer-events: none;
+  min-width: 168px;
+  max-width: 260px;
+  padding: 9px 11px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 24px oklch(0 0 0 / 0.34);
+  transform: translateX(12px);
+  animation: cb-fade 120ms ease;
+}
+/* Past the midpoint the card flips to the cursor's other side so it never
+   hangs off the plot. */
+.cb-tip.is-flipped { transform: translateX(calc(-100% - 12px)); }
+.cb-tip-head {
+  margin: 0 0 7px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.cb-tip-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.cb-tip-row { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.cb-tip-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--cb-c);
+  flex: none;
+  transform: translateY(-1px);
+}
+.cb-tip-name { color: var(--ink-2); flex: 1; }
+/* The value wears text ink, never the series colour — the swatch carries
+   identity, and a coloured number would fail contrast in light mode. */
+.cb-tip-value { color: var(--ink-0); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* ── Legend ───────────────────────────────────────────────────────── */
 .cb-legend {
@@ -11747,6 +11842,11 @@ html {
 /* ── Notes & empty ────────────────────────────────────────────────── */
 .cb-empty { margin: 0; padding: 40px 0; text-align: center; color: var(--ink-3); font-size: 14px; }
 .cb-note { margin: 0; color: var(--ink-3); font-size: 11.5px; line-height: 1.5; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cb-bar, .cb-line, .cb-tip { animation: none; }
+  .cb-bar, .cb-dot { transition: none; }
+}
 
 @media (max-width: 720px) {
   .cb-title { font-size: 30px; }
