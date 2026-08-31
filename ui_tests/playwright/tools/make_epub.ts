@@ -758,6 +758,17 @@ function buildSection(s: BookSection): string {
 const FIXED_DATE = new Date("2024-01-01T00:00:00Z");
 
 async function buildEpub(input: EpubInput): Promise<Buffer> {
+  // publisher.css has a single owner: publisherBodyColor writes a colour rule,
+  // blobStylesheet writes a url()-bearing rule referencing bg.png. Setting both
+  // would emit the bg.png manifest item (buildOpf keys it on blobStylesheet)
+  // without ever writing the file (buildEpub's css branch prefers
+  // publisherBodyColor) — a manifest that references a missing asset. Fail fast
+  // rather than generate a broken EPUB.
+  if (input.publisherBodyColor && input.blobStylesheet) {
+    throw new Error(
+      `${input.filename}: publisherBodyColor and blobStylesheet are mutually exclusive`,
+    );
+  }
   const zip = new JSZip();
   // The mimetype file MUST be the first entry and stored without compression
   // for the EPUB to validate.
