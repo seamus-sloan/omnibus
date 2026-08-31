@@ -11085,12 +11085,27 @@ html {
   display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
 }
 .bdmq-syncline-warn { color: var(--warn); }
+/* Reads as a control, not prose: the sync line's affordance is the only way
+   into the alignment modal, so it carries button chrome rather than sitting
+   inline as another run of mono text. */
 .bdmq-synclink {
-  border: 0; background: transparent; padding: 0; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 11px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--bg-2);
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .02em;
-  color: var(--ink-1);
+  color: var(--ink-0); white-space: nowrap;
+  transition: background .15s, border-color .15s, color .15s, transform .12s;
 }
-.bdmq-synclink:hover { color: var(--accent); }
+@media (hover: hover) {
+  .bdmq-synclink:hover {
+    background: var(--bg-3); border-color: var(--accent); color: var(--accent);
+  }
+}
+.bdmq-synclink:active { transform: translateY(1px); }
+.bdmq-synclink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* One neutral pill in every state, including the paused-sync warning: --warn
+   and --accent are all but the same amber here, so a warn-tinted button would
+   read as the hover state rather than as a second colour. */
 .bdmq .bd-sync-panel { margin-top: 0; }
 
 /* Highlights stop: the design's inline text actions under each kept line. */
