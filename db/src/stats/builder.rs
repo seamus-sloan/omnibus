@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 
+use omnibus_shared::chart::{axis_max_on, nice_axis, AXIS_DIVISION_CHOICES};
 use omnibus_shared::{
     ChartAggregate, ChartAxis, ChartBreakdown, ChartBucket, ChartMeasure, ChartResult, ChartSeries,
     ChartSpec, ChartSpecError, ChartUnit, BREAKDOWN_LIMIT, MAX_AXES, MAX_BUCKETS, OTHER_LABEL,
@@ -345,92 +346,6 @@ fn align(buckets: &[String], rows: &[Bucketed], aggregate: ChartAggregate) -> Ve
             None => aggregate.empty_bucket(),
         })
         .collect()
-}
-
-/// Round a tick step up to a readable 1 / 2 / 2.5 / 5 × 10ⁿ value.
-fn nice_step(raw: f64) -> f64 {
-    if !raw.is_finite() || raw <= 0.0 {
-        return 1.0;
-    }
-    let magnitude = 10f64.powf(raw.log10().floor());
-    let normalized = raw / magnitude;
-    let step = if normalized <= 1.0 {
-        1.0
-    } else if normalized <= 2.0 {
-        2.0
-    } else if normalized <= 2.5 {
-        2.5
-    } else if normalized <= 5.0 {
-        5.0
-    } else {
-        10.0
-    };
-    step * magnitude
-}
-
-/// How much of the axis the data must fill before the fit is accepted.
-///
-/// A ladder that only ever rounds the *maximum* up leaves an axis of 1000 for
-/// a peak of 550 — the data occupies half the frame and every shape in it
-/// reads flatter than it is. Trying several tick counts and keeping the
-/// tightest honest fit is what avoids that.
-const AXIS_MAX_HEADROOM: f64 = 1.35;
-
-/// Tick counts to try, in preference order.
-const AXIS_DIVISION_CHOICES: [usize; 3] = [4, 5, 3];
-
-/// Below this peak a whole-number axis gets one gridline per unit.
-const SMALL_COUNT_MAX: f64 = 6.0;
-
-/// An axis maximum and the number of gridlines that divide it, chosen so the
-/// ticks land on round numbers *and* the data fills the frame.
-/// `integral` marks an axis whose values are counts — half a book is not a
-/// quantity, so its gridlines must land on whole numbers.
-fn nice_axis(max: f64, integral: bool) -> (f64, usize) {
-    if !max.is_finite() || max <= 0.0 {
-        return (1.0, AXIS_DIVISION_CHOICES[0]);
-    }
-    // A small count reads best with one gridline per unit, and fills the frame
-    // exactly rather than rounding up to the next ladder rung.
-    if integral && max <= SMALL_COUNT_MAX {
-        let top = max.ceil().max(1.0);
-        return (top, top as usize);
-    }
-    for divisions in AXIS_DIVISION_CHOICES {
-        let top = axis_step(max, divisions, integral) * divisions as f64;
-        if top >= max && top <= max * AXIS_MAX_HEADROOM {
-            return (top, divisions);
-        }
-    }
-    // No tick count fits inside the headroom, so take the default's ceiling
-    // rather than an axis the data overflows.
-    let divisions = AXIS_DIVISION_CHOICES[0];
-    (
-        axis_step(max, divisions, integral) * divisions as f64,
-        divisions,
-    )
-}
-
-/// One gridline's worth of value, rounded up to a whole number on a count axis.
-fn axis_step(max: f64, divisions: usize, integral: bool) -> f64 {
-    let step = nice_step(max / divisions as f64);
-    if integral {
-        step.ceil()
-    } else {
-        step
-    }
-}
-
-/// An axis maximum on a *fixed* tick count.
-///
-/// The right-hand axis cannot pick its own count: both axes share one set of
-/// gridlines, and two different counts would draw the right axis's labels
-/// between the lines they belong to.
-fn axis_max_on(max: f64, divisions: usize, integral: bool) -> f64 {
-    if !max.is_finite() || max <= 0.0 {
-        return 1.0;
-    }
-    axis_step(max, divisions, integral) * divisions as f64
 }
 
 /// Keep the `BREAKDOWN_LIMIT` most-read slices and fold the tail into one
