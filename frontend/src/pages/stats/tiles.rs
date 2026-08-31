@@ -238,7 +238,13 @@ fn build_tiles(summary: &StatsSummary) -> Vec<Tile> {
         },
         Tile {
             value: avg_stars_value(summary.avg_stars),
-            unit: "\u{2605} avg",
+            // No unit beside the em-dash: "— ★ avg" reads as a measured value
+            // of nothing, where the bare dash reads as the absence it is.
+            unit: if summary.avg_stars.is_some() {
+                "\u{2605} avg"
+            } else {
+                ""
+            },
             label: "How you rated",
             testid: "stats-tile-avg-rating",
             metric: Metric::AvgRating,

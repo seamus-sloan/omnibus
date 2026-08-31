@@ -197,8 +197,15 @@ fn CompositionPanel(panel: Panel) -> Element {
     }
 }
 
-/// The bar colour for a slice at `index`, cycling the shared donut ramp so a
-/// panel reads as a ranked set rather than as one colour repeated.
+/// The bar colour for a slice at `index` — the shared donut ramp, **clamped**
+/// at its faintest step rather than cycled.
+///
+/// Clamped deliberately: the ramp distinguishes a dimension's leaders, and
+/// cycling would hand the fifth row the accent again and imply it ranks with
+/// the first. The tail settling into one quiet colour is the honest reading,
+/// and the bar's own length is what carries the value — which matters most for
+/// the decade histogram, whose rows are chronological rather than ranked and
+/// run to fifteen.
 fn slice_color(index: usize) -> &'static str {
     const RAMP: [&str; 4] = [
         "var(--st-donut-c0)",

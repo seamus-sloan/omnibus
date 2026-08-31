@@ -164,9 +164,21 @@ fn use_goal_hydration(server_url: String, mut signals: GoalSignals) {
         if (signals.loaded)() {
             return;
         }
+        // Claimed before the request, not after it: `use_effect` re-runs on
+        // every render, so a guard that only closes on completion starts a
+        // fresh fetch for each render in flight — and a persistently failing
+        // endpoint would be retried forever.
+        signals.loaded.set(true);
         let url = server_url.clone();
         spawn(async move {
             let Ok(summary) = data::fetch_stats(&url, StatsRange::AllTime).await else {
+                // Say so rather than rendering "Not set" for goals that may
+                // well exist — an empty card is indistinguishable from a
+                // reader who has set nothing.
+                signals.msg.set(Some(
+                    "Couldn't load your goals \u{2014} reload to try again.".to_string(),
+                ));
+                signals.msg_is_error.set(true);
                 return;
             };
             let targets = [
@@ -178,7 +190,6 @@ fn use_goal_hydration(server_url: String, mut signals: GoalSignals) {
             signals
                 .drafts
                 .set(targets.map(|t| t.map(|n| n.to_string()).unwrap_or_default()));
-            signals.loaded.set(true);
         });
     });
 }

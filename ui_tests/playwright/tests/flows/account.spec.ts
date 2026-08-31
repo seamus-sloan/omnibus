@@ -363,6 +363,20 @@ test("shows an error when the avatar upload fails", async ({ page }) => {
 test.describe
   .serial("reading goals", () => {
     /**
+     * Seed one goal through the REST route, asserting it landed. A silent
+     * setup failure — a moved route, an auth regression — would otherwise
+     * surface as a confusing assertion about the UI rather than the setup.
+     */
+    async function seedGoal(
+      request: APIRequestContext,
+      path: string,
+      data: Record<string, unknown>,
+    ) {
+      const resp = await request.put(path, { data });
+      expect(resp.status(), `seeding ${path} failed`).toBe(200);
+    }
+
+    /**
      * Reset every goal so each test below starts from the not-set state. The REST
      * writes invalidate this user's stats cache, so the card reads the cleared
      * values immediately rather than after the TTL.
@@ -428,9 +442,14 @@ test.describe
         "45 minutes",
       );
 
-      // They survive a reload — the card reads them back off the server.
+      // They survive a reload — the card reads all three back off the server,
+      // which is what tells an optimistic render apart from a real write.
       await gotoReady(page, ACCOUNT);
       await expect(page.getByTestId("goal-books-value")).toHaveText("24 books");
+      await expect(page.getByTestId("goal-pages-value")).toHaveText("30 pages");
+      await expect(page.getByTestId("goal-minutes-value")).toHaveText(
+        "45 minutes",
+      );
     });
 
     test("an emptied field clears that goal and leaves the others alone", async ({
@@ -438,9 +457,10 @@ test.describe
       request,
     }) => {
       await clearAllGoals(request);
-      await request.put("/api/stats/goal", { data: { target: 24 } });
-      await request.put("/api/stats/goal/daily", {
-        data: { kind: "pages", target: 30 },
+      await seedGoal(request, "/api/stats/goal", { target: 24 });
+      await seedGoal(request, "/api/stats/goal/daily", {
+        kind: "pages",
+        target: 30,
       });
       await gotoReady(page, ACCOUNT);
 
@@ -517,7 +537,7 @@ test.describe
       request,
     }) => {
       await clearAllGoals(request);
-      await request.put("/api/stats/goal", { data: { target: 24 } });
+      await seedGoal(request, "/api/stats/goal", { target: 24 });
       await gotoReady(page, ACCOUNT);
 
       await page.getByTestId("goals-edit").click();
