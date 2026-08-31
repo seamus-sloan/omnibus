@@ -308,6 +308,7 @@ fn result_is_empty_when_no_bucket_carries_a_value() {
             max: 1.0,
         }],
         divisions: 4,
+        stacked: false,
         truncated: false,
         caveats: vec![],
     };
@@ -332,6 +333,7 @@ fn result_with_no_buckets_is_empty_even_when_a_series_exists() {
         }],
         axes: vec![],
         divisions: 4,
+        stacked: false,
         truncated: false,
         caveats: vec![],
     };

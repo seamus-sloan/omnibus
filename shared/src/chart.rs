@@ -572,6 +572,14 @@ pub struct ChartResult {
     /// Gridlines dividing the plot, shared by both axes. Two different counts
     /// would put the right axis's labels between the lines they belong to.
     pub divisions: u8,
+    /// Whether the bar series stack into one column per bucket.
+    ///
+    /// Only ever true for a **breakdown of one additive measure**, where the
+    /// slices are parts of a whole and their sum is the figure the unsplit
+    /// chart would show. Two different measures never stack — books on top of
+    /// pages is not a quantity — and neither does a split average, since means
+    /// do not add.
+    pub stacked: bool,
     /// Set when the axis was clipped to the most recent [`MAX_BUCKETS`].
     pub truncated: bool,
     /// Caveats carried by the selected measures.
