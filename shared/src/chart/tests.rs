@@ -364,3 +364,15 @@ fn every_measure_round_trips_through_serde() {
         assert_eq!(json, format!("\"{}\"", m.as_query()));
     }
 }
+
+#[test]
+fn every_measure_carries_a_sentence_saying_what_it_counts() {
+    for m in ChartMeasure::ALL {
+        let d = m.description();
+        assert!(!d.is_empty(), "{} has no description", m.label());
+        assert!(d.ends_with('.'), "{}: {d}", m.label());
+        // The label names it; the description has to say something the label
+        // does not, or the notes are just repeating the picker.
+        assert_ne!(d.trim_end_matches('.'), m.label());
+    }
+}
