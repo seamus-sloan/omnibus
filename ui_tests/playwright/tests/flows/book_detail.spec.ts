@@ -838,9 +838,13 @@ test("lists a saved passage with its locator, note and date, then deletes it", a
   await expect(card.getByTestId("highlight-note")).toHaveText(
     "the line that stuck",
   );
-  // The locator is derived from the CFI's spine step (/14 → section 7); the
+  // The locator names the reader's chapter once the book's chapter structure
+  // is known, and falls back to the CFI's raw spine step (/14 → section 7)
+  // until then (#2356) — either is a valid locator for the same position. The
   // date comes from the server-assigned created_at.
-  await expect(card.getByTestId("highlight-meta")).toContainText("Section 7");
+  await expect(card.getByTestId("highlight-meta")).toContainText(
+    /(?:Chapter|Section) \d+/,
+  );
   await expect(card.getByTestId("highlight-meta")).toContainText("saved ");
 
   // Delete it — the RPC must fire and the card must leave the list.

@@ -35,17 +35,36 @@ pub(super) struct BdQuoteMeta {
 pub(super) fn BdHighlightsSection(uuid: String, quote_meta: BdQuoteMeta) -> Element {
     let server_url = use_server_url();
     let mut highlights = use_signal(Vec::<Highlight>::new);
+    // Each chapter's 0-based `spine_index`, in TOC order — used to name a
+    // passage's chapter the way the reader does (#2356). Empty on SSR / first
+    // paint and until the fetch lands, which leaves the locator on its
+    // spine-section fallback.
+    let mut chapter_spines = use_signal(Vec::<i64>::new);
     // The passage targeted for a quote card; `None` on SSR and first paint
     // (rule 07), set by each card's Quote button.
     let quote_target: Signal<Option<Highlight>> = use_signal(|| None);
 
     let load_url = server_url.clone();
     use_effect(use_reactive!(|uuid| {
-        let url = load_url.clone();
-        let uuid = uuid.clone();
+        let hl_url = load_url.clone();
+        let hl_uuid = uuid.clone();
         spawn(async move {
-            if let Ok(list) = data::list_highlights(&url, &uuid).await {
+            if let Ok(list) = data::list_highlights(&hl_url, &hl_uuid).await {
                 highlights.set(list);
+            }
+        });
+        // The alignment view doubles as the chapter table (title + spine index)
+        // for any book with text; take just the spine indices to map each
+        // passage's CFI to the reader's chapter number (#2356).
+        let ch_url = load_url.clone();
+        let ch_uuid = uuid.clone();
+        spawn(async move {
+            if let Ok(align) = data::get_alignment(&ch_url, &ch_uuid).await {
+                let spines = align
+                    .ebook
+                    .map(|e| e.chapters.iter().map(|c| c.spine_index).collect())
+                    .unwrap_or_default();
+                chapter_spines.set(spines);
             }
         });
     }));
@@ -71,6 +90,7 @@ pub(super) fn BdHighlightsSection(uuid: String, quote_meta: BdQuoteMeta) -> Elem
                     highlights,
                     server_url: server_url.clone(),
                     quote_target,
+                    chapter_spines,
                 }
             }
         }
@@ -86,6 +106,7 @@ fn BdHighlightList(
     highlights: Signal<Vec<Highlight>>,
     server_url: String,
     quote_target: Signal<Option<Highlight>>,
+    chapter_spines: ReadSignal<Vec<i64>>,
 ) -> Element {
     // Hoisted once for the whole list rather than once per card — a heavily
     // highlighted book runs to hundreds of rows, and each row resolves its
@@ -104,6 +125,7 @@ fn BdHighlightList(
                     server_url: server_url.clone(),
                     quote_target,
                     dates_ready,
+                    chapter_spines,
                 }
             }
         }
@@ -160,6 +182,7 @@ fn BdHighlightCard(
     server_url: String,
     quote_target: Signal<Option<Highlight>>,
     dates_ready: ReadSignal<bool>,
+    chapter_spines: ReadSignal<Vec<i64>>,
 ) -> Element {
     let offset = local_date_offset(dates_ready(), highlight.created_at);
     let id = highlight.id;
@@ -176,11 +199,13 @@ fn BdHighlightCard(
     let note = highlight.note.clone();
     // A Kobo-origin passage has no CFI: it still lists, but there is no
     // position to derive a locator from and nowhere for "Open in reader" to
-    // jump.
+    // jump. When the chapter table is loaded the locator names the reader's
+    // chapter; until then it falls back to the raw spine section (#2356).
+    let spines = chapter_spines.read();
     let meta_line = match highlight
         .epub_cfi_range
         .as_deref()
-        .and_then(highlight_locator)
+        .and_then(|cfi| highlight_locator(cfi, &spines))
     {
         Some(loc) => format!(
             "{loc} \u{00b7} saved {}",
@@ -188,6 +213,7 @@ fn BdHighlightCard(
         ),
         None => format!("saved {}", fmt_long_date(highlight.created_at, offset)),
     };
+    drop(spines);
     let open_href = highlight
         .epub_cfi_range
         .as_deref()
