@@ -268,7 +268,9 @@ struct LibraryView: View {
                     EmptyStateView(
                         icon: "books.vertical",
                         title: "No books yet",
-                        message: "Point the server at a library folder, or add a book from the You tab."
+                        message: "Point the server at a library folder, or add a book from the You tab.",
+                        kicker: "Your library",
+                        fanned: true
                     )
                 } else {
                     content

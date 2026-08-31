@@ -133,7 +133,11 @@ struct ReaderContentsSheet: View {
     @ViewBuilder
     private var contentsList: some View {
         if controller.toc.isEmpty {
-            EmptyStateView(icon: "list.bullet", title: "No table of contents")
+            EmptyStateView(
+                icon: "list.bullet",
+                title: "No table of contents",
+                message: "This edition ships without one — the scrubber still moves you through it."
+            )
         } else {
             ScrollViewReader { proxy in
                 ScrollView {

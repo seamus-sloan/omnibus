@@ -315,7 +315,16 @@ Design/             — Theme (Atrium tokens + the type scale), Fonts/ (static
                       metadata editor's chip and series fields, the native twin
                       of the web's `components/suggestion_dropdown/` —
                       UserAvatar — a user's picture or monogram, the native twin
-                      of the web's `components/user_avatar.rs`)
+                      of the web's `components/user_avatar.rs`, GhostPlate — the
+                      dashed 2:3 "book with nothing on it" motif every empty
+                      state leads with, optionally fanned for a surface that
+                      holds a collection). `EmptyStateView`/`ErrorStateView` in
+                      Primitives claim `maxHeight: .infinity` deliberately:
+                      their callers wrap them in a `Group` carrying
+                      `.background(ScreenBackground())`, and a `Group` is only
+                      as tall as its content, so a state view sized to its own
+                      text painted the page ground as a *band* across an
+                      otherwise system-black screen.
 Features/           — one directory per surface: Account, AddBooks, Auth,
                       BookDetail, CheckIn, Discovery, Library, Player, Search,
                       Settings, Shelves, Stats. Account's identity card opens

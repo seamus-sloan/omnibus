@@ -190,38 +190,168 @@ struct LoadingView: View {
     }
 }
 
+/// A book-shaped plate with nothing on it — the motif every "nothing here
+/// yet" surface leads with.
+///
+/// This app's world is 2:3 covers, so an empty surface says so with an empty
+/// cover: the same dashed plate the new-shelf tile draws, at rest. A bare SF
+/// Symbol floating on the ground was the one stock-iOS element left on these
+/// screens, and it read as a missing image rather than as a considered state.
+struct GhostPlate: View {
+    let glyph: String
+    var width: CGFloat = 74
+    /// Two dimmer plates fanned behind the lead one. For surfaces that hold a
+    /// *collection* — a shelf, a library, a download list — where one plate
+    /// under-describes what is missing.
+    var fanned = false
+
+    @Environment(\.palette) private var palette
+
+    private var height: CGFloat { width * 1.5 }
+
+    var body: some View {
+        ZStack {
+            if fanned {
+                sibling(angle: -11, x: -width * 0.5)
+                sibling(angle: 11, x: width * 0.5)
+            }
+            lead
+        }
+        // Bound the fan explicitly: the rotated siblings overflow the lead
+        // plate, and an unbounded ZStack would let them run under whatever
+        // sits beside it.
+        .frame(width: fanned ? width * 2.2 : width, height: height + 16)
+        .accessibilityHidden(true)
+    }
+
+    /// The plate in front. Its ground is opaque — a translucent one let the
+    /// fan behind it show straight through, so three plates read as one
+    /// tangle of lines rather than as a stack.
+    private var lead: some View {
+        RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+            .fill(palette.bg0Color)
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                    .fill(palette.bg1Color.opacity(0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                    .strokeBorder(
+                        palette.line.color,
+                        style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                    )
+            )
+            .overlay {
+                Image(systemName: glyph)
+                    .font(.system(size: width * 0.3, weight: .light))
+                    .foregroundStyle(palette.ink3Color)
+            }
+            .frame(width: width, height: height)
+    }
+
+    /// One of the plates fanned behind: outline only, and dropped a little so
+    /// the lead plate reads as the nearest of a stack rather than as the
+    /// middle of a row.
+    private func sibling(angle: Double, x: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+            .fill(palette.bg0Color)
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                    .strokeBorder(palette.line2.color, lineWidth: 1)
+            )
+            .frame(width: width, height: height)
+            .rotationEffect(.degrees(angle), anchor: .bottom)
+            .offset(x: x, y: 6)
+    }
+}
+
+/// The gentle call to action an empty state offers — the accent-tinted capsule
+/// the book detail's WRITE pill established, rather than a grey slab that reads
+/// as a form control.
+struct EmptyStateActionStyle: ButtonStyle {
+    @Environment(\.palette) private var palette
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.ui(14, weight: .medium))
+            .foregroundStyle(palette.accentColor)
+            .padding(.horizontal, 18)
+            .frame(height: 38)
+            .background(Capsule().fill(palette.accentColor.opacity(0.14)))
+            .overlay(Capsule().strokeBorder(palette.accentColor.opacity(0.45), lineWidth: 0.5))
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(Motion.lift, value: configuration.isPressed)
+    }
+}
+
+/// A surface with nothing on it yet.
+///
+/// Set as a page rather than a notice: the ghost plate, an accent rule, an
+/// optional mono kicker, the headline in the display cut, and the explanation
+/// under it. It claims the whole container — that is not cosmetic. Callers
+/// wrap it in a `Group` carrying `.background(ScreenBackground())`, and a
+/// `Group` is only as tall as its content, so a state view that sized to its
+/// text painted the page ground as a *band* across an otherwise system-black
+/// screen.
 struct EmptyStateView: View {
     let icon: String
     let title: String
     var message: String?
+    /// Mono small-caps lead-in above the headline, in the voice the rest of
+    /// the app uses for section kickers.
+    var kicker: String?
+    /// Fans two dimmer plates behind the motif — for surfaces that hold a
+    /// collection rather than a single thing.
+    var fanned = false
     var actionTitle: String?
     var action: (() -> Void)?
 
     @Environment(\.palette) private var palette
 
     var body: some View {
-        VStack(spacing: Spacing.md) {
-            Image(systemName: icon)
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(palette.ink3Color)
+        VStack(spacing: 0) {
+            GhostPlate(glyph: icon, fanned: fanned)
+
+            Rectangle()
+                .fill(palette.accentColor)
+                .frame(width: 26, height: 1.5)
+                .padding(.top, 26)
+
+            if let kicker {
+                Text(kicker.uppercased())
+                    .font(.monoUI(9.5))
+                    .tracking(1.6)
+                    .foregroundStyle(palette.ink3Color)
+                    .padding(.top, 14)
+            }
+
             Text(title)
-                .font(.display(24))
+                .font(.display(29))
                 .foregroundStyle(palette.ink0Color)
+                .multilineTextAlignment(.center)
+                .padding(.top, kicker == nil ? 14 : 6)
+
             if let message {
                 Text(message)
-                    .font(.ui(14))
+                    .font(.ui(13.5))
                     .foregroundStyle(palette.ink2Color)
                     .multilineTextAlignment(.center)
+                    .lineSpacing(3)
                     .frame(maxWidth: 300)
+                    .padding(.top, 8)
             }
+
             if let actionTitle, let action {
-                Button(actionTitle, action: action)
-                    .buttonStyle(QuietButtonStyle())
-                    .padding(.top, Spacing.xs)
+                Button(actionTitle) {
+                    Haptics.tap()
+                    action()
+                }
+                .buttonStyle(EmptyStateActionStyle())
+                .padding(.top, 22)
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 56)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 44)
         .padding(.horizontal, Spacing.screen)
     }
 }
@@ -233,22 +363,42 @@ struct ErrorStateView: View {
     @Environment(\.palette) private var palette
 
     var body: some View {
-        VStack(spacing: Spacing.md) {
+        VStack(spacing: 0) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 34, weight: .light))
+                .font(.system(size: 30, weight: .light))
                 .foregroundStyle(palette.badColor)
+
+            Rectangle()
+                .fill(palette.badColor)
+                .frame(width: 26, height: 1.5)
+                .padding(.top, 20)
+
+            Text("Couldn't load this")
+                .font(.display(27))
+                .foregroundStyle(palette.ink0Color)
+                .padding(.top, 14)
+
             Text(message)
-                .font(.ui(14))
-                .foregroundStyle(palette.ink1Color)
+                .font(.ui(13.5))
+                .foregroundStyle(palette.ink2Color)
                 .multilineTextAlignment(.center)
+                .lineSpacing(3)
                 .frame(maxWidth: 320)
+                .padding(.top, 8)
+
             if let retry {
-                Button("Try again", action: retry)
-                    .buttonStyle(QuietButtonStyle())
+                Button("Try again") {
+                    Haptics.tap()
+                    retry()
+                }
+                .buttonStyle(EmptyStateActionStyle())
+                .padding(.top, 22)
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 48)
+        // Same reason as `EmptyStateView`: the container's ground must paint
+        // the page, not a band across it.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 44)
         .padding(.horizontal, Spacing.screen)
     }
 }
