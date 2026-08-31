@@ -331,12 +331,13 @@ async function chapterDurationSeconds(
   return stamps.map(hmsToSeconds);
 }
 
-// Regression for issue #2246. The transport divided its own figures by the
-// playback rate while the chapter list stayed in book time, so off 1x the two
-// described different books on one screen — a 7:05:08 total beside chapters
-// summing to 10:38:00. Both are rate-adjusted listening time now, so a 2x
-// listener sees the half-hour a one-hour book actually costs them.
-test("a speed change rescales the transport total and the chapter durations together", async ({
+// Regression for issue #2344, superseding #2246. The transport total and the
+// chapter durations are the book's own running time — the same basis as the
+// bookmark stamps and the book detail page — so a speed change must NOT move
+// them (only the "time left" estimate is rate-adjusted). The earlier #2246 fix
+// rescaled these readouts, which is exactly what disagreed with a saved
+// bookmark at any speed but 1x.
+test("a speed change leaves the transport total and chapter durations in book time", async ({
   page,
   request,
 }) => {
@@ -364,20 +365,20 @@ test("a speed change rescales the transport total and the chapter durations toge
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("speed-panel")).toHaveCount(0);
 
-  // Both readouts halve, so they still describe the same book — and the
-  // listener sees the time the book will actually take them. A second of
-  // slack per figure absorbs the truncation in `format_hms`.
+  // The rate visibly changed (listen-rate reads 2.00×), but the book-time
+  // readouts stay put: the total and every chapter duration read the same at
+  // 2x as at 1x. A second of slack per figure absorbs `format_hms` truncation.
   const totalAt2x = await transportTotalSeconds(page);
-  expect(totalAt2x).toBeLessThan(totalAt1x);
-  expect(Math.abs(totalAt2x - totalAt1x / 2)).toBeLessThanOrEqual(1);
+  expect(Math.abs(totalAt2x - totalAt1x)).toBeLessThanOrEqual(1);
 
   const chaptersAt2x = await chapterDurationSeconds(page);
   expect(chaptersAt2x.length).toBe(chaptersAt1x.length);
   chaptersAt2x.forEach((secs, i) => {
-    // Every figure must actually have moved — a chapter list left at 1x is
-    // exactly what this test exists to catch.
-    expect(secs, `chapter ${i} should rescale`).toBeLessThan(chaptersAt1x[i]!);
-    expect(Math.abs(secs - chaptersAt1x[i]! / 2)).toBeLessThanOrEqual(1);
+    // A chapter duration that halved at 2x is the #2246 behavior #2344 undid.
+    expect(
+      Math.abs(secs - chaptersAt1x[i]!),
+      `chapter ${i} should stay book-time`,
+    ).toBeLessThanOrEqual(1);
   });
 });
 
