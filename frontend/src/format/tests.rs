@@ -216,6 +216,28 @@ fn format_date_month_year_renders_an_em_dash_for_an_empty_string() {
 }
 
 #[test]
+fn format_date_month_year_opt_is_some_for_a_real_date() {
+    assert_eq!(
+        format_date_month_year_opt("2016-05-02"),
+        Some("May 2016".to_string())
+    );
+    assert_eq!(format_date_month_year_opt("2016"), Some("2016".to_string()));
+}
+
+#[test]
+fn format_date_month_year_opt_is_none_for_absent_and_sentinel_dates() {
+    // The series card drops the whole slot on `None`, so a sentinel and a
+    // truly-absent date must both answer `None` — otherwise one renders `· —`
+    // and the other nothing (#2294, #2360).
+    assert_eq!(format_date_month_year_opt(""), None);
+    assert_eq!(format_date_month_year_opt("circa 1850"), None);
+    assert_eq!(
+        format_date_month_year_opt("0101-01-01T00:00:00+00:00"),
+        None
+    );
+}
+
+#[test]
 fn facet_query_scopes_every_word_of_a_multi_word_name() {
     // The bug this replaced: `format!("tag:{name}")` scoped only "Dark" and
     // let "academia" fall through to `build_fts_match`'s free-text arm, so a
