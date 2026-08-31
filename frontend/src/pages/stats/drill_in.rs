@@ -12,6 +12,7 @@ use omnibus_shared::{
     StatsSummary,
 };
 
+use super::donut::LengthRows;
 use crate::components::{ConfirmModal, CoverTile, CoverTileKind};
 use crate::use_server_url;
 
@@ -272,7 +273,7 @@ fn delta_for(metric: Metric, summary: &StatsSummary, range: StatsRange) -> Optio
 /// Build a minimal `EbookMetadata` from a `FinishedBook` row so the drill-in
 /// list can hand it to the shared `CoverTile` — the DTO only carries the
 /// handful of fields a cover + title row needs.
-fn finished_book_as_ebook(book: &FinishedBook) -> EbookMetadata {
+pub(super) fn finished_book_as_ebook(book: &FinishedBook) -> EbookMetadata {
     EbookMetadata {
         title: Some(book.title.clone()),
         filename: book.title.clone(),
@@ -347,6 +348,11 @@ pub(super) fn DrillIn(
                     {render_pages_note(&summary.pages_detail, summary.pages_read)}
                 }
                 if metric == Metric::Finished {
+                    // The length distribution is a fact *about* the books
+                    // finished, not a peer of the count, so it lives here
+                    // rather than as a card of its own beside the tile.
+                    div { class: "label st-drill-section-label", "How long they were" }
+                    LengthRows { summary: summary.clone() }
                     {render_finished_list(&summary.finished_books, summary.books_finished, &server_url)}
                 }
             }

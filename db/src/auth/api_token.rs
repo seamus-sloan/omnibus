@@ -40,6 +40,10 @@ pub const LIST_API_TOKENS_LIMIT: i64 = 500;
 /// seconds — same write-amplification guard as sessions.
 const API_TOKEN_TOUCH_THRESHOLD_SECS: i64 = 5 * 60;
 
+/// Characters of the raw token surfaced as the display suffix
+/// (`omni_…xxxx` in the management UI).
+const API_TOKEN_SUFFIX_CHARS: usize = 4;
+
 /// One API token row, minus the hash. `last_used_at` is `None` until the
 /// token first authenticates a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +54,9 @@ pub struct ApiToken {
     pub created_at: i64,
     pub last_used_at: Option<i64>,
     pub revoked_at: Option<i64>,
+    /// Last 4 characters of the raw token, recorded at creation for display
+    /// (`omni_…xxxx`). `None` on rows minted before migration `0091`.
+    pub suffix: Option<String>,
 }
 
 /// Returned from [`create_api_token`]. Callers must show `raw_token` to the
@@ -81,15 +88,18 @@ pub async fn create_api_token(
     let name = validate_token_name(name)?;
     let raw = format!("{API_TOKEN_PREFIX}{}", generate_token()?);
     let hash = hash_token(&raw);
+    // base64url is ASCII, so a byte slice is a char slice here.
+    let suffix = &raw[raw.len() - API_TOKEN_SUFFIX_CHARS..];
 
     let row = sqlx::query(
-        "INSERT INTO api_tokens (token_hash, user_id, name)
-         VALUES (?, ?, ?)
-         RETURNING id, user_id, name, created_at, last_used_at, revoked_at",
+        "INSERT INTO api_tokens (token_hash, user_id, name, suffix)
+         VALUES (?, ?, ?, ?)
+         RETURNING id, user_id, name, created_at, last_used_at, revoked_at, suffix",
     )
     .bind(&hash)
     .bind(user_id)
     .bind(name)
+    .bind(suffix)
     .fetch_one(pool)
     .await?;
 
@@ -108,6 +118,7 @@ pub async fn lookup_api_token(pool: &SqlitePool, raw_token: &str) -> AuthResult<
     let hash = hash_token(raw_token);
     let row = sqlx::query(
         "SELECT t.id AS t_id, t.user_id, t.name, t.created_at, t.last_used_at, t.revoked_at,
+                t.suffix,
                 u.id AS u_id, u.username, u.is_admin, u.can_upload, u.can_edit, u.can_download,
                 u.kindle_email, u.display_name, u.hidden_formats,
                 EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = u.id) AS has_avatar
@@ -132,6 +143,7 @@ pub async fn lookup_api_token(pool: &SqlitePool, raw_token: &str) -> AuthResult<
         created_at: row.get("created_at"),
         last_used_at: row.get("last_used_at"),
         revoked_at,
+        suffix: row.get("suffix"),
     };
 
     let now = now_unix();
@@ -168,7 +180,7 @@ pub async fn list_api_tokens_for_user(
     user_id: i64,
 ) -> AuthResult<Vec<ApiToken>> {
     let rows = sqlx::query(
-        "SELECT id, user_id, name, created_at, last_used_at, revoked_at
+        "SELECT id, user_id, name, created_at, last_used_at, revoked_at, suffix
          FROM api_tokens
          WHERE user_id = ? AND revoked_at IS NULL
          ORDER BY created_at DESC, id DESC
@@ -205,6 +217,31 @@ pub async fn revoke_api_token_for_user(
     Ok(())
 }
 
+/// Rename one of `user_id`'s live API tokens. Same not-found semantics as
+/// [`revoke_api_token_for_user`]: an unknown id, a revoked token, and another
+/// user's token are indistinguishable on the wire by design.
+pub async fn rename_api_token_for_user(
+    pool: &SqlitePool,
+    user_id: i64,
+    token_id: i64,
+    name: &str,
+) -> AuthResult<()> {
+    let name = validate_token_name(name)?;
+    let r = sqlx::query(
+        "UPDATE api_tokens SET name = ?
+         WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
+    )
+    .bind(name)
+    .bind(token_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    if r.rows_affected() == 0 {
+        return Err(AuthError::ApiTokenNotFound);
+    }
+    Ok(())
+}
+
 fn row_to_api_token(row: &sqlx::sqlite::SqliteRow) -> ApiToken {
     ApiToken {
         id: row.get("id"),
@@ -213,6 +250,7 @@ fn row_to_api_token(row: &sqlx::sqlite::SqliteRow) -> ApiToken {
         created_at: row.get("created_at"),
         last_used_at: row.get("last_used_at"),
         revoked_at: row.get("revoked_at"),
+        suffix: row.get("suffix"),
     }
 }
 

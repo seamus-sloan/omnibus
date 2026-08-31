@@ -263,9 +263,9 @@ async fn pin_state_clocks(
 /// format) is instead pinned against the DTOs this router already
 /// implements (`kobo::dto`, `kobo::store_resources`, `kobo::state`) — the
 /// same reference shapes `docs/kobo.md` documents as sourced from
-/// Calibre-Web / bookorbit rather than a packet capture. See
-/// `docs/kobo-smoke-test.md` for the manual real-hardware checklist that
-/// gates advertising a device's wireless sync URL to a user.
+/// Calibre-Web / bookorbit rather than a packet capture. Passing here does
+/// not prove a device's firmware accepts what is sent — only a real Kobo
+/// can.
 ///
 /// AC4: every step asserts response **body shape**, not just status code —
 /// a regression that changed a field name or dropped a value (rather than

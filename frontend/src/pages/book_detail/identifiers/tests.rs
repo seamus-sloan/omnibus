@@ -63,10 +63,35 @@ fn bd_identifier_label_prefers_a_real_scheme() {
 }
 
 #[test]
-fn bd_identifier_label_infers_isbn_from_shape_when_scheme_unknown() {
+fn bd_identifier_label_infers_isbn_from_a_valid_value_when_scheme_unknown() {
+    // A valid ISBN-13, and a valid ISBN-10 whose check digit is `X`, are
+    // inferred as ISBN; a non-ISBN string is not.
     assert_eq!(label(&ident(Some("unknown"), "978-0-7564-0407-9")), "ISBN");
-    assert_eq!(label(&ident(None, "012345678X")), "ISBN");
+    assert_eq!(label(&ident(None, "080442957X")), "ISBN");
     assert_eq!(label(&ident(None, "not-an-isbn")), "Identifier");
+}
+
+#[test]
+fn bd_identifier_label_does_not_infer_isbn_for_a_checksum_failure() {
+    // #2359: ten digits but a failing ISBN-10 check digit, under an `unknown`
+    // scheme — presenting it as an ISBN made bad file metadata look verified.
+    assert_eq!(label(&ident(Some("unknown"), "2100906924")), "Identifier");
+    // A single wrong digit in an otherwise-valid ISBN-13 is caught too.
+    assert_eq!(label(&ident(None, "9780756404078")), "Identifier");
+}
+
+#[test]
+fn bd_looks_like_isbn_validates_the_check_digit() {
+    // Valid ISBN-13, valid ISBN-10, valid ISBN-10 ending in X.
+    assert!(bd_looks_like_isbn("978-0-7564-0407-9"));
+    assert!(bd_looks_like_isbn("0-316-76948-7"));
+    assert!(bd_looks_like_isbn("080442957X"));
+    // Right length, wrong checksum.
+    assert!(!bd_looks_like_isbn("2100906924"));
+    assert!(!bd_looks_like_isbn("9780756404078"));
+    // `X` is only a check digit in the final position, and length must match.
+    assert!(!bd_looks_like_isbn("X123456789"));
+    assert!(!bd_looks_like_isbn("12345"));
 }
 
 #[test]

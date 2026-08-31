@@ -218,11 +218,21 @@ pub struct ApiTokenView {
     /// `None` until the token first authenticates a request.
     #[serde(default)]
     pub last_used_at: Option<i64>,
+    /// Last 4 characters of the raw token, for the `omni_…xxxx` display
+    /// identifier. `None` on tokens minted before the suffix was recorded.
+    #[serde(default)]
+    pub suffix: Option<String>,
 }
 
 /// Body of `POST /api/auth/api-tokens`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateApiTokenRequest {
+    pub name: String,
+}
+
+/// Body of `PATCH /api/auth/api-tokens/{id}` — the row's Rename action.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenameApiTokenRequest {
     pub name: String,
 }
 

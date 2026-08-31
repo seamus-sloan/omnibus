@@ -105,6 +105,26 @@ fn series_header(s: &SeriesDetail) -> Element {
     }
 }
 
+/// The series card's eyebrow — `"Book #1 · May 2016"`, dropping either half
+/// when it's absent. Only a real date carries the `·` separator: a sentinel or
+/// truly-absent date drops the whole date slot rather than trailing a bare
+/// `· —`, so two equally-dateless books read the same (#2294, #2360).
+fn series_card_eyebrow(book: &EbookMetadata) -> String {
+    let idx = book
+        .series_index
+        .as_deref()
+        .map(|idx| format!("Book #{idx}"));
+    let date = book
+        .published
+        .as_deref()
+        .and_then(crate::format::format_date_month_year_opt);
+    match (idx, date) {
+        (Some(idx), Some(date)) => format!("{idx} \u{b7} {date}"),
+        (Some(part), None) | (None, Some(part)) => part,
+        (None, None) => String::new(),
+    }
+}
+
 /// One book card in the series grid: cover, index/year label, title link, and
 /// an optional description.
 fn series_book_row(book: &EbookMetadata) -> Element {
@@ -119,14 +139,7 @@ fn series_book_row(book: &EbookMetadata) -> Element {
                 }
             }
             div { class: "series-card-info",
-                span { class: "label",
-                    if let Some(ref idx) = book.series_index {
-                        "Book #{idx}"
-                    }
-                    if let Some(ref published) = book.published {
-                        " · {crate::format::format_date_month_year(published)}"
-                    }
-                }
+                span { class: "label", "{series_card_eyebrow(book)}" }
                 h3 { class: "series-card-title",
                     Link {
                         to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
@@ -141,5 +154,46 @@ fn series_book_row(book: &EbookMetadata) -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn book(series_index: Option<&str>, published: Option<&str>) -> EbookMetadata {
+        EbookMetadata {
+            series_index: series_index.map(str::to_string),
+            published: published.map(str::to_string),
+            ..EbookMetadata::default()
+        }
+    }
+
+    #[test]
+    fn eyebrow_pairs_the_index_with_a_real_date() {
+        assert_eq!(
+            series_card_eyebrow(&book(Some("1"), Some("2016-05-02"))),
+            "Book #1 \u{b7} May 2016"
+        );
+    }
+
+    #[test]
+    fn eyebrow_reads_the_same_for_an_absent_and_a_sentinel_date() {
+        // Both dateless books must render "Book #1" with no trailing `· —`
+        // (#2294, #2360) — the whole point is that they agree.
+        let absent = series_card_eyebrow(&book(Some("1"), None));
+        let sentinel = series_card_eyebrow(&book(Some("1"), Some("0101-01-01T00:00:00+00:00")));
+        assert_eq!(absent, "Book #1");
+        assert_eq!(sentinel, "Book #1");
+        assert!(!sentinel.contains('\u{2014}'));
+    }
+
+    #[test]
+    fn eyebrow_drops_the_leading_separator_when_only_a_date_is_present() {
+        assert_eq!(
+            series_card_eyebrow(&book(None, Some("2016-05"))),
+            "May 2016"
+        );
+        assert_eq!(series_card_eyebrow(&book(None, None)), "");
     }
 }

@@ -82,6 +82,69 @@ async fn seed_book_with_file(pool: &SqlitePool, library_id: i64, filename: &str)
     inserted.book_id
 }
 
+/// #2342: the Author axis must key every book on one format. A book with an
+/// OPF `file_as` ("Weir, Andy") and one without (bare display name "Andy
+/// Weir") by the same author used to store two incompatible sort keys — the
+/// with-file_as book surname-first, the other given-first — and scatter to
+/// opposite ends of the list. The write path now derives the surname-first
+/// key from the display name when `file_as` is absent, so both land under one
+/// key and sort adjacently.
+#[tokio::test]
+async fn insert_book_row_keys_author_sort_surname_first_with_and_without_file_as() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let library_id = seed_scan_root(&pool).await;
+
+    let mut with_file_as = indexed(
+        "martian.epub",
+        Some("The Martian"),
+        &["Andy Weir"],
+        &[],
+        None,
+        None,
+    );
+    with_file_as.metadata.creators[0].file_as = Some("Weir, Andy".into());
+    let without_file_as = indexed(
+        "phm.epub",
+        Some("Project Hail Mary"),
+        &["Andy Weir"],
+        &[],
+        None,
+        None,
+    );
+
+    let insert = |b: IndexedBook| {
+        let pool = pool.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            let id = insert_book_row(&mut tx, library_id, "/lib", &b)
+                .await
+                .unwrap()
+                .book_id;
+            tx.commit().await.unwrap();
+            id
+        }
+    };
+    let id_with = insert(with_file_as).await;
+    let id_without = insert(without_file_as).await;
+
+    let author_sort = |id: i64| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT author_sort FROM books WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(author_sort(id_with).await, "Weir, Andy");
+    assert_eq!(
+        author_sort(id_without).await,
+        "Weir, Andy",
+        "a book without file_as must derive the same surname-first key"
+    );
+}
+
 /// COUNT `book_files` rows for one `book_id`.
 async fn book_files_count(pool: &SqlitePool, book_id: i64) -> i64 {
     sqlx::query_scalar("SELECT COUNT(*) FROM book_files WHERE book_id = ?")

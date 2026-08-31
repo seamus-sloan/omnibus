@@ -1,6 +1,12 @@
 // Reading-stats page (/stats): layout, the Week / Month / Year / Lifetime
-// dropdown embedded in the page title, the all-time section's immunity to
-// period changes, and the zero-activity empty state.
+// pills in the windowed band's own header, the standing band's immunity to
+// period changes, the User / Library scope switch, and the zero-activity
+// empty state.
+//
+// The page's load-bearing contract is the windowed / standing split: the pills
+// govern everything under "In this window" and nothing under "Outside the
+// window" or in the hero, and several tests below exist only to hold that
+// line.
 //
 // Sessions are seeded once in beforeAll — before the first /stats visit — so
 // the server-side 60s stats cache never captures an empty summary for the
@@ -30,12 +36,38 @@ const DONUT_GENRE = "Stats Spec Gothic";
 /** Late-2023 anchor: inside Lifetime, outside the week/month/year windows. */
 const OLD_SESSION_AT = 1_700_000_000;
 
-/** Open the in-title period dropdown and return its dialog locator. */
-async function openPeriodMenu(page: Page) {
-  await page.getByTestId("stats-range-trigger").click();
-  const menu = page.getByRole("dialog", { name: "Period" });
-  await expect(menu).toBeVisible();
-  return menu;
+/** The period pill for one range — they live in the windowed band's header. */
+function periodPill(page: Page, range: "week" | "month" | "year" | "all_time") {
+  return page.getByTestId(`stats-range-${range}`);
+}
+
+/**
+ * Switch the window and wait for the refetch it triggers, so a caller can
+ * assert against the new summary rather than racing the old one.
+ */
+async function selectPeriod(
+  page: Page,
+  range: "week" | "month" | "year" | "all_time",
+) {
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/stats",
+      // The testid *is* the wire name (`StatsRange::as_query`), so the pill
+      // and the request it fires can't drift apart.
+      expectedBody: { range },
+      expectedStatus: 200,
+    },
+    async () => periodPill(page, range).click(),
+  );
+  await expect(periodPill(page, range)).toHaveAttribute("aria-pressed", "true");
+}
+
+/** Move to the Library scope, where the shelf's own figures live. */
+async function openLibraryScope(page: Page) {
+  await page.getByTestId("stats-scope-tab-library").click();
+  await expect(page.getByTestId("stats-scope-library")).toBeVisible();
 }
 
 test.beforeAll(async ({ request }) => {
@@ -106,52 +138,47 @@ test("renders the stats page layout", async ({ page }) => {
   await expect(page).toHaveURL(/\/stats$/);
   await page.waitForLoadState("networkidle");
 
-  // Title carries the default period word (Month is the default range).
-  await expect(
-    page.getByRole("heading", { name: "Your reading month" }),
-  ).toBeVisible();
+  // The hero leads with the run the reader is on — a standing figure, above
+  // the switcher entirely.
+  await expect(page.getByTestId("stats-hero")).toBeVisible();
+  await expect(page.getByTestId("stats-current-streak")).toContainText(/\d/);
 
-  // The title's period word opens the dropdown, which offers all four
-  // periods with Month pre-selected.
-  const menu = await openPeriodMenu(page);
-  for (const label of ["Week", "Month", "Year", "Lifetime"]) {
-    await expect(menu.getByRole("button", { name: label })).toBeVisible();
+  // The scope switch, then the windowed band with its own pills. All four
+  // periods are offered, Month pre-selected (the default range).
+  await expect(page.getByTestId("stats-scope-switch")).toBeVisible();
+  await expect(page.getByTestId("stats-scope-user")).toBeVisible();
+  for (const range of ["week", "month", "year", "all_time"] as const) {
+    await expect(periodPill(page, range)).toBeVisible();
   }
-  await expect(menu.getByRole("button", { name: "Month" })).toHaveAttribute(
+  await expect(periodPill(page, "month")).toHaveAttribute(
     "aria-pressed",
     "true",
   );
+  // The pills sit under a label that says what they govern, and beside a
+  // window label that says what the current one covers.
+  await expect(page.getByTestId("stats-window-head")).toContainText(
+    "In this window",
+  );
+  await expect(page.getByTestId("stats-window-label")).toContainText(
+    /month to date$/,
+  );
 
-  // The scrim dismisses it without changing the period.
-  await page.getByTestId("stats-range-scrim").click();
-  await expect(menu).toHaveCount(0);
-  await expect(
-    page.getByRole("heading", { name: "Your reading month" }),
-  ).toBeVisible();
-
-  // ESC dismisses it too (the menu takes focus on mount), also without
-  // changing the period.
-  const reopened = await openPeriodMenu(page);
-  await reopened.press("Escape");
-  await expect(reopened).toHaveCount(0);
-  await expect(
-    page.getByRole("heading", { name: "Your reading month" }),
-  ).toBeVisible();
-
-  // Period-scoped section above, explicitly divided all-time section below.
   await expect(page.getByTestId("stats-period-section")).toBeVisible();
-  // The time-pattern card renders in both its states (strips or the
+  // The reading clock renders in both its states (the dial or the
   // no-local-time note), so its presence is structural.
   await expect(page.getByTestId("stats-when")).toBeVisible();
-  // The strips are the live end of the whole local-time path — the seeded
+  // The dial is the live end of the whole local-time path — the seeded
   // reports' `utc_offset_minutes` reaching the session column, the shifted
   // rollup, and the wire fields. Every other assertion in this file mocks
   // `/api/rpc/stats`, so without this one a serde rename or a dropped bind
   // would leave the suite green with the card stuck in its empty state.
   await expect(page.getByTestId("stats-when-empty")).toHaveCount(0);
-  await expect(page.getByTestId("stats-when-hours")).toBeVisible();
+  await expect(page.getByTestId("stats-clock-dial")).toBeVisible();
   await expect(page.getByTestId("stats-when-weekdays")).toBeVisible();
-  await expect(page.getByText("Not tied to the period above.")).toBeVisible();
+
+  // The standing band is labelled by what the pills *can't* reach, and
+  // carries no accent rule of its own — the absence is the signal.
+  await expect(page.getByText("Outside the window")).toBeVisible();
   await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
 });
 
@@ -235,9 +262,10 @@ test("a tile's grip opens its drill-in and the close button dismisses it", async
   await expect(drillIn).toHaveCount(0);
 
   // The selected period is untouched by opening/closing (AC4).
-  await expect(
-    page.getByRole("heading", { name: "Your reading month" }),
-  ).toBeVisible();
+  await expect(periodPill(page, "month")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 });
 
 test("the Avg rating drill-in charts every half-star bucket on a star axis", async ({
@@ -456,39 +484,30 @@ test("the Finished drill-in lists the books completed in the window", async ({
   await expect(page.getByTestId("stats-drill-in")).toHaveCount(0);
 });
 
-test("switching the period re-queries and updates the period section", async ({
+test("switching the period re-queries and relabels the window", async ({
   page,
 }) => {
   await gotoReady(page, "/stats");
-  const menu = await openPeriodMenu(page);
 
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/stats",
-      expectedBody: { range: "week" },
-      expectedStatus: 200,
-    },
-    async () => menu.getByRole("button", { name: "Week" }).click(),
+  await selectPeriod(page, "week");
+
+  // The window label follows the pills — it is the sentence that says what
+  // "this window" currently means.
+  await expect(page.getByTestId("stats-window-label")).toContainText(
+    /^Week of \d{1,2} \w{3} \d{4} · to date$/,
   );
-
-  // Picking a period closes the menu and rewrites the title.
-  await expect(menu).toHaveCount(0);
-  await expect(
-    page.getByRole("heading", { name: "Your reading week" }),
-  ).toBeVisible();
-
-  // Reopening shows the new selection.
-  const reopened = await openPeriodMenu(page);
-  await expect(reopened.getByRole("button", { name: "Week" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await expect(reopened.getByRole("button", { name: "Month" })).toHaveAttribute(
+  await expect(periodPill(page, "month")).toHaveAttribute(
     "aria-pressed",
     "false",
   );
+
+  // Lifetime has no previous window, so every tile drops its comparison
+  // rather than measuring against a zero nobody recorded.
+  await selectPeriod(page, "all_time");
+  await expect(page.getByTestId("stats-window-label")).toContainText(
+    "Everything you have tracked",
+  );
+  await expect(page.getByTestId("stats-tile-finished-delta")).toHaveCount(0);
 });
 
 test("the heatmap and genre donut render from seeded activity", async ({
@@ -496,21 +515,19 @@ test("the heatmap and genre donut render from seeded activity", async ({
 }) => {
   await gotoReady(page, "/stats");
 
-  // Heatmap: trailing-year grid with both streak figures in the card header
-  // and at least one active cell — keyed off the cell tooltip ("… on
-  // YYYY-MM-DD", which only active cells carry) rather than the intensity CSS
-  // classes.
+  // Heatmap: trailing-year grid with the coverage figures and the record in
+  // its header, and at least one active cell — keyed off the cell tooltip
+  // ("… on YYYY-MM-DD", which only active cells carry) rather than the
+  // intensity CSS classes.
   const heatmap = page.getByTestId("stats-heatmap");
   await expect(heatmap).toBeVisible();
-  // Both figures are asserted by label, not by value: the shared fixture's
-  // sessions are seeded at fixed timestamps, so whether a run is live depends
-  // on when the suite runs.
-  await expect(page.getByTestId("stats-current-streak")).toContainText(
-    "Current streak",
+  await expect(page.getByTestId("stats-days-read")).toContainText("days read");
+  // The record stands here; the run the reader is *on* leads the hero, and a
+  // second copy two bands apart is where two surfaces start to disagree.
+  await expect(heatmap.getByTestId("stats-longest-streak")).toContainText(
+    "best run",
   );
-  await expect(page.getByTestId("stats-longest-streak")).toContainText(
-    "Longest streak",
-  );
+  await expect(heatmap.getByTestId("stats-current-streak")).toHaveCount(0);
   expect(await heatmap.locator('[title*=" on "]').count()).toBeGreaterThan(0);
 
   // Donut: the seeded genre appears in the legend with a percentage; the
@@ -527,15 +544,12 @@ test("the heatmap and genre donut render from seeded activity", async ({
     /^\+\d+ books? without a genre$/,
   );
 
-  // Format split: both seeded formats appear with percentages.
-  const split = page.getByTestId("stats-format-split");
+  // The read-vs-listened split rides the same card's foot: the ring says what
+  // was read and the bars say how, and splitting them across two cards left a
+  // reader comparing them to answer one question.
+  const split = donut.getByTestId("stats-format-split");
   await expect(split).toContainText("Read");
   await expect(split).toContainText("Listened");
-
-  // Length split: the card is present either way. Which bars it draws depends
-  // on what the shared fixture user has finished this month, so this asserts
-  // only that the surface renders one of its two states.
-  await expect(page.getByTestId("stats-length-split")).toBeVisible();
 });
 
 test("the length distribution buckets finished books and never hides the unknown ones", async ({
@@ -574,6 +588,9 @@ test("the length distribution buckets finished books and never hides the unknown
 
   await gotoReady(page, "/stats");
 
+  // How long the finished books were is a fact *about* the Finished tile, not
+  // a peer of it, so it lives inside that tile's drill-in.
+  await page.getByTestId("stats-tile-finished").click();
   const card = page.getByTestId("stats-length-split");
   await expect(card).toBeVisible();
   // Every bucket the server sent is rendered, including the empty one and —
@@ -597,7 +614,7 @@ test("the books-per-month chart renders twelve bars with the current month highl
   const bars = chart.getByTestId("stats-monthly-bar");
   await expect(bars).toHaveCount(12);
   // The trailing (current) month is the last bar and carries the highlight.
-  await expect(bars.last()).toHaveClass(/st-mo-current/);
+  await expect(bars.last()).toHaveClass(/current/);
 });
 
 test("the library-size card states each total with its coverage", async ({
@@ -619,32 +636,25 @@ test("the library-size card states each total with its coverage", async ({
     }),
   );
   await gotoReady(page, "/stats");
+  await openLibraryScope(page);
 
   const card = page.getByTestId("stats-library-size");
   await expect(card).toBeVisible();
+  // The scope reads as a sentence before it reads as figures.
+  await expect(card).toContainText("1,510 books.");
+  await expect(card).toContainText("412 million words");
   await expect(card).toContainText("412M");
   await expect(card).toContainText("1.6M");
   // Never a bare total: the denominator is what makes the number a fact.
   await expect(card).toContainText("across 1,204 of 1,510 books");
   await expect(card.getByTestId("stats-library-figure")).toHaveCount(2);
 
-  // It sits in the all-time section, so it must not move with the switcher.
-  const before = await card.textContent();
-  const menu = await openPeriodMenu(page);
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/stats",
-      expectedBody: { range: "week" },
-      expectedStatus: 200,
-    },
-    async () => menu.getByRole("button", { name: "Week" }).click(),
+  // The scope switch says these figures are the shelf's, not the reader's —
+  // and the pills are absent here rather than present and inert.
+  await expect(page.getByTestId("stats-scope-switch")).toContainText(
+    "not period-scoped",
   );
-  await expect(
-    page.getByRole("heading", { name: "Your reading week" }),
-  ).toBeVisible();
-  await expect.poll(() => card.textContent()).toBe(before);
+  await expect(periodPill(page, "week")).toHaveCount(0);
 });
 
 test("a library measured for nothing renders no size card at all", async ({
@@ -658,10 +668,11 @@ test("a library measured for nothing renders no size card at all", async ({
     }),
   );
   await gotoReady(page, "/stats");
+  await openLibraryScope(page);
 
   // Three zeroes would read as a claim about the collection rather than about
   // the backfill.
-  await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
+  await expect(page.getByTestId("stats-scope-library")).toBeVisible();
   await expect(page.getByTestId("stats-library-size")).toHaveCount(0);
 });
 
@@ -715,12 +726,16 @@ test("the library-composition card states each dimension with its coverage", asy
     }),
   );
   await gotoReady(page, "/stats");
+  await openLibraryScope(page);
 
   const card = page.getByTestId("stats-library-composition");
   await expect(card).toBeVisible();
-  // Named apart from the period-scoped "How you consumed them" split, which
-  // is read-vs-listened seconds rather than the shelf's own format mix.
-  await expect(card).toContainText("What your library is made of");
+  // Each panel titles itself; the scope switch above them already says these
+  // are the shelf's figures, so a section heading would be a third statement
+  // of the same thing.
+  for (const title of ["Formats", "Languages", "Publishers", "Genres"]) {
+    await expect(card).toContainText(title);
+  }
   await expect(card.getByTestId("stats-composition-formats")).toContainText(
     "EPUB",
   );
@@ -737,27 +752,9 @@ test("the library-composition card states each dimension with its coverage", asy
     "+70 books held in more than one format",
   );
   // Ghosted rows are named rather than left to make the bars not add up.
-  await expect(card.getByTestId("stats-composition-ghosted")).toContainText(
+  await expect(page.getByTestId("stats-composition-ghosted")).toContainText(
     "4 books excluded",
   );
-
-  // It sits in the all-time section, so it must not move with the switcher.
-  const before = await card.textContent();
-  const menu = await openPeriodMenu(page);
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/stats",
-      expectedBody: { range: "week" },
-      expectedStatus: 200,
-    },
-    async () => menu.getByRole("button", { name: "Week" }).click(),
-  );
-  await expect(
-    page.getByRole("heading", { name: "Your reading week" }),
-  ).toBeVisible();
-  await expect.poll(() => card.textContent()).toBe(before);
 });
 
 test("a composition dimension with no data renders an empty state, not an empty chart", async ({
@@ -771,6 +768,7 @@ test("a composition dimension with no data renders an empty state, not an empty 
     }),
   );
   await gotoReady(page, "/stats");
+  await openLibraryScope(page);
 
   const publishers = page.getByTestId("stats-composition-publishers");
   await expect(publishers).toContainText("No publisher metadata yet.");
@@ -794,35 +792,31 @@ test("a library with nothing to describe renders no composition card at all", as
   const answered = page.waitForResponse("**/api/rpc/library-composition");
   await gotoReady(page, "/stats");
   await answered;
+  await openLibraryScope(page);
 
-  await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
+  await expect(page.getByTestId("stats-scope-library")).toBeVisible();
   await expect(page.getByTestId("stats-library-composition")).toHaveCount(0);
 });
 
-test("the all-time section does not change with the switcher", async ({
+test("the standing band and the hero do not change with the switcher", async ({
   page,
 }) => {
+  // The load-bearing contract: the pills govern the windowed band and nothing
+  // else. A regression here is the whole redesign undone.
   await gotoReady(page, "/stats");
-  const allTime = page.getByTestId("stats-heatmap");
-  await expect(allTime).toBeVisible();
-  const before = await allTime.textContent();
+  const standing = page.getByTestId("stats-alltime-section");
+  const hero = page.getByTestId("stats-hero");
+  await expect(standing).toBeVisible();
+  const standingBefore = await standing.textContent();
+  const heroBefore = await hero.textContent();
 
-  const menu = await openPeriodMenu(page);
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/stats",
-      expectedBody: { range: "year" },
-      expectedStatus: 200,
-    },
-    async () => menu.getByRole("button", { name: "Year" }).click(),
+  await selectPeriod(page, "year");
+
+  await expect(page.getByTestId("stats-window-label")).toContainText(
+    "year to date",
   );
-
-  await expect(
-    page.getByRole("heading", { name: "Your reading year" }),
-  ).toBeVisible();
-  await expect.poll(() => allTime.textContent()).toBe(before);
+  await expect.poll(() => standing.textContent()).toBe(standingBefore);
+  await expect.poll(() => hero.textContent()).toBe(heroBefore);
 });
 
 test("a user with no activity sees the friendly empty state", async ({
@@ -859,6 +853,9 @@ test("a user with no activity sees the friendly empty state", async ({
   await expect(page.getByText("No reading activity yet")).toBeVisible();
   await expect(page.getByTestId("stats-period-section")).toHaveCount(0);
   await expect(page.getByTestId("stats-alltime-section")).toHaveCount(0);
+  // The hero stays: the goals are set from it, and a reader with no activity
+  // is exactly who wants to set one.
+  await expect(page.getByTestId("stats-hero")).toBeVisible();
 });
 
 /**
@@ -885,11 +882,11 @@ function summaryWith(extra: Record<string, unknown>) {
   };
 }
 
-test("the time-pattern card charts every local hour and weekday", async ({
+test("the reading clock draws every local hour and names the peak", async ({
   page,
 }) => {
   // Route-mocked so the buckets are pinned: the suite shares one server and
-  // one user, and any other spec posting a session moves these bars.
+  // one user, and any other spec posting a session moves these ticks.
   const hours = Array.from({ length: 24 }, (_, hour) => ({
     hour,
     seconds: hour === 21 ? 15120 : hour === 9 ? 3600 : 0,
@@ -917,34 +914,46 @@ test("the time-pattern card charts every local hour and weekday", async ({
 
   await gotoReady(page, "/stats");
 
-  // All 24 columns render, quiet hours included — the shape of a day is the
-  // information, so an omitted hour would misdescribe it. Every third one is
-  // labelled; the rest keep their place with a blank label.
-  const hourStrip = page.getByTestId("stats-when-hours");
-  await expect(hourStrip).toBeVisible();
-  const hourLabels = hourStrip.getByTestId("stats-when-col-label");
-  await expect(hourLabels).toHaveCount(24);
-  await expect
-    .poll(() => hourLabels.allInnerTexts().then((t) => t.filter(Boolean)))
-    .toEqual(["00", "03", "06", "09", "12", "15", "18", "21"]);
-  // The magnitude nobody can read off a bar rides the hover title, as a
-  // clock time rather than a bare number.
-  await expect(hourStrip.locator('[title="21:00 · 4h 12m"]')).toBeVisible();
+  // All 24 ticks render, quiet hours included — the shape of a day is the
+  // information, so an omitted hour would misdescribe it.
+  const dial = page.getByTestId("stats-clock-dial");
+  await expect(dial).toBeVisible();
+  await expect(dial.locator(".st-clock-tick")).toHaveCount(24);
+  // The peak is derived, and reads as a clock time rather than an index. An
+  // all-zero window has none, which the next test pins.
+  await expect(page.getByTestId("stats-clock-peak")).toHaveText("9pm");
+  // The sentence beside the dial names the part of the day, not just a number.
+  // 9pm is the last hour of the evening band, so this window is an evening
+  // one — the late band starts at 10.
+  await expect(page.getByTestId("stats-clock-line")).toContainText(
+    "Evenings are yours",
+  );
 
   // Weekdays are the server's own labels in the server's own order — the web
   // never decides where the week starts.
   const dayStrip = page.getByTestId("stats-when-weekdays");
   await expect
-    .poll(() => dayStrip.getByTestId("stats-when-col-label").allInnerTexts())
+    .poll(() => dayStrip.locator(".st-day-label").allInnerTexts())
     .toEqual(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
-  await expect(dayStrip.locator('[title="Sun · 4h 12m"]')).toBeVisible();
+  // A day with nothing on it reads as an absence, never as a measured zero.
+  await expect
+    .poll(() => dayStrip.locator(".st-day-readout").allInnerTexts())
+    .toEqual([
+      "\u2014",
+      "\u2014",
+      "\u2014",
+      "\u2014",
+      "\u2014",
+      "\u2014",
+      "4h 12m",
+    ]);
 
   // Activity the server couldn't place on a local clock is disclosed, not
   // folded into a UTC hour.
   await expect(page.getByTestId("stats-when-unzoned")).toContainText("4h 12m");
 });
 
-test("the time-pattern card says so rather than drawing flat bars", async ({
+test("the reading clock says so rather than drawing an empty dial", async ({
   page,
 }) => {
   // A window whose sessions all predate capture-time timezones: the strips are
@@ -976,140 +985,23 @@ test("the time-pattern card says so rather than drawing flat bars", async ({
   await gotoReady(page, "/stats");
 
   await expect(page.getByTestId("stats-when-empty")).toBeVisible();
-  await expect(page.getByTestId("stats-when-hours")).toHaveCount(0);
+  await expect(page.getByTestId("stats-clock-dial")).toHaveCount(0);
+  // No peak hour is an em-dash, never midnight: the first maximum of a row of
+  // zeros is index 0, and reporting it would invent a habit.
+  await expect(page.getByTestId("stats-clock-peak")).toHaveCount(0);
   await expect(page.getByTestId("stats-when-unzoned")).toContainText("5h 12m");
 });
 
 /**
- * Reset the shared user's annual goal so the goal tests start from the
- * invitation state. The REST write invalidates that user's stats cache, so the
- * page reads the cleared value immediately rather than after the TTL.
+ * Reset every goal so the read-only assertions below start from a known
+ * state. The REST writes invalidate this user's stats cache, so the page reads
+ * the cleared values immediately rather than after the TTL.
  */
-async function clearReadingGoal(request: APIRequestContext) {
-  const resp = await request.put("/api/stats/goal", {
+async function clearAllGoals(request: APIRequestContext) {
+  const annual = await request.put("/api/stats/goal", {
     data: { target: null },
   });
-  expect(resp.status(), "clearing the reading goal failed").toBe(200);
-}
-
-test("the annual goal band invites, saves, persists, and clears", async ({
-  page,
-  request,
-}) => {
-  await clearReadingGoal(request);
-  await gotoReady(page, "/stats");
-
-  // AC4: no goal is an invitation, never a zero-of-zero bar.
-  const band = page.getByTestId("stats-goal");
-  await expect(band).toBeVisible();
-  await expect(page.getByTestId("stats-goal-invite")).toBeVisible();
-  await expect(page.getByTestId("stats-goal-progress")).toHaveCount(0);
-
-  await page.getByTestId("stats-goal-edit").click();
-  await page.getByTestId("stats-goal-input").fill("24");
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/stats-goal",
-      expectedBody: { update: { target: 24 } },
-      expectedStatus: 200,
-    },
-    async () => page.getByTestId("stats-goal-save").click(),
-  );
-
-  // AC5: the saved target is on screen straight away, not after the 60s
-  // stats cache TTL.
-  await expect(page.getByTestId("stats-goal-figure")).toContainText(
-    /of 24 books/,
-  );
-  await expect(page.getByTestId("stats-goal-progress")).toHaveAttribute(
-    "aria-valuemax",
-    "24",
-  );
-
-  // AC1: it survives a fresh page load.
-  await gotoReady(page, "/stats");
-  await expect(page.getByTestId("stats-goal-figure")).toContainText(
-    /of 24 books/,
-  );
-
-  // AC3: the band is annual, so the period switcher must not move it.
-  const before = await band.textContent();
-  const menu = await openPeriodMenu(page);
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/stats",
-      expectedBody: { range: "week" },
-      expectedStatus: 200,
-    },
-    async () => menu.getByRole("button", { name: "Week" }).click(),
-  );
-  await expect(
-    page.getByRole("heading", { name: "Your reading week" }),
-  ).toBeVisible();
-  await expect.poll(() => band.textContent()).toBe(before);
-
-  // Clearing drops the row rather than storing a zero target, so the
-  // invitation comes back.
-  await page.getByTestId("stats-goal-edit").click();
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/stats-goal",
-      expectedBody: { update: {} },
-      expectedStatus: 200,
-    },
-    async () => page.getByTestId("stats-goal-clear").click(),
-  );
-  await expect(page.getByTestId("stats-goal-invite")).toBeVisible();
-  await expect(page.getByTestId("stats-goal-progress")).toHaveCount(0);
-});
-
-test("a failed goal save surfaces the error and leaves the goal unset", async ({
-  page,
-  request,
-}) => {
-  await clearReadingGoal(request);
-  await page.route("**/api/rpc/stats-goal", (route) =>
-    route.fulfill({
-      status: 500,
-      contentType: "text/plain",
-      body: "goal write failed",
-    }),
-  );
-
-  await gotoReady(page, "/stats");
-  await page.getByTestId("stats-goal-edit").click();
-  await page.getByTestId("stats-goal-input").fill("12");
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/stats-goal",
-      expectedBody: { update: { target: 12 } },
-      expectedStatus: 500,
-    },
-    async () => page.getByTestId("stats-goal-save").click(),
-  );
-
-  await expect(page.getByTestId("stats-goal-error")).toBeVisible();
-  // The band stays in its pre-save state — no optimistic bar for a write the
-  // server rejected.
-  await expect(page.getByTestId("stats-goal-invite")).toBeVisible();
-  await expect(page.getByTestId("stats-goal-progress")).toHaveCount(0);
-});
-
-/**
- * Reset both of the shared user's daily goals so the daily tests start from
- * the no-target state. Same reasoning as {@link clearReadingGoal}: the REST
- * write invalidates that user's stats cache, so the page reads the cleared
- * value immediately rather than after the TTL.
- */
-async function clearDailyGoals(request: APIRequestContext) {
+  expect(annual.status(), "clearing the reading goal failed").toBe(200);
   for (const kind of ["pages", "minutes"]) {
     const resp = await request.put("/api/stats/goal/daily", {
       data: { kind, target: null },
@@ -1118,174 +1010,76 @@ async function clearDailyGoals(request: APIRequestContext) {
   }
 }
 
-test("a daily goal row invites, saves, persists, and clears", async ({
+test("the stats page reports goals but never edits them", async ({
   page,
   request,
 }) => {
-  await clearDailyGoals(request);
+  // Goals are account configuration and all three are set together in
+  // Settings → Account. The page that *reports* them must not grow an editor
+  // back: that split is the whole reason there is one Edit button.
+  await request.put("/api/stats/goal", { data: { target: 24 } });
+  await request.put("/api/stats/goal/daily", {
+    data: { kind: "pages", target: 30 },
+  });
   await gotoReady(page, "/stats");
 
-  // No target is an invitation, never a zero-of-zero bar — the same contract
-  // the annual band holds to.
-  await expect(page.getByTestId("stats-daily-goals")).toBeVisible();
-  await expect(page.getByTestId("stats-daily-pages-invite")).toBeVisible();
-  await expect(page.getByTestId("stats-daily-pages-progress")).toHaveCount(0);
-
-  await page.getByTestId("stats-daily-pages-edit").click();
-  await page.getByTestId("stats-daily-pages-input").fill("30");
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/stats-goal-daily",
-      expectedBody: { update: { kind: "pages", target: 30 } },
-      expectedStatus: 200,
-    },
-    async () => page.getByTestId("stats-daily-pages-save").click(),
+  await expect(page.getByTestId("stats-goal-figure")).toContainText(
+    /of 24 books/,
   );
-
-  await expect(page.getByTestId("stats-daily-pages-figure")).toContainText(
-    /of 30 pages/,
-  );
-  await expect(page.getByTestId("stats-daily-pages-progress")).toHaveAttribute(
+  await expect(page.getByTestId("stats-goal-progress")).toHaveAttribute(
     "aria-valuemax",
-    "30",
+    "24",
   );
-
-  // The other kind is untouched by a write naming only this one.
-  await expect(page.getByTestId("stats-daily-minutes-invite")).toBeVisible();
-
-  // And it survives a reload, so the target really was stored.
-  await gotoReady(page, "/stats");
   await expect(page.getByTestId("stats-daily-pages-figure")).toContainText(
     /of 30 pages/,
   );
-
-  await page.getByTestId("stats-daily-pages-edit").click();
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/stats-goal-daily",
-      expectedBody: { update: { kind: "pages" } },
-      expectedStatus: 200,
-    },
-    async () => page.getByTestId("stats-daily-pages-clear").click(),
+  // The untargeted kind still reports today's figure — a readout, not a goal —
+  // and carries its own timeframe, since the card header has moved to "Every
+  // day" for the targeted row's sake.
+  await expect(page.getByTestId("stats-daily-minutes-today")).toBeVisible();
+  await expect(page.getByTestId("stats-daily-goals")).toContainText(
+    "Minutes today",
   );
-  await expect(page.getByTestId("stats-daily-pages-invite")).toBeVisible();
+
+  for (const gone of [
+    "stats-goal-edit",
+    "stats-goal-input",
+    "stats-goal-save",
+    "stats-daily-pages-edit",
+    "stats-daily-minutes-edit",
+  ]) {
+    await expect(page.getByTestId(gone)).toHaveCount(0);
+  }
+});
+
+test("with no goals the hero reports the real figures and links to the editor", async ({
+  page,
+  request,
+}) => {
+  await clearAllGoals(request);
+  await gotoReady(page, "/stats");
+
+  // No target means no ring and no bar — both are claims a target makes — but
+  // the figures behind them are still worth showing, so the reader can see
+  // where they stand before committing to anything.
+  await expect(page.getByTestId("stats-goal-progress")).toHaveCount(0);
+  await expect(page.getByTestId("stats-goal-year-to-date")).toBeVisible();
+  await expect(page.getByTestId("stats-daily-pages-today")).toBeVisible();
+  await expect(page.getByTestId("stats-daily-minutes-today")).toBeVisible();
   await expect(page.getByTestId("stats-daily-pages-progress")).toHaveCount(0);
-});
 
-test("the two daily kinds are bounded independently", async ({
-  page,
-  request,
-}) => {
-  await clearDailyGoals(request);
-  await gotoReady(page, "/stats");
-
-  // 1,440 is every minute in a day, so a bigger minutes target is refused in
-  // the field — no request leaves the page.
-  await page.getByTestId("stats-daily-minutes-edit").click();
-  await page.getByTestId("stats-daily-minutes-input").fill("1500");
-  await page.getByTestId("stats-daily-minutes-save").click();
-  await expect(page.getByTestId("stats-daily-minutes-error")).toContainText(
-    "1440",
-  );
-  await expect(page.getByTestId("stats-daily-minutes-progress")).toHaveCount(0);
-
-  // The same number is a legal day of pages, and the pages field takes it.
-  await page.getByTestId("stats-daily-minutes-cancel").click();
-  await page.getByTestId("stats-daily-pages-edit").click();
-  await page.getByTestId("stats-daily-pages-input").fill("1500");
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/stats-goal-daily",
-      expectedBody: { update: { kind: "pages", target: 1500 } },
-      expectedStatus: 200,
-    },
-    async () => page.getByTestId("stats-daily-pages-save").click(),
-  );
-  await expect(page.getByTestId("stats-daily-pages-figure")).toContainText(
-    /of 1500 pages/,
+  // Each label says its timeframe exactly once: the annual kicker carries the
+  // year, and the daily card's header carries "Today" so its rows don't.
+  const hero = page.getByTestId("stats-hero");
+  await expect(hero).toContainText(/\d{4} so far/);
+  await expect(hero).not.toContainText("This year");
+  await expect(page.getByTestId("stats-daily-goals")).not.toContainText(
+    "Pages a day",
   );
 
-  await clearDailyGoals(request);
-});
-
-test("a failed daily goal save surfaces the error and leaves the row unset", async ({
-  page,
-  request,
-}) => {
-  await clearDailyGoals(request);
-  await page.route("**/api/rpc/stats-goal-daily", (route) =>
-    route.fulfill({
-      status: 500,
-      contentType: "text/plain",
-      body: "daily goal write failed",
-    }),
-  );
-
-  await gotoReady(page, "/stats");
-  await page.getByTestId("stats-daily-minutes-edit").click();
-  await page.getByTestId("stats-daily-minutes-input").fill("20");
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/stats-goal-daily",
-      expectedBody: { update: { kind: "minutes", target: 20 } },
-      expectedStatus: 500,
-    },
-    async () => page.getByTestId("stats-daily-minutes-save").click(),
-  );
-
-  await expect(page.getByTestId("stats-daily-minutes-error")).toBeVisible();
-  // No optimistic bar for a write the server rejected.
-  await expect(page.getByTestId("stats-daily-minutes-invite")).toBeVisible();
-  await expect(page.getByTestId("stats-daily-minutes-progress")).toHaveCount(0);
-});
-
-test("the session log lists stitched sittings under the aggregates", async ({
-  page,
-}) => {
-  await gotoReady(page, "/stats");
-
-  const log = page.getByTestId("session-log");
-  await expect(log).toBeVisible();
-  await expect(log.getByRole("heading", { name: "Session log" })).toBeVisible();
-
-  // The list arrives from its own post-mount fetch, so poll rather than
-  // asserting against the first paint.
-  const rows = page.getByTestId("session-log-row");
-  await expect.poll(() => rows.count()).toBeGreaterThan(0);
-
-  // AC2 — book, start time, format, and length on every row. Asserted by
-  // shape: other specs share this user and add sittings of their own, and the
-  // arithmetic is pinned by the db::stats unit tests.
-  const first = rows.first();
-  await expect(first).toContainText(/\d{4}/); // the year in the start stamp
-  await expect(first).toContainText(/Read|Listened/);
-  await expect(first).toContainText(/\d+(h|m)/);
-
-  // AC3 (the stitch itself) is pinned by the db::stats::sessions unit tests,
-  // not here: this is the user-wide log for a user every other spec also
-  // records sittings against, so any one seeded sitting can be pushed off the
-  // newest page by a parallel spec and must not be asserted by identity.
-  await expect(page.getByTestId("session-log-empty")).toHaveCount(0);
-});
-
-test("a failed session-log fetch surfaces an error without blanking the page", async ({
-  page,
-}) => {
-  await page.route("**/api/rpc/stats/sessions", (route) =>
-    route.fulfill({ status: 500, body: "boom" }),
-  );
-
-  await gotoReady(page, "/stats");
-  await expect(page.getByTestId("session-log-error")).toBeVisible();
-  await expect(page.getByTestId("session-log-row")).toHaveCount(0);
-  // The aggregates above it are unaffected — the log is its own read.
-  await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
+  // Both halves link to the one place goals are set.
+  await expect(page.getByTestId("stats-daily-set-link")).toBeVisible();
+  await page.getByTestId("stats-goal-set-link").click();
+  await expect(page).toHaveURL(/\/settings/);
+  await expect(page.getByTestId("account-goals-card")).toBeVisible();
 });

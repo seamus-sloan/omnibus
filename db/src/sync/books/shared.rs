@@ -14,7 +14,7 @@ use crate::helpers::{
     cleaned_series_name, mint_uuid, resolved_series_index, sanitize_accent_color, scan_key_for,
     split_filename, stable_uuid,
 };
-use crate::normalize::{normalize_author, normalize_title};
+use crate::normalize::{author_sort_key, normalize_author, normalize_title};
 use crate::sort_keys::series_sort_value;
 use crate::taxonomy::{
     resolve_or_insert_language, resolve_or_insert_publisher, resolve_or_insert_series_with_aliases,
@@ -252,11 +252,14 @@ async fn update_book_row(
     let scan_key = scan_key_for(&m.filename);
     let title = m.display_title();
     let series_index_num = resolved_series_index(m);
+    // With no OPF `file_as`, derive a surname-first key from the display name
+    // rather than storing the given-first name, so the Author axis keys every
+    // book the same way (#2342).
     let author_sort = m
         .creators
         .first()
         .and_then(|c| c.file_as.clone())
-        .or_else(|| m.creators.first().map(|c| c.name.clone()));
+        .or_else(|| m.creators.first().map(|c| author_sort_key(&c.name)));
     let has_cover = i64::from(b.cover.is_some());
 
     sqlx::query(
@@ -316,11 +319,14 @@ pub(super) async fn insert_book_row(
     let (book_path, file_stem, file_ext) = split_filename(&m.filename);
     let title = m.display_title();
     let series_index_num = resolved_series_index(m);
+    // With no OPF `file_as`, derive a surname-first key from the display name
+    // rather than storing the given-first name, so the Author axis keys every
+    // book the same way (#2342).
     let author_sort = m
         .creators
         .first()
         .and_then(|c| c.file_as.clone())
-        .or_else(|| m.creators.first().map(|c| c.name.clone()));
+        .or_else(|| m.creators.first().map(|c| author_sort_key(&c.name)));
     let has_cover = i64::from(b.cover.is_some());
 
     let book_id = sqlx::query_scalar::<_, i64>(

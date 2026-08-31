@@ -15,8 +15,9 @@ mod token;
 mod users;
 
 pub use api_token::{
-    create_api_token, list_api_tokens_for_user, lookup_api_token, revoke_api_token_for_user,
-    ApiToken, NewApiToken, API_TOKEN_PREFIX, LIST_API_TOKENS_LIMIT, MAX_API_TOKEN_NAME_CHARS,
+    create_api_token, list_api_tokens_for_user, lookup_api_token, rename_api_token_for_user,
+    revoke_api_token_for_user, ApiToken, NewApiToken, API_TOKEN_PREFIX, LIST_API_TOKENS_LIMIT,
+    MAX_API_TOKEN_NAME_CHARS,
 };
 pub use avatars::{
     backfill_avatar_thumbs, delete_user_avatar, get_user_avatar, get_user_avatar_variant,

@@ -3,13 +3,36 @@
 //! one `#[tool_router(router = …)]` impl block per family; this module owns
 //! the struct, the router combination, and the `ServerHandler` glue.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use base64::Engine as _;
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
+use rmcp::model::{Icon, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool_handler, ErrorData, ServerHandler};
 
 use crate::client::{ClientError, OmnibusClient};
+
+/// The Omnibus stoat mark (a vendored copy of `frontend/assets/
+/// omnibus-stoat.png` — in-crate so `cargo package` works), embedded at
+/// compile time. A `data:` URI is the one icon source that works on both
+/// transports: stdio has no origin to serve from, and `/mcp`'s bearer gate
+/// would block a client UI's anonymous fetch.
+const STOAT_PNG: &[u8] = include_bytes!("../assets/omnibus-stoat.png");
+
+/// The server icon advertised in `initialize`'s `serverInfo.icons`, encoded
+/// once per process.
+fn stoat_icon() -> Icon {
+    static DATA_URI: OnceLock<String> = OnceLock::new();
+    let src = DATA_URI.get_or_init(|| {
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(STOAT_PNG)
+        )
+    });
+    Icon::new(src.clone())
+        .with_mime_type("image/png")
+        .with_sizes(vec!["128x128".to_string()])
+}
 
 /// The MCP server: a shared authenticated client plus the tool router.
 #[derive(Clone)]
@@ -54,6 +77,7 @@ impl ServerHandler for OmnibusMcp {
         let mut implementation = Implementation::from_build_env();
         implementation.name = env!("CARGO_PKG_NAME").to_string();
         implementation.version = env!("CARGO_PKG_VERSION").to_string();
+        implementation.icons = Some(vec![stoat_icon()]);
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(implementation)
             .with_instructions(

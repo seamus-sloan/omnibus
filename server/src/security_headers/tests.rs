@@ -86,8 +86,8 @@ async fn csp_permits_dioxus_hydration_and_fonts() {
         "csp must allow inline (hydration) + Function()-eval (dioxus interpreter) scripts: {csp}"
     );
     assert!(
-        csp.contains("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"),
-        "csp must allow inline styles + Google Fonts stylesheet host: {csp}"
+        csp.contains("style-src 'self' 'unsafe-inline' blob: https://fonts.googleapis.com"),
+        "csp must allow inline styles, epub.js blob stylesheets, and the Google Fonts host: {csp}"
     );
     assert!(
         csp.contains("font-src 'self' data: https://fonts.gstatic.com"),
@@ -116,6 +116,21 @@ async fn csp_permits_dioxus_hydration_and_fonts() {
         csp.contains("frame-ancestors 'none'"),
         "csp must deny framing: {csp}"
     );
+}
+
+#[test]
+fn both_policies_allow_blob_stylesheets_for_epub_js() {
+    // epub.js renders a book's own stylesheets through `URL.createObjectURL`,
+    // so `style-src` must permit `blob:` or every forward page-turn is a CSP
+    // violation (#2213). The two policies must not drift: a future tightening
+    // that drops it from either one fails here rather than in a reader nobody
+    // is watching.
+    for csp in [DEFAULT_CSP.as_str(), NO_PROVIDER_HOSTS_CSP] {
+        assert!(
+            csp.contains("style-src 'self' 'unsafe-inline' blob: https://fonts.googleapis.com"),
+            "csp style-src must permit blob: for epub.js stylesheets: {csp}"
+        );
+    }
 }
 
 #[tokio::test]

@@ -105,8 +105,9 @@ fn build_panels_gives_the_genre_panel_a_coverage_line_that_names_it_hand_assigne
 #[cfg(feature = "server")]
 #[test]
 fn composition_card_renders_every_dimension_with_its_coverage() {
-    let html =
-        crate::test_support::render(rsx! { LibraryCompositionCard { composition: Some(full()) } });
+    let html = crate::test_support::render(
+        rsx! { LibraryCompositionPanels { composition: Some(full()) } },
+    );
 
     assert!(html.contains("stats-library-composition"), "{html}");
     for testid in [
@@ -118,9 +119,13 @@ fn composition_card_renders_every_dimension_with_its_coverage() {
     ] {
         assert!(html.contains(testid), "missing {testid}: {html}");
     }
-    // The card title must not read as the period-scoped "How you consumed
-    // them" split, which is seconds rather than the shelf's format mix.
-    assert!(html.contains("What your library is made of"), "{html}");
+    // Each panel carries its own heading, and the scope switch above them
+    // already says these figures are the shelf's rather than the reader's —
+    // a section title over the grid would be a third statement of the same
+    // thing.
+    for title in ["Formats", "Languages", "Publishers", "Published", "Genres"] {
+        assert!(html.contains(title), "missing {title}: {html}");
+    }
     // Every string the E2E spec asserts, verified here against real SSR
     // markup so a renamed label breaks a unit test rather than a browser run.
     for text in [
@@ -150,7 +155,7 @@ fn a_dimension_with_no_data_renders_an_empty_state_rather_than_an_empty_chart() 
     };
 
     let html = crate::test_support::render(
-        rsx! { LibraryCompositionCard { composition: Some(composition) } },
+        rsx! { LibraryCompositionPanels { composition: Some(composition) } },
     );
 
     // The formats panel still has bars, so the card renders — but the four
@@ -166,11 +171,11 @@ fn a_dimension_with_no_data_renders_an_empty_state_rather_than_an_empty_chart() 
 #[test]
 fn composition_card_renders_nothing_before_the_fetch_lands_or_for_an_empty_library() {
     let pending =
-        crate::test_support::render(rsx! { LibraryCompositionCard { composition: None } });
+        crate::test_support::render(rsx! { LibraryCompositionPanels { composition: None } });
     assert!(!pending.contains("stats-library-composition"), "{pending}");
 
     let empty = crate::test_support::render(rsx! {
-        LibraryCompositionCard { composition: Some(LibraryComposition::default()) }
+        LibraryCompositionPanels { composition: Some(LibraryComposition::default()) }
     });
     assert!(!empty.contains("stats-library-composition"), "{empty}");
 }

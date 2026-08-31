@@ -128,6 +128,12 @@
   // flush adds that raced it.
   var pendingAnnotations = [];
   var annotationRepaintTimer = null;
+  // First-paint watchdog: if rendition.display() never settles, none of the
+  // ready/error emits fire and the host's loading overlay stays up forever
+  // (#2346). Armed by init(), cleared on paint or teardown; on expiry it
+  // emits "error" so the host shows its "couldn't be loaded" + Retry surface
+  // rather than an indefinite "Loading…".
+  var firstPaintWatchdog = null;
   // A displayPercentage call that arrived before the book/locations were
   // ready — the follow-mode auto-jump fires ~50ms after mount, racing both
   // init() (book still null) and the locations pass (seconds on a first
@@ -170,6 +176,10 @@
     if (annotationRepaintTimer) {
       clearTimeout(annotationRepaintTimer);
       annotationRepaintTimer = null;
+    }
+    if (firstPaintWatchdog) {
+      clearTimeout(firstPaintWatchdog);
+      firstPaintWatchdog = null;
     }
     if (stageResizeObserver) {
       try {
@@ -434,6 +444,10 @@
     var firstPaint = new Promise(function (res) {
       paintResolve = function () {
         painted = true;
+        if (firstPaintWatchdog) {
+          clearTimeout(firstPaintWatchdog);
+          firstPaintWatchdog = null;
+        }
         res();
       };
     });
@@ -457,6 +471,18 @@
     // carry the spine-approximate `pct` (see buildRelocateData).
     var locationsCacheKey = opts.locationsKey ? "omn.locs::" + opts.locationsKey : null;
     var locBook = book;
+    // If this open never paints (e.g. rendition.display() never settles), none
+    // of the ready/error emits fire and the overlay hangs forever (#2346).
+    // Bound it: on expiry, if we still haven't painted and a newer open hasn't
+    // superseded this book, emit "error" so the host shows its Retry surface.
+    // The guard mirrors the book.ready .catch below.
+    var FIRST_PAINT_WATCHDOG_MS = 15000;
+    firstPaintWatchdog = setTimeout(function () {
+      firstPaintWatchdog = null;
+      if (!painted && book === locBook) {
+        emitStatus("error");
+      }
+    }, FIRST_PAINT_WATCHDOG_MS);
     book.ready
       .then(function () {
         tocFlat = [];

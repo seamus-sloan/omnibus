@@ -1,8 +1,8 @@
-//! Period-scoped composition cards: the genre donut (a pure-CSS
-//! `conic-gradient` ring of genre share by distinct book count), the
-//! read-vs-listened format split, and the finished-book length distribution.
-//! No charting library — slice colors are accent-derived CSS custom properties
-//! so all three stay theme-safe.
+//! "Where the time went" — the window's genre mix as a pure-CSS
+//! `conic-gradient` ring, with the read-vs-listened split beneath it, plus the
+//! finished-book length rows the Finished drill-in draws. No charting library;
+//! slice colors are accent-derived custom properties so every ring stays
+//! theme-safe.
 
 use dioxus::prelude::*;
 use omnibus_shared::{GenreShare, StatsSummary};
@@ -35,7 +35,7 @@ fn fold_shares(shares: &[GenreShare]) -> Vec<(String, i64)> {
 
 /// Integer percentages that always sum to exactly 100 (largest-remainder
 /// rounding), so the ring closes and the legend never reads 99% or 101%.
-fn percentages(counts: &[i64]) -> Vec<i64> {
+pub(super) fn percentages(counts: &[i64]) -> Vec<i64> {
     let total: i64 = counts.iter().sum();
     if total <= 0 {
         return vec![0; counts.len()];
@@ -59,7 +59,9 @@ fn percentages(counts: &[i64]) -> Vec<i64> {
     floored.into_iter().map(|(_, p, _)| p).collect()
 }
 
-/// The ring's `conic-gradient(...)` — cumulative stops per slice color.
+/// The ring's `conic-gradient(...)` — **cumulative** stops per slice colour,
+/// so a genre that rounds to nothing collapses to a zero-width slice rather
+/// than leaving a stray hairline where the next colour starts.
 fn donut_gradient(percents: &[i64]) -> String {
     let mut stops = Vec::with_capacity(percents.len());
     let mut at = 0;
@@ -71,10 +73,16 @@ fn donut_gradient(percents: &[i64]) -> String {
     format!("conic-gradient({})", stops.join(", "))
 }
 
-/// "What you read" — the genre-share donut with center book count and a
-/// `label · %` legend. Empty window → a friendly note instead of a ring.
+/// The disclosure line for active books the ring can't describe.
+fn untagged_note(untagged: i64) -> String {
+    let noun = if untagged == 1 { "book" } else { "books" };
+    format!("+{untagged} {noun} without a genre")
+}
+
+/// "Where the time went" — the genre ring with its legend, and the
+/// read-vs-listened split beneath.
 ///
-/// The center reports `genre_tagged_books` — the population the slices are
+/// The centre reports `genre_tagged_books` — the population the slices are
 /// drawn from — rather than `books_active`, which counts books the ring does
 /// not describe. The difference is disclosed under the legend instead, where
 /// it can't be read as a slice.
@@ -83,142 +91,134 @@ pub(super) fn GenreDonut(summary: StatsSummary) -> Element {
     let folded = fold_shares(&summary.genre_share);
     let tagged = summary.genre_tagged_books;
     let untagged = (summary.books_active - tagged).max(0);
-    if folded.is_empty() {
-        return rsx! {
-            div { class: "card st-donut-card", "data-testid": "stats-genre-donut",
-                div { class: "label", "What you read" }
-                p { class: "st-donut-empty", "No tagged reading in this period yet." }
-            }
-        };
-    }
     let percents = percentages(&folded.iter().map(|(_, c)| *c).collect::<Vec<_>>());
     let gradient = donut_gradient(&percents);
     // Content-derived key: when a period switch lands a different mix, the
     // body remounts and replays the content-swap animation while the card
     // stays put. Same data → same key → no motion.
     let content_key = format!("{tagged}|{untagged}|{gradient}|{folded:?}");
+
     rsx! {
-        div { class: "card st-donut-card", "data-testid": "stats-genre-donut",
-            div { class: "label", "What you read" }
-            div { key: "{content_key}", class: "st-donut-body",
-                div { class: "st-donut", style: "background: {gradient};", role: "img",
-                    aria_label: "Genre share by book count",
-                    div { class: "st-donut-hole",
-                        div { class: "st-donut-count", "{tagged}" }
-                        div { class: "st-donut-count-label mono", "tagged" }
+        div { class: "card st-spend", "data-testid": "stats-genre-donut",
+            div { class: "label", "Where the time went" }
+            if folded.is_empty() {
+                p { class: "st-card-empty", "No tagged reading in this period yet." }
+            } else {
+                div { key: "{content_key}", class: "st-spend-body",
+                    div {
+                        class: "st-donut",
+                        style: "background: {gradient};",
+                        role: "img",
+                        aria_label: "Genre share by book count",
+                        div { class: "st-donut-hole",
+                            div { class: "st-donut-count", "{tagged}" }
+                            div { class: "st-donut-count-label", "tagged" }
+                        }
                     }
-                }
-                ul { class: "st-donut-legend",
-                    for (i, ((name, _), pct)) in folded.iter().zip(percents.iter()).enumerate() {
-                        // Indexed, not name-keyed: a real genre named "Other"
-                        // would otherwise collide with the synthetic fold-row
-                        // above, and the parent's `content_key` already forces
-                        // a full remount whenever the data itself changes.
-                        li { key: "{i}", class: "st-donut-row",
-                            span {
-                                class: "st-donut-swatch",
-                                style: "background: {SLICE_VARS[i.min(SLICE_VARS.len() - 1)]};",
+                    ul { class: "st-donut-legend",
+                        for (i, ((name, _), pct)) in folded.iter().zip(percents.iter()).enumerate() {
+                            // Indexed, not name-keyed: a real genre named
+                            // "Other" would otherwise collide with the
+                            // synthetic fold-row above, and the parent's
+                            // `content_key` already forces a full remount
+                            // whenever the data itself changes.
+                            li { key: "{i}", class: "st-donut-row",
+                                span {
+                                    class: "st-donut-swatch",
+                                    style: "background: {SLICE_VARS[i.min(SLICE_VARS.len() - 1)]};",
+                                }
+                                span { class: "st-donut-name", "{name}" }
+                                span { class: "st-donut-pct", "{pct}%" }
                             }
-                            span { class: "st-donut-name", "{name}" }
-                            span { class: "st-donut-pct mono", "{pct}%" }
                         }
                     }
                 }
+                if untagged > 0 {
+                    p { class: "st-card-note", "data-testid": "stats-donut-untagged",
+                        {untagged_note(untagged)}
+                    }
+                }
             }
-            if untagged > 0 {
-                p { class: "st-donut-untagged mono", "data-testid": "stats-donut-untagged",
-                    {untagged_note(untagged)}
+            FormatSplit { summary }
+        }
+    }
+}
+
+/// The read-vs-listened share of active seconds, along the card's foot. Two
+/// bars rather than a caption: the ratio is the thing, and a reader takes it
+/// off the bars without parsing two percentages.
+#[component]
+fn FormatSplit(summary: StatsSummary) -> Element {
+    let total = summary.total_seconds();
+    if total <= 0 {
+        return rsx! {};
+    }
+    let percents = percentages(&[summary.reading_seconds, summary.listening_seconds]);
+    rsx! {
+        div { class: "st-split", "data-testid": "stats-format-split",
+            for (label, pct, var) in [
+                ("Read", percents[0], "var(--st-donut-c0)"),
+                ("Listened", percents[1], "var(--st-donut-c1)"),
+            ] {
+                div { key: "{label}", class: "st-split-half",
+                    div { class: "st-split-head",
+                        span { class: "st-split-name", {label} }
+                        // Keyed so a changed share fades the number in; the
+                        // bar below animates its width via CSS transition
+                        // instead (the row itself never remounts).
+                        span { key: "{pct}", class: "st-split-pct", "{pct}%" }
+                    }
+                    div { class: "st-split-track",
+                        div { class: "st-split-fill", style: "width: {pct}%; background: {var};" }
+                    }
                 }
             }
         }
     }
 }
 
-/// The disclosure line for active books the ring can't describe.
-fn untagged_note(untagged: i64) -> String {
-    let noun = if untagged == 1 { "book" } else { "books" };
-    format!("+{untagged} {noun} without a genre")
-}
-
 /// "How long they were" — the books finished in the window bucketed by page
-/// count, on the same pure-CSS bar treatment as [`FormatSplit`].
+/// count, on the same bar treatment as the split above.
+///
+/// Rows only, no card chrome: this is the Finished tile's detail, drawn inside
+/// its drill-in rather than as a card of its own — a length distribution is a
+/// fact *about* the books finished, not a peer of the count.
 ///
 /// The server owns the buckets, their order, and their labels, so this renders
 /// whatever it is handed — including the "Unknown" bucket, which is the point:
 /// an audiobook has no page analogue, and dropping it would quietly report the
 /// distribution over fewer books than the window actually holds.
 #[component]
-pub(super) fn LengthSplit(summary: StatsSummary) -> Element {
+pub(super) fn LengthRows(summary: StatsSummary) -> Element {
     let buckets = summary.length_buckets;
     let total: i64 = buckets.iter().map(|b| b.books).sum();
     if total <= 0 {
         return rsx! {
-            div { class: "card st-length-card", "data-testid": "stats-length-split",
-                div { class: "label", "How long they were" }
-                p { class: "st-donut-empty", "No books finished in this period yet." }
+            p { class: "st-card-empty", "data-testid": "stats-length-empty",
+                "No books finished in this period yet."
             }
         };
     }
     let percents = percentages(&buckets.iter().map(|b| b.books).collect::<Vec<_>>());
     rsx! {
-        div { class: "card st-length-card", "data-testid": "stats-length-split",
-            div { class: "label", "How long they were" }
-            div { class: "st-length-rows",
-                for (i, (bucket, pct)) in buckets.iter().zip(percents.iter()).enumerate() {
-                    // Indexed rather than label-keyed: the bucket set is fixed
-                    // and server-owned, and two of the labels could in
-                    // principle be renamed to collide.
-                    div { key: "{i}", class: "st-format-row", "data-testid": "stats-length-row",
-                        div { class: "st-format-row-head",
-                            span { class: "st-format-name", "{bucket.label}" }
-                            // The count, not the share: "3 books" answers the
-                            // question a reader brought to a length chart,
-                            // where "27%" needs the total to mean anything.
-                            span { key: "{bucket.books}", class: "mono st-format-pct", "{bucket.books}" }
-                        }
-                        div { class: "st-format-track",
-                            div {
-                                class: "st-format-fill",
-                                style: "width: {pct}%; background: {SLICE_VARS[i.min(SLICE_VARS.len() - 1)]};",
-                            }
-                        }
+        div { class: "st-length-rows", "data-testid": "stats-length-split",
+            for (i, (bucket, pct)) in buckets.iter().zip(percents.iter()).enumerate() {
+                // Indexed rather than label-keyed: the bucket set is fixed and
+                // server-owned, and two of the labels could in principle be
+                // renamed to collide.
+                div { key: "{i}", class: "st-split-half", "data-testid": "stats-length-row",
+                    div { class: "st-split-head",
+                        span { class: "st-split-name", "{bucket.label}" }
+                        // The count, not the share: "3 books" answers the
+                        // question a reader brought to a length chart, where
+                        // "27%" needs the total to mean anything.
+                        span { key: "{bucket.books}", class: "st-split-pct", "{bucket.books}" }
                     }
-                }
-            }
-        }
-    }
-}
-
-/// "How you consumed them" — reading vs listening share of active seconds.
-#[component]
-pub(super) fn FormatSplit(summary: StatsSummary) -> Element {
-    let total = summary.total_seconds();
-    if total <= 0 {
-        return rsx! {
-            div { class: "card st-format-card", "data-testid": "stats-format-split",
-                div { class: "label", "How you consumed them" }
-                p { class: "st-donut-empty", "No activity in this period yet." }
-            }
-        };
-    }
-    let percents = percentages(&[summary.reading_seconds, summary.listening_seconds]);
-    rsx! {
-        div { class: "card st-format-card", "data-testid": "stats-format-split",
-            div { class: "label", "How you consumed them" }
-            for (label, pct, var) in [
-                ("Read", percents[0], "var(--st-donut-c0)"),
-                ("Listened", percents[1], "var(--st-donut-c1)"),
-            ] {
-                div { class: "st-format-row",
-                    div { class: "st-format-row-head",
-                        span { class: "st-format-name", {label} }
-                        // Keyed so a changed share fades the number in; the
-                        // bar below animates its width via CSS transition
-                        // instead (the row itself never remounts).
-                        span { key: "{pct}", class: "st-format-pct mono", "{pct}%" }
-                    }
-                    div { class: "st-format-track",
-                        div { class: "st-format-fill", style: "width: {pct}%; background: {var};" }
+                    div { class: "st-split-track",
+                        div {
+                            class: "st-split-fill",
+                            style: "width: {pct}%; background: {SLICE_VARS[i.min(SLICE_VARS.len() - 1)]};",
+                        }
                     }
                 }
             }
@@ -227,119 +227,4 @@ pub(super) fn FormatSplit(summary: StatsSummary) -> Element {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn share(name: &str, books: i64) -> GenreShare {
-        GenreShare {
-            name: name.into(),
-            books,
-        }
-    }
-
-    #[test]
-    fn fold_shares_keeps_top_four_and_folds_the_tail_into_other() {
-        let shares: Vec<GenreShare> = (1..=6).map(|i| share(&format!("g{i}"), 7 - i)).collect();
-        let folded = fold_shares(&shares);
-        assert_eq!(folded.len(), 5);
-        assert_eq!(folded[0], ("g1".to_string(), 6));
-        assert_eq!(folded[4], ("Other".to_string(), 3));
-
-        assert!(fold_shares(&[]).is_empty());
-        assert_eq!(fold_shares(&[share("solo", 2)]).len(), 1);
-    }
-
-    #[test]
-    fn percentages_always_sum_to_one_hundred() {
-        for counts in [
-            vec![1, 1, 1],
-            vec![2, 1],
-            vec![7, 2, 1],
-            vec![1, 1, 1, 1, 1, 1, 1],
-        ] {
-            let p = percentages(&counts);
-            assert_eq!(p.iter().sum::<i64>(), 100, "counts {counts:?} → {p:?}");
-        }
-        assert_eq!(percentages(&[3, 1]), vec![75, 25]);
-        assert_eq!(percentages(&[]), Vec::<i64>::new());
-        assert_eq!(percentages(&[0, 0]), vec![0, 0]);
-    }
-
-    #[test]
-    fn untagged_note_singularizes_one_book() {
-        assert_eq!(untagged_note(1), "+1 book without a genre");
-        assert_eq!(untagged_note(4), "+4 books without a genre");
-    }
-
-    #[test]
-    fn fold_shares_other_covers_the_whole_tail_the_server_sent() {
-        // The server no longer truncates to a top-8, so "Other" is the real
-        // remainder rather than ranks five through eight.
-        let shares: Vec<GenreShare> = (1..=12).map(|i| share(&format!("g{i}"), 1)).collect();
-        let folded = fold_shares(&shares);
-        assert_eq!(folded.len(), 5);
-        assert_eq!(folded[4], ("Other".to_string(), 8));
-        let pct = percentages(&folded.iter().map(|(_, c)| *c).collect::<Vec<_>>());
-        assert_eq!(pct.iter().sum::<i64>(), 100);
-    }
-
-    #[cfg(feature = "server")]
-    fn length_summary(buckets: &[(&str, i64)]) -> StatsSummary {
-        StatsSummary {
-            length_buckets: buckets
-                .iter()
-                .map(|(label, books)| omnibus_shared::LengthBucket {
-                    label: (*label).to_string(),
-                    books: *books,
-                })
-                .collect(),
-            ..Default::default()
-        }
-    }
-
-    #[cfg(feature = "server")]
-    #[test]
-    fn length_split_renders_every_bucket_the_server_sent_with_its_count() {
-        let summary = length_summary(&[
-            ("Under 300", 3),
-            ("300\u{2013}499", 2),
-            ("500+", 0),
-            ("Unknown", 1),
-        ]);
-        let html = crate::test_support::render(rsx! { LengthSplit { summary } });
-
-        // Including the empty bucket — a missing bar reads as a different
-        // distribution — and the unknown one, which is the whole point: an
-        // audiobook has no page analogue and must not be filed as short.
-        for label in ["Under 300", "300\u{2013}499", "500+", "Unknown"] {
-            assert!(html.contains(label), "missing {label}: {html}");
-        }
-        assert!(html.contains("stats-length-split"), "{html}");
-    }
-
-    #[cfg(feature = "server")]
-    #[test]
-    fn length_split_says_nothing_was_finished_rather_than_drawing_flat_bars() {
-        // The server sends the zero-filled spine whether or not anything was
-        // finished, so the card decides on the total. Four zero-width bars
-        // would read as a real distribution over no books.
-        let summary = length_summary(&[("Under 300", 0), ("500+", 0), ("Unknown", 0)]);
-        let html = crate::test_support::render(rsx! { LengthSplit { summary } });
-
-        assert!(
-            html.contains("No books finished in this period yet."),
-            "{html}"
-        );
-        assert!(!html.contains("st-format-track"), "{html}");
-    }
-
-    #[test]
-    fn donut_gradient_builds_cumulative_stops() {
-        let g = donut_gradient(&[36, 28, 20, 16]);
-        assert_eq!(
-            g,
-            "conic-gradient(var(--st-donut-c0) 0% 36%, var(--st-donut-c1) 36% 64%, \
-             var(--st-donut-c2) 64% 84%, var(--st-donut-c3) 84% 100%)"
-        );
-    }
-}
+mod tests;

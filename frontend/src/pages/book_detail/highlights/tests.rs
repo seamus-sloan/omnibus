@@ -5,19 +5,43 @@ use super::locator::highlight_locator;
 use super::*;
 
 #[test]
-fn highlight_locator_names_the_spine_section_for_a_range_cfi() {
-    // epub.js emits ranges as `epubcfi(<common parent>,<start>,<end>)`; the
-    // spine step is the `/14` before the `!`.
+fn highlight_locator_names_the_reader_chapter_when_the_structure_is_loaded() {
+    // #2356: with the chapter table known, a passage names the chapter the
+    // reader shows, not the raw spine ordinal that counts front matter. The
+    // range CFI's spine step is `/14` → ordinal 7 → 0-based spine 6; against
+    // chapters starting at spines 0, 6 and 12 that resolves to chapter 2.
     assert_eq!(
-        highlight_locator("epubcfi(/6/14[chap03]!/4/2,/1:0,/1:120)"),
+        highlight_locator("epubcfi(/6/14[chap03]!/4/2,/1:0,/1:120)", &[0, 6, 12]),
+        Some("Chapter 2".to_string())
+    );
+}
+
+#[test]
+fn highlight_locator_falls_back_to_the_spine_section_without_a_chapter_table() {
+    // Empty chapter table (not yet loaded, or a book with no stored structure):
+    // the raw spine section keeps a passage locatable. The spine step is the
+    // `/14` before the `!`.
+    assert_eq!(
+        highlight_locator("epubcfi(/6/14[chap03]!/4/2,/1:0,/1:120)", &[]),
         Some("Section 7".to_string())
+    );
+}
+
+#[test]
+fn highlight_locator_falls_back_to_the_section_before_the_first_chapter() {
+    // A front-matter CFI (spine before every chapter's start) has no chapter
+    // to name, so it keeps the raw spine section rather than misreporting
+    // chapter 1.
+    assert_eq!(
+        highlight_locator("epubcfi(/6/2!/4)", &[4, 8]),
+        Some("Section 1".to_string())
     );
 }
 
 #[test]
 fn highlight_locator_reads_a_point_cfi_without_an_id_assertion() {
     assert_eq!(
-        highlight_locator("epubcfi(/6/4!/4/2/2/1:15)"),
+        highlight_locator("epubcfi(/6/4!/4/2/2/1:15)", &[]),
         Some("Section 2".to_string())
     );
 }
@@ -25,7 +49,7 @@ fn highlight_locator_reads_a_point_cfi_without_an_id_assertion() {
 #[test]
 fn highlight_locator_tolerates_surrounding_whitespace() {
     assert_eq!(
-        highlight_locator("  epubcfi(/6/8!/4)  "),
+        highlight_locator("  epubcfi(/6/8!/4)  ", &[]),
         Some("Section 4".to_string())
     );
 }
@@ -33,18 +57,18 @@ fn highlight_locator_tolerates_surrounding_whitespace() {
 #[test]
 fn highlight_locator_returns_none_for_unparseable_input() {
     // Not a CFI at all, and a CFI whose wrapper never closes.
-    assert_eq!(highlight_locator(""), None);
-    assert_eq!(highlight_locator("chapter 4, paragraph 2"), None);
-    assert_eq!(highlight_locator("epubcfi(/6/14!/4/2"), None);
+    assert_eq!(highlight_locator("", &[]), None);
+    assert_eq!(highlight_locator("chapter 4, paragraph 2", &[]), None);
+    assert_eq!(highlight_locator("epubcfi(/6/14!/4/2", &[]), None);
 }
 
 #[test]
 fn highlight_locator_returns_none_when_the_spine_step_is_not_an_element() {
     // Odd steps address text nodes and `/0` isn't a step at all — halving
     // either would invent a section number.
-    assert_eq!(highlight_locator("epubcfi(/6/7!/4/2)"), None);
-    assert_eq!(highlight_locator("epubcfi(/6/0!/4/2)"), None);
-    assert_eq!(highlight_locator("epubcfi(/6/x!/4/2)"), None);
+    assert_eq!(highlight_locator("epubcfi(/6/7!/4/2)", &[]), None);
+    assert_eq!(highlight_locator("epubcfi(/6/0!/4/2)", &[]), None);
+    assert_eq!(highlight_locator("epubcfi(/6/x!/4/2)", &[]), None);
 }
 
 #[test]
@@ -175,6 +199,7 @@ mod render_tests {
                 server_url: String::new(),
                 quote_target: use_signal(|| None),
                 dates_ready: use_local_dates_ready(),
+                chapter_spines: use_signal(Vec::<i64>::new),
             }
         }
     }
@@ -221,6 +246,7 @@ mod render_tests {
                 server_url: String::new(),
                 quote_target: use_signal(|| None),
                 dates_ready: use_local_dates_ready(),
+                chapter_spines: use_signal(Vec::<i64>::new),
             }
         }
     }
@@ -264,6 +290,7 @@ mod render_tests {
                 highlights: use_signal(|| seeded_list(8)),
                 server_url: String::new(),
                 quote_target: use_signal(|| None),
+                chapter_spines: use_signal(Vec::<i64>::new),
             }
         }
     }
@@ -294,6 +321,7 @@ mod render_tests {
                 server_url: String::new(),
                 quote_target: use_signal(|| None),
                 dates_ready: use_local_dates_ready(),
+                chapter_spines: use_signal(Vec::<i64>::new),
             }
         }
     }

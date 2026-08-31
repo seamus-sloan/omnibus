@@ -660,6 +660,19 @@ pub struct StatsSummary {
     /// [`StatsRange`] and a period switch never moves it.
     #[serde(default)]
     pub goal: Option<ReadingGoal>,
+    /// Books finished in the current calendar year, whether or not an annual
+    /// goal is set.
+    ///
+    /// The figure a surface can show *before* a reader commits to a target —
+    /// the annual counterpart of [`DailyGoals::pages_today`]. It is the same
+    /// measurement [`ReadingGoal::current`] carries, over the same year bounds,
+    /// computed once and shared: setting a goal must not appear to move the
+    /// count it measures.
+    ///
+    /// Not windowed, like [`Self::goal`] itself — a calendar year is not a
+    /// reporting period, so this reads the same on every [`StatsRange`].
+    #[serde(default)]
+    pub books_this_year: Option<i64>,
     /// The caller's standing daily goals and today's progress toward them.
     /// Not windowed either, and for the same reason as `goal`: a daily target
     /// recurs, so it reads the same whichever [`StatsRange`] the page shows.
@@ -852,14 +865,39 @@ pub struct DailyGoals {
     pub pages: Option<DailyGoal>,
     /// The minutes goal, `None` when unset.
     pub minutes: Option<DailyGoal>,
+    /// Pages covered today, measured whether or not a pages target is set.
+    ///
+    /// The figure a surface can show *before* a reader commits to a goal —
+    /// what iOS renders in the ring's slot when there is no ring to draw. It is
+    /// the same measurement [`DailyGoal::current`] carries, over the same UTC
+    /// day, computed once and shared: the number must not change the moment a
+    /// target is set, or the goal appears to move the ground it measures.
+    ///
+    /// `None` only when the server could not measure it at all, never as a
+    /// stand-in for zero.
+    #[serde(default)]
+    pub pages_today: Option<i64>,
+    /// Minutes read and listened today, on the reader's **local** day, whether
+    /// or not a minutes target is set. The counterpart to
+    /// [`Self::pages_today`], and measured exactly as the minutes goal's own
+    /// `current` is — truncating, so 59 seconds is not yet a minute.
+    ///
+    /// Note this is the local day where `pages_today` is the UTC one, for the
+    /// same reason the two goals differ: see [`crate::stats`]'s
+    /// `daily_goals` docs.
+    #[serde(default)]
+    pub minutes_today: Option<i64>,
     /// Seconds recorded today by sessions carrying no capture-time offset,
     /// which the minutes goal therefore could not place on a local day.
     ///
     /// The same disclosure [`StatsSummary::unzoned_seconds`] makes, narrowed to
-    /// the goal's own window: those seconds are real reading that `minutes`
-    /// does not include, and a goal that silently under-reports is worse than
-    /// one that says what it could not see. Always `0` when no minutes goal is
-    /// set — there is nothing to disclose against.
+    /// the day: those seconds are real reading that neither `minutes` nor
+    /// [`Self::minutes_today`] includes, and a figure that silently
+    /// under-reports is worse than one that says what it could not see.
+    ///
+    /// Reported whether or not a minutes target is set, because
+    /// `minutes_today` is shown either way — there is always something to
+    /// disclose against.
     #[serde(default)]
     pub unzoned_seconds: i64,
 }

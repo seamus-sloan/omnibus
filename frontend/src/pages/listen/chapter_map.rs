@@ -122,8 +122,8 @@ pub(super) struct ChapterMapProps {
     pub duration: f64,
     /// Seconds remaining in the whole book.
     pub remaining: f64,
-    /// Current playback rate — every time readout (elapsed, remaining, total)
-    /// divides by it so the row is wall-clock listening time, not book time.
+    /// Current playback rate — only the "remaining" estimate divides by it;
+    /// elapsed and total are real book-time (#2344).
     pub rate: f64,
     /// Index of the currently-playing chapter.
     pub current_chapter_index: usize,
@@ -301,14 +301,14 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
                 {segment_bar(&chapters, eff_current, effective, duration)}
 
                 // Visible playhead + drag-time bubble. The bubble previews
-                // the same rate-adjusted elapsed the row's left label shows,
-                // so the two can't disagree mid-drag.
+                // the same book-time elapsed the row's left label shows, so
+                // the two can't disagree mid-drag.
                 div { class: "lp-chapter-thumb", style: "left: {thumb:.3}%;" }
                 if is_scrubbing {
                     div {
                         class: "lp-chapter-bubble",
                         style: "left: {thumb:.3}%;",
-                        "{format_hms(helpers::remaining_at_rate(effective, rate))}"
+                        "{format_hms(effective)}"
                     }
                 }
 
@@ -327,18 +327,16 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
                 }
             }
 
-            // All three readouts share one rate-adjusted wall-clock basis
-            // (elapsed + remaining = total at the current speed), the same
-            // one the chapter list's durations use (#2246) — a 1x label
-            // beside a rate-adjusted one disagrees with it off 1x (#2108,
-            // matching the iOS player). Scaled after the scrub preview so a
-            // drag previews the rate-adjusted times too.
+            // Elapsed and total are real book-time, matching the bookmark
+            // stamps and the book detail page (#2344). Only the middle
+            // "remaining" is a rate-adjusted wall-clock estimate of the time
+            // left, the same basis landing's resume meta uses.
             div { class: "lp-scrub-times", "data-testid": "listen-scrub-times",
-                span { "{format_hms(helpers::remaining_at_rate(effective, rate))}" }
+                span { "{format_hms(effective)}" }
                 span { class: "lp-scrub-remaining",
                     "\u{00b7} {format_hms(helpers::remaining_at_rate(eff_remaining, rate))} remaining"
                 }
-                span { "{format_hms(helpers::remaining_at_rate(duration, rate))}" }
+                span { "{format_hms(duration)}" }
             }
             if buffering {
                 div {
@@ -363,8 +361,9 @@ mod render_tests {
 
     #[component]
     fn MapHarness(rate: f64) -> Element {
-        // Two 30-minute chapters, 20 book-minutes in: at 2x the row must
-        // read 10:00 elapsed / 20:00 remaining / 30:00 total.
+        // Two 30-minute chapters, 10 book-minutes in. Elapsed (10:00) and total
+        // (1:00:00) are real book-time and stay put across speeds; only the
+        // middle "remaining" estimate scales (50:00 at 1x, 25:00 at 2x).
         rsx! {
             ChapterMap {
                 chapters: vec![
@@ -381,9 +380,9 @@ mod render_tests {
                         duration_seconds: 1800.0,
                     },
                 ],
-                elapsed: 1200.0,
+                elapsed: 600.0,
                 duration: 3600.0,
-                remaining: 2400.0,
+                remaining: 3000.0,
                 rate,
                 current_chapter_index: 0,
                 on_seek: EventHandler::new(|_| {}),
@@ -392,23 +391,29 @@ mod render_tests {
         }
     }
 
+    // Issue #2344: at 2x the elapsed and total labels stay real book-time
+    // (matching bookmark stamps + the detail page); only the middle "remaining"
+    // estimate is rate-adjusted.
     #[test]
-    fn chapter_map_renders_every_time_label_on_the_rate_adjusted_basis() {
+    fn chapter_map_keeps_book_time_elapsed_and_total_and_scales_only_remaining() {
         let html = render(rsx! { MapHarness { rate: 2.0 } });
+        // Elapsed 10:00 and total 1:00:00 are book-time — identical to the 1x
+        // render below.
         assert!(html.contains("10:00"), "{html}");
-        assert!(html.contains("20:00 remaining"), "{html}");
-        assert!(html.contains("30:00"), "{html}");
+        assert!(html.contains("1:00:00"), "{html}");
+        // The time-left halves at 2x: 50:00 (1x) -> 25:00.
+        assert!(html.contains("25:00 remaining"), "{html}");
         // The seek range stays in 1x book-time — it's a coordinate, not a
         // readout.
-        assert!(html.contains("value=\"1200\""), "{html}");
+        assert!(html.contains("value=\"600\""), "{html}");
         assert!(html.contains("max=\"3600\""), "{html}");
     }
 
     #[test]
     fn chapter_map_renders_unchanged_labels_at_1x() {
         let html = render(rsx! { MapHarness { rate: 1.0 } });
-        assert!(html.contains("20:00"), "{html}");
-        assert!(html.contains("40:00 remaining"), "{html}");
+        assert!(html.contains("10:00"), "{html}");
+        assert!(html.contains("50:00 remaining"), "{html}");
         assert!(html.contains("1:00:00"), "{html}");
     }
 }

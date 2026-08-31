@@ -75,15 +75,18 @@ pub(super) fn MonthlyChart(summary: StatsSummary) -> Element {
     }
     let bars = build_bars(months);
     let avg_label = match monthly_average(months) {
-        Some(avg) => format!("avg {avg:.1}"),
+        Some(avg) => format!("avg {avg:.1} / month"),
         None => String::new(),
     };
 
+    // The month with the most finishes is called out alongside the current
+    // one: without it a tall bar in the middle of the year is just tall.
+    let peak = bars.iter().map(|b| b.books).max().unwrap_or(0);
     rsx! {
-        div { class: "card st-monthly-card", "data-testid": "stats-monthly-chart",
+        div { class: "card st-monthly", "data-testid": "stats-monthly-chart",
             div { class: "st-monthly-head",
                 div { class: "label", "Books finished \u{00B7} trailing 12 months" }
-                div { class: "st-monthly-avg mono", {avg_label} }
+                div { class: "st-monthly-avg", {avg_label} }
             }
             div {
                 class: "st-monthly-bars",
@@ -92,9 +95,14 @@ pub(super) fn MonthlyChart(summary: StatsSummary) -> Element {
                 for (i, bar) in bars.iter().enumerate() {
                     div {
                         key: "{i}",
-                        class: if bar.current { "st-mo-col st-mo-current" } else { "st-mo-col" },
+                        class: match (bar.current, peak > 0 && bar.books == peak) {
+                            (true, _) => "st-mo-col current",
+                            (false, true) => "st-mo-col peak",
+                            (false, false) => "st-mo-col",
+                        },
                         "data-testid": "stats-monthly-bar",
                         title: "{bar.books} finished",
+                        div { class: "st-mo-count", "{bar.books}" }
                         div { class: "st-mo-track",
                             div { class: "st-mo-bar", style: "height: {bar.height_pct}%;" }
                         }
