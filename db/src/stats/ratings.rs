@@ -13,7 +13,7 @@ use super::StatsError;
 /// Bind order is `user_id`.
 ///
 /// A rating the book page cannot render must not move the mean.
-const LIVE_RATINGS: &str = "\
+pub(super) const LIVE_RATINGS: &str = "\
     SELECT r.user_id AS user_id, r.half_stars AS half_stars, r.updated_at AS updated_at \
     FROM user_ratings r \
     JOIN books b ON b.uuid = r.book_uuid \

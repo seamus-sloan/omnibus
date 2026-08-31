@@ -78,7 +78,7 @@ pub(super) const FINISHED_EVENTS: &str = "\
 /// Derived once rather than spelled out per query: several of these metrics
 /// render on the same screen, so a metric that opts out of the filter has to
 /// do so visibly.
-fn live_finished_events() -> String {
+pub(super) fn live_finished_events() -> String {
     format!(
         "SELECT f.book_uuid AS book_uuid, f.finished_at AS finished_at \
          FROM ({FINISHED_EVENTS}) f \
