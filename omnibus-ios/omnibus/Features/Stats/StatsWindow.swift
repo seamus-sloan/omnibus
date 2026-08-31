@@ -327,7 +327,13 @@ struct ReadingClock: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if !summary.dayOfWeek.isEmpty {
+            // Gated on `hasHours`, not just on the strip being non-empty: the
+            // server zero-fills all seven buckets, so a window whose activity
+            // is all unzoned would otherwise print "no activity with a
+            // recorded local time" and then draw seven flat bars under it —
+            // the measured-looking day made of zeros `TimePatternCharts`
+            // guarded against before this replaced it.
+            if hasHours, !summary.dayOfWeek.isEmpty {
                 weekdays
                     .padding(.top, 16)
                     .overlay(alignment: .top) { Hairline() }
@@ -525,7 +531,11 @@ struct GenreDonut: View {
                 .fill(palette.bg1Color)
                 .frame(width: 104 * 0.62, height: 104 * 0.62)
             VStack(spacing: 2) {
-                Text("\(summary.genreTaggedBooks)")
+                // `verbatim`, like the goal ring's figure: a plain
+                // interpolation takes the `LocalizedStringKey` path and groups
+                // the integer, so a well-tagged library read "1,204" inside a
+                // 64pt hole beside ungrouped copy.
+                Text(verbatim: "\(summary.genreTaggedBooks)")
                     .font(.display(22, weight: .semibold))
                     .foregroundStyle(palette.ink0Color)
                 Text("tagged")

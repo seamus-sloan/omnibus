@@ -63,15 +63,12 @@ struct LastFourWeeksCard: View {
 
     @Environment(\.palette) private var palette
 
+    /// Built once per render and passed down. As a computed property this was
+    /// rebuilding a dictionary over the whole (now all-time) heatmap on every
+    /// read, and `sparkline` alone reads it three times.
     private var days: [DayActivity] { Self.trailing(28, of: summary) }
 
-    /// How many of the trailing bars the current streak covers. Bars before it
-    /// are drawn quiet, so the run reads as the live part of the month.
-    private var streakBars: Int {
-        min(days.count, Int(summary.currentStreakDays))
-    }
-
-    private var caption: String {
+    private func caption(_ days: [DayActivity]) -> String {
         guard summary.currentStreakDays > 0 else {
             let active = days.filter { $0.seconds > 0 }.count
             return active == 0
@@ -86,7 +83,8 @@ struct LastFourWeeksCard: View {
     }
 
     var body: some View {
-        StatsCard(padding: 0) {
+        let days = self.days
+        return StatsCard(padding: 0) {
             HStack(alignment: .center, spacing: 14) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Last four weeks")
@@ -94,7 +92,7 @@ struct LastFourWeeksCard: View {
                         .tracking(0.8)
                         .textCase(.uppercase)
                         .foregroundStyle(palette.ink2Color)
-                    Text(caption)
+                    Text(caption(days))
                         .font(.ui(12.5))
                         .foregroundStyle(palette.ink1Color)
                         .fixedSize(horizontal: false, vertical: true)
@@ -102,7 +100,7 @@ struct LastFourWeeksCard: View {
 
                 Spacer(minLength: Spacing.sm)
 
-                sparkline
+                sparkline(days)
                     .frame(maxWidth: 172)
             }
             .padding(.horizontal, Spacing.lg)
@@ -110,12 +108,12 @@ struct LastFourWeeksCard: View {
         }
         .screenPadding()
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Last four weeks. \(caption)")
+        .accessibilityLabel("Last four weeks. \(caption(days))")
     }
 
-    private var sparkline: some View {
+    private func sparkline(_ days: [DayActivity]) -> some View {
         let peak = max(1, days.map(\.seconds).max() ?? 1)
-        let firstStreakBar = days.count - streakBars
+        let firstStreakBar = days.count - min(days.count, Int(summary.currentStreakDays))
         return HStack(alignment: .bottom, spacing: 3) {
             ForEach(Array(days.enumerated()), id: \.offset) { index, day in
                 let fraction = Double(day.seconds) / Double(peak)
@@ -306,13 +304,30 @@ struct HeatmapView: View {
     private static let cell: CGFloat = 11
     private static let gap: CGFloat = 3
 
-    private var lookup: [String: Int64] {
-        Dictionary(days.map { ($0.day, $0.seconds) }, uniquingKeysWith: +)
+    /// Everything the grid needs, derived once.
+    ///
+    /// `lookup`, `maximum` and `weeks` were computed properties, and
+    /// `color(for:)` reads the first two — so each of the 182 cells rebuilt the
+    /// whole dictionary and re-scanned for the peak, while `weeks` was walked
+    /// separately by the grid, the ruler and the labels. That is O(cells ×
+    /// days) for an answer that doesn't change within a render, and this
+    /// screen now hands the view the *all-time* heatmap rather than one
+    /// window's.
+    private struct Grid {
+        let weeks: [[Date]]
+        let lookup: [String: Int64]
+        let maximum: Int64
     }
 
-    private var maximum: Int64 { max(1, days.map(\.seconds).max() ?? 1) }
-
     private var calendar: Calendar { StatsFormat.utc }
+
+    private func makeGrid() -> Grid {
+        Grid(
+            weeks: weeks,
+            lookup: Dictionary(days.map { ($0.day, $0.seconds) }, uniquingKeysWith: +),
+            maximum: max(1, days.map(\.seconds).max() ?? 1)
+        )
+    }
 
     private var weeks: [[Date]] {
         let end = StatsFormat.wireDay.date(from: asOf) ?? Date()
@@ -334,11 +349,12 @@ struct HeatmapView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
+        let model = makeGrid()
+        return VStack(alignment: .leading, spacing: Spacing.sm) {
             ScrollView(.horizontal) {
                 VStack(alignment: .leading, spacing: 5) {
-                    monthRuler
-                    grid
+                    monthRuler(model)
+                    grid(model)
                 }
                 .padding(.vertical, 2)
                 .screenPadding()
@@ -351,13 +367,13 @@ struct HeatmapView: View {
         }
     }
 
-    private var grid: some View {
+    private func grid(_ model: Grid) -> some View {
         HStack(spacing: Self.gap) {
-            ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+            ForEach(Array(model.weeks.enumerated()), id: \.offset) { _, week in
                 VStack(spacing: Self.gap) {
                     ForEach(week, id: \.self) { day in
                         RoundedRectangle(cornerRadius: 2.5, style: .continuous)
-                            .fill(color(for: day))
+                            .fill(color(for: day, in: model))
                             .frame(width: Self.cell, height: Self.cell)
                     }
                 }
@@ -371,9 +387,9 @@ struct HeatmapView: View {
     /// Each label is laid out in a zero-width overlay so it can overhang its
     /// own 11pt column: constrained to the column it wraps to two lines, which
     /// is how the ruler came out reading "Fe / b".
-    private var monthRuler: some View {
+    private func monthRuler(_ model: Grid) -> some View {
         HStack(spacing: Self.gap) {
-            ForEach(Array(monthLabels.enumerated()), id: \.offset) { _, label in
+            ForEach(Array(monthLabels(model.weeks).enumerated()), id: \.offset) { _, label in
                 Color.clear
                     .frame(width: Self.cell, height: 11)
                     .overlay(alignment: .leading) {
@@ -391,7 +407,7 @@ struct HeatmapView: View {
     /// One label per column, and only where the month actually turns over —
     /// testing each column for "contains a day in the first week" labelled two
     /// adjacent columns whenever a month started mid-week ("Ap Ap").
-    private var monthLabels: [String?] {
+    private func monthLabels(_ weeks: [[Date]]) -> [String?] {
         var lastLabelled: Int?
         return weeks.enumerated().map { index, week in
             guard let first = week.first else { return nil }
@@ -429,10 +445,10 @@ struct HeatmapView: View {
         palette.bg2Color.opacity(0.75)
     }
 
-    private func color(for day: Date) -> Color {
-        let seconds = lookup[StatsFormat.wireDay.string(from: day)] ?? 0
+    private func color(for day: Date, in model: Grid) -> Color {
+        let seconds = model.lookup[StatsFormat.wireDay.string(from: day)] ?? 0
         guard seconds > 0 else { return restColor }
-        let intensity = min(1, Double(seconds) / Double(maximum))
+        let intensity = min(1, Double(seconds) / Double(model.maximum))
         return palette.accentColor.opacity(0.25 + intensity * 0.75)
     }
 }

@@ -3,9 +3,9 @@
 //
 //  Both are unwindowed by design — a daily target recurs and an annual goal is
 //  annual — so they sit above the period control and never move when it does.
-//  Both are tappable in whole, with a chevron rather than an Edit button: the
-//  card *is* the control, and a button beside a ring made the ring look like a
-//  read-only figure.
+//  Neither card is itself a control: each carries a pencil that leads to
+//  `Account/ReadingGoalsView`, because a panel that *reports* today's figures
+//  should not also look like a button.
 
 import SwiftUI
 
@@ -39,8 +39,8 @@ private struct GoalEditLink: View {
 /// figure when it does not.
 ///
 /// A ring is a claim about a target, so a kind with no target gets no ring and
-/// no "of N" — just today's figure, centred in the same 74pt slot so a mixed
-/// card still aligns.
+/// no "of N" — just today's figure, centred in the same slot the ring
+/// occupies (`GoalRing.diameter`) so a mixed card still aligns.
 struct DailyGoalsCard: View {
     let summary: StatsSummary
 
@@ -272,7 +272,10 @@ struct YearGoalCard: View {
 
     private func figure(_ p: YearProjection) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("\(p.finished)")
+            // `verbatim` for the same reason the ring's figure is: a plain
+            // interpolation groups the integer, and `StatsFormat.counted`
+            // beside it does not.
+            Text(verbatim: "\(p.finished)")
                 .font(.display(38, weight: .semibold))
                 .foregroundStyle(palette.ink0Color)
                 .contentTransition(.numericText())
@@ -293,12 +296,11 @@ struct YearGoalCard: View {
     /// decimal, and there is deliberately no completion date — "you'd hit 30
     /// around 8 January" is not something a reader can act on, where "11 days
     /// a book to hit 30" is.
-    /// Top-aligned, so the three figures sit on one line.
     ///
-    /// Bottom-aligning them — which is what the mock's `align-items: flex-end`
-    /// does — lines up the *labels* instead, and since they wrap to one line or
-    /// two depending on the copy, the numbers above them ended up at three
-    /// different heights.
+    /// Top-aligned, so the three figures sit on one line. Bottom-aligning them
+    /// — which is what the mock's `align-items: flex-end` does — lines up the
+    /// *labels* instead, and since they wrap to one line or two depending on
+    /// the copy, the numbers above them ended up at three different heights.
     private func footer(_ p: YearProjection) -> some View {
         HStack(alignment: .top, spacing: 10) {
             ForEach(p.stats) { stat in
@@ -559,7 +561,7 @@ private struct YearGoalChart: View {
                 // edge, and whenever the projection lands near the target —
                 // which is exactly when a reader looks — the two labels
                 // printed over each other.
-                Text("goal \(target)")
+                Text(verbatim: "goal \(target)")
                     .font(.monoUI(8.5))
                     .foregroundStyle(palette.ink2Color)
                     .fixedSize()
@@ -571,7 +573,7 @@ private struct YearGoalChart: View {
             }
 
             if let end = projected.last {
-                Text("\(projection.projected)")
+                Text(verbatim: "\(projection.projected)")
                     .font(.monoUI(9, weight: .bold))
                     .foregroundStyle(palette.ink1Color)
                     .fixedSize()

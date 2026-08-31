@@ -77,6 +77,14 @@ struct StatsView: View {
         .onChange(of: path.isEmpty) { _, isRoot in
             if isRoot { Task { await load() } }
         }
+        // And the same thing reached the other way. The goals screen is also
+        // pushed from You › Reading, which is a *different* stack — popping
+        // there never touches `path`, and returning to this tab does not
+        // re-fire `.task`, so the rings kept the target the reader had just
+        // changed until a pull-to-refresh. Cheap to repeat: a cached read
+        // unless a write invalidated the entry, which is exactly the case
+        // this exists for.
+        .onAppear { Task { await load() } }
     }
 
     // MARK: - The screen
@@ -89,13 +97,18 @@ struct StatsView: View {
                 Masthead(title: "Stats")
                     .padding(.bottom, -Spacing.lg)
 
-                StreakHeadline(summary: summary)
+                // Off the unwindowed summary — see `standingSummary`. The
+                // streak card needs it too: `current_streak_days` is unwindowed
+                // but `longest_streak_days` is *not* (`db/src/stats/streak.rs`:
+                // "active_days and the longest run are windowed"), so fed the
+                // rendered summary the card's "best N" dropped from 23 to 7 on
+                // a Week switch — inside the band that must not move.
+                let unwindowed = standingSummary ?? summary
+                StreakHeadline(summary: unwindowed)
                 DailyGoalsCard(summary: summary)
                 if let year = Self.goalYear(summary) {
                     YearGoalCard(summary: summary, year: year)
                 }
-                // Both off the unwindowed summary — see `standingSummary`.
-                let unwindowed = standingSummary ?? summary
                 LastFourWeeksCard(summary: unwindowed)
 
                 if !unwindowed.heatmap.isEmpty {

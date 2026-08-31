@@ -18,7 +18,9 @@ enum StatsRamp {
     static let c1 = OKLCH(0.62, 0.10, 200)
     static let c2 = OKLCH(0.58, 0.09, 150)
     static let c3 = OKLCH(0.55, 0.10, 20)
-    /// The remainder slice, and the tick a near-silent hour draws.
+    /// The donut's remainder slice, and the four-week strip's pre-streak
+    /// bar. Not the dial's quietest tick — that step is `bg3`, so it sits
+    /// on the palette and moves with the theme.
     static let quiet = OKLCH(0.34, 0.012, 70)
 }
 
@@ -183,16 +185,35 @@ enum StatsFormat {
         return calendar
     }
 
-    /// A day rendered in a pinned English format. The copy around it ("Week of
-    /// …", "Unbroken since …") is English, and the device locale would splice
-    /// a translated month into it.
-    static func day(_ date: Date, _ format: String) -> String {
+    /// Every format this screen renders a day in, built once.
+    ///
+    /// `DateFormatter` construction is expensive and `day` runs in render
+    /// paths — the heatmap's month ruler alone calls it once per column, 26
+    /// times a pass — so allocating per call was measurable jank. An immutable
+    /// `static let` table shares the instances the way `wireDay` above already
+    /// does; nothing mutates them after init, and every caller is a view body
+    /// on the main thread.
+    private static let dayFormatters: [String: DateFormatter] = Dictionary(
+        uniqueKeysWithValues: ["d MMM", "d MMMM", "d MMM yyyy", "MMM", "MMMM yyyy", "yyyy"]
+            .map { ($0, pinnedFormatter($0)) })
+
+    private static func pinnedFormatter(_ format: String) -> DateFormatter {
         let f = DateFormatter()
         f.calendar = Calendar(identifier: .gregorian)
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(identifier: "UTC")
         f.dateFormat = format
-        return f.string(from: date)
+        return f
+    }
+
+    /// A day rendered in a pinned English format. The copy around it ("Week of
+    /// …", "Unbroken since …") is English, and the device locale would splice
+    /// a translated month into it.
+    ///
+    /// A format the table doesn't hold still works, at the old per-call cost —
+    /// correctness never depends on having pre-registered it.
+    static func day(_ date: Date, _ format: String) -> String {
+        (dayFormatters[format] ?? pinnedFormatter(format)).string(from: date)
     }
 
     /// A signed whole-number delta — "+2", "−1" — or `nil` when there is
