@@ -1,9 +1,21 @@
-# Send a book to your Kobo
+# Kobo
 
-Omnibus can hand a book to a Kobo e-reader as a **KEPUB** — Kobo's own EPUB
-variant, which gets noticeably faster page turns than a plain EPUB. It's a
-**wired transfer**: your Kobo plugs into the computer running the browser (never
-the Omnibus server), and the book copies onto it over USB.
+Omnibus gets books onto a Kobo e-reader two ways, and you can use either or
+both:
+
+- **[Send to Kobo](#send-a-book-over-usb)** — a one-off copy over a USB cable.
+  Nothing syncs back; it's a file transfer.
+- **[Wireless sync](#wireless-sync)** — the device talks to Omnibus over Wi-Fi
+  on its own. Whole shelves, plus reading position, read status, and highlights
+  in both directions.
+
+Either way the book is converted to a **KEPUB** — Kobo's own EPUB variant, which
+gets noticeably faster page turns than a plain EPUB.
+
+## Send a book over USB
+
+Your Kobo plugs into the computer running the browser (never the Omnibus
+server), and the book copies onto it over USB.
 
 On **Chrome or Edge**, Omnibus writes the file straight onto the plugged-in
 device in one click. On other browsers (Firefox, Safari), it downloads the KEPUB
@@ -13,11 +25,10 @@ and you copy it over yourself. Both are described below.
 > This transfer is completely safe for your device. Copying a file over USB
 > **cannot delete or change anything already on your Kobo** — not your books,
 > not your highlights, not your notes. Omnibus only ever *adds* a book file; it
-> never touches the device's internal database. (That is *not* true of wireless
-> sync, a separate and still-incomplete feature — see
-> [About wireless sync](#about-wireless-sync-experimental).)
+> never touches the device's internal database. (That is *not* true of
+> [wireless sync](#wireless-sync), which does write to it.)
 
-## Chrome / Edge — one-click write
+### Chrome / Edge — one-click write
 
 1. Connect your Kobo with a USB cable and tap **Connect** on the device. It
    appears as a USB drive.
@@ -33,7 +44,7 @@ on the drive (the same tidy layout Calibre uses), so browsing the device over
 USB stays organized rather than a pile of files at the root. (The download-then-
 copy path below hands you a single file instead — drop it wherever you like.)
 
-## Other browsers — download, then copy
+### Other browsers — download, then copy
 
 1. Open the book's page in Omnibus and click **Send to Kobo**. A file named
    `<id>.kepub.epub` downloads to your computer.
@@ -45,7 +56,7 @@ copy path below hands you a single file instead — drop it wherever you like.)
 
 Either way, open the book on the Kobo and you'll get the faster KEPUB page turns.
 
-## What this does and doesn't do
+### What this does and doesn't do
 
 - **Does:** put a reading-optimized copy of the book on your device.
 - **Doesn't:** sync your reading position, mark the book finished, or send
@@ -53,7 +64,7 @@ Either way, open the book on the Kobo and you'll get the faster KEPUB page turns
 - **Doesn't touch existing device content.** Nothing on the Kobo is modified or
   deleted by copying a file to it.
 
-## If the download is a plain `.epub`
+### If the download is a plain `.epub`
 
 Omnibus converts to KEPUB with a tool called
 [`kepubify`](https://github.com/pgaskin/kepubify). If that tool isn't installed
@@ -63,16 +74,21 @@ just a bit slower. The official Docker image ships `kepubify`; if you build from
 source, install `kepubify` on the server's `PATH` (or set `OMNIBUS_KEPUBIFY_PATH`)
 to get KEPUB output. See [.env.example](../.env.example).
 
-## About wireless sync (experimental)
+## Wireless sync
 
-*Wireless* Kobo sync — where the device talks to Omnibus over Wi-Fi instead of a
-USB cable — is functional but **experimental**: it has not yet passed
-verification against real devices. HTTP-layer contract tests pin the server's
-side of the protocol against a synthetic fixture (see
-`server/src/backend/kobo/tests.rs`), but only a real device can confirm the
-firmware actually accepts what's sent — see
-[docs/kobo-smoke-test.md](kobo-smoke-test.md) for the manual checklist that
-gates advertising this feature as non-experimental.
+The device talks to Omnibus over Wi-Fi instead of a USB cable, the way it would
+talk to the Kobo store. Shelves you opt in appear in the device's own library;
+reading position, read status, and highlights flow both directions on every
+sync.
+
+You need:
+
+- **An Omnibus server the Kobo can reach on its own Wi-Fi** — a LAN address or
+  a tunnel, not `localhost`. The device does the talking, so whatever URL you
+  give it has to resolve from the device.
+- **At least one shelf marked "Sync to Kobo"** — only opted-in shelves sync, so
+  set this before the first sync or the device pulls an empty library.
+- **A USB cable, once**, to edit a config file on the device.
 
 > [!WARNING]
 > **First sync can erase your Kobo's highlights**
@@ -88,23 +104,36 @@ gates advertising this feature as non-experimental.
 >
 > At minimum, copy `.kobo/KoboReader.sqlite` off the device over USB.
 
-### Setting up wireless sync
+### Setting it up
 
-From **Account → Kobo wireless sync**:
+Back up the device first — see the warning above.
 
-1. Give your Kobo a name and click **Add a Kobo**
-2. Copy the device's wireless sync endpoint URL. (`/kobo/<token>`)
-3. Connect the Kobo over USB,
-4. Edit `.kobo/Kobo/Kobo eReader.conf` and set `api_endpoint=` under
-   `[OneStoreServices]` to `<your_omnibus_server_url>/kobo/<token>`.
-5. Eject safely. Your next sync on the device talks to Omnibus.
+1. In a shelf's settings, turn on **Sync to Kobo** for whatever you want the
+   device to carry.
+2. Go to **Account → Kobo wireless sync**, give your Kobo a name, and click
+   **Add a Kobo**. Omnibus prints that device's own sync endpoint —
+   `<your_omnibus_server_url>/kobo/<token>`. The token identifies the device,
+   so treat the URL as a secret and use a different one per Kobo.
+3. Connect the Kobo over USB and tap **Connect** on the device. It appears as a
+   USB drive.
+4. Open `.kobo/Kobo/Kobo eReader.conf` on that drive and set `api_endpoint=`
+   under the `[OneStoreServices]` heading to the URL from step 2, replacing the
+   Kobo store URL already there. Save the file.
+
+   ```ini
+   [OneStoreServices]
+   api_endpoint=https://omnibus.example.com/kobo/<token>
+   ```
+
+5. Eject the Kobo safely and unplug it. On the device, **Reading → Sync now** —
+   your opted-in books appear in its library.
 
 (`.kobo` is a hidden folder — on macOS press
 <kbd>⌘</kbd><kbd>⇧</kbd><kbd>.</kbd> in Finder to reveal it; on Windows enable
 **Hidden items** in Explorer's View tab.)
 
-Only shelves you've opted in are synced — mark a shelf **Sync to Kobo** in its
-settings to include it.
+To stop syncing, point `api_endpoint` back at the Kobo store URL you replaced,
+or remove the device from **Account → Kobo wireless sync**.
 
 ### Highlights and notes
 

@@ -90,6 +90,19 @@ fn get_info_declares_tools_and_the_confirm_gated_write_surface() {
     assert!(instructions.contains("search_book_content"));
 }
 
+#[test]
+fn get_info_advertises_the_stoat_icon_as_a_png_data_uri() {
+    let info = offline_server().get_info();
+    let icons = info.server_info.icons.expect("serverInfo.icons declared");
+    assert_eq!(icons.len(), 1);
+    assert!(icons[0].src.starts_with("data:image/png;base64,"));
+    assert_eq!(icons[0].mime_type.as_deref(), Some("image/png"));
+    assert_eq!(
+        icons[0].sizes.as_deref(),
+        Some(&["128x128".to_string()][..])
+    );
+}
+
 /// Boot a stub instance serving shared-typed JSON and return a service
 /// pointed at it.
 async fn stub_service() -> OmnibusMcp {

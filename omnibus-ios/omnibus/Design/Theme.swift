@@ -43,8 +43,10 @@ struct Palette: Sendable {
     let ink1: OKLCH
     let ink2: OKLCH
     let ink3: OKLCH
-    let accent: OKLCH
-    let accentSoft: OKLCH
+    /// `var` so `accented(by:)` can re-key a copy; the static themes below
+    /// are still the only places a palette is built from scratch.
+    var accent: OKLCH
+    var accentSoft: OKLCH
     let accentInk: OKLCH
     let coverFallbackBg: OKLCH
     let coverFallbackInk: OKLCH
@@ -154,6 +156,22 @@ struct Palette: Sendable {
         case .light: .light
         case .sepia: .sepia
         }
+    }
+
+    /// This palette with its accent re-keyed to a book's tone — how a screen
+    /// devoted to one book takes that book's color.
+    ///
+    /// Only hue and chroma come from the tone. Lightness stays the theme's
+    /// own: it is what the theme's `accentInk` was chosen against, so any
+    /// cover color — a near-black jacket included — yields a control whose
+    /// label still reads. Chroma is clamped into the band the theme accents
+    /// occupy rather than taken raw, so a neon cover doesn't outshine the
+    /// page and a grey one keeps a trace of identity.
+    func accented(by tone: OKLCH) -> Palette {
+        var copy = self
+        copy.accent = OKLCH(accent.l, min(max(tone.c, 0.05), 0.16), tone.h)
+        copy.accentSoft = OKLCH(accentSoft.l, min(max(tone.c * 0.6, 0.03), accentSoft.c), tone.h)
+        return copy
     }
 }
 

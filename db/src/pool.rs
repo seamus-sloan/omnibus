@@ -97,6 +97,9 @@ async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
     repair_ghosted_audiobook_attachments(pool).await?;
     // Auto-attach match key for rows indexed before migration 0016.
     crate::normalize::backfill_norm_columns(pool).await?;
+    // Surname-first `author_sort` for rows whose write path stored the
+    // given-first display name, so the Author axis keys every row alike (#2342).
+    crate::normalize::backfill_author_sort(pool).await?;
     // Effective (override) match keys for Check-In on rows edited before
     // migration 0048 (and self-heals any drift from the overrides JSON).
     crate::metadata_overrides::backfill_override_norm_columns(pool).await?;

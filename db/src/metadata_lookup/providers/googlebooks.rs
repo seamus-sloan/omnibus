@@ -469,3 +469,61 @@ pub async fn search(
         .filter_map(|(id, info)| map_volume(id, info, None))
         .collect())
 }
+
+/// The host Google Books serves cover bitmaps from — the shape every
+/// `imageLinks` entry takes, and the only host [`upgrade_cover_url`] rewrites.
+const COVER_HOST: &str = "books.google.com";
+
+/// The path that serves those bitmaps. Checked alongside the host so a volume
+/// or search URL on the same host is left alone.
+const COVER_PATH: &str = "/books/content";
+
+/// The `zoom` value that asks for the largest rendition Google holds.
+///
+/// The scale is not ordinal, which is why this is a named constant rather than
+/// an inline bump: `imageLinks.thumbnail` is `zoom=1` and `smallThumbnail` is
+/// `zoom=5`, and both are 128px wide. 2/3/4 climb 300 → 575 → 800, and 0
+/// returns the original — measured at 1749x2694 for one volume.
+const COVER_ZOOM_ORIGINAL: &str = "0";
+
+/// Rewrite a Google Books cover URL to ask for full-resolution art.
+///
+/// `imageLinks` only ever offers the two 128px renditions, which is why every
+/// cover this provider contributes is small. The same content URL serves the
+/// original behind a different `zoom`, so the upgrade is a query rewrite on a
+/// host already on the cover allowlist — it opens no new fetch surface.
+///
+/// `None` for anything that is not a Google Books content URL, which leaves
+/// the other providers' covers untouched.
+///
+/// **The bytes this URL returns still have to be checked.** For roughly two
+/// thirds of volumes Google answers it with a placeholder at a 200 rather than
+/// a 404, so the status says nothing — see `super::super::cover`.
+pub fn upgrade_cover_url(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if parsed.host_str() != Some(COVER_HOST) || parsed.path() != COVER_PATH {
+        return None;
+    }
+
+    let mut upgraded = parsed.clone();
+    let mut pairs = upgraded.query_pairs_mut();
+    pairs.clear();
+    for (key, value) in parsed.query_pairs() {
+        match key.as_ref() {
+            // Every `zoom` is dropped here and exactly one re-appended below.
+            // The URL is client-supplied, so a request carrying two of them
+            // would otherwise rewrite to two — leaving which one applies up to
+            // whichever end of the query Google happens to read.
+            "zoom" => {}
+            // A page-curl graphic composited into the bitmap. Harmless on a
+            // 128px thumbnail, but it has no place in a stored library cover.
+            "edge" => {}
+            _ => {
+                pairs.append_pair(&key, &value);
+            }
+        }
+    }
+    pairs.append_pair("zoom", COVER_ZOOM_ORIGINAL);
+    drop(pairs);
+    Some(upgraded.to_string())
+}

@@ -5,12 +5,13 @@
 //! save callbacks.
 
 use dioxus::prelude::*;
+use dioxus_router::Link;
 use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
 
 use super::super::filtering::format_badge_label;
 use super::EditField;
 use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestionItem};
-use crate::data;
+use crate::{data, Route};
 
 /// Shared edit context for a scalar cell wrapper: admin gating, the row's
 /// current editing signal, and the per-field save callback. Grouped so the
@@ -302,6 +303,7 @@ pub(super) fn RowScalarCell(
 /// fallback otherwise.
 #[component]
 pub(super) fn EbookRowCoverCell(
+    uuid: String,
     thumb_src: String,
     thumb_srcset: String,
     has_cover: bool,
@@ -318,23 +320,33 @@ pub(super) fn EbookRowCoverCell(
     let show_img = has_cover && broken_thumb_src.read().as_deref() != Some(thumb_src.as_str());
     rsx! {
         td { class: "ebook-col-cover", "data-testid": "ebook-cell-cover",
-            if show_img {
-                img {
-                    class: "ebook-thumb",
-                    src: "{thumb_src}",
-                    srcset: "{thumb_srcset}",
-                    sizes: "(max-width: 640px) 160px, (max-width: 1280px) 320px, 640px",
-                    alt: "Cover of {alt_title}",
-                    loading: "lazy",
-                    width: "320",
-                    height: "480",
-                    onerror: {
-                        let thumb_src = thumb_src.clone();
-                        move |_| broken_thumb_src.set(Some(thumb_src.clone()))
-                    },
+            // The row's explicit, keyboard-accessible "open details" affordance.
+            // The <tr> itself is a plain row — its editable cells are separate
+            // interactive controls, so the row must not be a role=button that
+            // wraps them — so this link carries the announced action instead,
+            // and its accessible name matches what activating it does (#2350).
+            Link {
+                to: Route::BookDetail { uuid: uuid.clone() },
+                class: "ebook-cover-link",
+                "aria-label": "Open details for {alt_title}",
+                if show_img {
+                    img {
+                        class: "ebook-thumb",
+                        src: "{thumb_src}",
+                        srcset: "{thumb_srcset}",
+                        sizes: "(max-width: 640px) 160px, (max-width: 1280px) 320px, 640px",
+                        alt: "Cover of {alt_title}",
+                        loading: "lazy",
+                        width: "320",
+                        height: "480",
+                        onerror: {
+                            let thumb_src = thumb_src.clone();
+                            move |_| broken_thumb_src.set(Some(thumb_src.clone()))
+                        },
+                    }
+                } else {
+                    div { class: "ebook-thumb ebook-thumb-fallback", "—" }
                 }
-            } else {
-                div { class: "ebook-thumb ebook-thumb-fallback", "—" }
             }
         }
     }

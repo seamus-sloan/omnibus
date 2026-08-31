@@ -202,11 +202,18 @@ fn BdStarHalf(
 ) -> Element {
     let mut hover = state.hover;
     let current = state.current;
+    // The active value's own half is the un-rate control (re-clicking it
+    // clears), so it announces the clear and carries a tooltip — otherwise
+    // clearing is undiscoverable and misannounced as "Rate N stars" (#2352).
+    // `current()` is None on SSR / first hydration and reconciles post-mount
+    // (rule 07), so both sides render the "Rate …" first paint identically.
+    let label = half_star_label(value, current().map(|r| r.stars));
     rsx! {
         button {
             r#type: "button",
             class: "bd-star-half bd-star-half-{side}",
-            aria_label: rate_label(value),
+            aria_label: "{label}",
+            title: "{label}",
             onmouseenter: move |_| hover.set(Some(value)),
             onclick: move |_| {
                 if uuid.is_empty() {
@@ -362,6 +369,18 @@ fn rate_label(value: f32) -> String {
     }
 }
 
+/// Accessible label + tooltip for a half-star click target. When this half
+/// *is* the current rating, re-clicking it clears the rating — so it announces
+/// the clear (and the tooltip makes it discoverable) rather than the
+/// misleading "Rate N stars" it otherwise keeps (#2352).
+fn half_star_label(value: f32, current: Option<f32>) -> String {
+    if current == Some(value) {
+        format!("Clear your {}-star rating", fmt_stars(value))
+    } else {
+        rate_label(value)
+    }
+}
+
 /// Relative "rated N ago" phrase from a unix-seconds timestamp, computed
 /// against the injected `now` (rather than reading the clock internally) so
 /// every call site — the live widget and the other-ratings row alike — shares
@@ -385,7 +404,25 @@ fn rated_ago(now: i64, updated_at: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::rated_ago;
+    use super::{half_star_label, rated_ago};
+
+    #[test]
+    fn half_star_label_announces_clear_on_the_active_value() {
+        // #2352: the half whose value equals the saved rating is the un-rate
+        // control, so it must say it clears.
+        assert_eq!(half_star_label(3.0, Some(3.0)), "Clear your 3-star rating");
+        assert_eq!(
+            half_star_label(0.5, Some(0.5)),
+            "Clear your 0.5-star rating"
+        );
+    }
+
+    #[test]
+    fn half_star_label_rates_when_value_is_not_the_active_one() {
+        assert_eq!(half_star_label(3.0, Some(2.5)), "Rate 3 stars");
+        assert_eq!(half_star_label(4.0, Some(3.0)), "Rate 4 stars");
+        assert_eq!(half_star_label(1.0, None), "Rate 1 star");
+    }
 
     #[test]
     fn rated_ago_shows_just_now_for_sub_minute_gap() {

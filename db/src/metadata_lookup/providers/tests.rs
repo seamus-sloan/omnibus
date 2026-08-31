@@ -135,3 +135,92 @@ fn catalog_and_ladder_agree_when_both_keys_are_configured() {
     let config = MetadataLookupConfig::live(ProviderKeys::from_env());
     assert_catalog_agrees_with_ladder(&config);
 }
+
+/// A real `imageLinks.thumbnail` value, in the exact shape Google returns it
+/// (bar the scheme, which `upgrade_to_https` has already fixed by this point).
+const GB_THUMBNAIL: &str = "https://books.google.com/books/content?id=B1hSG45JCX4C&printsec=frontcover&img=1&zoom=1&edge=curl&source=gbs_api";
+
+#[test]
+fn upgrade_cover_url_requests_the_original_size_and_drops_the_page_curl() {
+    let upgraded = googlebooks::upgrade_cover_url(GB_THUMBNAIL).expect("google books url");
+    assert!(upgraded.contains("zoom=0"), "{upgraded}");
+    assert!(!upgraded.contains("zoom=1"), "{upgraded}");
+    assert!(!upgraded.contains("edge=curl"), "{upgraded}");
+}
+
+#[test]
+fn upgrade_cover_url_preserves_the_volume_id_and_every_other_parameter() {
+    let upgraded = googlebooks::upgrade_cover_url(GB_THUMBNAIL).expect("google books url");
+    // The id is what names the book; losing it would silently fetch nothing.
+    assert!(upgraded.contains("id=B1hSG45JCX4C"), "{upgraded}");
+    assert!(upgraded.contains("printsec=frontcover"), "{upgraded}");
+    assert!(upgraded.contains("img=1"), "{upgraded}");
+    assert!(upgraded.contains("source=gbs_api"), "{upgraded}");
+}
+
+#[test]
+fn upgrade_cover_url_stays_on_the_allowlisted_host_and_path() {
+    let upgraded = googlebooks::upgrade_cover_url(GB_THUMBNAIL).expect("google books url");
+    // The rewrite must not be able to move the fetch off the cover allowlist.
+    assert!(
+        upgraded.starts_with("https://books.google.com/books/content?"),
+        "{upgraded}"
+    );
+}
+
+#[test]
+fn upgrade_cover_url_adds_a_zoom_when_the_url_carries_none() {
+    let upgraded = googlebooks::upgrade_cover_url(
+        "https://books.google.com/books/content?id=abc&printsec=frontcover",
+    )
+    .expect("google books url");
+    assert!(upgraded.contains("zoom=0"), "{upgraded}");
+}
+
+#[test]
+fn upgrade_cover_url_collapses_repeated_zoom_parameters_to_one() {
+    // The URL is client-supplied, so it can carry more than one `zoom`. Two
+    // would rewrite to two, leaving which applies up to whichever end of the
+    // query the origin reads.
+    let upgraded = googlebooks::upgrade_cover_url(
+        "https://books.google.com/books/content?id=abc&zoom=1&zoom=5",
+    )
+    .expect("google books url");
+    assert_eq!(upgraded.matches("zoom=").count(), 1, "{upgraded}");
+    assert!(upgraded.contains("zoom=0"), "{upgraded}");
+}
+
+#[test]
+fn upgrade_cover_url_declines_a_url_from_another_provider() {
+    // Open Library and Hardcover covers are already served at full size; a
+    // zoom parameter would be meaningless on them.
+    assert_eq!(
+        googlebooks::upgrade_cover_url("https://covers.openlibrary.org/b/id/1-L.jpg"),
+        None
+    );
+    assert_eq!(
+        googlebooks::upgrade_cover_url("https://assets.hardcover.app/x.jpg"),
+        None
+    );
+}
+
+#[test]
+fn upgrade_cover_url_declines_a_google_url_that_is_not_a_cover() {
+    // Same host, different path — a search or volume URL is not a bitmap, and
+    // rewriting its query would produce a request for something else entirely.
+    assert_eq!(
+        googlebooks::upgrade_cover_url("https://books.google.com/books?id=abc"),
+        None
+    );
+}
+
+#[test]
+fn upgrade_cover_url_declines_a_lookalike_host() {
+    // The rewrite is what decides a second fetch happens, so a host that
+    // merely *contains* the real one must not match it.
+    assert_eq!(
+        googlebooks::upgrade_cover_url("https://books.google.com.evil.test/books/content?id=a"),
+        None
+    );
+    assert_eq!(googlebooks::upgrade_cover_url("not a url at all"), None);
+}

@@ -92,8 +92,9 @@ pub async fn decide_cleanup_suggestion(
     _server_url: &str,
     id: i64,
     decision: Decision,
+    value: Option<String>,
 ) -> Result<(), DataError> {
-    crate::rpc::rpc_cleanup_decide(id, decision)
+    crate::rpc::rpc_cleanup_decide(id, decision, value)
         .await
         .map_err(note_server_fn_err)
 }
@@ -106,11 +107,12 @@ pub async fn decide_cleanup_suggestion(
     server_url: &str,
     id: i64,
     decision: Decision,
+    value: Option<String>,
 ) -> Result<(), DataError> {
     post_cleanup(
         server_url,
         "decide",
-        serde_json::json!({ "id": id, "decision": decision }),
+        serde_json::json!({ "id": id, "decision": decision, "value": value }),
     )
     .await
 }

@@ -5,7 +5,6 @@
 use dioxus::prelude::*;
 use omnibus_shared::ChapterInfo;
 
-use super::super::helpers::remaining_at_rate;
 use super::state::{format_countdown, sleep_remaining, SleepState, SLEEP_PRESETS};
 use super::view::format_ms;
 
@@ -60,11 +59,10 @@ pub(super) struct ChaptersListView {
     pub current_index: usize,
     /// Seconds elapsed in the whole book (drives the current row's bar).
     pub elapsed: f64,
-    /// Current playback rate — each row's duration divides by it so the sheet
-    /// and the transport read one clock (#2246).
+    /// Current playback rate.
     pub rate: f64,
-    /// Formatted total-duration label shown in the sheet header, already on
-    /// that same rate-adjusted basis.
+    /// Formatted total-duration label shown in the sheet header, in real
+    /// book-time to match the row durations (#2344).
     pub total_label: String,
 }
 
@@ -118,7 +116,7 @@ fn chapter_row(
     ch: &ChapterInfo,
     current_index: usize,
     elapsed: f64,
-    rate: f64,
+    _rate: f64,
     on_seek: &EventHandler<f64>,
 ) -> Element {
     let is_current = i == current_index;
@@ -150,7 +148,7 @@ fn chapter_row(
             } else {
                 span {
                     class: "mono m-ch-trail m-ch-dur",
-                    "{format_ms(remaining_at_rate(ch.duration_seconds, rate))}"
+                    "{format_ms(ch.duration_seconds)}"
                 }
             }
         }

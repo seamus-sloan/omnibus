@@ -24,7 +24,10 @@ use crate::physical::{
 };
 use crate::test_support::CoversTempDir;
 
-use super::resolve::{add_physical_only_with, wishlist_add_with, MAX_CLOSE_MATCH_CANDIDATES};
+use super::resolve::{
+    add_physical_only_with, authors_compatible, strip_leading_article, wishlist_add_with,
+    LOOSE_FETCH_LIMIT, MAX_CLOSE_MATCH_CANDIDATES,
+};
 use super::*;
 
 const ISBN: &str = "9780134685991";
@@ -158,6 +161,18 @@ async fn mount_ol_hit(server: &MockServer, title: &str, author: &str) {
                 "title": title,
                 "authors": [{ "name": author }],
             }
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Mount Open Library to resolve `ISBN` to a book with a title but no authors
+/// at all — an edition record shape Open Library genuinely publishes.
+async fn mount_ol_hit_without_authors(server: &MockServer, title: &str) {
+    Mock::given(method("GET"))
+        .and(path("/api/books"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            format!("ISBN:{ISBN}"): { "title": title }
         })))
         .mount(server)
         .await;
@@ -602,6 +617,208 @@ async fn resolve_norm_prefers_exact_over_ambiguous_tolerant_matches() {
         matches!(outcome, ScanOutcome::CloseMatch { book, .. } if book.uuid == "exact"),
         "the exact title match must win over the tolerant superset"
     );
+}
+
+/// The name forms one book's print editions actually carry: the library holds
+/// the Gutenberg EPUB, and each provider answer is a real Google Books or Open
+/// Library record for a physical edition of it (#2334). Passes 1 and 2 reject
+/// every row but the first — the author key is an equality test and the title
+/// key only absorbs a trailing subtitle — so each of these was a duplicate
+/// physical-only book rather than a match.
+#[tokio::test]
+async fn resolve_close_match_bridges_the_name_forms_print_editions_carry() {
+    for (title, author) in [
+        ("A Room with a View", "E. M. Forster"),
+        // Google Books, ISBN 014043173X — the given name spelled out.
+        ("A Room with a View", "Edward Morgan Forster"),
+        // Google Books, ISBN 9781548791292 — the middle initial dropped.
+        ("A Room with a View", "E. Forster"),
+        // Open Library, ISBN 9780486112664 — the leading article dropped.
+        ("Room with a View", "E. M. Forster"),
+        // Open Library, ISBN 9781548791292 — both at once.
+        ("Room with a View", "E. Forster"),
+    ] {
+        let pool = pool().await;
+        seed_book(&pool, "u1", "A Room with a View", "E. M. Forster", None).await;
+        let server = MockServer::start().await;
+        mount_ol_hit(&server, title, author).await;
+
+        let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+            .await
+            .unwrap();
+        assert!(
+            matches!(&outcome, ScanOutcome::CloseMatch { book, .. } if book.uuid == "u1"),
+            "{title:?} by {author:?} should match the library EPUB, got {outcome:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn resolve_close_match_matches_on_title_when_the_provider_has_no_author() {
+    // An Open Library edition record with an empty `authors` array used to
+    // short-circuit the whole norm rung, discarding a usable title.
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+    let server = MockServer::start().await;
+    mount_ol_hit_without_authors(&server, "Effective Java").await;
+
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(
+        matches!(&outcome, ScanOutcome::CloseMatch { book, .. } if book.uuid == "u1"),
+        "an authorless provider record should still match on title, got {outcome:?}"
+    );
+}
+
+#[tokio::test]
+async fn resolve_norm_does_not_match_a_different_last_name() {
+    // The loose pass widens the *first* token only. Two authors who share a
+    // title and nothing else must not be offered as the same book.
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Middlemarch", "George Eliot", None).await;
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "Middlemarch", "George Orwell").await;
+
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, ScanOutcome::NotInLibrary { .. }),
+        "a different last name is not a close match"
+    );
+}
+
+#[tokio::test]
+async fn resolve_norm_prefers_the_exact_author_over_a_compatible_name_form() {
+    // Both books carry the same title; only one carries the provider's exact
+    // author key. Passes 1 and 2 isolate it before the loose pass can offer
+    // the other alongside it.
+    let pool = pool().await;
+    seed_book(&pool, "exact", "A Room with a View", "E. M. Forster", None).await;
+    seed_book(&pool, "loose", "A Room with a View", "Edward Forster", None).await;
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "A Room with a View", "E. M. Forster").await;
+
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert_eq!(close_match_uuids(&outcome), vec!["exact"]);
+}
+
+#[tokio::test]
+async fn resolve_loose_pass_caps_the_candidate_list() {
+    // The loose pass fetches a wider window than it ships, so the cap has to
+    // hold after the author filter thins it — not before.
+    let pool = pool().await;
+    for i in 0..MAX_CLOSE_MATCH_CANDIDATES + 3 {
+        seed_book(
+            &pool,
+            &format!("u{i}"),
+            "A Room with a View",
+            "E. M. Forster",
+            None,
+        )
+        .await;
+    }
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "Room with a View", "Edward Morgan Forster").await;
+
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert_eq!(
+        close_match_uuids(&outcome).len(),
+        MAX_CLOSE_MATCH_CANDIDATES
+    );
+}
+
+#[tokio::test]
+async fn resolve_loose_pass_does_not_let_same_title_strangers_crowd_out_the_match() {
+    // The real book is one row among a shelf's worth of same-title books by
+    // other authors. Capping the fetch before the author filter would drop it.
+    let pool = pool().await;
+    for i in 0..LOOSE_FETCH_LIMIT {
+        seed_book(
+            &pool,
+            &format!("stranger-{i:03}"),
+            "A Room with a View",
+            &format!("Author {i:03}"),
+            None,
+        )
+        .await;
+    }
+    // Sorts last by uuid, so a pre-filter cap would never reach it.
+    seed_book(
+        &pool,
+        "zz-match",
+        "A Room with a View",
+        "E. M. Forster",
+        None,
+    )
+    .await;
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "Room with a View", "Edward Morgan Forster").await;
+
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert_eq!(close_match_uuids(&outcome), vec!["zz-match"]);
+}
+
+#[test]
+fn authors_compatible_accepts_initial_and_expanded_forms_of_one_name() {
+    for (provider, library) in [
+        ("e m forster", "e m forster"),
+        ("edward morgan forster", "e m forster"),
+        ("e forster", "e m forster"),
+        ("e m forster", "edward morgan forster"),
+        ("forster", "e m forster"),
+        ("john ronald reuel tolkien", "j r r tolkien"),
+    ] {
+        assert!(
+            authors_compatible(Some(provider), Some(library)),
+            "{provider:?} should be compatible with {library:?}"
+        );
+    }
+}
+
+#[test]
+fn authors_compatible_rejects_a_different_last_or_first_token() {
+    for (provider, library) in [
+        ("george orwell", "george eliot"),
+        ("edmund forster", "morgan forster"),
+        ("brandon sanderson", "robert jordan"),
+    ] {
+        assert!(
+            !authors_compatible(Some(provider), Some(library)),
+            "{provider:?} should not be compatible with {library:?}"
+        );
+    }
+}
+
+#[test]
+fn authors_compatible_treats_a_missing_key_as_cant_tell_not_no_match() {
+    assert!(authors_compatible(None, Some("e m forster")));
+    assert!(authors_compatible(Some("e m forster"), None));
+    assert!(authors_compatible(None, None));
+}
+
+#[test]
+fn strip_leading_article_drops_only_a_leading_english_article() {
+    assert_eq!(
+        strip_leading_article("a room with a view"),
+        "room with a view"
+    );
+    assert_eq!(
+        strip_leading_article("an ember in the ashes"),
+        "ember in the ashes"
+    );
+    assert_eq!(strip_leading_article("the hobbit"), "hobbit");
+    assert_eq!(strip_leading_article("annihilation"), "annihilation");
+    assert_eq!(strip_leading_article("dune"), "dune");
+    // A title that is only an article keeps it, so the key never empties.
+    assert_eq!(strip_leading_article("the"), "the");
 }
 
 /// Every uuid a `CloseMatch` offers, head and tail flattened the way both

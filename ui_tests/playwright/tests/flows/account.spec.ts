@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { TEST_PASSWORD } from "../utils/auth";
@@ -355,3 +355,197 @@ test("shows an error when the avatar upload fails", async ({ page }) => {
   await expect(page.getByTestId("avatar-status")).toBeVisible();
   await expect(page.getByTestId("avatar-status")).toHaveClass(/error/);
 });
+
+// The five goal tests all reset the same three per-user rows, so they have to
+// run one at a time — under the suite's `fullyParallel` default they clobber
+// each other's state mid-assertion. Scoped to this block rather than the file,
+// so the rest of the account surface keeps its parallelism.
+test.describe
+  .serial("reading goals", () => {
+    /**
+     * Seed one goal through the REST route, asserting it landed. A silent
+     * setup failure — a moved route, an auth regression — would otherwise
+     * surface as a confusing assertion about the UI rather than the setup.
+     */
+    async function seedGoal(
+      request: APIRequestContext,
+      path: string,
+      data: Record<string, unknown>,
+    ) {
+      const resp = await request.put(path, { data });
+      expect(resp.status(), `seeding ${path} failed`).toBe(200);
+    }
+
+    /**
+     * Reset every goal so each test below starts from the not-set state. The REST
+     * writes invalidate this user's stats cache, so the card reads the cleared
+     * values immediately rather than after the TTL.
+     */
+    async function clearAllGoals(request: APIRequestContext) {
+      const annual = await request.put("/api/stats/goal", {
+        data: { target: null },
+      });
+      expect(annual.status(), "clearing the reading goal failed").toBe(200);
+      for (const kind of ["pages", "minutes"]) {
+        const resp = await request.put("/api/stats/goal/daily", {
+          data: { kind, target: null },
+        });
+        expect(resp.status(), `clearing the daily ${kind} goal failed`).toBe(
+          200,
+        );
+      }
+    }
+
+    test("the goals card sets all three targets behind one control", async ({
+      page,
+      request,
+    }) => {
+      await clearAllGoals(request);
+      await gotoReady(page, ACCOUNT);
+
+      const card = page.getByTestId("account-goals-card");
+      await expect(card).toBeVisible();
+      await expect(
+        page.getByRole("heading", { level: 2, name: "Reading goals" }),
+      ).toBeVisible();
+
+      // Read mode: every kind states its target or that it has none, and there is
+      // exactly one control — the point of consolidating them here.
+      for (const testid of ["goal-books", "goal-pages", "goal-minutes"]) {
+        await expect(page.getByTestId(`${testid}-value`)).toHaveText("Not set");
+      }
+      await expect(card.getByRole("button")).toHaveCount(1);
+      await expect(page.getByTestId("goals-edit")).toBeVisible();
+
+      await page.getByTestId("goals-edit").click();
+      await page.getByTestId("goal-books-input").fill("24");
+      await page.getByTestId("goal-pages-input").fill("30");
+      await page.getByTestId("goal-minutes-input").fill("45");
+
+      // One Save, three per-kind writes: the annual route and the daily route
+      // can't be batched, so the card fans out and reports what landed.
+      await expectMutation(
+        page,
+        {
+          method: "POST",
+          url: "/api/rpc/stats-goal",
+          expectedBody: { update: { target: 24 } },
+          expectedStatus: 200,
+        },
+        async () => page.getByTestId("goals-save").click(),
+      );
+
+      await expect(page.getByTestId("goals-status")).toHaveText("Goals saved.");
+      await expect(page.getByTestId("goal-books-value")).toHaveText("24 books");
+      await expect(page.getByTestId("goal-pages-value")).toHaveText("30 pages");
+      await expect(page.getByTestId("goal-minutes-value")).toHaveText(
+        "45 minutes",
+      );
+
+      // They survive a reload — the card reads all three back off the server,
+      // which is what tells an optimistic render apart from a real write.
+      await gotoReady(page, ACCOUNT);
+      await expect(page.getByTestId("goal-books-value")).toHaveText("24 books");
+      await expect(page.getByTestId("goal-pages-value")).toHaveText("30 pages");
+      await expect(page.getByTestId("goal-minutes-value")).toHaveText(
+        "45 minutes",
+      );
+    });
+
+    test("an emptied field clears that goal and leaves the others alone", async ({
+      page,
+      request,
+    }) => {
+      await clearAllGoals(request);
+      await seedGoal(request, "/api/stats/goal", { target: 24 });
+      await seedGoal(request, "/api/stats/goal/daily", {
+        kind: "pages",
+        target: 30,
+      });
+      await gotoReady(page, ACCOUNT);
+
+      await page.getByTestId("goals-edit").click();
+      // Blanking is how a single form drops a goal — there is no Clear per row.
+      await page.getByTestId("goal-pages-input").fill("");
+
+      await expectMutation(
+        page,
+        {
+          method: "POST",
+          url: "/api/rpc/stats-goal-daily",
+          // `target` is `skip_serializing_if = "Option::is_none"`, so a clear
+          // travels as the kind alone — same shape the annual clear uses.
+          expectedBody: { update: { kind: "pages" } },
+          expectedStatus: 200,
+        },
+        async () => page.getByTestId("goals-save").click(),
+      );
+
+      await expect(page.getByTestId("goal-pages-value")).toHaveText("Not set");
+      // The untouched annual target is not restated — only changed kinds are
+      // written, so another device's value can't be clobbered by a no-op save.
+      await expect(page.getByTestId("goal-books-value")).toHaveText("24 books");
+    });
+
+    test("an out-of-range target is refused before it costs a round trip", async ({
+      page,
+      request,
+    }) => {
+      await clearAllGoals(request);
+      await gotoReady(page, ACCOUNT);
+
+      await page.getByTestId("goals-edit").click();
+      // 1,500 is a legal day of pages and an impossible day of minutes, so the
+      // same number has to be accepted by one field and refused by the other.
+      await page.getByTestId("goal-pages-input").fill("1500");
+      await page.getByTestId("goal-minutes-input").fill("1500");
+      await page.getByTestId("goals-save").click();
+
+      const status = page.getByTestId("goals-status");
+      await expect(status).toContainText("Minutes a day");
+      await expect(status).toContainText("1440");
+      // Nothing was written — the form stays open on the value it rejected.
+      await expect(page.getByTestId("goal-pages-input")).toHaveValue("1500");
+    });
+
+    test("a failed save names the kind that didn't land", async ({
+      page,
+      request,
+    }) => {
+      await clearAllGoals(request);
+      await page.route("**/api/rpc/stats-goal-daily", (route) =>
+        route.fulfill({ status: 500, contentType: "text/plain", body: "boom" }),
+      );
+
+      await gotoReady(page, ACCOUNT);
+      await page.getByTestId("goals-edit").click();
+      await page.getByTestId("goal-books-input").fill("24");
+      await page.getByTestId("goal-pages-input").fill("30");
+      await page.getByTestId("goals-save").click();
+
+      // Three goals are three writes: the reader has to know which one to retry
+      // rather than being told "something went wrong".
+      const status = page.getByTestId("goals-status");
+      await expect(status).toContainText("Pages a day");
+      await expect(status).toHaveClass(/error/);
+      // The annual write did land, and the form stays open on the failure.
+      await expect(page.getByTestId("goal-books-input")).toHaveValue("24");
+    });
+
+    test("cancel drops the drafts back to what the server confirmed", async ({
+      page,
+      request,
+    }) => {
+      await clearAllGoals(request);
+      await seedGoal(request, "/api/stats/goal", { target: 24 });
+      await gotoReady(page, ACCOUNT);
+
+      await page.getByTestId("goals-edit").click();
+      await page.getByTestId("goal-books-input").fill("99");
+      await page.getByTestId("goals-cancel").click();
+
+      await expect(page.getByTestId("goal-books-value")).toHaveText("24 books");
+      await page.getByTestId("goals-edit").click();
+      await expect(page.getByTestId("goal-books-input")).toHaveValue("24");
+    });
+  });

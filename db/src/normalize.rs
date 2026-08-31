@@ -35,6 +35,30 @@ pub fn normalize_author(s: &str) -> Option<String> {
     normalize(s)
 }
 
+/// Surname-first sort key for an author *display name*, used as the
+/// `author_sort` fallback when a book carries no OPF `file_as`. Without it the
+/// Author axis mixes two key formats — `"Surname, Given"` for file-as rows and
+/// `"Given Surname"` for the rest — so the same author's books scatter to
+/// opposite ends of the list (#2342).
+///
+/// Mirrors the frontend authors-index `sort_key` so the library table and the
+/// authors index agree on order:
+/// - a name already in `"Surname, Given"` form (it carries a comma) is kept
+///   verbatim — some Calibre dumps store the display name that way;
+/// - a mononym (no whitespace) is kept verbatim;
+/// - otherwise the last whitespace-separated token becomes the surname:
+///   `"Andy Weir"` → `"Weir, Andy"`.
+pub fn author_sort_key(name: &str) -> String {
+    let name = name.trim();
+    if name.contains(',') {
+        return name.to_string();
+    }
+    match name.rsplit_once(' ') {
+        Some((rest, last)) => format!("{last}, {rest}"),
+        None => name.to_string(),
+    }
+}
+
 /// Fold `s` to `[a-z0-9 ]`, expanding `&` and collapsing everything else
 /// to single spaces.
 ///
@@ -148,6 +172,60 @@ pub async fn backfill_norm_columns(pool: &SqlitePool) -> Result<(), NormalizeErr
 /// Rows per chunk for the norm-column backfill UPDATE. Three binds per row
 /// keeps a chunk under SQLite's 999-parameter cap.
 const NORM_UPDATE_CHUNK: usize = 300;
+
+/// Boot backfill: reshape any `books.author_sort` still stored in display
+/// `"Given Surname"` order into the surname-first sort key, so the Author axis
+/// orders every existing row on one key format instead of the mix the old
+/// write path left — `"Surname, Given"` for file-as rows and `"Given Surname"`
+/// for the rest (#2342). New rows are written surname-first by the sync
+/// writers; this heals rows indexed before that change.
+///
+/// Idempotent by construction: it only touches a value that has a space but no
+/// comma (an untransformed display name), and [`author_sort_key`]'s output
+/// always carries a comma — so the second pass skips every row it already
+/// fixed and the pass is a near-no-op once caught up. Runs on every boot from
+/// `init_db` alongside [`backfill_norm_columns`].
+pub async fn backfill_author_sort(pool: &SqlitePool) -> Result<(), NormalizeError> {
+    // Only the rows that actually change: `instr(_, ',') = 0` excludes values
+    // already in "Surname, Given" form, and `instr(_, ' ') > 0` excludes
+    // mononyms (which `author_sort_key` returns verbatim anyway).
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, author_sort FROM books
+          WHERE author_sort IS NOT NULL
+            AND author_sort <> ''
+            AND instr(author_sort, ',') = 0
+            AND instr(author_sort, ' ') > 0",
+    )
+    .fetch_all(pool)
+    .await?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let mut tx = pool.begin().await?;
+    for chunk in rows.chunks(AUTHOR_SORT_UPDATE_CHUNK) {
+        let values = std::iter::repeat_n("(?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE books
+                SET author_sort = v.column2
+               FROM (VALUES {values}) AS v
+              WHERE books.id = v.column1"
+        );
+        let mut q = sqlx::query(&sql);
+        for (id, sort) in chunk {
+            q = q.bind(id).bind(author_sort_key(sort));
+        }
+        q.execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Rows per chunk for the author-sort backfill UPDATE. Two binds per row keeps
+/// a chunk well under SQLite's 999-parameter cap.
+const AUTHOR_SORT_UPDATE_CHUNK: usize = 400;
 
 #[cfg(test)]
 mod tests;

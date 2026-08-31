@@ -59,6 +59,8 @@ fn sync_line_offers_link_formats_when_unlinked() {
     // SSR escapes the apostrophe.
     assert!(html.contains("positions aren&#39;t synced"), "{html}");
     assert!(html.contains("data-testid=\"sync-link-open\""), "{html}");
+    // Named like a control, not a trailing "link formats \u{2192}" run of prose.
+    assert!(html.contains("Link Formats"), "{html}");
 }
 
 #[test]

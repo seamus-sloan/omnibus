@@ -17,6 +17,7 @@ enum Destination: Hashable {
     case tags
     case tag(name: String)
     case settings
+    case readingGoals
     case downloads
     case authorsIndex
     case searchResults(query: String)
@@ -52,17 +53,25 @@ struct MainTabView: View {
         // player sit directly above the tabs as one block.
         .toolbar(.hidden, for: .tabBar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                if player.isActive {
-                    MiniPlayerBar()
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+            // An immersive detail screen owns the bottom edge — its action
+            // bar sits where the tabs do — so the whole block steps aside
+            // while one is up. Audio keeps playing; the mini player returns
+            // with the bar on pop.
+            if !Presentation.shared.isImmersiveDetail {
+                VStack(spacing: 0) {
+                    if player.isActive {
+                        MiniPlayerBar()
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    OmnibusTabBar(selection: $selection) { tab in
+                        reselect.fire(tab)
+                    }
                 }
-                OmnibusTabBar(selection: $selection) { tab in
-                    reselect.fire(tab)
-                }
+                .animation(Motion.glide, value: player.isActive)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .animation(Motion.glide, value: player.isActive)
         }
+        .animation(Motion.glide, value: Presentation.shared.isImmersiveDetail)
         // The keyboard belongs over the tab bar, not under it. Has to sit on
         // the modified view — on the inset's content it is a no-op (#2102).
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -157,6 +166,22 @@ final class Presentation {
     var reader: ReaderSession?
     var player: ReaderSession?
 
+    /// How many immersive detail screens are on screen — pushed book details
+    /// hide the tab bar and mini player. A count, not a flag: a series-strip
+    /// tap pushes a second detail over the first, and appear/disappear of the
+    /// two interleave during the transition.
+    private(set) var immersiveDetailDepth = 0
+
+    var isImmersiveDetail: Bool { immersiveDetailDepth > 0 }
+
+    func pushImmersiveDetail() {
+        immersiveDetailDepth += 1
+    }
+
+    func popImmersiveDetail() {
+        immersiveDetailDepth = max(0, immersiveDetailDepth - 1)
+    }
+
     /// Bumped once a reading or listening session has *persisted* its final
     /// position. Surfaces that show resume state observe this instead of
     /// reacting to dismissal — the reader writes its last position from an
@@ -245,6 +270,8 @@ struct DestinationRouter: ViewModifier {
                 SearchResultsView(query: name, title: name)
             case .settings:
                 SettingsView()
+            case .readingGoals:
+                ReadingGoalsView()
             case .downloads:
                 DownloadsView()
             case .authorsIndex:

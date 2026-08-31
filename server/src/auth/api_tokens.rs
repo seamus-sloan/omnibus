@@ -11,7 +11,9 @@ use axum::{
     Json,
 };
 use omnibus_db::auth::{self as auth_db, ApiToken, AuthError};
-use omnibus_shared::{ApiTokenView, CreateApiTokenRequest, CreateApiTokenResponse};
+use omnibus_shared::{
+    ApiTokenView, CreateApiTokenRequest, CreateApiTokenResponse, RenameApiTokenRequest,
+};
 
 use super::extractor::AuthUser;
 use crate::backend::AppState;
@@ -24,6 +26,7 @@ fn to_view(t: ApiToken) -> ApiTokenView {
         name: t.name,
         created_at: t.created_at,
         last_used_at: t.last_used_at,
+        suffix: t.suffix,
     }
 }
 
@@ -50,6 +53,22 @@ pub async fn post_api_token_handler(
         .into_response(),
         Err(AuthError::Validation(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),
         Err(e) => internal("create api token", e),
+    }
+}
+
+/// `PATCH /api/auth/api-tokens/{id}` — rename one of the caller's tokens.
+/// `404` follows the same indistinguishability rule as revoke.
+pub async fn patch_api_token_handler(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(token_id): Path<i64>,
+    Json(req): Json<RenameApiTokenRequest>,
+) -> Response {
+    match auth_db::rename_api_token_for_user(state.pool(), user.id, token_id, &req.name).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(AuthError::Validation(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),
+        Err(AuthError::ApiTokenNotFound) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => internal("rename api token", e),
     }
 }
 

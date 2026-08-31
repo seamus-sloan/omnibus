@@ -129,7 +129,7 @@ fn superlatives_card_renders_its_rows_and_the_fastest_read_caveat() {
         ..Default::default()
     };
 
-    let html = crate::test_support::render(rsx! { SuperlativesCard { summary } });
+    let html = crate::test_support::render(rsx! { StandoutsGrid { summary } });
 
     assert!(html.contains("stats-superlatives"), "{html}");
     assert!(html.contains("Doorstopper"), "{html}");
@@ -142,7 +142,7 @@ fn superlatives_card_renders_its_rows_and_the_fastest_read_caveat() {
 #[test]
 fn superlatives_card_renders_nothing_at_all_for_a_bare_window() {
     let html = crate::test_support::render(rsx! {
-        SuperlativesCard { summary: StatsSummary::default() }
+        StandoutsGrid { summary: StatsSummary::default() }
     });
 
     assert!(!html.contains("stats-superlatives"), "{html}");
@@ -159,7 +159,7 @@ fn superlatives_card_omits_the_caveat_when_it_reports_no_fastest_read() {
         ..Default::default()
     };
 
-    let html = crate::test_support::render(rsx! { SuperlativesCard { summary } });
+    let html = crate::test_support::render(rsx! { StandoutsGrid { summary } });
 
     assert!(html.contains("stats-superlatives"), "{html}");
     assert!(!html.contains("stats-superlatives-note"), "{html}");

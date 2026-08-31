@@ -33,9 +33,13 @@ pub async fn rpc_cleanup_queue(kind: CleanupKind, limit: i64) -> Result<Vec<Sugg
 /// Admin-only: record a review decision on one suggestion. `Accepted` also
 /// runs the matching apply primitive, so a card the admin accepted is applied
 /// before this returns.
+///
+/// `value` is the reviewer's own wording from the review card's editable
+/// proposal field, sent only when they typed over the detector's. The db layer
+/// refuses it for the kinds whose apply primitive cannot honour one.
 #[post("/api/rpc/cleanup/decide", pool: PoolExt, admin: AdminUser)]
-pub async fn rpc_cleanup_decide(id: i64, decision: Decision) -> Result<()> {
-    db::cleanup::decide_suggestion(&pool.0, id, decision, admin.0.id)
+pub async fn rpc_cleanup_decide(id: i64, decision: Decision, value: Option<String>) -> Result<()> {
+    db::cleanup::decide_suggestion(&pool.0, id, decision, admin.0.id, value.as_deref())
         .await
         .map_err(|e| map_store_error("cleanup decide", e))?;
     Ok(())

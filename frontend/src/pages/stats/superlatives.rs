@@ -1,6 +1,7 @@
-//! Superlatives card for the `/stats` period section: the window's single
-//! most-X figures. Every row is conditional, so the card's own length reports
-//! how much the window holds — see [`build_rows`] for which fields feed it.
+//! "The standouts" — the windowed band's grid of single most-X figures, one
+//! card per superlative. Every row is conditional, so the grid's own length
+//! reports how much the window holds — see [`build_rows`] for which fields
+//! feed it.
 
 use dioxus::prelude::*;
 use omnibus_shared::{BookSuperlative, RankedEntity, StatsSummary, FASTEST_READ_MIN_SECS};
@@ -117,32 +118,41 @@ fn fastest_read_note() -> String {
     )
 }
 
-/// "The standouts" — the window's superlatives, or nothing at all.
+/// "The standouts" — the window's superlatives as a card grid, or nothing at
+/// all.
 ///
-/// The card is omitted rather than emptied: a heading over a friendly "no
+/// The grid is omitted rather than emptied: a heading over a friendly "no
 /// standouts yet" line is a row of furniture on a page that already has an
 /// empty state one level up.
+///
+/// The gate is this assembled list, **not** [`omnibus_shared::Superlatives::is_empty`]
+/// — the busiest week and the two rankings come off fields outside that
+/// struct, so a window with only a busiest week is `is_empty()` and still has
+/// something to show.
 #[component]
-pub(super) fn SuperlativesCard(summary: StatsSummary) -> Element {
+pub(super) fn StandoutsGrid(summary: StatsSummary) -> Element {
     let rows = build_rows(&summary);
     if rows.is_empty() {
         return rsx! {};
     }
     let show_note = summary.superlatives.fastest_read.is_some();
     rsx! {
-        div { class: "card st-sup-card", "data-testid": "stats-superlatives",
-            div { class: "label", "The standouts" }
-            div { class: "st-sup-grid",
-                for row in rows.iter() {
-                    div { key: "{row.label}", class: "st-sup-row", "data-testid": "stats-superlative",
-                        div { class: "label st-sup-label", "{row.label}" }
-                        div { class: "st-sup-headline", "{row.headline}" }
-                        div { class: "mono st-sup-detail", "{row.detail}" }
-                    }
+        div { class: "st-standouts", "data-testid": "stats-superlatives",
+            for (i, row) in rows.iter().enumerate() {
+                div {
+                    key: "{row.label}",
+                    // The leading standout carries the accent tint: the grid
+                    // is ranked, and an unranked wall of six identical cards
+                    // gives a reader nowhere to start.
+                    class: if i == 0 { "st-standout lead" } else { "st-standout" },
+                    "data-testid": "stats-superlative",
+                    div { class: "st-standout-label", "{row.label}" }
+                    div { class: "st-standout-headline", "{row.headline}" }
+                    div { class: "st-standout-detail", "{row.detail}" }
                 }
             }
             if show_note {
-                p { class: "st-sup-note", "data-testid": "stats-superlatives-note",
+                p { class: "st-standouts-note", "data-testid": "stats-superlatives-note",
                     {fastest_read_note()}
                 }
             }
