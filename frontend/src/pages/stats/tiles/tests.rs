@@ -44,6 +44,23 @@ fn pages_value_reads_an_audio_only_window_as_zero_not_as_unknown() {
 }
 
 #[test]
+fn build_tiles_drops_the_star_unit_when_nothing_was_rated() {
+    // "— ★ avg" reads as a measured value of nothing; the bare dash reads as
+    // the absence it is. The unit is dropped rather than emptied, since the
+    // tile's top row is a flex with a gap an empty span would still consume.
+    let mut month = summary(StatsRange::Month);
+    month.avg_stars = None;
+    let rated = build_tiles(&month);
+    assert_eq!(rated[3].value, "\u{2014}");
+    assert_eq!(rated[3].unit, "");
+
+    month.avg_stars = Some(4.3);
+    let tiles = build_tiles(&month);
+    assert_eq!(tiles[3].value, "4.3");
+    assert_eq!(tiles[3].unit, "\u{2605} avg");
+}
+
+#[test]
 fn fill_pct_reaches_the_baseline_and_pegs_once_past_it() {
     assert_eq!(fill_pct(0.0, 100.0), 0);
     assert_eq!(fill_pct(50.0, 100.0), 50);

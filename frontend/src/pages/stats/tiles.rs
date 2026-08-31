@@ -277,7 +277,12 @@ pub(super) fn HeadlineTiles(summary: StatsSummary, expanded: Signal<Option<Metri
                         // remounts just this node when the new summary lands,
                         // replaying the content swap while the tile stays put.
                         span { key: "{tile.value}", class: "st-tile-value", {tile.value.clone()} }
-                        span { class: "st-tile-unit", {tile.unit} }
+                        // Omitted entirely rather than rendered empty: the
+                        // row is a flex with an 8px gap, so an empty span
+                        // still pushes the delta across.
+                        if !tile.unit.is_empty() {
+                            span { class: "st-tile-unit", {tile.unit} }
+                        }
                         if let Some(c) = tile.comparison.as_ref() {
                             span {
                                 class: "st-tile-delta {c.css_class}",
