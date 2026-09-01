@@ -1,12 +1,19 @@
 //! Stitching of session checkpoint rows back into sittings. Every client
 //! flushes a running segment on a timer, so one sitting lands as many rows;
 //! [`stitched`] regroups them at query time so callers count sittings rather
-//! than flush cadence. Read-side only — the writers stay as they are.
+//! than flush cadence. Read-side only here — the writers stay as they are —
+//! but [`IDLE_GAP_SECS`] is also what bounds a sitting on the ledger's write
+//! path.
 
 /// Idle seconds that end a sitting. Comfortably above every client's flush
 /// interval — the longest is the iOS reader's 300s checkpoint — so no
 /// cadence can manufacture a split and only real idleness does.
-pub(super) const IDLE_GAP_SECS: i64 = 900;
+///
+/// `pub(crate)` because the forward-progress ledger scopes its accrual to the
+/// same sitting (`db::progress::ledger::observe_percent_tx`): a reader who
+/// flips back for a quote and returns has to land inside one sitting there for
+/// the same reason two of their checkpoint rows do here.
+pub(crate) const IDLE_GAP_SECS: i64 = 900;
 
 /// Shortest sitting that counts as a session. Opening a book and closing it
 /// again is a glance, not a sitting, and the writers' own 5s floor is far too

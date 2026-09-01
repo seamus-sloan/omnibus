@@ -100,12 +100,13 @@ async fn upsert_progress_ledgers_nothing_for_a_cfi_only_write() {
         .unwrap();
 
     assert!(days(&pool, user).await.is_empty());
-    let mark: Option<i64> =
-        sqlx::query_scalar("SELECT percent FROM reading_progress_marks WHERE user_id = ?")
-            .bind(user)
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
+    let mark: Option<i64> = sqlx::query_scalar(
+        "SELECT sitting_max_percent FROM reading_progress_marks WHERE user_id = ?",
+    )
+    .bind(user)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
     assert_eq!(mark, None);
 }
 
@@ -161,12 +162,13 @@ async fn attach_derived_percent_ledgers_nothing_when_the_attach_is_a_no_op() {
 
     assert!(!attached);
     assert!(days(&pool, user).await.is_empty());
-    let mark: Option<i64> =
-        sqlx::query_scalar("SELECT percent FROM reading_progress_marks WHERE user_id = ?")
-            .bind(user)
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
+    let mark: Option<i64> = sqlx::query_scalar(
+        "SELECT sitting_max_percent FROM reading_progress_marks WHERE user_id = ?",
+    )
+    .bind(user)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
     assert_eq!(mark, Some(10));
 }
 

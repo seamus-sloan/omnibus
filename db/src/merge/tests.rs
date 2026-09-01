@@ -1498,12 +1498,13 @@ async fn merge_keeps_the_newer_forward_progress_mark() {
     for (uuid, percent, ts) in [(&target, 20, 1000), (&source, 55, 2000)] {
         sqlx::query(
             "INSERT INTO reading_progress_marks
-                 (user_id, book_uuid, format, percent, updated_at)
-             VALUES (?, ?, 'epub', ?, ?)",
+                 (user_id, book_uuid, format, sitting_max_percent, sitting_observed_at, updated_at)
+             VALUES (?, ?, 'epub', ?, ?, ?)",
         )
         .bind(user)
         .bind(uuid)
         .bind(percent)
+        .bind(ts)
         .bind(ts)
         .execute(&pool)
         .await
@@ -1515,7 +1516,7 @@ async fn merge_keeps_the_newer_forward_progress_mark() {
         .unwrap();
 
     let marks: Vec<(String, i64)> =
-        sqlx::query_as("SELECT book_uuid, percent FROM reading_progress_marks")
+        sqlx::query_as("SELECT book_uuid, sitting_max_percent FROM reading_progress_marks")
             .fetch_all(&pool)
             .await
             .unwrap();

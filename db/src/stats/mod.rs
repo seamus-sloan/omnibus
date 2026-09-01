@@ -19,7 +19,10 @@ mod library;
 mod pages;
 mod patterns;
 mod ratings;
-mod sessionize;
+// `pub(crate)` for `IDLE_GAP_SECS` alone: `db::progress::ledger` scopes its
+// accrual to the same sitting this module stitches session rows into, and two
+// answers to "is this still the same sitting?" would drift apart.
+pub(crate) mod sessionize;
 mod sessions;
 mod streak;
 mod superlatives;
