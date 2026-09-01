@@ -302,8 +302,14 @@ struct BookDetailView: View {
     /// Scroll-position binding for the dot rail's jumps. Written on a tap;
     /// the scroller keeps it updated as pages snap.
     @State private var scrollTarget: Int?
+    /// Whether the screen has appeared before. The first `onAppear` belongs
+    /// to `.task`'s load; every later one means a pushed screen — the
+    /// metadata editor, a nested detail — was popped off, and whatever it
+    /// wrote should show immediately.
+    @State private var hasAppeared = false
 
     private var downloads = DownloadManager.shared
+    private var presentation = Presentation.shared
 
     var body: some View {
         Group {
@@ -329,6 +335,26 @@ struct BookDetailView: View {
         .bookZoomDestination(uuid, in: bookZoom)
         .task { await model.load(uuid: uuid) }
         .refreshTask { await model.load(uuid: uuid) }
+        // Refetch on the way back from a pushed screen (edited metadata, a
+        // nested detail). Sheets reload through their own callbacks; the
+        // reader and player are full-screen covers over the tab view, so
+        // closing one never re-appears this view — that path is the
+        // `progressToken` observation below.
+        .onAppear {
+            guard hasAppeared else {
+                hasAppeared = true
+                return
+            }
+            Task { await model.load(uuid: uuid) }
+        }
+        // Refetch once a reading or listening session has *persisted* its
+        // final position — the position, status, highlights, and stats it
+        // wrote should show the moment the reader or player closes. Keyed on
+        // the token rather than the dismissal so the read never lands before
+        // the write it is meant to pick up.
+        .onChange(of: presentation.progressToken) { _, _ in
+            Task { await model.load(uuid: uuid) }
+        }
         .sheet(isPresented: $showAlignment) {
             if let book = model.book {
                 AlignmentSheet(book: book) {
