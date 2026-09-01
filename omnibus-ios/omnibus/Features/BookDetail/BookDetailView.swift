@@ -3,10 +3,10 @@
 //  page opening on it whole — the cover, or the generated plate at the same
 //  size — with the panel resting under it. Past that, the layout follows the
 //  reader's scroll-stops preference. Off (the default), the flow: every
-//  section — Home · Shelf · Stats · Highlights · Journals · The files ·
-//  Recommendations — runs on in one continuous list, nothing capped. On,
-//  the marquee: the same sections as seven snap stops on a vertical pager,
-//  one screenful each. Chrome is immersive either way: glass discs over the
+//  section — Home · Stats · Highlights · Journals · The files · More —
+//  runs on in one continuous list, nothing capped. On, the marquee: the
+//  same sections as six snap stops on a vertical pager, one screenful
+//  each. Chrome is immersive either way: glass discs over the
 //  art, a persistent bottom action bar so Resume never scrolls away, and
 //  the marquee's tappable dot rail or the flow's nav strip behind the discs.
 
@@ -232,21 +232,22 @@ final class BookDetailModel {
     }
 }
 
-/// The seven stops, in scroll order.
+/// The six stops, in scroll order. The trailing More folds what used to be
+/// two stops — the shelf block and the recommendations — into one, matching
+/// the design's six-section list on both clients.
 enum DetailStop: Int, CaseIterable, Identifiable {
-    case home, shelf, stats, highlights, journals, files, recommendations
+    case home, stats, highlights, journals, files, more
 
     var id: Int { rawValue }
 
     var name: String {
         switch self {
         case .home: "Home"
-        case .shelf: "Shelf"
         case .stats: "Stats"
         case .highlights: "Highlights"
         case .journals: "Journals"
         case .files: "The files"
-        case .recommendations: "Recommendations"
+        case .more: "More"
         }
     }
 }
@@ -748,8 +749,6 @@ struct BookDetailView: View {
                 onAlignment: { showAlignment = true },
                 onRemovedWishlist: { model.wishlistEntry = nil }
             )
-        case .shelf:
-            StopShelf(book: book, model: model) { showShelfPicker = true }
         case .stats:
             StopStats(book: book, model: model)
         case .highlights:
@@ -775,8 +774,17 @@ struct BookDetailView: View {
                 onListen: { listen(book) },
                 onAlignment: { showAlignment = true }
             )
-        case .recommendations:
-            StopRecommendations(book: book, model: model)
+        case .more:
+            // The old Shelf and Recommendations stops, concatenated — the
+            // shelf block keeps its chips and strips, minus its author strip,
+            // which the recommendations' author cluster already carries.
+            VStack(alignment: .leading, spacing: 0) {
+                StopShelf(book: book, model: model, authorStrip: false) {
+                    showShelfPicker = true
+                }
+                StopRecommendations(book: book, model: model)
+                    .padding(.top, 26)
+            }
         }
     }
 

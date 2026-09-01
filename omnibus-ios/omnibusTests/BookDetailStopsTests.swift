@@ -348,3 +348,12 @@ private func entry(id: Int64, clientID: String? = nil) -> JournalEntry {
     #expect(DetailRead.syncRow(state: .candidate) == linked)
     #expect(DetailRead.syncRow(state: .nothingNewer) == linked)
 }
+
+// MARK: - Section list
+
+/// Both clients agreed on this six-section list (web folded its Shelf stop
+/// the same way) — pinning it keeps the numbering from drifting apart.
+@Test func detailStopsRunHomeToMoreInSixSections() {
+    #expect(DetailStop.allCases.map(\.name)
+        == ["Home", "Stats", "Highlights", "Journals", "The files", "More"])
+}

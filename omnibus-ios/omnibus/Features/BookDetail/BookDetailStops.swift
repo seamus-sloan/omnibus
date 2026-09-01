@@ -1,7 +1,8 @@
 //  BookDetailStops.swift
-//  The seven snap-stop panels of the book detail marquee, the small pieces
-//  they share (kicker, ruler, stat tiles, cover strips, inset lists), and the
-//  pure derivations behind them (`DetailRead`, `DetailStats`).
+//  The section panels of the book detail — six in either layout, with the
+//  trailing More holding the shelf block and the recommendations — the small
+//  pieces they share (kicker, ruler, stat tiles, cover strips, inset lists),
+//  and the pure derivations behind them (`DetailRead`, `DetailStats`).
 
 import SwiftUI
 
@@ -978,11 +979,16 @@ struct StopHome: View {
     }
 }
 
-// MARK: - 02 · Shelf
+// MARK: - 06 · More — the shelf block
 
 struct StopShelf: View {
     let book: Book
     let model: BookDetailModel
+    /// Whether this block stands alone as a full stop. Off inside the More
+    /// section, which drops the "more by <author>" strip (the
+    /// recommendations half already carries the author cluster) and the
+    /// full-screen ruled void (the section continues right below it).
+    var authorStrip = true
     var onShelfPicker: () -> Void
 
     @Environment(\.palette) private var palette
@@ -1083,11 +1089,16 @@ struct StopShelf: View {
             if series.count <= 1, knowsMembership, model.authorBooks.isEmpty, shelfNames.isEmpty {
                 MonoNote(text: "a shelf gathers books by hand, or fills itself from a rule")
                     .padding(.top, 20)
-                StopRuledVoid(rows: 2)
-                    .padding(.top, 18)
+                // The ruled void filled the old standalone stop's screen; in
+                // the More section the page continues below, so it would read
+                // as a gap rather than a waiting page.
+                if authorStrip {
+                    StopRuledVoid(rows: 2)
+                        .padding(.top, 18)
+                }
             }
 
-            if series.count <= 1, !model.authorBooks.isEmpty {
+            if authorStrip, series.count <= 1, !model.authorBooks.isEmpty {
                 MonoNote(text: "more by \(book.authorDisplay)")
                     .padding(.top, 20)
                 ScrollView(.horizontal) {
@@ -1108,7 +1119,7 @@ struct StopShelf: View {
     }
 }
 
-// MARK: - 03 · Stats
+// MARK: - 02 · Stats
 
 struct StopStats: View {
     let book: Book
@@ -1251,7 +1262,7 @@ struct StopStats: View {
     }
 }
 
-// MARK: - 04 · Highlights
+// MARK: - 03 · Highlights
 
 struct StopHighlights: View {
     let book: Book
@@ -1358,7 +1369,7 @@ struct HighlightRow: View {
     }
 }
 
-// MARK: - 05 · Journals
+// MARK: - 04 · Journals
 
 struct StopJournals: View {
     let book: Book
@@ -1519,7 +1530,7 @@ struct JournalRow: View {
     }
 }
 
-// MARK: - 06 · The files
+// MARK: - 05 · The files
 
 struct StopFiles: View {
     let book: Book
@@ -1757,7 +1768,7 @@ struct DownloadBadge: View {
     }
 }
 
-// MARK: - 07 · Recommendations
+// MARK: - 06 · More — the recommendations block
 
 struct StopRecommendations: View {
     let book: Book
