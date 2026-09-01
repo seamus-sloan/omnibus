@@ -10851,8 +10851,8 @@ html {
      always clears the gutter. `100vh - --bdmq-top` is the stage's own height
      (it is fixed to `top: var(--bdmq-top); bottom: 0`), and 1.25 * 2/3 = 5/6. */
   width: min(
-    (100vh - var(--bdmq-top, 61px)) * 5 / 6,
-    100% - var(--bdmq-cover-gutter) * 2
+    calc((100vh - var(--bdmq-top, 61px)) * 5 / 6),
+    calc(100% - var(--bdmq-cover-gutter) * 2)
   );
   height: auto;
 }
