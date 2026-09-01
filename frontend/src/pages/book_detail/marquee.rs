@@ -1,7 +1,7 @@
 //! Marquee book-detail stage (web): the cover pinned huge on the left
 //! under a soft parallax, content in a translucent panel on the right, and
-//! seven snap-scrolled stops — Home · Shelf · Stats · Highlights · Journals ·
-//! The files · Recommendations — with a hover-expanding dot-rail table of
+//! six snap-scrolled stops — Home · Stats · Highlights · Journals ·
+//! The files · More — with a hover-expanding dot-rail table of
 //! contents. Scroll mechanics live in `marquee.js` (installed post-mount, rule 07).
 
 use dioxus::prelude::*;
@@ -13,7 +13,7 @@ use omnibus_shared::{
 use crate::components::atrium::Cover;
 use crate::data;
 
-use super::body::{BdAuthorCluster, BdPageCtx, BdSameHand, BdSuggestionsStrip};
+use super::body::BdPageCtx;
 use super::highlights::{BdHighlightsSection, BdQuoteMeta};
 use super::journal::MarqueeJournalStop;
 use super::view::LoadedBookView;
@@ -21,19 +21,22 @@ use super::PhysSignals;
 
 mod files;
 mod home;
-mod shelf;
+mod more;
 mod stats;
 
-/// The seven stops, in running order. The label pair is `NN` + name — the
-/// section label renders `NN / 07 — Name` and the dot rail `NN · Name`.
-pub(super) const MARQUEE_SECTIONS: [(&str, &str); 7] = [
+/// The six stops, in running order. The label pair is `NN` + name — the
+/// section label renders `NN / 06 — Name` and the dot rail `NN · Name`.
+///
+/// The shelf is not a stop of its own: the books beside this one belong with
+/// the author and the suggestions under `More`, which is the one place the
+/// page points away from the book it is about.
+pub(super) const MARQUEE_SECTIONS: [(&str, &str); 6] = [
     ("01", "Home"),
-    ("02", "Shelf"),
-    ("03", "Stats"),
-    ("04", "Highlights"),
-    ("05", "Journals"),
-    ("06", "The files"),
-    ("07", "Recommendations"),
+    ("02", "Stats"),
+    ("03", "Highlights"),
+    ("04", "Journals"),
+    ("05", "The files"),
+    ("06", "More"),
 ];
 
 /// Scroll-mechanics glue (parallax, dot tracking, dot-rail navigation).
@@ -167,7 +170,7 @@ pub(super) fn MarqueeStage(
         accent: b.accent.clone(),
     };
 
-    let stops: [Element; 7] = [
+    let stops: [Element; 6] = [
         rsx! {
             home::MarqueeHomeStop {
                 b: b.clone(),
@@ -181,9 +184,6 @@ pub(super) fn MarqueeStage(
                 after_merge: ctx.after_merge,
                 wishlist: wishlist.clone(),
             }
-        },
-        rsx! {
-            shelf::MarqueeShelfStop { b: b.clone(), view: view.clone(), series: series() }
         },
         rsx! {
             stats::MarqueeStatsStop {
@@ -217,22 +217,18 @@ pub(super) fn MarqueeStage(
             }
         },
         rsx! {
-            div { class: "bdmq-tight",
-                BdSameHand {
-                    author: BdAuthorCluster {
-                        primary_author: view.primary_author.clone(),
-                        author_id: view.author_id,
-                        author_books: author_books.clone(),
-                    },
-                }
-                BdSuggestionsStrip {
-                    book_title: view.title.clone(),
+            more::MarqueeMoreStop {
+                b: b.clone(),
+                view: view.clone(),
+                ctx: more::MoreStopCtx {
+                    series: series(),
+                    author_books: author_books.clone(),
                     suggestions,
-                    ctx: BdPageCtx {
+                    page: BdPageCtx {
                         server_url: ctx.server_url.clone(),
                         is_admin: ctx.is_admin,
                     },
-                }
+                },
             }
         },
     ];
@@ -263,7 +259,7 @@ pub(super) fn MarqueeStage(
                         key: "{no}",
                         class: "bdmq-sec",
                         "data-testid": "bdmq-sec-{i}",
-                        div { class: "bdmq-seclab", "{no} / 07 \u{2014} " b { "{name}" } }
+                        div { class: "bdmq-seclab", "{no} / 06 \u{2014} " b { "{name}" } }
                         div { class: "bdmq-panel",
                             div { class: "bdmq-panel-inner", {stops[i].clone()} }
                         }

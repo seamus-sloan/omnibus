@@ -11269,6 +11269,15 @@ html {
 .bdmq .bd-wishlist-head { margin-top: 14px; }
 
 /* ── Shelf stop (series shelf) ── */
+/* The rule between the More stop's three blocks — the shelf, the author's
+   other work, and the suggestions. Lighter than `.divider`, which already
+   separates the suggestions strip from what precedes it. */
+.bdmq-morerule {
+  height: 1px;
+  margin: 26px 0 22px;
+  background: linear-gradient(90deg, var(--line-2), transparent);
+}
+
 .rx-shelf {
   display: flex; gap: 30px; align-items: flex-end;
   padding: 14px 2px 16px; border-bottom: 2px solid var(--bg-3);

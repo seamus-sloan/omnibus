@@ -112,10 +112,10 @@ test("renders the book detail layout", async ({ page, request }) => {
   // stop active on load.
   const dots = page.getByTestId("bdmq-dots");
   await expect(dots).toBeVisible();
-  await expect(dots.getByRole("button")).toHaveCount(7);
+  await expect(dots.getByRole("button")).toHaveCount(6);
   await expect(page.getByTestId("bdmq-dot-0")).toHaveClass(/\bon\b/);
 
-  // Stops — "Passages you saved" (stop 04) is always rendered. Only its
+  // Stops — "Passages you saved" (stop 03) is always rendered. Only its
   // presence is asserted here: `journal.spec.ts` seeds a highlight on this
   // same book, so whether the list or the empty state fills it depends on
   // run order. The empty and populated states are covered by the
@@ -125,7 +125,9 @@ test("renders the book detail layout", async ({ page, request }) => {
   ).toBeVisible();
   await expect(page.getByTestId("highlights-section")).toBeVisible();
 
-  // Stops — "From the same hand" (stop 07) heading is always rendered.
+  // Stops — the More stop (06) carries the shelf, the author's other work
+  // and the suggestions in one run, so its heading is always rendered.
+  await expect(page.getByTestId("bdmq-more")).toBeAttached();
   await expect(
     page.getByRole("heading", { name: "From the same hand" }),
   ).toBeVisible();
@@ -138,10 +140,10 @@ test("dot rail jumps between stops and tracks the active section", async ({
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
-  // Jumping to stop 06 via the rail scrolls the snap container and moves
-  // the active marker. The scroll is smooth, so poll for the class flip.
-  await page.getByTestId("bdmq-dot-5").click();
-  await expect(page.getByTestId("bdmq-dot-5")).toHaveClass(/\bon\b/);
+  // Jumping to stop 05 (The files) via the rail scrolls the snap container
+  // and moves the active marker. The scroll is smooth, so poll for the flip.
+  await page.getByTestId("bdmq-dot-4").click();
+  await expect(page.getByTestId("bdmq-dot-4")).toHaveClass(/\bon\b/);
   await expect(page.getByTestId("bdmq-dot-0")).not.toHaveClass(/\bon\b/);
 
   // The files stop's content is on screen once the snap settles.
