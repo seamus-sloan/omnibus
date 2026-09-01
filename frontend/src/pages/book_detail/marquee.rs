@@ -24,6 +24,9 @@ mod home;
 mod more;
 mod stats;
 
+#[cfg(test)]
+mod tests;
+
 /// The six stops, in running order. The label pair is `NN` + name — the
 /// section label renders `NN / 06 — Name` and the dot rail `NN · Name`.
 ///
