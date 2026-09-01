@@ -2,9 +2,12 @@
 //  The book detail marquee: full-bleed cover art running off the top edge,
 //  a translucent panel riding over its lower edge, and the page organised as
 //  seven snap stops on a vertical pager — Home · Shelf · Stats · Highlights ·
-//  Journals · The files · Recommendations. Chrome is immersive: glass discs
-//  over the art, a tappable dot rail, and a persistent bottom action bar so
-//  Resume never scrolls away.
+//  Journals · The files · Recommendations. Home has two positions when the
+//  book has a photographic cover: the page opens on the cover whole with the
+//  panel resting under it, and the first swipe lifts the panel to full
+//  height before the next one moves on to stop 02. Chrome is immersive:
+//  glass discs over the art, a tappable dot rail, and a persistent bottom
+//  action bar so Resume never scrolls away.
 
 import SwiftUI
 
@@ -251,13 +254,18 @@ struct BookDetailView: View {
         self.uuid = uuid
     }
 
-    /// Where the panel's top edge sits at the Home stop — how much cover art
-    /// stays in view before the page becomes the panel.
+    /// Where the panel's top edge sits at the Home stop for a plate cover —
+    /// how much art stays in view before the page becomes the panel. A
+    /// photographic cover derives its rest position from the cover height
+    /// instead (`DetailRead.restTop`).
     static let artTop: CGFloat = 300
-    /// Window the artwork pans inside.
+    /// Window the artwork pans inside once the Home panel has lifted.
     static let artHeight: CGFloat = 470
     /// Clearance the panel keeps for the action bar.
     static let barClearance: CGFloat = 108
+    /// Scroll id of the rest run above the Home stop — the pre-Home snap
+    /// target the two-position panel rests at.
+    static let restMarkerID = -1
 
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
@@ -288,6 +296,13 @@ struct BookDetailView: View {
     @State private var editingJournal: JournalEntry?
     /// Continuous page position, 0...6 — drives the art pan and fade.
     @State private var page: CGFloat = 0
+    /// The Home panel's rest→lifted progress, 0...1 — drives the art's
+    /// whole→windowed transition and the panel's padding and tint. Pinned
+    /// to 1 for books whose panel has no rest position.
+    @State private var lift: CGFloat = 0
+    /// Whether the Home panel has settled lifted — the discrete switch the
+    /// handle label, tag row, and description clamp key on.
+    @State private var lifted = false
     /// The stop the scroller has settled nearest to.
     @State private var at: Int = 0
     /// Scroll-position binding for the dot rail's jumps. Written on a tap;
@@ -419,31 +434,69 @@ struct BookDetailView: View {
 
     // MARK: - Shell
 
-    private func content(_ book: Book) -> some View {
-        ZStack {
-            ScreenBackground()
-            DetailArtLayer(book: book, page: page)
-                .ignoresSafeArea()
-            snapScroller(book)
-                .ignoresSafeArea()
-        }
-        .overlay(alignment: .top) { chromeDiscs(book) }
-        .overlay(alignment: .trailing) { dotRail }
-        .overlay(alignment: .bottomTrailing) { nextHint }
-        .overlay(alignment: .bottom) { actionBar(book) }
+    /// Whether the Home panel gets its two positions: it needs a
+    /// photographic cover to rest against — a typographic plate is shown
+    /// whole anyway, so those books keep the one-position panel.
+    private func hasRestingCover(_ book: Book) -> Bool {
+        book.coverURL != nil
     }
 
-    private func snapScroller(_ book: Book) -> some View {
+    private func content(_ book: Book) -> some View {
+        GeometryReader { geometry in
+            // The scroller and art ignore the safe areas, so the rest
+            // geometry has to be derived from the full screen, not the
+            // inset-trimmed proxy size.
+            let size = CGSize(
+                width: geometry.size.width
+                    + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing,
+                height: geometry.size.height
+                    + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
+            )
+            let twoPosition = hasRestingCover(book)
+            let restTop = DetailRead.restTop(width: size.width, height: size.height)
+
+            ZStack {
+                ScreenBackground()
+                DetailArtLayer(book: book, page: page, lift: twoPosition ? lift : 1)
+                    .ignoresSafeArea()
+                snapScroller(book, twoPosition: twoPosition, restTop: restTop)
+                    .ignoresSafeArea()
+            }
+            .overlay(alignment: .top) { chromeDiscs(book) }
+            .overlay(alignment: .trailing) {
+                DetailDotRail(at: at) { stop in
+                    withAnimation(Motion.settle) { scrollTarget = stop.rawValue }
+                }
+            }
+            .overlay(alignment: .bottomTrailing) { nextHint }
+            .overlay(alignment: .bottom) { restFade(twoPosition) }
+            .overlay(alignment: .bottom) { actionBar(book) }
+        }
+    }
+
+    private func snapScroller(
+        _ book: Book, twoPosition: Bool, restTop: CGFloat
+    ) -> some View {
         ScrollView(.vertical) {
             VStack(spacing: 0) {
+                // The rest run: scrolling it away is what lifts the panel,
+                // and its top edge is the snap target the panel rests at.
+                if twoPosition {
+                    Color.clear
+                        .frame(height: restTop)
+                        .id(Self.restMarkerID)
+                }
                 ForEach(DetailStop.allCases) { stop in
-                    stopSection(stop, book)
+                    stopSection(stop, book, twoPosition: twoPosition)
                         .id(stop.rawValue)
                 }
             }
             .scrollTargetLayout()
         }
-        .scrollTargetBehavior(.paging)
+        // View-aligned rather than paged: the rest run makes the first snap
+        // length differ from a page, and `.always` keeps the one-stop-per-
+        // swipe contract — the same gesture gate the design prescribes.
+        .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
         .scrollPosition(id: $scrollTarget)
         .scrollIndicators(.hidden)
         .onScrollGeometryChange(for: DetailScrollState.self) { geometry in
@@ -453,35 +506,57 @@ struct BookDetailView: View {
             )
         } action: { _, state in
             guard state.viewport > 0 else { return }
-            let raw = state.offset / state.viewport
-            page = min(CGFloat(DetailStop.allCases.count - 1), max(0, raw))
+            let map = DetailRead.scrollMap(
+                offset: state.offset,
+                restTop: twoPosition ? restTop : 0,
+                viewport: state.viewport
+            )
+            lift = map.lift
+            page = min(CGFloat(DetailStop.allCases.count - 1), map.page)
             at = Int(page.rounded())
+            let settled = !twoPosition || map.lift > 0.6
+            if settled != lifted {
+                withAnimation(Motion.snap) { lifted = settled }
+            }
         }
     }
 
-    private func stopSection(_ stop: DetailStop, _ book: Book) -> some View {
+    private func stopSection(
+        _ stop: DetailStop, _ book: Book, twoPosition: Bool
+    ) -> some View {
         VStack(spacing: 0) {
-            if stop == .home {
+            // A plate cover keeps the fixed art window above the panel; a
+            // resting cover's clearance is the rest run before this section.
+            if stop == .home, !twoPosition {
                 Color.clear.frame(height: Self.artTop)
             }
-            stopPanel(stop, book)
+            stopPanel(stop, book, twoPosition: twoPosition)
         }
         .containerRelativeFrame(.vertical)
     }
 
-    private func stopPanel(_ stop: DetailStop, _ book: Book) -> some View {
+    private func stopPanel(
+        _ stop: DetailStop, _ book: Book, twoPosition: Bool
+    ) -> some View {
         let isHome = stop == .home
+        let resting = isHome && twoPosition
 
         return VStack(alignment: .leading, spacing: 0) {
-            StopLabel(stop: stop)
+            if resting {
+                LiftHandle(lifted: lifted) { toggleLift() }
+            } else {
+                StopLabel(stop: stop)
+            }
             stopContent(stop, book)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(EdgeInsets(
             // A full stop's label must clear the chrome discs, which end
-            // ~105pt below the top edge on current devices.
-            top: isHome ? 14 : 128,
+            // ~105pt below the top edge on current devices. The two-position
+            // Home earns that clearance as it lifts — at rest its top edge
+            // is far below the discs.
+            top: isHome ? (twoPosition ? 14 + 114 * lift : 14) : 128,
             leading: 22,
             bottom: Self.barClearance,
             trailing: 30
@@ -492,16 +567,48 @@ struct BookDetailView: View {
             // blurs, so the tint stays light at Home — heavier and the art it
             // rides over reads as a hard cut instead of a ghost. Past Home the
             // art has faded, so the panel goes nearly opaque and simply is
-            // the screen.
+            // the screen. The two-position Home moves between those poles:
+            // resting below the cover it owns its strip, lifted it ghosts
+            // the whole cover behind it.
             ZStack {
                 Rectangle().fill(.ultraThinMaterial)
-                palette.bg0Color.opacity(isHome ? 0.30 : 0.82)
+                palette.bg0Color.opacity(
+                    isHome ? (twoPosition ? 0.60 + 0.22 * lift : 0.30) : 0.82)
             }
         }
         .overlay(alignment: .top) {
-            if isHome { Hairline() }
+            if isHome { Hairline().opacity(twoPosition ? 1 - lift : 1) }
         }
         .clipped()
+    }
+
+    /// The handle's tap: jump the scroller to the other Home position.
+    private func toggleLift() {
+        withAnimation(Motion.settle) {
+            scrollTarget = lifted ? Self.restMarkerID : DetailStop.home.rawValue
+        }
+    }
+
+    /// At rest the panel's lower content runs on under the action bar; this
+    /// fades it into the ground the way the design masks it out, and lifts
+    /// away with the panel.
+    @ViewBuilder
+    private func restFade(_ twoPosition: Bool) -> some View {
+        if twoPosition {
+            LinearGradient(
+                stops: [
+                    .init(color: palette.bg0Color.opacity(0), location: 0),
+                    .init(color: palette.bg0Color, location: 0.62),
+                    .init(color: palette.bg0Color, location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 170)
+            .opacity(1 - lift)
+            .allowsHitTesting(false)
+            .ignoresSafeArea(edges: .bottom)
+        }
     }
 
     @ViewBuilder
@@ -511,7 +618,12 @@ struct BookDetailView: View {
             StopHome(
                 book: book,
                 model: model,
+                restingCover: hasRestingCover(book),
+                // A plate book's panel has no rest position — it is always
+                // the full stop, whatever the scroller last reported.
+                lifted: !hasRestingCover(book) || lifted,
                 onMore: { showDescription = true },
+                onAlignment: { showAlignment = true },
                 onRemovedWishlist: { model.wishlistEntry = nil }
             )
         case .shelf:
@@ -595,39 +707,6 @@ struct BookDetailView: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .animation(Motion.snap, value: at == 0)
-    }
-
-    /// The desktop dot rail, moved to the panel's right edge.
-    private var dotRail: some View {
-        VStack(spacing: 0) {
-            ForEach(DetailStop.allCases) { stop in
-                Button {
-                    Haptics.select()
-                    withAnimation(Motion.settle) { scrollTarget = stop.rawValue }
-                } label: {
-                    Circle()
-                        .fill(at == stop.rawValue ? palette.accentColor : palette.bg3Color)
-                        .frame(width: 7, height: 7)
-                        .scaleEffect(at == stop.rawValue ? 1.35 : 1)
-                        // The dot is the indicator, not the target — the row
-                        // is sized for a finger, near the 44pt guideline.
-                        .frame(width: 44, height: 26)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(stop.name)
-            }
-        }
-        .padding(.vertical, 5)
-        // The visible pill stays slim while the touch strip stays wide — the
-        // capsule is drawn narrower than the rail it backs.
-        .background {
-            Capsule().fill(palette.bg0Color.opacity(0.45))
-                .overlay(Capsule().strokeBorder(palette.line2.color, lineWidth: 0.5))
-                .frame(width: 19)
-        }
-        .offset(y: 90)
-        .animation(Motion.snap, value: at)
     }
 
     /// A quiet pointer at what the next swipe reaches. Home speaks for
@@ -775,15 +854,62 @@ private struct DetailScrollState: Equatable {
     var viewport: CGFloat
 }
 
+/// The desktop dot rail, moved to the panel's right edge. A view of its own
+/// so it reads the palette from the environment — the screen re-keys that to
+/// the book's tone, and the active dot must carry the book accent, not the
+/// app's.
+struct DetailDotRail: View {
+    let at: Int
+    var onJump: (DetailStop) -> Void
+
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(DetailStop.allCases) { stop in
+                Button {
+                    Haptics.select()
+                    onJump(stop)
+                } label: {
+                    Circle()
+                        .fill(at == stop.rawValue ? palette.accentColor : palette.bg3Color)
+                        .frame(width: 7, height: 7)
+                        .scaleEffect(at == stop.rawValue ? 1.35 : 1)
+                        // The dot is the indicator, not the target — the row
+                        // is sized for a finger, near the 44pt guideline.
+                        .frame(width: 44, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(stop.name)
+            }
+        }
+        .padding(.vertical, 5)
+        // The visible pill stays slim while the touch strip stays wide — the
+        // capsule is drawn narrower than the rail it backs.
+        .background {
+            Capsule().fill(palette.bg0Color.opacity(0.45))
+                .overlay(Capsule().strokeBorder(palette.line2.color, lineWidth: 0.5))
+                .frame(width: 19)
+        }
+        .offset(y: 90)
+        .animation(Motion.snap, value: at)
+    }
+}
+
 // MARK: - Art layer
 
-/// The cover, full-bleed off the top edge. Photographic art is taller than
-/// its window and pans as the page moves through the stops; a generated
-/// plate is shown whole instead — cropping one would eat its own layout.
-/// Both dissolve to a wash as the panel takes the screen.
+/// The cover, full-bleed off the top edge. While the Home panel rests, a
+/// photographic cover shows whole — unmasked, nothing cropped; as the panel
+/// lifts, the art closes down to the window it pans inside across the
+/// stops. A generated plate is shown whole always — cropping one would eat
+/// its own layout. Both dissolve to a wash as the panel takes the screen.
 struct DetailArtLayer: View {
     let book: Book
     let page: CGFloat
+    /// The Home panel's rest→lifted progress; 1 for books with no rest
+    /// position, so the window and mask sit at their shipped values.
+    var lift: CGFloat = 1
 
     @Environment(\.palette) private var palette
 
@@ -811,8 +937,14 @@ struct DetailArtLayer: View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let imageHeight = width * 1.5
-            let travel = max(0, imageHeight - BookDetailView.artHeight)
+            // The window opens to the whole image at rest and closes to the
+            // pan height as the panel lifts; the mask's fade-out arrives
+            // with it, so the resting cover keeps its bottom edge.
+            let windowHeight = BookDetailView.artHeight
+                + (imageHeight - BookDetailView.artHeight) * (1 - lift)
+            let travel = max(0, imageHeight - windowHeight)
             let progress = min(1, page / CGFloat(DetailStop.allCases.count - 1))
+            let fadeStart = 0.58 + 0.42 * (1 - lift)
 
             RemoteImage(
                 path: "/api/covers/\(book.uuid)",
@@ -826,7 +958,7 @@ struct DetailArtLayer: View {
             .background { GeneratedCoverPlate(identity: CoverIdentity(book)) }
             .frame(width: width, height: imageHeight)
             .offset(y: -progress * travel)
-            .frame(width: width, height: BookDetailView.artHeight, alignment: .top)
+            .frame(width: width, height: windowHeight, alignment: .top)
             .clipped()
             // Dark scrim off the top edge so the status bar and discs stay
             // legible over bright artwork.
@@ -842,7 +974,7 @@ struct DetailArtLayer: View {
                 LinearGradient(
                     stops: [
                         .init(color: .black, location: 0),
-                        .init(color: .black, location: 0.58),
+                        .init(color: .black, location: fadeStart),
                         .init(color: .clear, location: 1),
                     ],
                     startPoint: .top,
@@ -850,7 +982,6 @@ struct DetailArtLayer: View {
                 )
             }
         }
-        .frame(height: BookDetailView.artHeight)
     }
 
     /// The typographic plate, whole, in a soft accent halo.

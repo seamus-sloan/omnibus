@@ -78,6 +78,50 @@ enum DetailRead {
         guard let audioSeconds, let audioDuration, audioDuration > 0 else { return nil }
         return min(1, max(0, audioSeconds / audioDuration))
     }
+
+    /// Where the Home panel rests below a whole cover: the 2:3 cover height
+    /// at this width, clamped so a short screen keeps a readable panel strip
+    /// and a degenerate one still shows some art.
+    static func restTop(width: CGFloat, height: CGFloat) -> CGFloat {
+        max(220, min((width * 1.5).rounded(), height - 240))
+    }
+
+    /// Continuous scroll offset → the two numbers the shell reacts to:
+    /// `lift` is the Home panel's rest→lifted progress across the rest run,
+    /// `page` the stop position past it — held at 0 while the panel is still
+    /// lifting, so the art pan and fade wait for stop 02. A zero `restTop`
+    /// means no rest run (a plate cover): plain paging, always lifted.
+    static func scrollMap(
+        offset: CGFloat, restTop: CGFloat, viewport: CGFloat
+    ) -> (lift: CGFloat, page: CGFloat) {
+        guard viewport > 0 else { return (1, 0) }
+        guard restTop > 0 else { return (1, max(0, offset / viewport)) }
+        return (
+            lift: min(1, max(0, offset / restTop)),
+            page: max(0, (offset - restTop) / viewport)
+        )
+    }
+
+    /// What the Home sync row states per link state, and the action word its
+    /// trailing affordance promises. Every action opens the alignment sheet —
+    /// link, re-confirm, and unlink all live there.
+    static func syncRow(state: CrossFormatResumeState?) -> DetailSyncCopy {
+        switch state {
+        case .linkStale:
+            DetailSyncCopy(label: "Sync needs re-confirm", action: "Re-confirm", linked: false)
+        case .notLinked, nil:
+            DetailSyncCopy(label: "Positions unlinked", action: "Link", linked: false)
+        default:
+            DetailSyncCopy(label: "Positions linked", action: "Manage", linked: true)
+        }
+    }
+}
+
+/// The Home sync row's copy, plus whether it wears the linked (accent) look.
+struct DetailSyncCopy: Equatable {
+    var label: String
+    var action: String
+    var linked: Bool
 }
 
 /// What the stats stop states about this read, folded from the session log.
@@ -191,6 +235,103 @@ struct MonoNote: View {
             .font(.monoUI(9.5))
             .foregroundStyle(color ?? palette.ink3Color)
             .lineSpacing(3)
+    }
+}
+
+/// The Home panel's grab bar and its one-line invitation. At rest it points
+/// up; lifted, it carries the stop label and points back down. Tapping
+/// toggles the position for anyone who doesn't read "swipe" as an offer.
+struct LiftHandle: View {
+    let lifted: Bool
+    var onToggle: () -> Void
+
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        Button {
+            Haptics.tap()
+            onToggle()
+        } label: {
+            HStack(spacing: 9) {
+                Capsule()
+                    .fill(palette.ink2Color.opacity(0.55))
+                    .frame(width: 36, height: 4)
+                Text(label)
+                    .font(.monoUI(8.5))
+                    .tracking(1.4)
+                    .foregroundStyle(palette.ink3Color)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, 7)
+        .accessibilityLabel(lifted ? "Collapse book details" : "Expand book details")
+        .accessibilityIdentifier("home-lift-handle")
+    }
+
+    private var label: String {
+        lifted
+            ? String(
+                format: "%02d / %02d — HOME · SWIPE DOWN",
+                DetailStop.home.rawValue + 1, DetailStop.allCases.count
+            )
+            : "SWIPE UP FOR THE REST"
+    }
+}
+
+/// The cross-format position-sync state, as a full-width bordered row on the
+/// Home stop: the state on the left, the accent action on the right. Tapping
+/// anywhere opens the alignment sheet — link and unlink both live there.
+struct DetailSyncRow: View {
+    let state: CrossFormatResumeState?
+    var onOpen: () -> Void
+
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        let copy = DetailRead.syncRow(state: state)
+
+        Button {
+            Haptics.tap()
+            onOpen()
+        } label: {
+            HStack(spacing: 8) {
+                Text("\u{21C4}")
+                    .font(.system(size: 12))
+                    .foregroundStyle(copy.linked ? palette.accentColor : palette.ink3Color)
+                Text(copy.label.uppercased())
+                    .font(.monoUI(9.5))
+                    .tracking(1.3)
+                    .foregroundStyle(copy.linked ? palette.ink1Color : palette.ink2Color)
+                    .lineLimit(1)
+                Spacer(minLength: Spacing.sm)
+                Text(copy.action.uppercased())
+                    .font(.monoUI(9.5))
+                    .tracking(1.3)
+                    .foregroundStyle(palette.accentColor)
+            }
+            .padding(.horizontal, 11)
+            .frame(height: 38)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(copy.linked ? palette.accentColor.opacity(0.07) : .clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(
+                        copy.linked
+                            ? palette.accentColor.opacity(0.4)
+                            : palette.line2.color,
+                        lineWidth: 1
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel("\(copy.label). \(copy.action)")
+        .accessibilityIdentifier("home-sync-row")
     }
 }
 
@@ -647,7 +788,14 @@ struct MoreRowButton: View {
 struct StopHome: View {
     let book: Book
     let model: BookDetailModel
+    /// Whether the panel rests under a whole cover (a photographic cover
+    /// exists) and whether it is currently lifted. At rest the panel is a
+    /// short strip, so the compact state trims what the fold would cut
+    /// anyway; a plate book has no rest position and is always lifted.
+    var restingCover = false
+    var lifted = true
     var onMore: () -> Void
+    var onAlignment: () -> Void
     var onRemovedWishlist: () -> Void
 
     @Environment(\.palette) private var palette
@@ -662,7 +810,9 @@ struct StopHome: View {
             ))
 
             Text(book.displayTitle)
-                .font(.display(38, weight: .semibold))
+                // The two-position panel trades title size for the room the
+                // whole cover took — both positions share the smaller cut.
+                .font(.display(restingCover ? 31 : 38, weight: .semibold))
                 .foregroundStyle(palette.ink0Color)
                 .lineLimit(3)
                 .minimumScaleFactor(0.6)
@@ -674,9 +824,16 @@ struct StopHome: View {
                 .lineLimit(1)
                 .padding(.top, 7)
 
-            if !book.genres.isEmpty || !book.subjects.isEmpty {
+            if !book.genres.isEmpty {
                 ChipStrip {
                     ForEach(book.genres, id: \.self) { GenreChip(label: $0) }
+                }
+                .padding(.top, 11)
+                .accessibilityIdentifier("book-detail-genres")
+            }
+
+            if !book.subjects.isEmpty, lifted {
+                ChipStrip {
                     ForEach(book.subjects, id: \.self) { subject in
                         NavigationLink(value: Destination.tag(name: subject)) {
                             TagChip(label: subject)
@@ -684,8 +841,8 @@ struct StopHome: View {
                         .buttonStyle(PressableStyle())
                     }
                 }
-                .padding(.top, 11)
-                .accessibilityIdentifier("book-detail-genres")
+                .padding(.top, book.genres.isEmpty ? 11 : 7)
+                .accessibilityIdentifier("book-detail-tags")
             }
 
             if let description = book.description?.nilIfBlank {
@@ -693,21 +850,25 @@ struct StopHome: View {
                     .font(.ui(13))
                     .foregroundStyle(palette.ink1Color)
                     .lineSpacing(4)
-                    .lineLimit(2)
+                    // Lifted there is room for a real excerpt; at rest the
+                    // fold is close, so two lines tease the drawer instead.
+                    .lineLimit(restingCover && lifted ? 6 : 2)
                     .padding(.top, 11)
                     .onTapGesture { onMore() }
 
-                Button {
-                    Haptics.tap()
-                    onMore()
-                } label: {
-                    Text("MORE")
-                        .font(.monoUI(9.5))
-                        .tracking(1.5)
-                        .foregroundStyle(palette.accentColor)
+                if lifted {
+                    Button {
+                        Haptics.tap()
+                        onMore()
+                    } label: {
+                        Text("MORE")
+                            .font(.monoUI(9.5))
+                            .tracking(1.5)
+                            .foregroundStyle(palette.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 6)
                 }
-                .buttonStyle(.plain)
-                .padding(.top, 6)
             }
 
             if model.isWishlistOnly {
@@ -728,8 +889,14 @@ struct StopHome: View {
 
                 ruler
                     .padding(.top, 17)
+
+                if book.hasEbook, book.hasAudiobook {
+                    DetailSyncRow(state: model.syncState, onOpen: onAlignment)
+                        .padding(.top, 14)
+                }
             }
         }
+        .animation(Motion.snap, value: lifted)
     }
 
     @ViewBuilder
