@@ -133,6 +133,22 @@ async fn current_offset_minutes_ignores_an_implausible_stored_offset() {
 }
 
 #[tokio::test]
+async fn current_offset_minutes_falls_back_past_an_implausible_newer_session() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "reader").await;
+    seed_session(&pool, user, T0, Some(540)).await;
+    seed_session(&pool, user, T0 + 86_400, Some(99_999)).await;
+
+    // The bad row is the newest, so range-checking the *winner* would drop the
+    // reader to UTC rather than to where they last plausibly read. The probe
+    // skips it and the previous good session answers instead.
+    assert_eq!(
+        current_offset_minutes(&pool, user).await.unwrap(),
+        Some(540)
+    );
+}
+
+#[tokio::test]
 async fn current_offset_minutes_is_scoped_to_one_user() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let mine = seed_user(&pool, "mine").await;

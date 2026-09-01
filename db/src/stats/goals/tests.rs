@@ -1,7 +1,8 @@
 //! Unit tests for `db::stats::goals`: the read/write happy paths for both
 //! scopes, every `GoalError` variant, the per-year isolation AC7 turns on, the
-//! local-versus-UTC day the two daily kinds are measured over, and the cache
-//! invalidation a just-saved goal depends on.
+//! local-versus-UTC day the two daily kinds are measured over and its agreement
+//! with the day they label, and the cache invalidation a just-saved goal depends
+//! on.
 
 use omnibus_shared::{
     StatsRange, GOAL_KIND_BOOKS, MAX_DAILY_MINUTES, MAX_DAILY_PAGES, MAX_GOAL_TARGET,
@@ -917,6 +918,95 @@ async fn daily_goals_counts_minutes_on_the_readers_local_day_not_the_utc_day() {
             .await
             .unwrap();
     assert!(same_utc_day, "the fixture must straddle only the local day");
+}
+
+/// The day is an argument, not a second clock read: a request that crossed
+/// local midnight between resolving the label and measuring the figure would
+/// otherwise report one day's date against the next day's minutes.
+#[tokio::test]
+async fn day_seconds_measures_the_day_it_is_handed_rather_than_re_reading_the_clock() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    let midday = local_day_start_plus(&pool, OFFSET_PLUS_13, 43_200).await;
+    read_session(&pool, user, "uuid-1", midday, 600, Some(OFFSET_PLUS_13)).await;
+    read_session(
+        &pool,
+        user,
+        "uuid-1",
+        midday - 86_400,
+        1_800,
+        Some(OFFSET_PLUS_13),
+    )
+    .await;
+
+    let today = local_day(&pool, OFFSET_PLUS_13).await;
+    let yesterday: String = sqlx::query_scalar("SELECT date(?, '-1 day')")
+        .bind(&today)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        day_seconds(&pool, user, &today, OFFSET_PLUS_13)
+            .await
+            .unwrap(),
+        600
+    );
+    assert_eq!(
+        day_seconds(&pool, user, &yesterday, OFFSET_PLUS_13)
+            .await
+            .unwrap(),
+        1_800,
+        "the day asked for decides the figure, not `now`"
+    );
+}
+
+/// The reported `day` and the figure beside it describe the same day, for both
+/// kinds — the label is resolved once and every measurement is taken against it.
+#[tokio::test]
+async fn daily_goals_label_and_figure_name_the_same_day() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    let midday = local_day_start_plus(&pool, OFFSET_PLUS_13, 43_200).await;
+    read_session(&pool, user, "uuid-1", midday, 600, Some(OFFSET_PLUS_13)).await;
+    read_session(
+        &pool,
+        user,
+        "uuid-1",
+        midday - 86_400,
+        1_800,
+        Some(OFFSET_PLUS_13),
+    )
+    .await;
+    for kind in [GOAL_KIND_PAGES, GOAL_KIND_MINUTES] {
+        set_daily_goal(
+            &pool,
+            user,
+            &DailyGoalUpdate::set(kind, 20),
+            Some(OFFSET_PLUS_13),
+        )
+        .await
+        .unwrap();
+    }
+
+    let goals = daily_goals(&pool, user, Some(OFFSET_PLUS_13))
+        .await
+        .unwrap();
+    let minutes = goals.minutes.unwrap();
+    assert_eq!(minutes.day, local_day(&pool, OFFSET_PLUS_13).await);
+    assert_eq!(
+        minutes.current, 10,
+        "the previous local day's half hour belongs to that day's label"
+    );
+    assert_eq!(
+        goals.pages.unwrap().day,
+        minutes.day,
+        "both kinds carry the one label"
+    );
 }
 
 #[tokio::test]

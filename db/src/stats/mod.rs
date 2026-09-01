@@ -32,7 +32,8 @@ mod library;
 mod pages;
 mod patterns;
 mod ratings;
-mod sessionize;
+// `pub(crate)` for `IDLE_GAP_SECS` alone — see its own docs.
+pub(crate) mod sessionize;
 mod sessions;
 mod streak;
 mod superlatives;
@@ -187,6 +188,11 @@ fn cache_put(
     summary: StatsSummary,
 ) {
     if let Ok(mut guard) = cache().lock() {
+        // Bounded by the TTL, not a count: an entry past it can never be served
+        // again, so age reclaims exactly the dead ones — where a capacity cap
+        // would have to evict a live reader's summary, and a summary is not
+        // small (a heatmap vec plus up to `FINISHED_BOOKS_LIMIT` books).
+        guard.retain(|_, (at, _)| now.saturating_sub(*at) < STATS_TTL_SECS);
         guard.insert((user_id, range, offset_minutes), (now, summary));
     }
 }
@@ -208,5 +214,34 @@ pub(crate) fn clear_cache() {
 pub fn invalidate_user(user_id: i64) {
     if let Ok(mut guard) = cache().lock() {
         guard.retain(|(uid, _, _), _| *uid != user_id);
+    }
+}
+
+/// Eviction, inline rather than in the sibling `tests.rs` because it needs no
+/// pool and no fixtures — the cache is a map behind an injected clock.
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn cache_put_evicts_entries_the_ttl_has_passed() {
+        // Stamped near zero so the sweep can't reach a sibling test's entry: the
+        // cache is a process-wide static, and everything else in this crate is
+        // stamped at `now_secs()` or at 1000.
+        let stale = (9_401, StatsRange::Week, 0);
+        let fresh = (9_402, StatsRange::Week, 0);
+        cache_put(stale.0, stale.1, stale.2, 0, StatsSummary::default());
+        cache_put(
+            fresh.0,
+            fresh.1,
+            fresh.2,
+            STATS_TTL_SECS,
+            StatsSummary::default(),
+        );
+
+        // Read back at the instant it was written, where the TTL alone would
+        // still have served it — so a miss here is reclamation, not expiry.
+        assert!(cache_get(stale.0, stale.1, stale.2, 0).is_none());
+        assert!(cache_get(fresh.0, fresh.1, fresh.2, STATS_TTL_SECS).is_some());
     }
 }

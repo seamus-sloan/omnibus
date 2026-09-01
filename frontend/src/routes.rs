@@ -68,6 +68,10 @@ pub enum Route {
     Login {},
     #[route("/register")]
     Register {},
+    // Must stay last: dioxus-router matches variants in declaration order,
+    // so a catch-all above any real route would swallow it.
+    #[route("/:..segments")]
+    NotFound { segments: Vec<String> },
 }
 
 /// Route target for `/` — wraps [`LandingPage`] in the platform screen layout.
@@ -489,6 +493,17 @@ pub fn Search(query: String) -> Element {
 pub fn Register() -> Element {
     use_page_title(|| Some("Register".into()));
     rsx! { RegisterPage {} }
+}
+
+/// Route target for any unmatched URL. Without it dioxus-router renders its
+/// own "Failed to parse route" diagnostic — the complete internal route
+/// table, admin paths included — as the page body, with no nav to escape by.
+#[component]
+pub fn NotFound(segments: Vec<String>) -> Element {
+    use_page_title(|| Some("Not found".into()));
+    rsx! {
+        ScreenLayout { NotFoundPage { segments } }
+    }
 }
 
 /// A navigation target for `route` with the dangling `?` trimmed off.

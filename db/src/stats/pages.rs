@@ -105,11 +105,74 @@ pub(super) fn finished_in_window() -> String {
     )
 }
 
-/// Every forward-progress gain one reader has on record, resolved to a day on
-/// **their** calendar: one `(day, uuid, percent_gained)` row per bucket.
+/// A day in seconds — the slack both prunes below are stated with.
+/// `user_offset::resolve_offset_minutes` clamps to `-720..=840`, so every
+/// calendar this module can be asked for sits inside one day of UTC, which is
+/// what lets a bound be written without knowing the offset at all.
+const DAY_SECS: i64 = 86_400;
+
+/// The index-usable predicate [`ledger_days`] pushes into each of its arms, one
+/// per ledger generation. Named fields rather than a pair, because two `String`s
+/// of SQL swap silently.
+struct LedgerPrune {
+    /// On `s.slot`, served by `idx_reading_progress_slots_user_slot`.
+    slots: String,
+    /// On `d.day`, served by `idx_reading_progress_daily_user_day`.
+    daily: String,
+}
+
+/// Prune both arms to a window opening at the unix second `param`.
+///
+/// A *bound*, never the filter — the exact day comparison stays in
+/// [`ledger_in_window`]'s outer `WHERE`, and this only has to be implied by it.
+/// It is: the shift cancels on both sides of `local_day(t) >= local_day(start)`,
+/// and that comparison can only hold when `t + shift > start + shift - 86400`,
+/// so every row the outer filter keeps has `t > start - 86400` whatever the
+/// offset. A row this lets through may still be dropped out there; none it
+/// excludes would have survived.
+///
+/// It has to exist because the outer filter compares a *computed* `date(...)`
+/// that no index can serve. Without a bound on the stored column the slots arm
+/// matches on `user_id` alone and re-reads a reader's whole ledger history —
+/// once per aggregate, on every stats load.
+fn window_prune(param: &str) -> LedgerPrune {
+    LedgerPrune {
+        // `/` truncates toward zero, so a pre-1970 bound rounds *up* — still at
+        // or below the smallest slot the outer filter can keep, which satisfies
+        // `slot >= (param - 86400) / 900` under exact division.
+        slots: format!("s.slot >= ({param} - {DAY_SECS}) / {SLOT_SECS}"),
+        // The frozen arm's stored day is what the outer filter compares, and
+        // `local_day(start)` never falls below `date(start - 86400)`.
+        daily: format!("d.day >= date({param} - {DAY_SECS}, 'unixepoch')"),
+    }
+}
+
+/// Prune both arms to the one reader-calendar day `param` names (`YYYY-MM-DD`).
+///
+/// Same implication, bounded at both ends: that day is the UTC day of `param`
+/// shifted by less than a day either way, so every instant it can hold lies in
+/// `[midnight - 1 day, midnight + 2 days)`. The frozen arm needs no slack at
+/// all — its stored day *is* what the outer filter compares, so the push-down
+/// there is exact rather than conservative.
+fn day_prune(param: &str) -> LedgerPrune {
+    // `strftime` returns TEXT; CAST rather than lean on numeric affinity to
+    // compare an integer bound against an integer column.
+    let midnight = format!("CAST(strftime('%s', {param}) AS INTEGER)");
+    LedgerPrune {
+        slots: format!(
+            "s.slot BETWEEN ({midnight} - {DAY_SECS}) / {SLOT_SECS} \
+                       AND ({midnight} + 2 * {DAY_SECS}) / {SLOT_SECS}"
+        ),
+        daily: format!("d.day = {param}"),
+    }
+}
+
+/// Every forward-progress gain one reader has on record within `prune`'s reach,
+/// resolved to a day on **their** calendar: one `(day, uuid, percent_gained)`
+/// row per bucket.
 ///
 /// Unions the ledger's two generations, which is the whole reason this exists.
-/// `reading_progress_slots` (migration `0093`) keys on a quarter-hour, so its
+/// `reading_progress_slots` (migration `0095`) keys on a quarter-hour, so its
 /// day is computed here against `offset_minutes` and follows the reader.
 /// `reading_progress_daily` (`0083`) stored a UTC day string and kept no
 /// instant, so there is nothing to re-bucket it from — those rows contribute
@@ -117,17 +180,24 @@ pub(super) fn finished_in_window() -> String {
 /// a few hours out. The old table is frozen, so its share shrinks to nothing as
 /// its days age out of every window.
 ///
-/// Bind order is `user_id, user_id`.
-fn ledger_days(offset_minutes: i64) -> String {
+/// Parameters are **numbered**: `?1` and `?2` are `user_id`, once per arm, and
+/// the prune's bound is `?3` — referenced from both arms and again by the
+/// caller's exact filter, but still one bind. Numbering rather than repeating a
+/// bare `?` is what keeps every caller's bind list the three-value one it has
+/// always had. A caller adding a placeholder of its own numbers it `?4`; a bare
+/// `?` mixed in here would be assigned an index by position and silently take
+/// the wrong value.
+fn ledger_days(offset_minutes: i64, prune: &LedgerPrune) -> String {
     let slot_day = calendar::local_day(&format!("(s.slot * {SLOT_SECS})"), offset_minutes);
+    let LedgerPrune { slots, daily } = prune;
     format!(
         "SELECT {slot_day} AS day,
                 s.book_uuid AS uuid,
                 s.percent_gained AS percent_gained
-           FROM reading_progress_slots s WHERE s.user_id = ?
+           FROM reading_progress_slots s WHERE s.user_id = ?1 AND {slots}
          UNION ALL
          SELECT d.day, d.book_uuid, d.percent_gained
-           FROM reading_progress_daily d WHERE d.user_id = ?"
+           FROM reading_progress_daily d WHERE d.user_id = ?2 AND {daily}"
     )
 }
 
@@ -137,10 +207,14 @@ fn ledger_days(offset_minutes: i64) -> String {
 /// rather than the join dropping them silently — the total excludes them, the
 /// coverage counts them.
 ///
-/// Bind order is `user_id, user_id, start`. `start` is a unix second compared as
-/// the day it falls in **on the reader's calendar**, so it lines up with the day
-/// labels the union produces; comparing it as a UTC day would include a
-/// leading extra day for every reader east of UTC.
+/// Bind order is `user_id, user_id, start` — three binds, unchanged. `start` is
+/// a unix second compared as the day it falls in **on the reader's calendar**,
+/// so it lines up with the day labels the union produces; comparing it as a UTC
+/// day would include a leading extra day for every reader east of UTC.
+///
+/// It occupies `?1..?3`, `start` appearing as `?3` in [`window_prune`]'s two
+/// bounds as well as here. A caller wrapping this with a placeholder of its own
+/// must number it `?4` and bind it fourth.
 pub(super) fn ledger_in_window(offset_minutes: i64) -> String {
     format!(
         "SELECT g.day AS day,
@@ -150,9 +224,9 @@ pub(super) fn ledger_in_window(offset_minutes: i64) -> String {
          FROM ({}) g
          JOIN ({}) p ON p.uuid = g.uuid
          WHERE g.day >= {}",
-        ledger_days(offset_minutes),
+        ledger_days(offset_minutes, &window_prune("?3")),
         book_pages_source(),
-        calendar::local_day("?", offset_minutes)
+        calendar::local_day("?3", offset_minutes)
     )
 }
 
@@ -279,6 +353,9 @@ fn hourly_rate(pages: Option<i64>, secs: Option<i64>) -> Option<f64> {
 /// which happens on the last days of most months — and `date(end)` then names
 /// day one of the *current* window, so an inclusive comparison would count that
 /// day into its own baseline and report a 0% delta against it.
+///
+/// Bind order is `user_id, user_id, start, end`: [`ledger_in_window`] holds
+/// `?1..?3`, so `end` is the `?4` this adds.
 pub(super) async fn pages_read_bounded(
     pool: &SqlitePool,
     user_id: i64,
@@ -293,7 +370,7 @@ pub(super) async fn pages_read_bounded(
          FROM ({}) w
          WHERE w.pages IS NOT NULL AND w.day <= {}",
         ledger_in_window(offset_minutes),
-        calendar::local_day("? - 1", offset_minutes)
+        calendar::local_day("?4 - 1", offset_minutes)
     );
     Ok(sqlx::query_scalar(&sql)
         .bind(user_id)
@@ -304,7 +381,7 @@ pub(super) async fn pages_read_bounded(
         .await?)
 }
 
-/// Pages covered on one UTC `YYYY-MM-DD`, for the daily pages goal.
+/// Pages covered on one `YYYY-MM-DD`, for the daily pages goal.
 ///
 /// Zero rather than `None` when nothing resolves, which is the one place this
 /// module deliberately departs from [`pages_read`]: that function's `None` is
@@ -316,7 +393,12 @@ pub(super) async fn pages_read_bounded(
 /// `day` is on the reader's own calendar, and so is the bucketing this compares
 /// it against — which is the point of migration `0093`. A gain the reader made
 /// at 21:00 counts toward the day they made it on, not the one UTC had rolled
-/// over into. Bind order is `user_id, user_id, day`.
+/// over into.
+///
+/// Bind order is `user_id, user_id, day` — three binds, unchanged, with `day`
+/// as `?3` in [`day_prune`]'s bounds as well as in the exact filter. The daily
+/// goals are unwindowed and run on every stats load, so the bounds are what
+/// stop this reading a reader's whole ledger four times over.
 pub(super) async fn pages_read_on_day(
     pool: &SqlitePool,
     user_id: i64,
@@ -329,8 +411,8 @@ pub(super) async fn pages_read_on_day(
                     0)
          FROM ({}) g
          JOIN ({}) p ON p.uuid = g.uuid
-         WHERE g.day = ? AND p.pages IS NOT NULL",
-        ledger_days(offset_minutes),
+         WHERE g.day = ?3 AND p.pages IS NOT NULL",
+        ledger_days(offset_minutes, &day_prune("?3")),
         book_pages_source()
     );
     Ok(sqlx::query_scalar(&sql)

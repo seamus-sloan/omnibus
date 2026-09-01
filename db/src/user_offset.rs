@@ -61,14 +61,14 @@ fn in_range(offset: i64) -> bool {
         .contains(&offset)
 }
 
-/// The reader's UTC offset from the most recent session carrying one, or `None`
-/// when no session ever has.
+/// The reader's UTC offset from the most recent session carrying a plausible
+/// one, or `None` when no session ever has.
 ///
 /// A **proxy**, and worth naming as one: it says where they were when they last
 /// read, not where they are now, and it is stale by an hour after a DST
 /// transition the reader has not read across. Only reached when the asking
 /// client declared no offset of its own — the sessions' `time_zone` column
-/// (migration `0092`) is what would answer this exactly, once there is a tz
+/// (migration `0094`) is what would answer this exactly, once there is a tz
 /// database to resolve it against.
 ///
 /// One indexed probe per table, compared here, rather than one `ORDER BY` over a
@@ -82,12 +82,19 @@ pub async fn current_offset_minutes(
     user_id: i64,
 ) -> Result<Option<i64>, OffsetError> {
     let mut latest: Option<(i64, i64)> = None;
+    // Range-checked inside each probe rather than on the winner: rows written
+    // before `SessionReport::validate` existed are still here, and one of them
+    // landing last must cost the reader that session, not their whole calendar.
+    // `BETWEEN` excludes a NULL too, so a probe only ever decodes an offset.
     for table in ["reading_sessions", "listening_sessions"] {
-        // `table` is one of two fixed literals chosen here, never user input.
+        // `table` is one of two fixed literals chosen here, never user input,
+        // and the bounds are `i64` consts — neither is an injection surface.
         let sql = format!(
             "SELECT started_at, utc_offset_minutes FROM {table}
-             WHERE user_id = ? AND utc_offset_minutes IS NOT NULL
-             ORDER BY started_at DESC LIMIT 1"
+             WHERE user_id = ? AND utc_offset_minutes BETWEEN {min} AND {max}
+             ORDER BY started_at DESC LIMIT 1",
+            min = SessionReport::UTC_OFFSET_MIN_MINUTES,
+            max = SessionReport::UTC_OFFSET_MAX_MINUTES,
         );
         let Some(row) = sqlx::query(&sql).bind(user_id).fetch_optional(pool).await? else {
             continue;
@@ -100,10 +107,7 @@ pub async fn current_offset_minutes(
             latest = Some(candidate);
         }
     }
-    // Bounds-checked on the way out as well as at the API boundary: this reads
-    // rows written before that check existed, and one bad session must not
-    // relabel a reader's days.
-    Ok(latest.map(|(_, offset)| offset).filter(|o| in_range(*o)))
+    Ok(latest.map(|(_, offset)| offset))
 }
 
 /// Today's date as `YYYY-MM-DD` under `offset_minutes`.

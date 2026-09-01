@@ -41,6 +41,12 @@ test("renders the account section layout", async ({ page }) => {
   await expect(currentPassword(page)).toBeVisible();
   await expect(newPassword(page)).toBeVisible();
   await expect(page.getByTestId("change-password-submit")).toBeVisible();
+  // Book-details card sits above the goals, and its switch is parked: it
+  // renders so the setting is discoverable, disabled with a "Coming soon"
+  // marker because nothing reads the preference yet.
+  await expect(page.getByTestId("account-scroll-stops-card")).toBeVisible();
+  await expect(page.getByTestId("scroll-stops-toggle")).toBeDisabled();
+  await expect(page.getByTestId("scroll-stops-soon")).toHaveText("Coming soon");
   // Hidden-formats card (its behavior is covered by hidden_formats.spec.ts).
   await expect(page.getByTestId("account-hidden-formats-card")).toBeVisible();
 
@@ -429,7 +435,10 @@ test.describe
         {
           method: "POST",
           url: "/api/rpc/stats-goal",
-          expectedBody: { update: { target: 24 } },
+          // `utc_offset_minutes` is the browser's own offset, which the config
+          // pins to UTC (`timezoneId`) so this is deterministically 0 — it is
+          // where the server cuts the answer's day boundaries (rule 10).
+          expectedBody: { update: { target: 24 }, utc_offset_minutes: 0 },
           expectedStatus: 200,
         },
         async () => page.getByTestId("goals-save").click(),
@@ -474,8 +483,9 @@ test.describe
           method: "POST",
           url: "/api/rpc/stats-goal-daily",
           // `target` is `skip_serializing_if = "Option::is_none"`, so a clear
-          // travels as the kind alone — same shape the annual clear uses.
-          expectedBody: { update: { kind: "pages" } },
+          // travels as the kind alone — same shape the annual clear uses. The
+          // offset rides every stats write; the config pins it to 0.
+          expectedBody: { update: { kind: "pages" }, utc_offset_minutes: 0 },
           expectedStatus: 200,
         },
         async () => page.getByTestId("goals-save").click(),

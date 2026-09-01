@@ -222,9 +222,11 @@ struct SessionReportZoneTests {
         report.timeZone = nil
         let json = try JSONSerialization.jsonObject(
             with: try JSONEncoder().encode(report)) as? [String: Any]
-        // The server's `SessionReport::validate` rejects a present-but-blank
-        // zone, which would fail the whole batched report over a field nothing
-        // reads yet.
+        // Swift's synthesized `Encodable` uses `encodeIfPresent`, so a nil
+        // zone omits the key rather than sending null or "". That matters
+        // because the server's `SessionReport::validate` rejects a
+        // present-but-blank zone, which would fail the whole batched report
+        // over a field nothing reads yet.
         #expect(json?["time_zone"] == nil)
     }
 }

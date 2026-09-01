@@ -70,8 +70,20 @@ table missing from it strands the reader's rows on a uuid no book carries:
 invisible to every query that joins `books`, still counted by every query
 that doesn't. Migration `0079` heals the rows already stranded that way; the
 list is what stops new ones. If the table carries a `UNIQUE` key the retarget
-would collide on, add it to `DEDUPE_TABLES` beside it and the shared
-latest-wins helper resolves it.
+would collide on, it needs a collision helper beside it — and **which one is
+decided by what a row holds, not by which list is nearer**:
+
+- **Snapshot → `DEDUPE_TABLES`.** A position, a rating, a read status: only
+  one of the two rows can be true at once, so the shared latest-wins helper
+  keeps the newer and drops the other.
+- **Counter → `fold_ledger_counters`.** A per-reader table keyed on a time
+  bucket (`reading_progress_daily`, `reading_progress_slots`) counts ground
+  covered, and a reader who covered ground in both editions in the same
+  bucket covered all of it — the two rows are **summed**. Latest-wins there
+  is silent data loss dressed as a tie-break, so a counter table joins
+  `RETARGET_TABLES` and this helper, never `DEDUPE_TABLES`. What a bucket may
+  be keyed on in the first place is
+  [10-reader-calendar.md](10-reader-calendar.md).
 
 The list is deliberately **not** every table with a `book_uuid` column.
 Library-wide tables (`shelf_books`, `physical_copies`, `wishlist_entries`,

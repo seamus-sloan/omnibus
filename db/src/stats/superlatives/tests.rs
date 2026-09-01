@@ -9,8 +9,8 @@ use crate::test_support::seed_user;
 
 const DAY: i64 = 86_400;
 
-/// 2023-11-14 00:00:00 UTC. Day-aligned on purpose: a session at `D0 + n` and
-/// the `date(started_at, 'unixepoch')` bucket it lands in can't disagree.
+/// 2023-11-14 00:00:00 UTC. Day-aligned on purpose: at offset 0, a session at
+/// `D0 + n` and the day bucket it lands in can't disagree.
 const D0: i64 = 19_675 * DAY;
 
 async fn seed_lib(pool: &SqlitePool) -> i64 {
@@ -110,7 +110,7 @@ async fn superlatives_are_all_absent_for_a_window_with_no_activity() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
 
-    let s = superlatives(&pool, user, 0).await.unwrap();
+    let s = superlatives(&pool, user, 0, 0).await.unwrap();
 
     assert!(s.is_empty(), "{s:?}");
 }
@@ -131,7 +131,7 @@ async fn extreme_books_name_the_two_ends_of_the_window() {
         finish(&pool, user, uuid, D0).await;
     }
 
-    let s = superlatives(&pool, user, 0).await.unwrap();
+    let s = superlatives(&pool, user, 0, 0).await.unwrap();
 
     let longest = s.longest_book.unwrap();
     assert_eq!(longest.title, "Doorstopper");
@@ -149,7 +149,7 @@ async fn shortest_book_is_absent_when_the_window_finished_only_one_book() {
     seed_book(&pool, lib, "u-a", "Only Book", Some(300)).await;
     finish(&pool, user, "u-a", D0).await;
 
-    let s = superlatives(&pool, user, 0).await.unwrap();
+    let s = superlatives(&pool, user, 0, 0).await.unwrap();
 
     // The one book is genuinely the longest; calling it the shortest too
     // dresses a single datum as a range.
@@ -167,7 +167,7 @@ async fn shortest_book_is_absent_when_every_finished_book_is_the_same_length() {
         finish(&pool, user, uuid, D0).await;
     }
 
-    let s = superlatives(&pool, user, 0).await.unwrap();
+    let s = superlatives(&pool, user, 0, 0).await.unwrap();
 
     assert_eq!(s.longest_book.unwrap().value, 300);
     assert!(s.shortest_book.is_none());
@@ -185,7 +185,7 @@ async fn extreme_books_exclude_a_book_the_length_ladder_cannot_measure() {
     finish(&pool, user, "u-book", D0).await;
     finish(&pool, user, "u-audio", D0).await;
 
-    let s = superlatives(&pool, user, 0).await.unwrap();
+    let s = superlatives(&pool, user, 0, 0).await.unwrap();
 
     assert_eq!(s.longest_book.unwrap().title, "Measured");
     // Only one measurable book survives, so the pair collapses to one figure.
@@ -209,7 +209,7 @@ async fn extreme_books_exclude_a_book_the_ladder_measures_as_zero_pages() {
     finish(&pool, user, "u-book", D0).await;
     finish(&pool, user, "u-images", D0).await;
 
-    let s = superlatives(&pool, user, 0).await.unwrap();
+    let s = superlatives(&pool, user, 0, 0).await.unwrap();
 
     assert_eq!(s.longest_book.unwrap().title, "Measured");
     assert!(s.shortest_book.is_none(), "{:?}", s.shortest_book);
@@ -227,7 +227,7 @@ async fn extreme_books_name_the_position_zero_author() {
     seed_author(&pool, "u-book", "Second Hand", 1).await;
     finish(&pool, user, "u-book", D0).await;
 
-    let longest = superlatives(&pool, user, 0)
+    let longest = superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .longest_book
@@ -250,7 +250,7 @@ async fn extreme_books_break_a_length_tie_on_title() {
         finish(&pool, user, uuid, D0).await;
     }
 
-    let s = superlatives(&pool, user, 0).await.unwrap();
+    let s = superlatives(&pool, user, 0, 0).await.unwrap();
 
     // Two books tie at 500; the answer must be the same on every run.
     assert_eq!(s.longest_book.unwrap().title, "Alpha");
@@ -265,7 +265,7 @@ async fn extreme_books_ignore_finishes_outside_the_window() {
     seed_book(&pool, lib, "u-a", "Old", Some(300)).await;
     finish(&pool, user, "u-a", D0).await;
 
-    let s = superlatives(&pool, user, D0 + 1).await.unwrap();
+    let s = superlatives(&pool, user, D0 + 1, 0).await.unwrap();
 
     assert!(s.longest_book.is_none());
 }
@@ -302,7 +302,7 @@ async fn biggest_day_sums_reading_and_listening_on_the_same_calendar_day() {
     read_session(&pool, user, "u-a", D0 + DAY, 2000).await;
     listen_session(&pool, user, "u-a", D0 + DAY + 60, 2000).await;
 
-    let day = superlatives(&pool, user, 0)
+    let day = superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .biggest_day
@@ -321,7 +321,7 @@ async fn biggest_day_breaks_a_tie_on_the_earliest_day() {
     read_session(&pool, user, "u-a", D0 + DAY, 3600).await;
     read_session(&pool, user, "u-a", D0, 3600).await;
 
-    let day = superlatives(&pool, user, 0)
+    let day = superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .biggest_day
@@ -340,11 +340,33 @@ async fn biggest_day_ignores_a_day_under_the_sitting_floor() {
     // otherwise headline "Biggest day — 0 m".
     read_session(&pool, user, "u-a", D0, sessionize::MIN_SITTING_SECS - 15).await;
 
-    assert!(superlatives(&pool, user, 0)
+    assert!(superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .biggest_day
         .is_none());
+}
+
+#[tokio::test]
+async fn biggest_day_buckets_an_evening_session_on_the_readers_own_day() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "u-a", "Book", Some(100)).await;
+    // At UTC-7 both sittings are Monday the 13th: 10:00 local, then 20:00
+    // local — which is 03:00 UTC on the 14th. In UTC they split into two
+    // smaller days and the later one wins.
+    read_session(&pool, user, "u-a", D0 - 7 * 3600, 3000).await;
+    read_session(&pool, user, "u-a", D0 + 3 * 3600, 3600).await;
+
+    let day = superlatives(&pool, user, 0, -420)
+        .await
+        .unwrap()
+        .biggest_day
+        .unwrap();
+
+    assert_eq!(day.day, "2023-11-13");
+    assert_eq!(day.seconds, 6600);
 }
 
 #[tokio::test]
@@ -359,7 +381,7 @@ async fn biggest_day_ignores_sessions_before_the_window() {
     read_session(&pool, user, "u-a", D0 - 10 * DAY, 7200).await;
     read_session(&pool, user, "u-a", D0 + DAY, 3600).await;
 
-    let day = superlatives(&pool, user, D0)
+    let day = superlatives(&pool, user, D0, 0)
         .await
         .unwrap()
         .biggest_day
@@ -385,7 +407,7 @@ async fn longest_sit_stitches_checkpoints_rather_than_ranking_raw_rows() {
     }
     read_session(&pool, user, "u-single", D0 + 10 * DAY, 1200).await;
 
-    let sit = superlatives(&pool, user, 0)
+    let sit = superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .longest_sit
@@ -403,7 +425,7 @@ async fn longest_sit_ignores_a_glance_under_the_sitting_floor() {
     seed_book(&pool, lib, "u-a", "Glanced At", Some(100)).await;
     read_session(&pool, user, "u-a", D0, sessionize::MIN_SITTING_SECS - 1).await;
 
-    assert!(superlatives(&pool, user, 0)
+    assert!(superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .longest_sit
@@ -420,7 +442,7 @@ async fn longest_sit_breaks_a_duration_tie_on_the_earliest_sitting() {
     read_session(&pool, user, "u-late", D0 + DAY, 3600).await;
     read_session(&pool, user, "u-early", D0, 3600).await;
 
-    let sit = superlatives(&pool, user, 0)
+    let sit = superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .longest_sit
@@ -439,7 +461,7 @@ async fn longest_sit_ignores_a_sitting_that_began_before_the_window() {
     read_session(&pool, user, "u-a", D0 - 10 * DAY, 7200).await;
     read_session(&pool, user, "u-a", D0 + DAY, 3600).await;
 
-    let sit = superlatives(&pool, user, D0)
+    let sit = superlatives(&pool, user, D0, 0)
         .await
         .unwrap()
         .longest_sit
@@ -456,7 +478,7 @@ async fn longest_sit_ignores_a_ghosted_book_with_no_live_row() {
     // be a superlative.
     read_session(&pool, user, "u-ghost", D0, 7200).await;
 
-    assert!(superlatives(&pool, user, 0)
+    assert!(superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .longest_sit
@@ -488,7 +510,7 @@ async fn fastest_read_counts_days_from_the_first_recorded_session() {
     seed_raced_book(&pool, lib, user, "u-fast", "Sprint", (D0, D0 + 3 * DAY)).await;
     seed_raced_book(&pool, lib, user, "u-slow", "Slog", (D0, D0 + 40 * DAY)).await;
 
-    let fastest = superlatives(&pool, user, 0)
+    let fastest = superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .fastest_read
@@ -499,13 +521,40 @@ async fn fastest_read_counts_days_from_the_first_recorded_session() {
 }
 
 #[tokio::test]
+async fn fastest_read_counts_days_on_the_readers_calendar() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    // At UTC-8 the read opens 16:00 on the 13th and ends 01:00 on the 15th —
+    // two days. In UTC it opens on the 14th and ends on the 15th, so the
+    // shared shift does not cancel: only one end crosses a midnight.
+    seed_raced_book(
+        &pool,
+        lib,
+        user,
+        "u-a",
+        "Overnight",
+        (D0, D0 + DAY + 9 * 3600),
+    )
+    .await;
+
+    let fastest = superlatives(&pool, user, 0, -480)
+        .await
+        .unwrap()
+        .fastest_read
+        .unwrap();
+
+    assert_eq!(fastest.value, 2);
+}
+
+#[tokio::test]
 async fn fastest_read_reports_a_same_day_read_as_one_day_not_zero() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
     let lib = seed_lib(&pool).await;
     seed_raced_book(&pool, lib, user, "u-a", "One Sitting", (D0, D0 + 3600)).await;
 
-    let fastest = superlatives(&pool, user, 0)
+    let fastest = superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .fastest_read
@@ -527,7 +576,7 @@ async fn fastest_read_counts_listening_toward_the_tracked_time_floor() {
     listen_session(&pool, user, "u-audio", D0, FASTEST_READ_MIN_SECS).await;
     finish(&pool, user, "u-audio", D0 + 2 * DAY).await;
 
-    let fastest = superlatives(&pool, user, 0)
+    let fastest = superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .fastest_read
@@ -546,7 +595,7 @@ async fn fastest_read_counts_reading_that_began_before_the_window() {
     // the sessions to the window would report this as a one-day sprint.
     seed_raced_book(&pool, lib, user, "u-a", "Long Haul", (D0 - 30 * DAY, D0)).await;
 
-    let fastest = superlatives(&pool, user, D0)
+    let fastest = superlatives(&pool, user, D0, 0)
         .await
         .unwrap()
         .fastest_read
@@ -575,7 +624,7 @@ async fn fastest_read_ignores_a_book_under_the_tracked_time_floor() {
     )
     .await;
 
-    let fastest = superlatives(&pool, user, 0)
+    let fastest = superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .fastest_read
@@ -594,7 +643,7 @@ async fn fastest_read_ignores_a_book_whose_sessions_all_postdate_its_completion(
     // which is not a fast read.
     seed_raced_book(&pool, lib, user, "u-a", "Reread", (D0 + 5 * DAY, D0)).await;
 
-    assert!(superlatives(&pool, user, 0)
+    assert!(superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .fastest_read
@@ -619,7 +668,7 @@ async fn fastest_read_uses_the_earliest_in_window_completion() {
     .await
     .unwrap();
 
-    let fastest = superlatives(&pool, user, 0)
+    let fastest = superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .fastest_read
@@ -636,7 +685,7 @@ async fn fastest_read_breaks_a_tie_on_title() {
     seed_raced_book(&pool, lib, user, "u-b", "Beta", (D0, D0 + 2 * DAY)).await;
     seed_raced_book(&pool, lib, user, "u-a", "Alpha", (D0, D0 + 2 * DAY)).await;
 
-    let fastest = superlatives(&pool, user, 0)
+    let fastest = superlatives(&pool, user, 0, 0)
         .await
         .unwrap()
         .fastest_read
@@ -655,7 +704,7 @@ async fn superlatives_propagate_sqlx_error_when_the_books_table_is_missing() {
         .await
         .unwrap();
 
-    let err = superlatives(&pool, 1, 0).await.unwrap_err();
+    let err = superlatives(&pool, 1, 0, 0).await.unwrap_err();
 
     assert!(matches!(err, StatsError::Sqlx(_)));
 }

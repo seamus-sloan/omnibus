@@ -51,12 +51,6 @@ fn aria_value_now(current: i64, target: i64) -> i64 {
     current.clamp(0, target)
 }
 
-/// How many whole minutes `secs` is, for the unplaceable-sessions disclosure.
-/// Truncating, to match the way the goal itself counts a partial minute.
-fn disclosure_minutes(secs: i64) -> i64 {
-    secs / 60
-}
-
 /// How far through its year `day` is, as a fraction 0.0..=1.0 — the pace an
 /// annual target is read against.
 ///
@@ -197,8 +191,12 @@ pub(super) fn AnnualGoalRing(
     }
 }
 
-/// The standing daily goals card: the pages and minutes rows, the goals-met
-/// chip, and the unplaceable-sessions disclosure beneath them.
+/// The standing daily goals card: the pages and minutes rows, and the one link
+/// to where they are set.
+///
+/// No unplaceable-sessions disclosure: `DailyGoals::unzoned_seconds` is now
+/// always zero, since every session can be placed on the reader's own day (rule
+/// 10). The wire field stays for older clients; there is nothing left to render.
 #[component]
 pub(super) fn DailyGoalsCard(daily: DailyGoals) -> Element {
     // "Every day" promises a recurrence, which is only true once something
@@ -235,21 +233,6 @@ pub(super) fn DailyGoalsCard(daily: DailyGoals) -> Element {
             // them, so there is one thing to click.
             if daily.pages.is_none() || daily.minutes.is_none() {
                 SetGoalsLink { label: "Set goals", testid: "stats-daily-set-link" }
-            }
-            // Only ever non-zero alongside a minutes goal, and it is a
-            // disclosure rather than an error: those seconds are real reading
-            // the goal could not place on a day.
-            if daily.unzoned_seconds > 0 {
-                p { class: "st-daily-unzoned", "data-testid": "stats-daily-unzoned",
-                    {
-                        let mins = disclosure_minutes(daily.unzoned_seconds);
-                        format!(
-                            "{mins} {} today came from sessions that recorded no time zone, \
-                             so they aren't counted above.",
-                            plural("minute", mins),
-                        )
-                    }
-                }
             }
         }
     }

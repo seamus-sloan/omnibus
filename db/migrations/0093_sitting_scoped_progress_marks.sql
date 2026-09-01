@@ -1,0 +1,66 @@
+-- Scope the forward-progress ledger's accrual to a reading *sitting*.
+--
+-- Migration `0083` differenced every position write against the last percent
+-- observed, clamping a backward move to zero but still letting the mark follow
+-- the reader back. Re-covering that ground then accrued a second time: at 40%,
+-- flipping back to 30% to find a quote and returning to 45% charged 15 where
+-- only 5 was new. It measured the *path* the reader walked, not the ground they
+-- covered, so any backtracking inflated the Pages read tile and everything
+-- derived from it.
+--
+-- The mark now holds the furthest point reached in the current sitting and
+-- accrues only above it, so a there-and-back move inside one sitting is free.
+--
+-- A sitting ends after `stats::sessionize::IDLE_GAP_SECS` of no observation,
+-- and that boundary governs the **mark**, never the gain. It is the only thing
+-- that lets the mark fall back, which is what keeps a deliberate re-read
+-- counting in full: restarting a finished book re-baselines at 5%, not a doomed
+-- climb back to a lifetime high-water of 100. Ground beyond the mark is earned
+-- on either side of it — an offline stretch coalesces into one write stamped
+-- with the last page turn, so a plane ride arrives as a single observation
+-- long after the previous one, and it is reading, not idleness.
+--
+-- This is BookOrbit's session-delta semantics reached from the other side. They
+-- bracket a session on the client and post one `end - start` delta; that shape
+-- was rejected for omnibus in #2139 because every reading surface would have to
+-- learn to carry a percent first (the iOS reader posts a CFI and no percent at
+-- all), and a session lost on a crashed tab takes its whole delta with it.
+-- Deriving the same bracket from the position writes the clients already make
+-- needs no client change and inherits the offline outboxes' durability.
+--
+-- Known residual, deliberate: a backtrack spanning a sitting boundary — go
+-- back, put the book down, read forward tomorrow — still over-credits, because
+-- a per-sitting clamp cannot net across sittings. Closing that needs signed
+-- deltas or an explicit re-read boundary; see the discussion on #2394.
+
+-- Renamed rather than added: it is the same slot, holding the same kind of
+-- value, under one new rule — it no longer follows the reader backward mid
+-- sitting. A second percent column would just be two answers to one question.
+-- SQLite rewrites the column's CHECK constraint along with the rename.
+ALTER TABLE reading_progress_marks RENAME COLUMN percent TO sitting_max_percent;
+
+-- The sitting clock, deliberately *not* `updated_at`. Two differences, and both
+-- matter: this one advances only on a real observation, where `updated_at`
+-- carries `DEFAULT (strftime('%s','now'))` and is what `merge::transaction`'s
+-- `dedupe_latest_wins` arbitrates on — so a merge or a maintenance write that
+-- touched the row would silently end or extend a sitting if the two were one
+-- column. And this one is clamped forward monotonically, so an observation that
+-- arrives out of order (the off-request-path percent derivation landing late
+-- with the position's older event time) cannot drag the boundary backward and
+-- manufacture a gap.
+--
+-- Nullable, because SQLite cannot add a NOT NULL column without a constant
+-- default and there is no honest constant here. NULL reads as "no sitting in
+-- progress", which re-baselines on the next observation.
+--
+-- The existing rows are backfilled from `updated_at` rather than left NULL, and
+-- the direction matters. The gain no longer depends on the clock at all — it is
+-- `max(0, observed - mark)` either way — so the only thing a clock decides is
+-- whether the mark may fall. Seeding one *keeps* the mark, and NULL drops it to
+-- wherever the reader currently is, which hands back every point between the
+-- two on the way up. For a pre-migration mark, which is the reader's last known
+-- position, keeping it is the conservative answer and NULL is the one that
+-- re-charges ground already counted.
+ALTER TABLE reading_progress_marks ADD COLUMN sitting_observed_at INTEGER;
+
+UPDATE reading_progress_marks SET sitting_observed_at = updated_at;

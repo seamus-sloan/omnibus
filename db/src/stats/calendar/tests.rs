@@ -161,6 +161,26 @@ async fn today_expr_yields_a_matching_day_and_day_number() {
 }
 
 #[tokio::test]
+async fn window_start_expr_stays_on_a_midnight_for_an_absurd_offset() {
+    // Only reachable from a caller that skipped `resolve_offset_minutes`, and
+    // the failure would not look like one: the shift and the modifier are two
+    // expressions in one query, so bounding either alone leaves a window edge
+    // that is nobody's midnight. `bounded` is shared precisely so they can't.
+    let start = scalar_i64(&format!(
+        "CAST({} AS INTEGER)",
+        window_start_expr(StatsRange::Month, i64::MAX)
+    ))
+    .await;
+    let time = scalar(&format!(
+        "strftime('%H:%M', {start} + {}, 'unixepoch')",
+        SessionReport::UTC_OFFSET_MAX_MINUTES * 60
+    ))
+    .await;
+
+    assert_eq!(time, "00:00");
+}
+
+#[tokio::test]
 async fn shift_parenthesises_a_negative_offset() {
     // `x - -25200` would lex as a `--` line comment and swallow the rest of the
     // statement; the parens are load-bearing, not cosmetic.

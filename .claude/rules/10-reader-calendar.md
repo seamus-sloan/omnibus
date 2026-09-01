@@ -19,8 +19,14 @@ falls back to the reader's most recent session offset, then to UTC.
 
 That covers the heatmap, the streak and active days, `listening_daily`,
 `busiest_week`, both daily goals, the annual goal's year bounds, `as_of`,
-`books_per_month`, the chart builder's buckets **and its axis**, and where the
-Week/Month/Year window itself opens.
+`books_per_month`, `rating_monthly`, the superlatives that name a day
+(`biggest_day`, `fastest_read`), the chart builder's buckets **and its axis**,
+and where the Week/Month/Year window itself opens.
+
+The list is long on purpose. Converting *most* of it is the failure mode: a
+`biggest_day` left on UTC beside a local heatmap names a day the grid shows as
+empty, and a `rating_monthly` left on UTC months files one rating in a different
+month from the chart built over the same data. Both shipped that way once.
 
 - **Never hand-write the shift.** Compose from `stats::calendar` —
   `local_day`, `local_day_number`, `local_month`, `window_start_expr`,
@@ -29,9 +35,16 @@ Week/Month/Year window itself opens.
 - **A spec resolves the offset once.** Every measure, breakdown and axis in one
   response shares it, or a series and the axis it is drawn against disagree
   about which bucket a day belongs to.
-- **The cache key carries the offset.** `stats`'s aggregate cache is keyed
-  `(user_id, range, offset_minutes)`. Omitting it serves a reader in Tokyo the
-  days of a reader in Los Angeles.
+- **The server's cache key carries the offset.** `stats`'s aggregate cache is
+  keyed `(user_id, range, offset_minutes)`. Omitting it serves a reader in Tokyo
+  the days of a reader in Los Angeles.
+  **The two offline client caches deliberately do not**, and that is not the
+  same bug: they key on range alone (`CacheKey.stats(range)` on iOS,
+  `keys::stats(…)` on web). Adding the offset there would be more correct after
+  a flight — the stale entry would miss instead of briefly showing yesterday's
+  boundary — but it would leave a just-landed reader with *nothing* to show
+  offline, and these clients are local-first. The live read corrects it on
+  arrival, so the wrong boundary is one frame, not sticky.
 - **The server still owns the arithmetic.** The client contributes only *where
   it is*. A client that derived its own bucketing is what makes the web page,
   the iOS tab and a widget disagree about one streak.
@@ -64,7 +77,7 @@ You cannot have both. Protect the present.
 
 ## The ledger decides no calendar
 
-`reading_progress_slots` (migration `0093`) keys forward progress on the
+`reading_progress_slots` (migration `0095`) keys forward progress on the
 **quarter-hour** it was observed in, and the day is resolved on the way out.
 
 - **Never store a day.** Migration `0083` did, and a day string is the one thing

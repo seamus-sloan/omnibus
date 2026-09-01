@@ -459,6 +459,9 @@ async fn move_progress_and_history(
         .fetch_one(&mut **tx)
         .await?;
 
+    // Before the dedupe, which is what makes the readers it applies to
+    // identifiable — afterwards the losing row is gone.
+    clear_sitting_clock(tx, &source_uuid, &target_uuid).await?;
     for (table, extra_key) in DEDUPE_TABLES {
         dedupe_latest_wins(tx, table, extra_key, &source_uuid, &target_uuid).await?;
     }
@@ -491,7 +494,7 @@ async fn move_progress_and_history(
 }
 
 /// The two forward-progress counter tables and the column each buckets on —
-/// `0083`'s frozen day buckets and `0093`'s quarter-hour slots, which replaced
+/// `0083`'s frozen day buckets and `0095`'s quarter-hour slots, which replaced
 /// them so the day could be resolved at read time. Both generations are still
 /// read, so both have to survive a merge.
 const LEDGER_COUNTER_TABLES: [(&str, &str); 2] = [
@@ -567,6 +570,49 @@ async fn fold_ledger_counters(
 /// deleting a loser on whichever side it falls, and pass 2's blanket delete of
 /// colliding target rows is only correct once pass 1 has removed the source
 /// rows the target already beat.
+/// Unset the forward-progress sitting clock for the readers whose surviving
+/// mark the dedupe is about to choose between, so their next observation on the
+/// merged book re-baselines.
+///
+/// `dedupe_latest_wins` picks that mark by `updated_at` alone, and since
+/// migration `0095` a mark is a *ceiling* on accrual rather than a value the
+/// next write simply replaces. A source book 90% read winning over a target 10%
+/// read would otherwise suppress every gain below 90% on the merged book for a
+/// whole sitting — the reader reads 15%→60% and the tile reports nothing.
+///
+/// Scoped to `(reader, format)` pairs holding a mark on **both** books, which is
+/// exactly the set the dedupe resolves — it keys on `format` too, so an epub
+/// mark and an audio mark never collide and neither one's provenance is in
+/// doubt. That distinction carries the common case rather than an edge one: a
+/// merge is usually cross-format, so the reader most often holds an epub mark on
+/// one book and an audio mark on the other, and a reader-wide clear would
+/// re-baseline both sittings when the dedupe had touched neither. Anything
+/// cleared needlessly lets its mark fall on the next observation and hands back
+/// ground already counted — the over-credit this whole change exists to remove.
+///
+/// Must run *before* the dedupe: afterwards one of the two rows has been
+/// deleted, so the pairs holding both are no longer identifiable.
+async fn clear_sitting_clock(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    source_uuid: &str,
+    target_uuid: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE reading_progress_marks SET sitting_observed_at = NULL
+          WHERE book_uuid IN (?1, ?2)
+            AND (user_id, format) IN (
+                SELECT user_id, format FROM reading_progress_marks WHERE book_uuid = ?1
+                INTERSECT
+                SELECT user_id, format FROM reading_progress_marks WHERE book_uuid = ?2
+            )",
+    )
+    .bind(source_uuid)
+    .bind(target_uuid)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 async fn dedupe_latest_wins(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     table: &str,

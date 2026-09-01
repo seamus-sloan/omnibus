@@ -1,5 +1,6 @@
 //! Unit tests for the forward-progress ledger: baselining, forward accrual,
-//! backward moves, and slot bucketing.
+//! the sitting boundary that makes a there-and-back move free, out-of-order
+//! observations, and slot bucketing.
 
 use super::*;
 use crate::init_db;
@@ -8,6 +9,11 @@ use crate::test_support::seed_user;
 /// 2023-11-14 22:13:20 UTC.
 const T0: i64 = 1_700_000_000;
 const DAY: i64 = 86_400;
+
+/// One second past the sitting boundary — the smallest gap that opens a new
+/// sitting, so a test asking for one can't be read as asking for idleness in
+/// general.
+const PAST_GAP: i64 = IDLE_GAP_SECS + 1;
 
 const UUID: &str = "uuid-a";
 
@@ -36,12 +42,23 @@ async fn days(pool: &SqlitePool, user: i64) -> Vec<(String, i64)> {
     days_at(pool, user, 0).await
 }
 
+/// The sitting's high-water percent.
 async fn mark(pool: &SqlitePool, user: i64) -> Option<i64> {
-    sqlx::query_scalar("SELECT percent FROM reading_progress_marks WHERE user_id = ?")
+    sqlx::query_scalar("SELECT sitting_max_percent FROM reading_progress_marks WHERE user_id = ?")
         .bind(user)
         .fetch_optional(pool)
         .await
         .unwrap()
+}
+
+/// The sitting clock the gap test reads.
+async fn clock(pool: &SqlitePool, user: i64) -> Option<i64> {
+    sqlx::query_scalar("SELECT sitting_observed_at FROM reading_progress_marks WHERE user_id = ?")
+        .bind(user)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+        .flatten()
 }
 
 async fn observe(pool: &SqlitePool, user: i64, percent: i64, at: i64) {
@@ -88,20 +105,36 @@ async fn observe_percent_sums_repeated_gains_within_one_day() {
 }
 
 #[tokio::test]
-async fn observe_percent_accrues_nothing_when_the_position_moves_backward() {
+async fn observe_percent_charges_a_there_and_back_move_only_for_the_new_ground() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
 
+    // The bug this scoping exists for: at 40%, flip back to 30% to find a
+    // quote, return, read on to 45%. Differencing consecutive writes charged
+    // the 30→40 stretch a second time and reported 15.
     observe(&pool, user, 40, T0).await;
     observe(&pool, user, 30, T0 + 60).await;
-
-    // No row at all — negative pages read is not a thing. The mark follows the
-    // reader back so the ground re-covered accrues again on the way forward.
-    assert!(days(&pool, user).await.is_empty());
-    assert_eq!(mark(&pool, user).await, Some(30));
-
     observe(&pool, user, 45, T0 + 120).await;
-    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 15)]);
+
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 5)]);
+    assert_eq!(mark(&pool, user).await, Some(45));
+}
+
+#[tokio::test]
+async fn observe_percent_keeps_forward_ground_the_reader_later_backtracks_out_of() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    // 40→60 was read, so it stays credited even though the reader then went
+    // back and ended the sitting behind it. This is where the high-water mark
+    // and an endpoint difference part company: the latter would report 5.
+    observe(&pool, user, 40, T0).await;
+    observe(&pool, user, 60, T0 + 60).await;
+    observe(&pool, user, 30, T0 + 120).await;
+    observe(&pool, user, 45, T0 + 180).await;
+
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 20)]);
+    assert_eq!(mark(&pool, user).await, Some(60));
 }
 
 #[tokio::test]
@@ -116,13 +149,85 @@ async fn observe_percent_accrues_nothing_when_the_position_does_not_move() {
 }
 
 #[tokio::test]
+async fn observe_percent_opens_a_new_sitting_after_an_idle_gap() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    observe(&pool, user, 10, T0).await;
+    observe(&pool, user, 30, T0 + 60).await;
+
+    // Back at 20 after putting the book down: a new sitting, so it baselines
+    // there rather than reading as a backward move inside the old one.
+    observe(&pool, user, 20, T0 + 60 + PAST_GAP).await;
+    assert_eq!(mark(&pool, user).await, Some(20));
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 20)]);
+
+    observe(&pool, user, 35, T0 + 120 + PAST_GAP).await;
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 35)]);
+}
+
+#[tokio::test]
+async fn observe_percent_credits_a_reread_in_full_from_its_own_baseline() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    // Finished at 100, restarted the next day. The re-read baselines at 5 and
+    // accrues from there — a lifetime high-water mark would have swallowed the
+    // whole thing, which is why the sitting is the scope and the book is not.
+    observe(&pool, user, 100, T0).await;
+    observe(&pool, user, 5, T0 + DAY).await;
+    observe(&pool, user, 30, T0 + DAY + 60).await;
+
+    assert_eq!(days(&pool, user).await, vec![("2023-11-15".into(), 25)]);
+    assert_eq!(mark(&pool, user).await, Some(30));
+}
+
+#[tokio::test]
+async fn observe_percent_keeps_one_sitting_across_a_gap_of_exactly_the_threshold() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    // The boundary is inclusive — `IDLE_GAP_SECS` of quiet is still the same
+    // sitting, and only the second past it is not.
+    observe(&pool, user, 10, T0).await;
+    observe(&pool, user, 20, T0 + IDLE_GAP_SECS).await;
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 10)]);
+
+    // Past the boundary the sitting ends, but the 20→30 ground was still
+    // covered, so it accrues — the boundary governs the mark, not the gain.
+    observe(&pool, user, 30, T0 + IDLE_GAP_SECS + PAST_GAP).await;
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 20)]);
+    assert_eq!(mark(&pool, user).await, Some(30));
+}
+
+#[tokio::test]
+async fn observe_percent_credits_forward_ground_covered_across_a_sitting_boundary() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    // The offline case, and the reason the gap must not zero a forward gain:
+    // both outboxes coalesce a book's position writes into one, stamped with
+    // the last page turn, so a plane ride from 20% to 60% arrives as a single
+    // observation 45 minutes after the previous one. Baselining it silently
+    // would report the whole flight as no pages read.
+    observe(&pool, user, 20, T0).await;
+    observe(&pool, user, 60, T0 + 2_700).await;
+
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 40)]);
+    assert_eq!(mark(&pool, user).await, Some(60));
+}
+
+#[tokio::test]
 async fn observe_percent_buckets_each_gain_into_its_own_day() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
 
     observe(&pool, user, 0, T0).await;
     observe(&pool, user, 10, T0 + 60).await;
-    observe(&pool, user, 30, T0 + DAY).await;
+    // A day later is a new sitting, so it takes a second observation before
+    // the next day's reading has a baseline to accrue against.
+    observe(&pool, user, 10, T0 + DAY).await;
+    observe(&pool, user, 30, T0 + DAY + 60).await;
 
     assert_eq!(
         days(&pool, user).await,
@@ -222,6 +327,71 @@ async fn observe_percent_keeps_the_two_formats_on_separate_marks() {
         .unwrap();
 
     assert!(days(&pool, user).await.is_empty());
+}
+
+#[tokio::test]
+async fn observe_percent_treats_an_out_of_order_observation_as_the_same_sitting() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    observe(&pool, user, 10, T0).await;
+    observe(&pool, user, 30, T0 + 100).await;
+    // The off-request-path percent derivation completing late, carrying its
+    // own position's older event time. A negative gap is not idleness, so it
+    // extends the sitting instead of baselining a new one.
+    observe(&pool, user, 35, T0 + 50).await;
+
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 25)]);
+    assert_eq!(mark(&pool, user).await, Some(35));
+}
+
+#[tokio::test]
+async fn observe_percent_does_not_rewind_the_sitting_clock_when_an_observation_arrives_late() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    observe(&pool, user, 10, T0).await;
+    observe(&pool, user, 20, T0 + 800).await;
+    observe(&pool, user, 25, T0 + 10).await;
+
+    // Clamped forward: had the late observation dragged the clock back to
+    // T0+10, the next one would have measured its gap from there and split a
+    // sitting that never went idle.
+    assert_eq!(clock(&pool, user).await, Some(T0 + 800));
+
+    observe(&pool, user, 30, T0 + 800 + IDLE_GAP_SECS).await;
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 20)]);
+}
+
+#[tokio::test]
+async fn observe_percent_baselines_a_row_carrying_no_sitting_clock() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    // What `merge::transaction::clear_sitting_clock` leaves behind: a mark whose
+    // sitting was ended without a new one starting, because the merge could have
+    // handed this reader the other book's mark.
+    sqlx::query(
+        "INSERT INTO reading_progress_marks
+             (user_id, book_uuid, format, sitting_max_percent, sitting_observed_at, updated_at)
+         VALUES (?, ?, 'epub', 40, NULL, ?)",
+    )
+    .bind(user)
+    .bind(UUID)
+    .bind(T0)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // 50 - 40: the stale mark is still a real position the reader passed, so
+    // the ground beyond it counts. What the missing clock buys is that the mark
+    // cannot act as a *ceiling* — it re-baselines instead of suppressing
+    // everything below 40 for a sitting.
+    observe(&pool, user, 50, T0 + 60).await;
+
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 10)]);
+    assert_eq!(mark(&pool, user).await, Some(50));
+    assert_eq!(clock(&pool, user).await, Some(T0 + 60));
 }
 
 #[tokio::test]
