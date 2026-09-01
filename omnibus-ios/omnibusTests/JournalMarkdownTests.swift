@@ -50,7 +50,23 @@ private func plain(_ spans: [JournalSpan]) -> String {
 
 @Test func blocksNumberAnOrderedList() {
     let blocks = JournalMarkdown.blocks("1. first\n2) second")
-    #expect(blocks == [.numbered([[.prose("first")], [.prose("second")]])])
+    #expect(blocks == [.numbered([[.prose("first")], [.prose("second")]], start: 1)])
+}
+
+@Test func blocksOpenAnOrderedListAtItsAuthoredNumber() {
+    // Server ground truth: `5. fifth` opens `<ol start="5">`, so the list must
+    // read 5, 6, 7 — not restart at 1.
+    let blocks = JournalMarkdown.blocks("5. fifth\n6. sixth\n7. seventh")
+    #expect(blocks == [.numbered(
+        [[.prose("fifth")], [.prose("sixth")], [.prose("seventh")]], start: 5)])
+}
+
+@Test func blocksIgnoreEveryMarkerAfterTheFirst() {
+    // `<ol>` carries one start; the rest of the authored numbers are dropped,
+    // so an all-`1.` list still counts up.
+    let blocks = JournalMarkdown.blocks("1. one\n1. also one\n1. still one")
+    #expect(blocks == [.numbered(
+        [[.prose("one")], [.prose("also one")], [.prose("still one")]], start: 1)])
 }
 
 @Test func blocksContinueAListItemAcrossALazyWrap() {

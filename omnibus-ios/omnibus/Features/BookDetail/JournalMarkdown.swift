@@ -21,7 +21,9 @@ enum JournalBlock: Equatable {
     case heading(level: Int, spans: [JournalSpan])
     case paragraph([JournalSpan])
     case bullets([[JournalSpan]])
-    case numbered([[JournalSpan]])
+    /// `start` is the first item's authored number — `5.` opens at five, as
+    /// `<ol start="5">` does. Later markers are ignored, per CommonMark.
+    case numbered([[JournalSpan]], start: Int)
     case quote([JournalSpan])
     /// Fenced source, kept verbatim — no inline parse, no spoilers.
     case code(String)
@@ -161,7 +163,7 @@ extension JournalMarkdown {
             case none
             case paragraph([String])
             case bullets([[String]])
-            case numbered([[String]])
+            case numbered([[String]], Int)
             case quote([String])
         }
 
@@ -224,12 +226,12 @@ extension JournalMarkdown {
                 return
             }
             if let item = Self.numberedItem(trimmed) {
-                if case .numbered(var items) = pending {
-                    items.append([item])
-                    pending = .numbered(items)
+                if case .numbered(var items, let start) = pending {
+                    items.append([item.text])
+                    pending = .numbered(items, start)
                 } else {
                     flush()
-                    pending = .numbered([[item]])
+                    pending = .numbered([[item.text]], item.number)
                 }
                 return
             }
@@ -249,9 +251,9 @@ extension JournalMarkdown {
             case .bullets(var items):
                 items[items.count - 1].append(trimmed)
                 pending = .bullets(items)
-            case .numbered(var items):
+            case .numbered(var items, let start):
                 items[items.count - 1].append(trimmed)
-                pending = .numbered(items)
+                pending = .numbered(items, start)
             case .quote(var lines):
                 lines.append(trimmed)
                 pending = .quote(lines)
@@ -284,8 +286,9 @@ extension JournalMarkdown {
                 block = .paragraph(inline(lines.joined(separator: "\n")))
             case .bullets(let items):
                 block = .bullets(items.map { inline($0.joined(separator: "\n")) })
-            case .numbered(let items):
-                block = .numbered(items.map { inline($0.joined(separator: "\n")) })
+            case .numbered(let items, let start):
+                block = .numbered(
+                    items.map { inline($0.joined(separator: "\n")) }, start: start)
             case .quote(let lines):
                 block = .quote(inline(lines.joined(separator: "\n")))
             }
@@ -360,17 +363,18 @@ extension JournalMarkdown {
             return String(rest.drop { $0 == " " })
         }
 
-        /// `1. item` / `1) item`, up to the nine digits CommonMark allows.
-        static func numberedItem(_ line: String) -> String? {
+        /// `1. item` / `1) item`, up to the nine digits CommonMark allows —
+        /// with the number, which the first item of a list opens it at.
+        static func numberedItem(_ line: String) -> (number: Int, text: String)? {
             let digits = line.prefix(while: \.isNumber)
-            guard (1...9).contains(digits.count) else { return nil }
+            guard (1...9).contains(digits.count), let number = Int(digits) else { return nil }
             let rest = line.dropFirst(digits.count)
             guard let delimiter = rest.first, delimiter == "." || delimiter == ")" else {
                 return nil
             }
             let body = rest.dropFirst()
             guard body.first == " " else { return nil }
-            return String(body.drop { $0 == " " })
+            return (number, String(body.drop { $0 == " " }))
         }
 
         /// `> quoted`, with the one optional space after the marker.
@@ -437,8 +441,8 @@ struct JournalBody: View {
             prose(spans)
         case .bullets(let items):
             list(items) { _ in "\u{2022}" }
-        case .numbered(let items):
-            list(items) { "\($0 + 1)." }
+        case .numbered(let items, let start):
+            list(items) { "\(start + $0)." }
         case .quote(let spans):
             prose(spans)
                 .padding(.leading, 13)
