@@ -102,6 +102,28 @@ enum DetailRead {
         )
     }
 
+    /// How much art keeps peeking behind the nav strip at the flow body's
+    /// snap position, measured from the screen's top — the one source for
+    /// the snap behavior, the scroll map, and the scroller's marker.
+    static let flowNavPeek: CGFloat = 96
+
+    /// The Option B flow's scroll → shell state. `lift` is the rest→lifted
+    /// progress across the run to the body's snap position (it drives the
+    /// art's whole→windowed morph and the rest fade); `page` feeds the art's
+    /// pan and wash as the list runs on; `past` is when the cover has gone
+    /// and the nav strip takes over under the discs.
+    static func flowMap(
+        offset: CGFloat, restTop: CGFloat, navPeek: CGFloat = DetailRead.flowNavPeek
+    ) -> (lift: CGFloat, page: CGFloat, past: Bool) {
+        let run = max(1, restTop - navPeek)
+        let ratio = offset / max(1, restTop)
+        return (
+            lift: min(1, max(0, offset / run)),
+            page: max(0, (ratio - 0.35) * 2.4),
+            past: ratio > 0.55
+        )
+    }
+
     /// What the Home sync row states per link state, and the action word its
     /// trailing affordance promises. Every action opens the alignment sheet —
     /// link, re-confirm, and unlink all live there.
@@ -1234,6 +1256,9 @@ struct StopStats: View {
 struct StopHighlights: View {
     let book: Book
     let model: BookDetailModel
+    /// The flow (Option B) has no fixed screenful to fit, so it lists every
+    /// kept line inline instead of capping at `stopCount` behind a sheet.
+    var uncapped = false
     var onAll: () -> Void
 
     /// Passages shown on the stop before the sheet takes over.
@@ -1266,17 +1291,28 @@ struct StopHighlights: View {
             } else {
                 DetailKicker(text: "Kept lines · \(all.count)")
 
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Self.preview(of: all)) { highlight in
-                        HighlightRow(highlight: highlight)
+                if uncapped {
+                    // Lazy: the flow's list is unbounded, and the model
+                    // already stores highlights newest-first.
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(all) { highlight in
+                            HighlightRow(highlight: highlight)
+                        }
                     }
-                }
-                .padding(.top, 6)
+                    .padding(.top, 6)
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Self.preview(of: all)) { highlight in
+                            HighlightRow(highlight: highlight)
+                        }
+                    }
+                    .padding(.top, 6)
 
-                MoreRowButton(
-                    label: "All \(all.count) highlights",
-                    identifier: "highlights-show-more"
-                ) { onAll() }
+                    MoreRowButton(
+                        label: "All \(all.count) highlights",
+                        identifier: "highlights-show-more"
+                    ) { onAll() }
+                }
             }
         }
     }
@@ -1327,6 +1363,9 @@ struct HighlightRow: View {
 struct StopJournals: View {
     let book: Book
     let model: BookDetailModel
+    /// The flow (Option B) has no fixed screenful to fit, so it lists every
+    /// entry inline instead of capping at `stopCount` behind a sheet.
+    var uncapped = false
     var onWrite: () -> Void
     var onOpen: (JournalEntry) -> Void
     var onAll: () -> Void
@@ -1359,14 +1398,24 @@ struct StopJournals: View {
                 StopRuledVoid()
                     .padding(.top, 22)
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(entries.prefix(Self.stopCount)) { entry in
-                        JournalRow(entry: entry) { onOpen(entry) }
+                if uncapped {
+                    // Lazy, and no copied slice: the flow's list is unbounded.
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(entries) { entry in
+                            JournalRow(entry: entry) { onOpen(entry) }
+                        }
                     }
+                    .padding(.top, 8)
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(entries.prefix(Self.stopCount)) { entry in
+                            JournalRow(entry: entry) { onOpen(entry) }
+                        }
+                    }
+                    .padding(.top, 8)
                 }
-                .padding(.top, 8)
 
-                if entries.count > Self.stopCount {
+                if !uncapped, entries.count > Self.stopCount {
                     MoreRowButton(label: "All \(entries.count) entries") { onAll() }
                 } else {
                     MonoNote(text: "everyone reading this book writes here")

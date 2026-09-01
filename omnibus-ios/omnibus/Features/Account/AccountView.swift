@@ -10,11 +10,6 @@
 import SwiftUI
 
 struct AccountView: View {
-    /// Whether the book-detail scroll-stops switch is inert. `true` until
-    /// the book detail page actually branches on the stored preference — see
-    /// `bookDetailSection`. The web card carries the same constant.
-    static let scrollStopsParked = true
-
     /// Owned by `MainTabView` — see `isImmersiveDetail` there.
     @Binding var path: [Destination]
 
@@ -349,29 +344,18 @@ struct AccountView: View {
         }
     }
 
-    /// Whether this reader's book detail page uses the snap-stop marquee.
-    /// Account configuration: saved directly, never queued (rule 08).
-    ///
-    /// Parked behind `AccountView.scrollStopsParked` — nothing reads the
-    /// preference yet, so the switch renders disabled under a "Coming soon"
-    /// marker rather than letting a reader set a value that changes nothing.
-    /// Dropping that constant is what lights it up.
+    /// Whether this reader's book detail page uses the snap-stop marquee —
+    /// off, it renders as one continuous flow. Account configuration: saved
+    /// directly, never queued (rule 08).
     private var bookDetailSection: some View {
         group("Book details") {
             VStack(alignment: .leading, spacing: Spacing.md) {
                 Plate {
                     PlateRow(label: "Use scroll stops", isFirst: true) {
-                        if Self.scrollStopsParked {
-                            Text("Coming soon")
-                                .font(.monoUI(9.5, weight: .medium))
-                                .tracking(0.8)
-                                .textCase(.uppercase)
-                                .foregroundStyle(palette.ink3Color)
-                        }
                         Toggle("", isOn: $scrollStops)
                             .labelsHidden()
                             .tint(palette.accentColor)
-                            .disabled(Self.scrollStopsParked || !connectivity.isOnline)
+                            .disabled(!connectivity.isOnline)
                     }
                 }
 
