@@ -3,11 +3,11 @@
 //  a translucent panel riding over its lower edge, and the page organised as
 //  seven snap stops on a vertical pager — Home · Shelf · Stats · Highlights ·
 //  Journals · The files · Recommendations. Home has two positions: the page
-//  opens on the artwork — a photographic cover whole, a plate in its halo —
-//  with the panel resting under it, and the first swipe lifts the panel to
-//  full height before the next one moves on to stop 02. Chrome is immersive:
-//  glass discs over the art, a tappable dot rail, and a persistent bottom
-//  action bar so Resume never scrolls away.
+//  opens on the artwork whole — the cover, or the generated plate at the
+//  same size — with the panel resting under it, and the first swipe lifts
+//  the panel to full height before the next one moves on to stop 02. Chrome
+//  is immersive: glass discs over the art, a tappable dot rail, and a
+//  persistent bottom action bar so Resume never scrolls away.
 
 import SwiftUI
 
@@ -254,11 +254,6 @@ struct BookDetailView: View {
         self.uuid = uuid
     }
 
-    /// Where the Home panel rests for a plate cover — how much of the plate
-    /// window stays in view before the page becomes the panel. A
-    /// photographic cover derives its rest position from the cover height
-    /// instead (`DetailRead.restTop`).
-    static let artTop: CGFloat = 300
     /// Window the artwork pans inside once the Home panel has lifted.
     static let artHeight: CGFloat = 470
     /// Clearance the panel keeps for the action bar.
@@ -433,16 +428,6 @@ struct BookDetailView: View {
 
     // MARK: - Shell
 
-    /// Where the Home panel rests for this book: below the whole cover when
-    /// a photographic one exists, at the plate window's edge otherwise — a
-    /// typographic plate is short, so its panel rests higher. Either way the
-    /// first swipe lifts the panel to the top of the page.
-    private func restTop(for book: Book, in size: CGSize) -> CGFloat {
-        book.coverURL != nil
-            ? DetailRead.restTop(width: size.width, height: size.height)
-            : Self.artTop
-    }
-
     private func content(_ book: Book) -> some View {
         GeometryReader { geometry in
             // The scroller and art ignore the safe areas, so the rest
@@ -454,7 +439,7 @@ struct BookDetailView: View {
                 height: geometry.size.height
                     + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
             )
-            let restTop = restTop(for: book, in: size)
+            let restTop = DetailRead.restTop(width: size.width, height: size.height)
 
             ZStack {
                 ScreenBackground()
@@ -877,33 +862,62 @@ struct DetailDotRail: View {
 
 // MARK: - Art layer
 
-/// The cover, full-bleed off the top edge. While the Home panel rests, a
-/// photographic cover shows whole — unmasked, nothing cropped; as the panel
-/// lifts, the art closes down to the window it pans inside across the
-/// stops. A generated plate is shown whole always — cropping one would eat
-/// its own layout. Both dissolve to a wash as the panel takes the screen.
+/// The artwork, full-bleed off the top edge — the cover when the record has
+/// one, the generated plate at the same size otherwise, so every book takes
+/// the identical path. While the Home panel rests the art shows whole —
+/// unmasked, nothing cropped; as the panel lifts, it closes down to the
+/// window it pans inside across the stops, and dissolves to a wash as the
+/// panel takes the screen.
 struct DetailArtLayer: View {
     let book: Book
     let page: CGFloat
-    /// The Home panel's rest→lifted progress. Only photographic art reads
-    /// it — a plate is drawn whole in both positions.
+    /// The Home panel's rest→lifted progress — drives the whole→windowed
+    /// transition.
     var lift: CGFloat = 1
 
-    @Environment(\.palette) private var palette
-
-    /// How much taller the panned image is than its window, at 2:3 on a
-    /// 402pt-wide device — the travel budget the pan spends across the stops.
     private var fade: Double {
         min(1, Double(page) * 1.25)
     }
 
     var body: some View {
-        Group {
-            if book.coverURL != nil {
-                pannedArt
-            } else {
-                plate
-            }
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let imageHeight = width * 1.5
+            // The window opens to the whole image at rest and closes to the
+            // pan height as the panel lifts; the mask's fade-out arrives
+            // with it, so the resting artwork keeps its bottom edge.
+            let windowHeight = BookDetailView.artHeight
+                + (imageHeight - BookDetailView.artHeight) * (1 - lift)
+            let travel = max(0, imageHeight - windowHeight)
+            let progress = min(1, page / CGFloat(DetailStop.allCases.count - 1))
+            let fadeStart = 0.58 + 0.42 * (1 - lift)
+
+            art
+                .frame(width: width, height: imageHeight)
+                .offset(y: -progress * travel)
+                .frame(width: width, height: windowHeight, alignment: .top)
+                .clipped()
+                // Dark scrim off the top edge so the status bar and discs
+                // stay legible over bright artwork.
+                .overlay(alignment: .top) {
+                    LinearGradient(
+                        colors: [.black.opacity(0.5), .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: BookDetailView.artHeight * 0.2)
+                }
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .black, location: fadeStart),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
         }
         .opacity(1 - fade * 0.85)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -911,19 +925,11 @@ struct DetailArtLayer: View {
         .accessibilityHidden(true)
     }
 
-    private var pannedArt: some View {
-        GeometryReader { geometry in
-            let width = geometry.size.width
-            let imageHeight = width * 1.5
-            // The window opens to the whole image at rest and closes to the
-            // pan height as the panel lifts; the mask's fade-out arrives
-            // with it, so the resting cover keeps its bottom edge.
-            let windowHeight = BookDetailView.artHeight
-                + (imageHeight - BookDetailView.artHeight) * (1 - lift)
-            let travel = max(0, imageHeight - windowHeight)
-            let progress = min(1, page / CGFloat(DetailStop.allCases.count - 1))
-            let fadeStart = 0.58 + 0.42 * (1 - lift)
-
+    /// The image itself — same frame either way; a coverless record just
+    /// skips the fetch that could only 404.
+    @ViewBuilder
+    private var art: some View {
+        if book.coverURL != nil {
             RemoteImage(
                 path: "/api/covers/\(book.uuid)",
                 alternates: ["/api/thumbs/\(book.uuid)/lg"]
@@ -934,56 +940,9 @@ struct DetailArtLayer: View {
             // as `BookCover`: a transparent or degenerate cover image loads
             // "successfully" and would otherwise leave a black band.
             .background { GeneratedCoverPlate(identity: CoverIdentity(book)) }
-            .frame(width: width, height: imageHeight)
-            .offset(y: -progress * travel)
-            .frame(width: width, height: windowHeight, alignment: .top)
-            .clipped()
-            // Dark scrim off the top edge so the status bar and discs stay
-            // legible over bright artwork.
-            .overlay(alignment: .top) {
-                LinearGradient(
-                    colors: [.black.opacity(0.5), .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: BookDetailView.artHeight * 0.2)
-            }
-            .mask {
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0),
-                        .init(color: .black, location: fadeStart),
-                        .init(color: .clear, location: 1),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
+        } else {
+            GeneratedCoverPlate(identity: CoverIdentity(book))
         }
-    }
-
-    /// The typographic plate, whole, in a soft accent halo.
-    private var plate: some View {
-        let tone = CoverIdentity(book).tone
-
-        return ZStack(alignment: .top) {
-            RadialGradient(
-                colors: [
-                    OKLCH(0.45, tone.c * 0.9, tone.h).color.opacity(0.55),
-                    .clear,
-                ],
-                center: UnitPoint(x: 0.5, y: 0.3),
-                startRadius: 0,
-                endRadius: 280
-            )
-            .frame(height: BookDetailView.artHeight)
-
-            BookCover(identity: CoverIdentity(book), size: .lg, cornerRadius: 7)
-                .frame(width: 190)
-                .coverShadow(1.2)
-                .padding(.top, 58)
-        }
-        .frame(maxWidth: .infinity)
     }
 }
 
