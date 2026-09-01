@@ -1,7 +1,7 @@
 //  BookDetailScrollStopsTests.swift
 //  The book-detail scroll-stops account preference: its wire decode (a
 //  pre-0092 payload has no key and must land on the off default) and the
-//  parked state the Account switch currently renders.
+//  flow map the off-default Option B layout scrolls by.
 
 import Foundation
 import Testing
@@ -29,10 +29,32 @@ struct BookDetailScrollStopsTests {
         #expect(me.bookDetailScrollStops)
     }
 
-    /// The switch ships inert. Pinning it keeps the flag from being lit up
-    /// without the book detail page being taught to read the preference —
-    /// which would give the reader a control that changes nothing.
-    @Test func scrollStopsSwitchIsParkedUntilTheDetailPageReadsIt() {
-        #expect(AccountView.scrollStopsParked)
+    // MARK: - Flow geometry
+
+    @Test func flowMapRestsWithTheCoverWholeAtTheTop() {
+        let map = DetailRead.flowMap(offset: 0, restTop: 603)
+        #expect(map.lift == 0)
+        #expect(map.page == 0)
+        #expect(!map.past)
+    }
+
+    @Test func flowMapLiftsAcrossTheRunToTheBodySnapPosition() {
+        // The body snaps navPeek short of the cover's end — fully lifted,
+        // and already "past": the strip is what covers the peeking art.
+        let map = DetailRead.flowMap(offset: 603 - 96, restTop: 603)
+        #expect(map.lift == 1)
+        #expect(map.past)
+    }
+
+    @Test func flowMapStaysUnpastWhileTheCoverMostlyShows() {
+        let map = DetailRead.flowMap(offset: 200, restTop: 603)
+        #expect(map.lift > 0)
+        #expect(!map.past)
+    }
+
+    @Test func flowMapWashesTheArtAsTheListRunsOn() {
+        let map = DetailRead.flowMap(offset: 603 * 2, restTop: 603)
+        #expect(map.past)
+        #expect(map.page > 1)
     }
 }
