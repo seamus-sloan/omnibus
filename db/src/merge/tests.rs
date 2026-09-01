@@ -1522,3 +1522,43 @@ async fn merge_keeps_the_newer_forward_progress_mark() {
             .unwrap();
     assert_eq!(marks, vec![(target.clone(), 55)]);
 }
+
+#[tokio::test]
+async fn merge_unsets_the_sitting_clock_so_the_surviving_mark_cannot_act_as_a_ceiling() {
+    // The surviving mark is picked by `updated_at`, so a source book read to
+    // 90% can win over a target read to 10%. Since migration 0093 that mark is
+    // a ceiling on accrual, so leaving its clock live would suppress every gain
+    // under 90% on the merged book until the next idle gap — the reader reads
+    // and the tile reports nothing. A NULL clock re-baselines instead.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool).await;
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+
+    for (uuid, percent, ts) in [(&target, 10, 4000), (&source, 90, 5000)] {
+        sqlx::query(
+            "INSERT INTO reading_progress_marks
+                 (user_id, book_uuid, format, sitting_max_percent, sitting_observed_at, updated_at)
+             VALUES (?, ?, 'epub', ?, ?, ?)",
+        )
+        .bind(user)
+        .bind(uuid)
+        .bind(percent)
+        .bind(ts)
+        .bind(ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    merge_books(&pool, &source, &target, Some(user))
+        .await
+        .unwrap();
+
+    let clock: Option<i64> =
+        sqlx::query_scalar("SELECT sitting_observed_at FROM reading_progress_marks")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(clock, None, "merge must leave no sitting in progress");
+}

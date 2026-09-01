@@ -1,9 +1,8 @@
 //! Stitching of session checkpoint rows back into sittings. Every client
 //! flushes a running segment on a timer, so one sitting lands as many rows;
 //! [`stitched`] regroups them at query time so callers count sittings rather
-//! than flush cadence. Read-side only here — the writers stay as they are —
-//! but [`IDLE_GAP_SECS`] is also what bounds a sitting on the ledger's write
-//! path.
+//! than flush cadence. Read-side only, but [`IDLE_GAP_SECS`] also bounds a
+//! sitting on the ledger's write path.
 
 /// Idle seconds that end a sitting. Comfortably above every client's flush
 /// interval — the longest is the iOS reader's 300s checkpoint — so no

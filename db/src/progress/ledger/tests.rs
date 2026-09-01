@@ -180,9 +180,28 @@ async fn observe_percent_keeps_one_sitting_across_a_gap_of_exactly_the_threshold
     observe(&pool, user, 20, T0 + IDLE_GAP_SECS).await;
     assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 10)]);
 
+    // Past the boundary the sitting ends, but the 20→30 ground was still
+    // covered, so it accrues — the boundary governs the mark, not the gain.
     observe(&pool, user, 30, T0 + IDLE_GAP_SECS + PAST_GAP).await;
-    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 10)]);
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 20)]);
     assert_eq!(mark(&pool, user).await, Some(30));
+}
+
+#[tokio::test]
+async fn observe_percent_credits_forward_ground_covered_across_a_sitting_boundary() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    // The offline case, and the reason the gap must not zero a forward gain:
+    // both outboxes coalesce a book's position writes into one, stamped with
+    // the last page turn, so a plane ride from 20% to 60% arrives as a single
+    // observation 45 minutes after the previous one. Baselining it silently
+    // would report the whole flight as no pages read.
+    observe(&pool, user, 20, T0).await;
+    observe(&pool, user, 60, T0 + 2_700).await;
+
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 40)]);
+    assert_eq!(mark(&pool, user).await, Some(60));
 }
 
 #[tokio::test]
@@ -260,9 +279,9 @@ async fn observe_percent_baselines_a_row_carrying_no_sitting_clock() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
 
-    // What migration 0092 leaves behind if its backfill found no `updated_at`
-    // to copy: a mark with no sitting in progress, which re-baselines rather
-    // than differencing against a value of unknown vintage.
+    // Every row migration 0093 inherits looks like this — it sets no clock on
+    // purpose. The mark still holds the pre-migration last-position-seen value,
+    // so it must re-baseline rather than continue a sitting from it.
     sqlx::query(
         "INSERT INTO reading_progress_marks
              (user_id, book_uuid, format, sitting_max_percent, sitting_observed_at, updated_at)
@@ -275,9 +294,13 @@ async fn observe_percent_baselines_a_row_carrying_no_sitting_clock() {
     .await
     .unwrap();
 
+    // 50 - 40: the stale mark is still a real position the reader passed, so
+    // the ground beyond it counts. What the missing clock buys is that the mark
+    // cannot act as a *ceiling* — it re-baselines instead of suppressing
+    // everything below 40 for a sitting.
     observe(&pool, user, 50, T0 + 60).await;
 
-    assert!(days(&pool, user).await.is_empty());
+    assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 10)]);
     assert_eq!(mark(&pool, user).await, Some(50));
     assert_eq!(clock(&pool, user).await, Some(T0 + 60));
 }

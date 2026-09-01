@@ -1,12 +1,8 @@
-//! Forward-progress ledger (migrations `0083`, `0092`): turns the mutable
+//! Forward-progress ledger (migrations `0083`, `0093`): turns the mutable
 //! position row into an append-only record of how much of a book was covered on
-//! each day. `db::stats::pages` reads it; the position write path is the only
-//! writer — every site that sets `reading_progress.progress_percent` must
+//! each day, scoped to a sitting rather than a single write. `db::stats::pages`
+//! reads it; every site that sets `reading_progress.progress_percent` must
 //! observe here too, or the ground that write covered is lost for good.
-//!
-//! Accrual is scoped to a **sitting**, not to a single write, which is what
-//! keeps a there-and-back move from being charged twice; see
-//! [`observe_percent_tx`].
 
 use omnibus_shared::ProgressFormat;
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
@@ -34,24 +30,21 @@ const PAGES_LEDGER_EPOCH_KEY: &str = "pages_ledger_epoch";
 /// silently lose every gain on the surfaces that write CFIs (iOS).
 ///
 /// The mark is the **sitting's high-water percent**, not the last position seen
-/// (migration `0092`). Differencing consecutive writes measured the path the
-/// reader walked rather than the ground they covered, so flipping back to find
-/// a quote and returning charged the stretch in between twice. Holding the
-/// furthest point instead makes a there-and-back move free, while forward
-/// reading the reader later backtracks out of stays credited — they did read
-/// it.
+/// (migration `0093`), so a there-and-back move inside one sitting is free
+/// while forward ground the reader later backtracks out of stays credited.
 ///
-/// Three cases accrue nothing on purpose:
+/// [`IDLE_GAP_SECS`] of quiet opens a new sitting, and that governs the **mark**
+/// alone, never the gain: it is the only thing that lets the mark fall back, so
+/// a re-read counts from wherever it restarts instead of climbing to a lifetime
+/// high-water of 100. Ground beyond the mark is earned either way — an offline
+/// stretch drains as one coalesced write long after the fact, and it is real
+/// reading, not a gap.
+///
+/// Two cases accrue nothing on purpose:
 ///
 /// * A book with no mark yet is *baselined* — a device syncing a book it is
 ///   already 60% through has not just read 60% of it.
-/// * A first observation more than [`IDLE_GAP_SECS`] after the previous one
-///   opens a **new sitting** and baselines again, wherever the reader now is.
-///   That is what keeps a deliberate re-read counting in full: restarting a
-///   finished book baselines at 5% rather than facing a lifetime high-water of
-///   100 that would swallow the whole re-read.
-/// * A move that stays at or below the sitting's high-water mark is ground
-///   already credited.
+/// * A move at or below the mark is ground already credited.
 ///
 /// `observed_at` is the surviving record's client event time, so a write
 /// replayed from an offline outbox lands on the day it happened rather than the
@@ -142,22 +135,32 @@ pub(super) async fn observe_percent_tx(
 }
 
 /// The `(new sitting high-water, ground gained)` an observation produces
-/// against an existing mark. Split out from [`observe_percent_tx`] so the whole
-/// sitting rule reads as three lines in one place rather than interleaved with
-/// the two statements that persist it.
+/// against an existing mark.
 ///
-/// `last_at` is NULL only for a row migration `0092` created before the sitting
-/// clock existed and that nothing has observed since. It reads as "no sitting in
-/// progress", which re-baselines — right for those rows, none of which is mid
-/// sitting across a deploy.
+/// `last_at` is NULL for a row that predates migration `0093` and has not been
+/// observed since — the migration leaves those clocks unset on purpose. It
+/// reads as "no sitting in progress", which re-baselines, so a mark carrying
+/// the old last-position-seen meaning can never continue a live sitting.
 fn sitting_gain(mark: i64, last_at: Option<i64>, percent: i64, observed_at: i64) -> (i64, i64) {
     // A negative gap is an out-of-order observation, not idleness, so it
     // continues the sitting rather than opening one — `<=` covers both.
     let continues = last_at.is_some_and(|last| observed_at - last <= IDLE_GAP_SECS);
-    if !continues {
-        return (percent, 0);
-    }
-    (mark.max(percent), (percent - mark).max(0))
+    // Ground beyond the mark is always earned, boundary or not. A new sitting
+    // that opens *ahead* of the mark is a reader who covered that stretch while
+    // nothing was observing — both outboxes coalesce an offline stretch into a
+    // single write stamped with the last page turn — and zeroing it there would
+    // report a plane ride as no pages at all.
+    let gained = (percent - mark).max(0);
+    // The boundary decides only whether the mark may ratchet *down*. Inside a
+    // sitting it never does, which is what makes a there-and-back move free;
+    // opening a new one re-baselines, which is what lets a re-read count from
+    // wherever it restarts instead of climbing back to a lifetime high-water.
+    let next_mark = if continues {
+        mark.max(percent)
+    } else {
+        percent
+    };
+    (next_mark, gained)
 }
 
 /// [`observe_percent_tx`] on its own transaction, for writers outside the

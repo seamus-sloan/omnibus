@@ -461,6 +461,7 @@ async fn move_progress_and_history(
     for (table, extra_key) in DEDUPE_TABLES {
         dedupe_latest_wins(tx, table, extra_key, &source_uuid, &target_uuid).await?;
     }
+    clear_sitting_clock(tx, &source_uuid, &target_uuid).await?;
     fold_daily_ledger(tx, &source_uuid, &target_uuid).await?;
     // Per-device annotation sync state keys on (device_id, book_uuid) rather
     // than on a user, so it can't use the latest-wins helper. Where a device
@@ -552,6 +553,33 @@ async fn fold_daily_ledger(
 /// deleting a loser on whichever side it falls, and pass 2's blanket delete of
 /// colliding target rows is only correct once pass 1 has removed the source
 /// rows the target already beat.
+/// Unset the forward-progress sitting clock on both books' marks, so the next
+/// observation on the merged book re-baselines.
+///
+/// `dedupe_latest_wins` picks the surviving mark by `updated_at` alone, and
+/// since migration `0093` that mark is a *ceiling* on accrual rather than a
+/// value the next write simply replaces. A source book 90% read winning over a
+/// target 10% read would otherwise suppress every gain below 90% on the merged
+/// book for a whole sitting — the reader reads 15%→60% and the tile reports
+/// nothing. Re-baselining costs at most the first observation's gain and cannot
+/// suppress anything, which is the same trade migration `0093` makes for the
+/// rows it inherits.
+async fn clear_sitting_clock(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    source_uuid: &str,
+    target_uuid: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE reading_progress_marks SET sitting_observed_at = NULL
+          WHERE book_uuid IN (?1, ?2)",
+    )
+    .bind(source_uuid)
+    .bind(target_uuid)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 async fn dedupe_latest_wins(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     table: &str,

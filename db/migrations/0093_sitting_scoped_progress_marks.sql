@@ -10,10 +10,15 @@
 --
 -- The mark now holds the furthest point reached in the current sitting and
 -- accrues only above it, so a there-and-back move inside one sitting is free.
+--
 -- A sitting ends after `stats::sessionize::IDLE_GAP_SECS` of no observation,
--- and the next one baselines wherever the reader then is — which is what keeps
--- a deliberate re-read counting in full: restarting a finished book opens a new
--- sitting at 5%, not a doomed climb back to a lifetime high-water of 100.
+-- and that boundary governs the **mark**, never the gain. It is the only thing
+-- that lets the mark fall back, which is what keeps a deliberate re-read
+-- counting in full: restarting a finished book re-baselines at 5%, not a doomed
+-- climb back to a lifetime high-water of 100. Ground beyond the mark is earned
+-- on either side of it — an offline stretch coalesces into one write stamped
+-- with the last page turn, so a plane ride arrives as a single observation
+-- long after the previous one, and it is reading, not idleness.
 --
 -- This is BookOrbit's session-delta semantics reached from the other side. They
 -- bracket a session on the client and post one `end - start` delta; that shape
@@ -44,11 +49,13 @@ ALTER TABLE reading_progress_marks RENAME COLUMN percent TO sitting_max_percent;
 -- with the position's older event time) cannot drag the boundary backward and
 -- manufacture a gap.
 --
--- Nullable with a backfill rather than `NOT NULL DEFAULT`: SQLite cannot add a
--- NOT NULL column without a constant default, and there is no honest constant
--- here. NULL reads as "no sitting in progress", which re-baselines on the next
--- observation — the right answer for every existing row, since none of them is
--- mid-sitting across a deploy anyway.
+-- Nullable, and deliberately left NULL on every existing row rather than
+-- backfilled from `updated_at`. NULL reads as "no sitting in progress", which
+-- re-baselines on the next observation — and that is what the existing rows
+-- want, because each one holds a mark under the *old* last-position-seen
+-- meaning. Seeding a clock from `updated_at` would let a recently-written one
+-- carry that stale mark into a live sitting and charge the reader once more for
+-- ground it had already counted, which is the bug this migration exists to end.
+-- Nothing is lost by starting them cold: the first observation after the deploy
+-- baselines, exactly as a book seen for the first time does.
 ALTER TABLE reading_progress_marks ADD COLUMN sitting_observed_at INTEGER;
-
-UPDATE reading_progress_marks SET sitting_observed_at = updated_at;
