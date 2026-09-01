@@ -984,9 +984,10 @@ struct StopHome: View {
 struct StopShelf: View {
     let book: Book
     let model: BookDetailModel
-    /// Whether to append the "more by <author>" strip. Off inside the More
-    /// section, whose recommendations half already carries the author
-    /// cluster — two copies of the same strip would sit a screen apart.
+    /// Whether this block stands alone as a full stop. Off inside the More
+    /// section, which drops the "more by <author>" strip (the
+    /// recommendations half already carries the author cluster) and the
+    /// full-screen ruled void (the section continues right below it).
     var authorStrip = true
     var onShelfPicker: () -> Void
 
