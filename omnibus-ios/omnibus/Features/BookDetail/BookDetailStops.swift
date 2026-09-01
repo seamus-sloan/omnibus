@@ -90,7 +90,7 @@ enum DetailRead {
     /// `lift` is the Home panel's rest→lifted progress across the rest run,
     /// `page` the stop position past it — held at 0 while the panel is still
     /// lifting, so the art pan and fade wait for stop 02. A zero `restTop`
-    /// means no rest run (a plate cover): plain paging, always lifted.
+    /// degenerates to plain paging, permanently lifted.
     static func scrollMap(
         offset: CGFloat, restTop: CGFloat, viewport: CGFloat
     ) -> (lift: CGFloat, page: CGFloat) {
@@ -788,11 +788,9 @@ struct MoreRowButton: View {
 struct StopHome: View {
     let book: Book
     let model: BookDetailModel
-    /// Whether the panel rests under a whole cover (a photographic cover
-    /// exists) and whether it is currently lifted. At rest the panel is a
-    /// short strip, so the compact state trims what the fold would cut
-    /// anyway; a plate book has no rest position and is always lifted.
-    var restingCover = false
+    /// Whether the panel is at its lifted position. At rest it is a short
+    /// strip under the artwork, so the compact state trims what the fold
+    /// would cut anyway.
     var lifted = true
     var onMore: () -> Void
     var onAlignment: () -> Void
@@ -811,8 +809,8 @@ struct StopHome: View {
 
             Text(book.displayTitle)
                 // The two-position panel trades title size for the room the
-                // whole cover took — both positions share the smaller cut.
-                .font(.display(restingCover ? 31 : 38, weight: .semibold))
+                // artwork took — both positions share the smaller cut.
+                .font(.display(31, weight: .semibold))
                 .foregroundStyle(palette.ink0Color)
                 .lineLimit(3)
                 .minimumScaleFactor(0.6)
@@ -852,7 +850,7 @@ struct StopHome: View {
                     .lineSpacing(4)
                     // Lifted there is room for a real excerpt; at rest the
                     // fold is close, so two lines tease the drawer instead.
-                    .lineLimit(restingCover && lifted ? 6 : 2)
+                    .lineLimit(lifted ? 6 : 2)
                     .padding(.top, 11)
                     .onTapGesture { onMore() }
 

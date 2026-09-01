@@ -2,10 +2,10 @@
 //  The book detail marquee: full-bleed cover art running off the top edge,
 //  a translucent panel riding over its lower edge, and the page organised as
 //  seven snap stops on a vertical pager — Home · Shelf · Stats · Highlights ·
-//  Journals · The files · Recommendations. Home has two positions when the
-//  book has a photographic cover: the page opens on the cover whole with the
-//  panel resting under it, and the first swipe lifts the panel to full
-//  height before the next one moves on to stop 02. Chrome is immersive:
+//  Journals · The files · Recommendations. Home has two positions: the page
+//  opens on the artwork — a photographic cover whole, a plate in its halo —
+//  with the panel resting under it, and the first swipe lifts the panel to
+//  full height before the next one moves on to stop 02. Chrome is immersive:
 //  glass discs over the art, a tappable dot rail, and a persistent bottom
 //  action bar so Resume never scrolls away.
 
@@ -254,8 +254,8 @@ struct BookDetailView: View {
         self.uuid = uuid
     }
 
-    /// Where the panel's top edge sits at the Home stop for a plate cover —
-    /// how much art stays in view before the page becomes the panel. A
+    /// Where the Home panel rests for a plate cover — how much of the plate
+    /// window stays in view before the page becomes the panel. A
     /// photographic cover derives its rest position from the cover height
     /// instead (`DetailRead.restTop`).
     static let artTop: CGFloat = 300
@@ -297,8 +297,7 @@ struct BookDetailView: View {
     /// Continuous page position, 0...6 — drives the art pan and fade.
     @State private var page: CGFloat = 0
     /// The Home panel's rest→lifted progress, 0...1 — drives the art's
-    /// whole→windowed transition and the panel's padding and tint. Pinned
-    /// to 1 for books whose panel has no rest position.
+    /// whole→windowed transition and the panel's padding and tint.
     @State private var lift: CGFloat = 0
     /// Whether the Home panel has settled lifted — the discrete switch the
     /// handle label, tag row, and description clamp key on.
@@ -434,11 +433,14 @@ struct BookDetailView: View {
 
     // MARK: - Shell
 
-    /// Whether the Home panel gets its two positions: it needs a
-    /// photographic cover to rest against — a typographic plate is shown
-    /// whole anyway, so those books keep the one-position panel.
-    private func hasRestingCover(_ book: Book) -> Bool {
+    /// Where the Home panel rests for this book: below the whole cover when
+    /// a photographic one exists, at the plate window's edge otherwise — a
+    /// typographic plate is short, so its panel rests higher. Either way the
+    /// first swipe lifts the panel to the top of the page.
+    private func restTop(for book: Book, in size: CGSize) -> CGFloat {
         book.coverURL != nil
+            ? DetailRead.restTop(width: size.width, height: size.height)
+            : Self.artTop
     }
 
     private func content(_ book: Book) -> some View {
@@ -452,14 +454,13 @@ struct BookDetailView: View {
                 height: geometry.size.height
                     + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
             )
-            let twoPosition = hasRestingCover(book)
-            let restTop = DetailRead.restTop(width: size.width, height: size.height)
+            let restTop = restTop(for: book, in: size)
 
             ZStack {
                 ScreenBackground()
-                DetailArtLayer(book: book, page: page, lift: twoPosition ? lift : 1)
+                DetailArtLayer(book: book, page: page, lift: lift)
                     .ignoresSafeArea()
-                snapScroller(book, twoPosition: twoPosition, restTop: restTop)
+                snapScroller(book, restTop: restTop)
                     .ignoresSafeArea()
             }
             .overlay(alignment: .top) { chromeDiscs(book) }
@@ -469,25 +470,21 @@ struct BookDetailView: View {
                 }
             }
             .overlay(alignment: .bottomTrailing) { nextHint }
-            .overlay(alignment: .bottom) { restFade(twoPosition) }
+            .overlay(alignment: .bottom) { restFade }
             .overlay(alignment: .bottom) { actionBar(book) }
         }
     }
 
-    private func snapScroller(
-        _ book: Book, twoPosition: Bool, restTop: CGFloat
-    ) -> some View {
+    private func snapScroller(_ book: Book, restTop: CGFloat) -> some View {
         ScrollView(.vertical) {
             VStack(spacing: 0) {
                 // The rest run: scrolling it away is what lifts the panel,
                 // and its top edge is the snap target the panel rests at.
-                if twoPosition {
-                    Color.clear
-                        .frame(height: restTop)
-                        .id(Self.restMarkerID)
-                }
+                Color.clear
+                    .frame(height: restTop)
+                    .id(Self.restMarkerID)
                 ForEach(DetailStop.allCases) { stop in
-                    stopSection(stop, book, twoPosition: twoPosition)
+                    stopSection(stop, book)
                         .id(stop.rawValue)
                 }
             }
@@ -508,41 +505,29 @@ struct BookDetailView: View {
             guard state.viewport > 0 else { return }
             let map = DetailRead.scrollMap(
                 offset: state.offset,
-                restTop: twoPosition ? restTop : 0,
+                restTop: restTop,
                 viewport: state.viewport
             )
             lift = map.lift
             page = min(CGFloat(DetailStop.allCases.count - 1), map.page)
             at = Int(page.rounded())
-            let settled = !twoPosition || map.lift > 0.6
+            let settled = map.lift > 0.6
             if settled != lifted {
                 withAnimation(Motion.snap) { lifted = settled }
             }
         }
     }
 
-    private func stopSection(
-        _ stop: DetailStop, _ book: Book, twoPosition: Bool
-    ) -> some View {
-        VStack(spacing: 0) {
-            // A plate cover keeps the fixed art window above the panel; a
-            // resting cover's clearance is the rest run before this section.
-            if stop == .home, !twoPosition {
-                Color.clear.frame(height: Self.artTop)
-            }
-            stopPanel(stop, book, twoPosition: twoPosition)
-        }
-        .containerRelativeFrame(.vertical)
+    private func stopSection(_ stop: DetailStop, _ book: Book) -> some View {
+        stopPanel(stop, book)
+            .containerRelativeFrame(.vertical)
     }
 
-    private func stopPanel(
-        _ stop: DetailStop, _ book: Book, twoPosition: Bool
-    ) -> some View {
+    private func stopPanel(_ stop: DetailStop, _ book: Book) -> some View {
         let isHome = stop == .home
-        let resting = isHome && twoPosition
 
         return VStack(alignment: .leading, spacing: 0) {
-            if resting {
+            if isHome {
                 LiftHandle(lifted: lifted) { toggleLift() }
             } else {
                 StopLabel(stop: stop)
@@ -553,10 +538,10 @@ struct BookDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(EdgeInsets(
             // A full stop's label must clear the chrome discs, which end
-            // ~105pt below the top edge on current devices. The two-position
-            // Home earns that clearance as it lifts — at rest its top edge
-            // is far below the discs.
-            top: isHome ? (twoPosition ? 14 + 114 * lift : 14) : 128,
+            // ~105pt below the top edge on current devices. Home earns that
+            // clearance as it lifts — at rest its top edge is far below the
+            // discs.
+            top: isHome ? 14 + 114 * lift : 128,
             leading: 22,
             bottom: Self.barClearance,
             trailing: 30
@@ -564,20 +549,19 @@ struct BookDetailView: View {
         .background {
             // The panel rides over the artwork: blur what shows through, then
             // tint with the page ground. The material already darkens what it
-            // blurs, so the tint stays light at Home — heavier and the art it
-            // rides over reads as a hard cut instead of a ghost. Past Home the
-            // art has faded, so the panel goes nearly opaque and simply is
-            // the screen. The two-position Home moves between those poles:
-            // resting below the cover it owns its strip, lifted it ghosts
-            // the whole cover behind it.
+            // blurs, so the tint stays lighter at Home — heavier and the art
+            // it rides over reads as a hard cut instead of a ghost. Past Home
+            // the art has faded, so the panel goes nearly opaque and simply
+            // is the screen. Home moves between those poles as it lifts:
+            // resting below the art it owns its strip, lifted it ghosts the
+            // artwork behind it.
             ZStack {
                 Rectangle().fill(.ultraThinMaterial)
-                palette.bg0Color.opacity(
-                    isHome ? (twoPosition ? 0.60 + 0.22 * lift : 0.30) : 0.82)
+                palette.bg0Color.opacity(isHome ? 0.60 + 0.22 * lift : 0.82)
             }
         }
         .overlay(alignment: .top) {
-            if isHome { Hairline().opacity(twoPosition ? 1 - lift : 1) }
+            if isHome { Hairline().opacity(1 - lift) }
         }
         .clipped()
     }
@@ -592,23 +576,20 @@ struct BookDetailView: View {
     /// At rest the panel's lower content runs on under the action bar; this
     /// fades it into the ground the way the design masks it out, and lifts
     /// away with the panel.
-    @ViewBuilder
-    private func restFade(_ twoPosition: Bool) -> some View {
-        if twoPosition {
-            LinearGradient(
-                stops: [
-                    .init(color: palette.bg0Color.opacity(0), location: 0),
-                    .init(color: palette.bg0Color, location: 0.62),
-                    .init(color: palette.bg0Color, location: 1),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 170)
-            .opacity(1 - lift)
-            .allowsHitTesting(false)
-            .ignoresSafeArea(edges: .bottom)
-        }
+    private var restFade: some View {
+        LinearGradient(
+            stops: [
+                .init(color: palette.bg0Color.opacity(0), location: 0),
+                .init(color: palette.bg0Color, location: 0.62),
+                .init(color: palette.bg0Color, location: 1),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .frame(height: 170)
+        .opacity(1 - lift)
+        .allowsHitTesting(false)
+        .ignoresSafeArea(edges: .bottom)
     }
 
     @ViewBuilder
@@ -618,10 +599,7 @@ struct BookDetailView: View {
             StopHome(
                 book: book,
                 model: model,
-                restingCover: hasRestingCover(book),
-                // A plate book's panel has no rest position — it is always
-                // the full stop, whatever the scroller last reported.
-                lifted: !hasRestingCover(book) || lifted,
+                lifted: lifted,
                 onMore: { showDescription = true },
                 onAlignment: { showAlignment = true },
                 onRemovedWishlist: { model.wishlistEntry = nil }
@@ -907,8 +885,8 @@ struct DetailDotRail: View {
 struct DetailArtLayer: View {
     let book: Book
     let page: CGFloat
-    /// The Home panel's rest→lifted progress; 1 for books with no rest
-    /// position, so the window and mask sit at their shipped values.
+    /// The Home panel's rest→lifted progress. Only photographic art reads
+    /// it — a plate is drawn whole in both positions.
     var lift: CGFloat = 1
 
     @Environment(\.palette) private var palette
