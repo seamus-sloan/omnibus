@@ -155,6 +155,35 @@ private func plain(_ spans: [JournalSpan]) -> String {
     #expect(blocks == [.code("still mine")])
 }
 
+@Test func blocksLetALongFenceCarryAShorterOne() {
+    // A four-backtick fence exists so its body can contain ```; a three-run
+    // must not close it. Server ground truth: ````\ninner ``` fence\n````
+    // renders as one <pre> holding the inner run.
+    let blocks = JournalMarkdown.blocks("````\ninner ``` fence\n````")
+    #expect(blocks == [.code("inner ``` fence")])
+}
+
+@Test func blocksCloseAFenceOnAtLeastItsOwnLength() {
+    // Longer closes shorter; an info string on the closing line does not.
+    #expect(JournalMarkdown.blocks("```\nbody\n`````") == [.code("body")])
+    #expect(JournalMarkdown.blocks("```\nbody\n``` js\nmore\n```") == [.code("body\n``` js\nmore")])
+}
+
+@Test func blocksReadATildeFence() {
+    #expect(JournalMarkdown.blocks("~~~\nbody\n~~~") == [.code("body")])
+}
+
+@Test func blocksKeepAMultiLineSetextHeadingWhole() {
+    // Not a bug: CommonMark's setext content may span lines, and the server
+    // agrees — `Foo\nbar\n---` renders as `<h2>Foo<br>bar</h2>`. iOS matching
+    // it is the point; diverging would make one entry read two ways.
+    let blocks = JournalMarkdown.blocks("Foo\nbar\n---\nafter")
+    #expect(blocks == [
+        .heading(level: 2, spans: [.prose("Foo\nbar")]),
+        .paragraph([.prose("after")]),
+    ])
+}
+
 @Test func blocksSurviveCarriageReturns() {
     // Splitting on a newline *set* would read CRLF as two breaks, and the blank
     // line between them would end the paragraph.
@@ -229,6 +258,40 @@ private func plain(_ spans: [JournalSpan]) -> String {
 
 @Test func maskedLeavesProseAlone() {
     #expect(JournalMarkdown.masked("Wrote a C# parser") == "Wrote a C# parser")
+}
+
+// MARK: - What assistive tech hears
+
+@Test func spokenNamesAHiddenSpanRatherThanReadingIt() {
+    // The colour mask means nothing to VoiceOver, so the label has to censor
+    // the span itself — otherwise a spoiler leaks to the one audience that
+    // cannot see it is meant to be hidden.
+    var next = 0
+    let spans = JournalMarkdown.spans("Cannot believe ||**Fitchner** was ARES||", from: &next)
+    #expect(JournalMarkdown.spoken(spans, revealed: []) == "Cannot believe spoiler, hidden")
+}
+
+@Test func spokenReadsASpanOnceItIsRevealed() {
+    var next = 0
+    let spans = JournalMarkdown.spans("He was ||**Ares**||", from: &next)
+    // Inline markup is resolved too — "star star Ares star star" is not a
+    // sentence.
+    #expect(JournalMarkdown.spoken(spans, revealed: [0]) == "He was Ares")
+}
+
+@Test func hiddenIDsNamesOnlyTheSpansStillClosed() {
+    let blocks = JournalMarkdown.blocks("||one|| and ||two|| and ||three||")
+    guard case .paragraph(let spans) = blocks[0] else {
+        Issue.record("expected one paragraph")
+        return
+    }
+    #expect(JournalMarkdown.hiddenIDs(spans, revealed: []) == [0, 1, 2])
+    #expect(JournalMarkdown.hiddenIDs(spans, revealed: [1]) == [0, 2])
+    #expect(JournalMarkdown.hiddenIDs(spans, revealed: [0, 1, 2]) == [])
+}
+
+@Test func hiddenIDsIsEmptyForABlockWithNoSpoilers() {
+    #expect(JournalMarkdown.hiddenIDs([.prose("plain")], revealed: []) == [])
 }
 
 // MARK: - Inline rendering

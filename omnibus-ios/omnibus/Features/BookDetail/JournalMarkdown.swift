@@ -113,6 +113,31 @@ enum JournalMarkdown {
         )) ?? AttributedString(source)
     }
 
+    /// The block as assistive tech should hear it: markup resolved, and every
+    /// still-hidden span named rather than read out. Masking a run by colour
+    /// hides it from exactly one audience and not from the other — VoiceOver
+    /// speaks the text under the bar — so the label has to censor it too.
+    static func spoken(_ spans: [JournalSpan], revealed: Set<Int>) -> String {
+        spans.map { span in
+            switch span {
+            case .prose(let text):
+                String(inline(text).characters)
+            case .spoiler(let text, let id):
+                revealed.contains(id) ? String(inline(text).characters) : "spoiler, hidden"
+            }
+        }.joined()
+    }
+
+    /// The spans in one block that are still hidden — what a reveal-all
+    /// accessibility action opens, and whether to offer one at all.
+    static func hiddenIDs(_ spans: [JournalSpan], revealed: Set<Int>) -> Set<Int> {
+        var out: Set<Int> = []
+        for case .spoiler(_, let id) in spans where !revealed.contains(id) {
+            out.insert(id)
+        }
+        return out
+    }
+
     /// The link a masked spoiler carries, and the id back out of one.
     static func revealURL(_ id: Int) -> URL? { URL(string: "\(revealScheme)://\(id)") }
 
@@ -151,7 +176,7 @@ extension JournalMarkdown {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             if let open = fence {
-                if trimmed.hasPrefix(open), trimmed.allSatisfy({ $0 == open.first }) {
+                if Self.closesFence(trimmed, open: open) {
                     out.append(.code(code.joined(separator: "\n")))
                     fence = nil
                     code = []
@@ -274,9 +299,25 @@ extension JournalMarkdown {
 
         // MARK: Line shapes
 
-        /// The backtick or tilde run opening a fence, if this line is one.
+        /// The backtick or tilde run opening a fence, if this line is one —
+        /// the whole run, not just its first three. CommonMark lets a longer
+        /// fence carry ``` inside it, and only a run at least as long closes
+        /// one, so the length has to survive to the closing check.
         static func fenceMarker(_ line: String) -> String? {
-            ["```", "~~~"].first(where: line.hasPrefix)
+            for marker: Character in ["`", "~"] {
+                let run = line.prefix { $0 == marker }
+                if run.count >= 3 { return String(run) }
+            }
+            return nil
+        }
+
+        /// Whether this line closes the open fence: a bare run of the same
+        /// marker, at least as long as the one that opened it. A shorter run,
+        /// or one with an info string after it, is content.
+        static func closesFence(_ line: String, open: String) -> Bool {
+            guard let marker = open.first else { return false }
+            let run = line.prefix { $0 == marker }
+            return run.count >= open.count && run.count == line.count
         }
 
         /// `---`, `***`, `___` — three or more of one marker and nothing else.
@@ -384,11 +425,14 @@ struct JournalBody: View {
     private func view(for block: JournalBlock) -> some View {
         switch block {
         case .heading(let level, let spans):
-            text(spans, ink: palette.ink0Color)
-                .font(.display(level <= 1 ? 25 : level == 2 ? 21 : 18, weight: .semibold))
-                .foregroundStyle(palette.ink0Color)
-                .lineSpacing(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            spoilerSafe(
+                text(spans, ink: palette.ink0Color)
+                    .font(.display(level <= 1 ? 25 : level == 2 ? 21 : 18, weight: .semibold))
+                    .foregroundStyle(palette.ink0Color)
+                    .lineSpacing(2)
+                    .frame(maxWidth: .infinity, alignment: .leading),
+                spans
+            )
         case .paragraph(let spans):
             prose(spans)
         case .bullets(let items):
@@ -422,12 +466,35 @@ struct JournalBody: View {
     }
 
     private func prose(_ spans: [JournalSpan]) -> some View {
-        text(spans, ink: palette.ink1Color)
-            .font(.display(18))
-            .foregroundStyle(palette.ink1Color)
-            .lineSpacing(6)
-            .multilineTextAlignment(.leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        spoilerSafe(
+            text(spans, ink: palette.ink1Color)
+                .font(.display(18))
+                .foregroundStyle(palette.ink1Color)
+                .lineSpacing(6)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading),
+            spans
+        )
+    }
+
+    /// A block holding a masked span speaks a censored label — the colour
+    /// mask means nothing to VoiceOver — and, where its spans can be opened,
+    /// offers one rotor action to open them, since the per-span reveal links
+    /// the label replaces are no longer reachable.
+    @ViewBuilder
+    private func spoilerSafe(_ view: some View, _ spans: [JournalSpan]) -> some View {
+        let hidden = JournalMarkdown.hiddenIDs(spans, revealed: revealed)
+        if hidden.isEmpty {
+            view
+        } else if revealable {
+            view
+                .accessibilityLabel(JournalMarkdown.spoken(spans, revealed: revealed))
+                .accessibilityAction(named: "Reveal spoilers") {
+                    withAnimation(Motion.snap) { revealed.formUnion(hidden) }
+                }
+        } else {
+            view.accessibilityLabel(JournalMarkdown.spoken(spans, revealed: revealed))
+        }
     }
 
     /// A list hung on its markers, so a wrapped line lines up under the text

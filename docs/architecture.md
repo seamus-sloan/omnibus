@@ -341,9 +341,11 @@ Features/           — one directory per surface: Account, AddBooks, Auth,
                       rail tracking card (tracked-since line, store search,
                       remove): same never-queued contract, plus a confirmation
                       the web button doesn't ask for. `JournalMarkdown` is the
-                      journal body's renderer — the web reads the server's
-                      `body_html`, but the native app only ever has `body_md`,
-                      so it carries its own line-based splitter (paragraphs,
+                      journal body's renderer — the web sets the server's
+                      `body_html` with `dangerous_inner_html`, which SwiftUI
+                      has no equivalent of, so the native app renders from the
+                      `body_md` riding alongside it and carries its own
+                      line-based splitter (paragraphs,
                       headings, bullet/ordered lists, quotes, fenced code,
                       rules) plus a `||spoiler||` pass. Two contracts differ
                       from `db::journals::markdown` deliberately: spoilers pair
