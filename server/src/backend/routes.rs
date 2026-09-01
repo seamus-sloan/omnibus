@@ -457,9 +457,11 @@ fn metadata_routes() -> Router<AppState> {
         )
 }
 
-/// F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous
-/// `/api/rpc/kindle/send`, `/api/rpc/account/kindle-email`, and
-/// `/api/rpc/smtp*` server fns.
+/// F4.3 Send-to-Kindle plus the per-user account preferences that grew up
+/// beside it (hidden formats, the book-detail scroll-stops switch, the
+/// profile and its avatar) — all mobile-facing REST. Web hits the analogous
+/// `/api/rpc/kindle/send`, `/api/rpc/account/*`, and `/api/rpc/smtp*` server
+/// fns.
 fn kindle_routes() -> Router<AppState> {
     Router::new()
         .route("/api/kindle/send", post(kindle::post_send))

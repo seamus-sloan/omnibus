@@ -1,20 +1,18 @@
-//! "Book details" account card: whether the caller's book detail page uses
-//! the snap-stop marquee or reads as one continuous scroll. Off by default.
-//! A single switch, saved on change rather than behind a Save button — with
-//! nothing else in the card to batch with, a button would only add a step
-//! between the click and the setting taking effect.
-//!
-//! The switch is parked: nothing reads the preference yet, so it renders
-//! disabled behind a "Coming soon" marker rather than letting a reader set a
-//! value that changes nothing. The save path below is wired and tested, so
-//! lighting it up is dropping [`PARKED`] and the marker beside it.
+//! "Book details" account card (Settings → Account): whether the caller's
+//! book detail page uses the snap-stop marquee or reads as one continuous
+//! scroll. One switch, saved on change rather than behind a Save button —
+//! there is nothing else in the card to batch with. Currently inert; see
+//! [`PARKED`].
 
 use dioxus::prelude::*;
 
 use crate::data;
 
 /// Whether the switch is inert. `true` until the book detail pages actually
-/// branch on the stored preference — see the module docs.
+/// branch on the stored preference: until then a live toggle would let a
+/// reader set a value that changes nothing, so the switch renders disabled
+/// behind a "Coming soon" marker. The save path below is wired and tested,
+/// so lighting it up is dropping this constant and the marker beside it.
 const PARKED: bool = true;
 
 /// `onchange` for the scroll-stops switch, extracted so its guards and its
