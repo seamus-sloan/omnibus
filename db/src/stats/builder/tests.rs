@@ -1021,7 +1021,14 @@ async fn chart_series_drops_activity_dated_after_today() {
     // The axis stops at today rather than stretching five empty months to
     // reach it, so the future sitting is left out — and only the real one is
     // plotted. The `/stats` totals still count it, which is the cost.
-    assert!(!r.buckets.iter().any(|b| b.as_str() > "2026-08"));
+    //
+    // Derived from the same clock the fixture and the query use: a pinned
+    // month literal here passes only until the calendar leaves it behind.
+    let this_month: String = sqlx::query_scalar("SELECT strftime('%Y-%m', 'now')")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(!r.buckets.iter().any(|b| b.as_str() > this_month.as_str()));
     let charted: f64 = r.series[0].values.iter().flatten().sum();
     assert_eq!(charted, 10.0);
 }
