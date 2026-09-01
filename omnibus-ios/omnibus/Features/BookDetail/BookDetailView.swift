@@ -115,7 +115,10 @@ final class BookDetailModel {
             }
             group.addTask { @MainActor in
                 for await items in UserDataService.highlights(uuid: uuid).values() {
-                    self.highlights = items
+                    // Sorted once at ingestion: the stops re-render on every
+                    // scroll tick, so a per-render sort is a real cost the
+                    // flow's uncapped list would pay constantly.
+                    self.highlights = items.sorted { $0.createdAt > $1.createdAt }
                 }
             }
             group.addTask { @MainActor in
@@ -262,11 +265,8 @@ struct BookDetailView: View {
     /// Scroll id of the rest run above the Home stop — the pre-Home snap
     /// target the two-position panel rests at.
     static let restMarkerID = -1
-    /// How much art keeps peeking behind the nav strip at the flow body's
-    /// snap position — the strip's region, measured from the screen's top.
-    static let flowNavPeek: CGFloat = 96
-    /// Scroll id of the flow body's snap position, `flowNavPeek` short of
-    /// the cover's end — where the lift cue's tap sends the list.
+    /// Scroll id of the flow body's snap position, `DetailRead.flowNavPeek`
+    /// short of the cover's end — where the lift cue's tap sends the list.
     static let flowLiftedMarkerID = -2
 
     /// What the journal composer was opened for. `Identifiable` so the
@@ -644,12 +644,12 @@ struct BookDetailView: View {
         ScrollView(.vertical) {
             VStack(spacing: 0) {
                 Color.clear
-                    .frame(height: max(0, restTop - Self.flowNavPeek))
+                    .frame(height: max(0, restTop - DetailRead.flowNavPeek))
                     .id(Self.restMarkerID)
                 // The body's snap position: this marker's top edge, a
                 // nav strip's worth of art short of the cover's end.
                 Color.clear
-                    .frame(height: Self.flowNavPeek)
+                    .frame(height: DetailRead.flowNavPeek)
                     .id(Self.flowLiftedMarkerID)
                 flowBody(book)
             }
@@ -668,7 +668,7 @@ struct BookDetailView: View {
             let map = DetailRead.flowMap(
                 offset: state.offset,
                 restTop: restTop,
-                navPeek: Self.flowNavPeek
+                navPeek: DetailRead.flowNavPeek
             )
             lift = map.lift
             page = map.page

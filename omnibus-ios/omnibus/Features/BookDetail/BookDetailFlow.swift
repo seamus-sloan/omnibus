@@ -13,7 +13,7 @@ import SwiftUI
 /// scrolls free. The design's `scroll-snap-type: proximity`, by hand.
 struct FlowSnapBehavior: ScrollTargetBehavior {
     var restTop: CGFloat
-    var navPeek: CGFloat = BookDetailView.flowNavPeek
+    var navPeek: CGFloat = DetailRead.flowNavPeek
 
     func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
         let lifted = max(1, restTop - navPeek)

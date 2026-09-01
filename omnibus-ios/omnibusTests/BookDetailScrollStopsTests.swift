@@ -41,7 +41,7 @@ struct BookDetailScrollStopsTests {
     @Test func flowMapLiftsAcrossTheRunToTheBodySnapPosition() {
         // The body snaps navPeek short of the cover's end — fully lifted,
         // and already "past": the strip is what covers the peeking art.
-        let map = DetailRead.flowMap(offset: 603 - 96, restTop: 603)
+        let map = DetailRead.flowMap(offset: 603 - DetailRead.flowNavPeek, restTop: 603)
         #expect(map.lift == 1)
         #expect(map.past)
     }
