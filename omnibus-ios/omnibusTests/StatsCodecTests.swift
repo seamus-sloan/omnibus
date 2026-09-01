@@ -188,6 +188,45 @@ struct SessionReportZoneTests {
             with: try JSONEncoder().encode(report)) as? [String: Any]
         #expect(json?["utc_offset_minutes"] as? Int == -420)
     }
+
+    @Test("a report stamps the device's zone name beside the offset")
+    func stampsLocalZoneName() {
+        let report = SessionReport(
+            bookUUID: "uuid", format: .epub, startedAt: 0, endedAt: 60, progressUnits: 60,
+            deviceId: nil)
+        #expect(report.timeZone == SessionReport.localTimeZoneName())
+        // The zone is what an offset cannot say: -420 is Los Angeles in summer,
+        // Phoenix year-round and Denver in winter, and only a name tells them
+        // apart for an instant other than the captured one.
+        #expect(
+            SessionReport.localTimeZoneName(in: TimeZone(identifier: "America/Los_Angeles")!)
+                == "America/Los_Angeles")
+    }
+
+    @Test("the zone name rides the wire under its snake_case key")
+    func encodesZoneKey() throws {
+        var report = SessionReport(
+            bookUUID: "uuid", format: .epub, startedAt: 0, endedAt: 60, progressUnits: 60,
+            deviceId: nil)
+        report.timeZone = "Asia/Tokyo"
+        let json = try JSONSerialization.jsonObject(
+            with: try JSONEncoder().encode(report)) as? [String: Any]
+        #expect(json?["time_zone"] as? String == "Asia/Tokyo")
+    }
+
+    @Test("an absent zone name is omitted rather than sent blank")
+    func omitsBlankZone() throws {
+        var report = SessionReport(
+            bookUUID: "uuid", format: .epub, startedAt: 0, endedAt: 60, progressUnits: 60,
+            deviceId: nil)
+        report.timeZone = nil
+        let json = try JSONSerialization.jsonObject(
+            with: try JSONEncoder().encode(report)) as? [String: Any]
+        // The server's `SessionReport::validate` rejects a present-but-blank
+        // zone, which would fail the whole batched report over a field nothing
+        // reads yet.
+        #expect(json?["time_zone"] == nil)
+    }
 }
 
 @Suite("Standout rows")

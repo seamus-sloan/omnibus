@@ -837,10 +837,38 @@ enum UserDataService {
 
     // MARK: - Stats
 
+    /// The reader's stats over `range`.
+    ///
+    /// Declares this device's UTC offset, which is what the server cuts every
+    /// day boundary in the answer on — the heatmap, the streak, both daily
+    /// goals, and where the window itself opens (rule 10). Without it the
+    /// server falls back to the offset of the reader's most recent session,
+    /// which is where they last read rather than where they are.
+    ///
+    /// The **cache key stays `range` alone**, deliberately. Keying it on the
+    /// offset too would be more correct after a flight — the stale entry would
+    /// miss instead of briefly showing yesterday's boundary — but it would also
+    /// leave the reader with nothing at all to show offline in the new zone,
+    /// and this app is local-first. `Cache.live` corrects it as soon as the
+    /// live read lands.
     static func stats(range: StatsRange) -> AsyncThrowingStream<CacheRead<StatsSummary>, Error> {
         Cache.live(CacheKey.stats(range)) {
-            try await APIClient.shared.get("/api/stats", query: ["range": range.rawValue])
+            try await APIClient.shared.get(
+                "/api/stats",
+                query: ["range": range.rawValue, "utc_offset_minutes": localOffsetQuery()]
+            )
         }
+    }
+
+    /// This device's UTC offset as a query value, for the stats reads and the
+    /// goal writes.
+    ///
+    /// Shared so the reads and the writes cannot come to declare different
+    /// places: a goal save answers with today's progress, so a write that named
+    /// a different day than the read it replaces would appear to move the
+    /// ground it measures.
+    private static func localOffsetQuery() -> String {
+        String(SessionReport.localOffsetMinutes())
     }
 
     /// How big the library is in words, pages, and hours of audio.
@@ -864,6 +892,7 @@ enum UserDataService {
     static func setReadingGoal(target: Int64?) async throws -> ReadingGoal? {
         let goal: ReadingGoal? = try await APIClient.shared.put(
             "/api/stats/goal",
+            query: ["utc_offset_minutes": localOffsetQuery()],
             body: ReadingGoalUpdate(target: target)
         )
         // Every cached summary carries the goal, not just the range the picker
@@ -889,6 +918,7 @@ enum UserDataService {
     static func setDailyGoal(kind: DailyGoalKind, target: Int64?) async throws -> DailyGoals {
         let goals: DailyGoals = try await APIClient.shared.put(
             "/api/stats/goal/daily",
+            query: ["utc_offset_minutes": localOffsetQuery()],
             body: DailyGoalUpdate(kind: kind, target: target)
         )
         // Every cached summary carries the daily goals, not just the range the

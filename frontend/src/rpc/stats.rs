@@ -17,14 +17,21 @@ use omnibus_shared::{
 use super::{internal_rpc_error, AuthUser, PoolExt};
 
 /// Fetch the current user's stats summary over `range`. Served from the
-/// `db::stats` per-user cache (60s TTL), so switcher-driven refetches inside
-/// the window skip the SQL. Mobile uses the analogous `GET /api/stats` REST
-/// route in `server::backend::stats`.
+/// `db::stats` per-user cache (60s TTL, keyed on the offset too), so
+/// switcher-driven refetches inside the window skip the SQL. Mobile uses the
+/// analogous `GET /api/stats` REST route in `server::backend::stats`.
+///
+/// `utc_offset_minutes` is where the calling device is, and every day boundary
+/// in the answer is cut on it (rule 10). `None` — an older client, or one with
+/// no browser to ask — falls back to the reader's most recent session offset
+/// and then to UTC.
 #[post("/api/rpc/stats", pool: PoolExt, user: AuthUser)]
-pub async fn rpc_stats(range: StatsRange) -> Result<StatsSummary> {
-    Ok(db::stats::user_stats(&pool.0, user.id, range, None)
-        .await
-        .map_err(|e| internal_rpc_error("stats", e))?)
+pub async fn rpc_stats(range: StatsRange, utc_offset_minutes: Option<i64>) -> Result<StatsSummary> {
+    Ok(
+        db::stats::user_stats(&pool.0, user.id, range, utc_offset_minutes)
+            .await
+            .map_err(|e| internal_rpc_error("stats", e))?,
+    )
 }
 
 /// Fetch the current user's Started/Time-read/Sessions insights for one book
@@ -33,10 +40,15 @@ pub async fn rpc_stats(range: StatsRange) -> Result<StatsSummary> {
 /// the rail section that renders this card doesn't compile on mobile, so
 /// there's no REST counterpart.
 #[post("/api/rpc/book-insights", pool: PoolExt, user: AuthUser)]
-pub async fn rpc_book_insights(uuid: String) -> Result<Option<BookInsights>> {
-    Ok(db::stats::book_insights(&pool.0, user.id, &uuid, None)
-        .await
-        .map_err(|e| internal_rpc_error("book insights", e))?)
+pub async fn rpc_book_insights(
+    uuid: String,
+    utc_offset_minutes: Option<i64>,
+) -> Result<Option<BookInsights>> {
+    Ok(
+        db::stats::book_insights(&pool.0, user.id, &uuid, utc_offset_minutes)
+            .await
+            .map_err(|e| internal_rpc_error("book insights", e))?,
+    )
 }
 
 /// Fetch how big the library is in words, pages, and hours of audio.
@@ -59,10 +71,15 @@ pub async fn rpc_library_size() -> Result<LibrarySize> {
 /// `db::stats::set_goal` drops this user's cached summaries, so the refetch
 /// that follows a save reads the new target rather than the cached one.
 #[post("/api/rpc/stats-goal", pool: PoolExt, user: AuthUser)]
-pub async fn rpc_set_reading_goal(update: ReadingGoalUpdate) -> Result<Option<ReadingGoal>> {
-    Ok(db::stats::set_goal(&pool.0, user.id, &update, None)
-        .await
-        .map_err(|e| internal_rpc_error("set reading goal", e))?)
+pub async fn rpc_set_reading_goal(
+    update: ReadingGoalUpdate,
+    utc_offset_minutes: Option<i64>,
+) -> Result<Option<ReadingGoal>> {
+    Ok(
+        db::stats::set_goal(&pool.0, user.id, &update, utc_offset_minutes)
+            .await
+            .map_err(|e| internal_rpc_error("set reading goal", e))?,
+    )
 }
 
 /// Set, change, or clear one of the current user's daily reading goals,
@@ -70,13 +87,20 @@ pub async fn rpc_set_reading_goal(update: ReadingGoalUpdate) -> Result<Option<Re
 ///
 /// Both rather than just the kind written, so the band redraws from one
 /// response — the two are independent, and a follow-up read to fetch the other
-/// could land on a different day. Account configuration under rule 08, so
-/// never queued by the offline outbox.
+/// could land on a different day. The offset decides *which* day both kinds
+/// are measured over, so a save that omitted it could answer against a
+/// different one than the read it replaces. Account configuration under rule
+/// 08, so never queued by the offline outbox.
 #[post("/api/rpc/stats-goal-daily", pool: PoolExt, user: AuthUser)]
-pub async fn rpc_set_daily_goal(update: DailyGoalUpdate) -> Result<DailyGoals> {
-    Ok(db::stats::set_daily_goal(&pool.0, user.id, &update, None)
-        .await
-        .map_err(|e| internal_rpc_error("set daily reading goal", e))?)
+pub async fn rpc_set_daily_goal(
+    update: DailyGoalUpdate,
+    utc_offset_minutes: Option<i64>,
+) -> Result<DailyGoals> {
+    Ok(
+        db::stats::set_daily_goal(&pool.0, user.id, &update, utc_offset_minutes)
+            .await
+            .map_err(|e| internal_rpc_error("set daily reading goal", e))?,
+    )
 }
 
 /// Fetch what the library is made of — its format, language, publisher,
@@ -136,13 +160,18 @@ pub async fn rpc_session_log(
 /// re-validated server-side inside `db::stats::chart_series` — the builder
 /// UI's guards are a convenience, not the contract.
 #[post("/api/rpc/chart-series", pool: PoolExt, user: AuthUser)]
-pub async fn rpc_chart_series(spec: ChartSpec) -> Result<ChartResult> {
-    Ok(db::stats::chart_series(&pool.0, user.id, &spec, None)
-        .await
-        .map_err(|e| match e {
-            db::stats::ChartError::Spec(inner) => {
-                dioxus::prelude::ServerFnError::new(inner.to_string())
-            }
-            db::stats::ChartError::Stats(inner) => internal_rpc_error("chart series", inner),
-        })?)
+pub async fn rpc_chart_series(
+    spec: ChartSpec,
+    utc_offset_minutes: Option<i64>,
+) -> Result<ChartResult> {
+    Ok(
+        db::stats::chart_series(&pool.0, user.id, &spec, utc_offset_minutes)
+            .await
+            .map_err(|e| match e {
+                db::stats::ChartError::Spec(inner) => {
+                    dioxus::prelude::ServerFnError::new(inner.to_string())
+                }
+                db::stats::ChartError::Stats(inner) => internal_rpc_error("chart series", inner),
+            })?,
+    )
 }
