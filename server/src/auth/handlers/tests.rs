@@ -541,6 +541,33 @@ async fn me_reports_saved_hidden_formats() {
     assert_eq!(me.hidden_formats, vec!["cbz".to_string()]);
 }
 
+#[tokio::test]
+async fn me_reports_saved_book_detail_scroll_stops() {
+    let (app, pool) = app().await;
+    let user = crate::auth::test_support::create_user(&pool, "reader").await;
+    let token = crate::auth::test_support::bearer_token(&pool, user.id).await;
+    db::auth::set_book_detail_scroll_stops(&pool, user.id, true)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/me")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let me: omnibus_shared::UserSummary = serde_json::from_slice(&body).unwrap();
+    assert!(me.book_detail_scroll_stops);
+}
+
 // ── GET/DELETE /api/auth/sessions (self-service, AC2/AC3/AC4) ──────────
 
 fn bearer_req(method: &str, uri: &str, token: &str) -> Request<Body> {
@@ -572,6 +599,7 @@ fn fake_auth_user(id: i64, session_id: i64) -> AuthUser {
         display_name: None,
         has_avatar: false,
         hidden_formats: Vec::new(),
+        book_detail_scroll_stops: false,
         session_id,
         session_kind: SessionKind::Bearer,
     }

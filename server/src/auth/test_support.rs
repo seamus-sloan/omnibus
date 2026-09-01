@@ -45,6 +45,7 @@ async fn insert_user(pool: &SqlitePool, username: &str, is_admin: bool) -> User 
         display_name: None,
         has_avatar: false,
         hidden_formats: Vec::new(),
+        book_detail_scroll_stops: false,
     }
 }
 
@@ -85,6 +86,7 @@ pub async fn create_user_with_password(pool: &SqlitePool, username: &str, passwo
         display_name: None,
         has_avatar: false,
         hidden_formats: Vec::new(),
+        book_detail_scroll_stops: false,
     }
 }
 

@@ -469,6 +469,10 @@ fn kindle_routes() -> Router<AppState> {
             "/api/account/hidden-formats",
             post(account::post_hidden_formats),
         )
+        .route(
+            "/api/account/book-detail-scroll-stops",
+            post(account::post_book_detail_scroll_stops),
+        )
         .route("/api/account/profile", post(profile::post_profile))
         .route("/api/account/avatar", delete(profile::delete_avatar))
         .route("/api/users/{user_id}/avatar", get(profile::get_user_avatar))

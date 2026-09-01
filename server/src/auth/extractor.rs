@@ -29,6 +29,7 @@ pub struct AuthUser {
     pub display_name: Option<String>,
     pub has_avatar: bool,
     pub hidden_formats: Vec<String>,
+    pub book_detail_scroll_stops: bool,
     pub session_id: i64,
     pub session_kind: SessionKind,
 }
@@ -47,6 +48,7 @@ impl AuthUser {
             display_name: self.display_name.clone(),
             has_avatar: self.has_avatar,
             hidden_formats: self.hidden_formats.clone(),
+            book_detail_scroll_stops: self.book_detail_scroll_stops,
         }
     }
 }
@@ -134,6 +136,7 @@ fn build_auth_user(user: auth_db::User, session: auth_db::Session) -> AuthUser {
         display_name: user.display_name,
         has_avatar: user.has_avatar,
         hidden_formats: user.hidden_formats,
+        book_detail_scroll_stops: user.book_detail_scroll_stops,
         session_id: session.id,
         session_kind: session.kind,
     }

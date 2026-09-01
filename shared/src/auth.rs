@@ -32,6 +32,11 @@ pub struct UserSummary {
     /// request's `exclude_formats`; empty means nothing hidden.
     #[serde(default)]
     pub hidden_formats: Vec<String>,
+    /// Whether this user's book detail page uses the snap-stop marquee.
+    /// `false` — the default, and what a pre-0092 payload decodes to —
+    /// renders it as one continuous scroll.
+    #[serde(default)]
+    pub book_detail_scroll_stops: bool,
 }
 
 impl UserSummary {
@@ -261,6 +266,19 @@ mod tests {
         )
         .unwrap();
         assert!(v.hidden_formats.is_empty());
+    }
+
+    // Same contract one migration later: a pre-0092 payload (or a cached
+    // `/me` body from one) has no `book_detail_scroll_stops`, and must decode
+    // to the off default rather than failing.
+    #[test]
+    fn user_summary_deserializes_payload_missing_book_detail_scroll_stops() {
+        let v: UserSummary = serde_json::from_str(
+            r#"{"id":1,"username":"alice","is_admin":false,
+                "can_upload":false,"can_edit":false,"can_download":true}"#,
+        )
+        .unwrap();
+        assert!(!v.book_detail_scroll_stops);
     }
 
     // Payloads from a pre-0088 server lack `client`. The default must name the
