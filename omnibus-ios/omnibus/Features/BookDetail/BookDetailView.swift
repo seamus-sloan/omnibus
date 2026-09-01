@@ -763,6 +763,16 @@ struct BookDetailView: View {
                     }
                     .buttonStyle(BarGlassStyle())
                     .accessibilityLabel(toPlayer ? "Read" : "Listen")
+
+                    Button {
+                        Haptics.tap()
+                        immersiveRead(book)
+                    } label: {
+                        ImmersiveReadMark()
+                    }
+                    .buttonStyle(BarGlassStyle())
+                    .accessibilityLabel("Immersive read")
+                    .accessibilityIdentifier("bar-immersive-read")
                 }
             }
         }
@@ -780,6 +790,15 @@ struct BookDetailView: View {
     }
 
     private func read(_ book: Book) {
+        Presentation.shared.openReader(book)
+    }
+
+    /// The immersive read: the reader with the audiobook running under it —
+    /// the docked mini bar keeps playback controllable while reading. Audio
+    /// loads in the background (it resolves the saved-position file itself,
+    /// and re-opening the playing book is a no-op) while the reader opens.
+    private func immersiveRead(_ book: Book) {
+        Task { await player.load(book: book) }
         Presentation.shared.openReader(book)
     }
 
@@ -996,6 +1015,35 @@ struct BarCTAStyle: ButtonStyle {
             )
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(Motion.lift, value: configuration.isPressed)
+    }
+}
+
+/// The immersive-read glyph: a page beside sound bars, drawn to match the
+/// design's mark — no SF Symbol says "read along".
+struct ImmersiveReadMark: View {
+    var size: CGFloat = 17
+
+    var body: some View {
+        // Laid out on the mark's 24pt grid, scaled to `size`.
+        let unit = size / 24
+        let stroke = 1.9 * unit
+
+        HStack(alignment: .center, spacing: 3.5 * unit) {
+            RoundedRectangle(cornerRadius: 2 * unit, style: .continuous)
+                .strokeBorder(lineWidth: stroke)
+                .frame(width: 8 * unit, height: 14 * unit)
+            HStack(alignment: .center, spacing: 1.1 * unit) {
+                bar(8, unit: unit, stroke: stroke)
+                bar(12, unit: unit, stroke: stroke)
+                bar(5, unit: unit, stroke: stroke)
+            }
+        }
+        .frame(width: size, height: size)
+    }
+
+    private func bar(_ height: CGFloat, unit: CGFloat, stroke: CGFloat) -> some View {
+        Capsule()
+            .frame(width: stroke, height: height * unit)
     }
 }
 
