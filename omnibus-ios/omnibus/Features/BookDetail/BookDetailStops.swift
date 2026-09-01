@@ -844,15 +844,27 @@ struct StopHome: View {
             }
 
             if let description = book.description?.nilIfBlank {
-                Text(description.strippingHTML)
-                    .font(.ui(13))
-                    .foregroundStyle(palette.ink1Color)
-                    .lineSpacing(4)
-                    // Lifted there is room for a real excerpt; at rest the
-                    // fold is close, so two lines tease the drawer instead.
-                    .lineLimit(lifted ? 6 : 2)
-                    .padding(.top, 11)
-                    .onTapGesture { onMore() }
+                // A real button, not a bare tap gesture: at rest the "MORE"
+                // affordance is folded away, so the preview itself must
+                // advertise the action for VoiceOver.
+                Button {
+                    Haptics.tap()
+                    onMore()
+                } label: {
+                    Text(description.strippingHTML)
+                        .font(.ui(13))
+                        .foregroundStyle(palette.ink1Color)
+                        .lineSpacing(4)
+                        // Lifted there is room for a real excerpt; at rest
+                        // the fold is close, so two lines tease the drawer.
+                        .lineLimit(lifted ? 6 : 2)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 11)
+                .accessibilityHint("Opens the full description")
 
                 if lifted {
                     Button {
