@@ -10832,18 +10832,30 @@ html {
   position: absolute; left: 0; top: 0; bottom: 0; width: 50%;
   display: flex; align-items: center; justify-content: center;
   z-index: 0;
+  /* Breathing room the cover is sized against, so its left edge and drop
+     shadow never sit flush against the viewport. */
+  --bdmq-cover-gutter: clamp(18px, 2.6vw, 52px);
 }
 .bdmq-coverwrap .cover-wrap {
   filter: drop-shadow(0 40px 60px oklch(0 0 0 / .6))
           drop-shadow(0 4px 0 oklch(0 0 0 / .3));
 }
 .bdmq-coverpx {
-  height: 125%; aspect-ratio: 2/3; flex: 0 0 auto; will-change: transform;
-  /* The design sizes the cover off the stage height (125%, 2:3). On a tall
-     or narrow window that runs wider than the cover column and floods the
-     stage, so cap it to the column: the cover stays centred on the left with
-     its right edge tucked under the translucent panel, as designed. */
-  max-width: 100%;
+  aspect-ratio: 2/3; flex: 0 0 auto; will-change: transform;
+  /* The design sizes the cover off the stage height (125%, 2:3) so it bleeds
+     past the stage under the parallax, and the width follows from that height
+     -- so on a tall or narrow window it runs wider than the 50% cover
+     column. Capping that with `max-width` alone squashed the box off 2:3 (an
+     explicit height outranks the ratio), so `object-fit: cover` then ate the
+     artwork's left edge flush against the viewport. Size off whichever
+     constraint binds instead: the ratio always holds, and the book's left edge
+     always clears the gutter. `100vh - --bdmq-top` is the stage's own height
+     (it is fixed to `top: var(--bdmq-top); bottom: 0`), and 1.25 * 2/3 = 5/6. */
+  width: min(
+    calc((100vh - var(--bdmq-top, 61px)) * 5 / 6),
+    calc(100% - var(--bdmq-cover-gutter) * 2)
+  );
+  height: auto;
 }
 .bdmq-coverpx .cover-wrap { width: 100%; height: 100%; }
 
@@ -11324,6 +11336,9 @@ html {
 /* ── Responsive: below ~940px the cover recedes behind a full-width panel ── */
 @media (max-width: 940px) {
   .bdmq-coverwrap { width: 100%; opacity: .22; }
+  /* Below the split the cover is a full-bleed wash behind the panel rather
+     than the subject, so it wants the stage-height sizing with no gutter. */
+  .bdmq-coverpx { width: auto; height: 125%; max-width: 100%; }
   .bdmq-panel { width: 100%; border-left: 0; padding: 40px 28px; }
   .bdmq-seclab { left: 28px; }
   .bdmq-next { right: 28px; }
