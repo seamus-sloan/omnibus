@@ -240,6 +240,54 @@ private func sitting(
     #expect(preview == "The Cinder scene lands differently in audio")
 }
 
+@Test func journalRowPreviewUnwrapsANumberedOrQuotedOpeningLine() {
+    #expect(JournalRow.preview("1. Started it again") == "Started it again")
+    #expect(JournalRow.preview("> The Beauty of the House") == "The Beauty of the House")
+    // Prose that merely opens with a year keeps its digits — the marker needs
+    // its `.` or `)`.
+    #expect(JournalRow.preview("1984 reads differently now") == "1984 reads differently now")
+}
+
+@Test func journalRowPreviewCensorsASpoilerSoTheRowCannotLeakIt() {
+    // The row is always visible, so the span never reaches it in the clear.
+    let preview = JournalRow.preview("Cannot believe ||Fitchner was **ARES**|| honestly")
+    #expect(preview == "Cannot believe \u{2588}\u{2588}\u{2588} honestly")
+}
+
+// MARK: - Journal composer target
+
+private func entry(id: Int64, clientID: String? = nil) -> JournalEntry {
+    JournalEntry(
+        id: id, bookUUID: "b", authorId: 1, authorName: "admin",
+        bodyMd: "body", bodyHtml: "<p>body</p>", progress: nil,
+        clientID: clientID, createdAt: 0, updatedAt: 0
+    )
+}
+
+@Test func composerTargetCarriesTheEntryItWasOpenedOn() {
+    // The regression this type exists for: Edit lost its entry when the
+    // composer was a Bool with the entry in a separate `@State` beside it.
+    let target = BookDetailView.ComposerTarget.editing(entry(id: 7))
+    #expect(target.entry?.id == 7)
+    #expect(BookDetailView.ComposerTarget.new.entry == nil)
+}
+
+@Test func composerTargetIdentitySeparatesNewFromEachEditedEntry() {
+    // The id is what `.sheet(item:)` re-presents on, so two entries must not
+    // share one — and neither may collide with a new entry.
+    let first = BookDetailView.ComposerTarget.editing(entry(id: 7))
+    let second = BookDetailView.ComposerTarget.editing(entry(id: 8))
+    #expect(first.id != second.id)
+    #expect(first.id != BookDetailView.ComposerTarget.new.id)
+}
+
+@Test func composerTargetIdentityFollowsAnOfflineEntrysClientID() {
+    // An entry created offline has no server id yet; its client-minted handle
+    // is what distinguishes it (migration 0051's whole point).
+    let pending = BookDetailView.ComposerTarget.editing(entry(id: 0, clientID: "abc"))
+    #expect(pending.id == "abc")
+}
+
 
 // MARK: - Two-position Home geometry
 

@@ -1408,18 +1408,19 @@ struct JournalRow: View {
     /// The opening line as plain text. Parsed as markdown rather than
     /// regex-stripped, so prose that happens to contain `#` or `_` (C#,
     /// snake_case) keeps its characters while real syntax is dropped.
+    ///
+    /// The row is always visible, so a `||spoiler||` is censored before
+    /// anything else runs — the same guard the web ladder row applies.
     static func preview(_ md: String) -> String {
         guard let first = md.split(separator: "\n").first else { return "" }
-        let line = String(first)
-            // A leading list or heading marker is block syntax the inline
-            // parser would pass through verbatim.
+        let line = JournalMarkdown.masked(String(first))
+            // A leading list, heading or quote marker is block syntax the
+            // inline parser would pass through verbatim.
             .replacingOccurrences(
-                of: #"^\s*([-*+]\s+|#{1,6}\s+)"#, with: "", options: .regularExpression)
-        let parsed = (try? AttributedString(
-            markdown: line,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )).map { String($0.characters) }
-        return (parsed ?? line).trimmingCharacters(in: .whitespaces)
+                of: #"^\s*([-*+]\s+|\d{1,9}[.)]\s+|#{1,6}\s+|>\s?)"#,
+                with: "", options: .regularExpression)
+        let parsed = String(JournalMarkdown.inline(line).characters)
+        return parsed.trimmingCharacters(in: .whitespaces)
     }
 
     var body: some View {
@@ -1925,7 +1926,10 @@ struct AllJournalsSheet: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 9) {
                                 JournalByline(entry: entry, avatarSize: 26)
-                                JournalBody(md: entry.bodyMd)
+                                // Not revealable here: the card is a button, so
+                                // a tap belongs to the row — it opens the entry
+                                // in the drawer, where a spoiler does open.
+                                JournalBody(md: entry.bodyMd, revealable: false)
                             }
                             .contentShape(Rectangle())
                         }
@@ -2043,30 +2047,6 @@ struct JournalByline: View {
         parts.append(Format.date(unix: entry.createdAt))
         if entry.status == .draft { parts.append("draft") }
         return parts.joined(separator: " · ")
-    }
-}
-
-/// A journal body in the reading face. Bodies are markdown; inline-only
-/// rendering keeps the author's line breaks instead of collapsing the entry
-/// into one paragraph.
-struct JournalBody: View {
-    let md: String
-
-    @Environment(\.palette) private var palette
-
-    private var rendered: AttributedString {
-        (try? AttributedString(
-            markdown: md,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(md)
-    }
-
-    var body: some View {
-        Text(rendered)
-            .font(.display(18))
-            .foregroundStyle(palette.ink1Color)
-            .lineSpacing(6)
-            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

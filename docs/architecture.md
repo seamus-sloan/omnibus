@@ -340,7 +340,30 @@ Features/           — one directory per surface: Account, AddBooks, Auth,
                       `WishlistSection` is the native twin of the web page's
                       rail tracking card (tracked-since line, store search,
                       remove): same never-queued contract, plus a confirmation
-                      the web button doesn't ask for. Stats carries the annual
+                      the web button doesn't ask for. `JournalMarkdown` is the
+                      journal body's renderer — the web sets the server's
+                      `body_html` with `dangerous_inner_html`, which SwiftUI
+                      has no equivalent of, so the native app renders from the
+                      `body_md` riding alongside it and carries its own
+                      line-based splitter (paragraphs,
+                      headings, bullet/ordered lists, quotes, fenced code,
+                      rules) plus a `||spoiler||` pass. Two contracts differ
+                      from `db::journals::markdown` deliberately: spoilers pair
+                      **per line** (the fix #2366 asks of the server, and what
+                      the web composer's own highlighter already does), and a
+                      masked span is a bar carrying a `omnibus-spoiler://<id>`
+                      link that `JournalBody` swallows via `OpenURLAction` —
+                      `Text` has no per-run gesture. Reveal is a **toggle**, so
+                      an open span keeps its link and has to restate the
+                      block's ink or it would draw in the tint colour. Not
+                      revealable inside `AllJournalsSheet`, where the card is a
+                      button; the row excerpt censors every span as `███`, as
+                      the web ladder's `journal_excerpt` does. The composer is
+                      an item-driven sheet keyed on `ComposerTarget`
+                      (`.new` / `.editing`) rather than a Bool beside a payload
+                      `@State`: `.sheet(isPresented:)` captured its content
+                      before the payload landed, so Edit opened a blank "New
+                      entry". Stats carries the annual
                       reading-goal card above the range picker — progress, or an
                       invitation when no goal is set, never a zero-of-zero bar —
                       on the same never-queued contract: `setReadingGoal` writes

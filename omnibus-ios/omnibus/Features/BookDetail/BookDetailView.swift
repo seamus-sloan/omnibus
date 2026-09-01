@@ -262,6 +262,27 @@ struct BookDetailView: View {
     /// target the two-position panel rests at.
     static let restMarkerID = -1
 
+    /// What the journal composer was opened for. `Identifiable` so the
+    /// composer can be an item-driven sheet, which is what keeps a chosen
+    /// entry attached to the presentation that carries it.
+    enum ComposerTarget: Identifiable {
+        case new
+        case editing(JournalEntry)
+
+        var id: String {
+            switch self {
+            case .new: "new"
+            case .editing(let entry): entry.pathID
+            }
+        }
+
+        /// The entry being edited, or `nil` when writing a new one.
+        var entry: JournalEntry? {
+            if case .editing(let entry) = self { return entry }
+            return nil
+        }
+    }
+
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -269,7 +290,6 @@ struct BookDetailView: View {
     @Environment(AudioPlayer.self) private var player
     @Environment(\.bookZoomNamespace) private var bookZoom
     @State private var model = BookDetailModel()
-    @State private var showJournalComposer = false
     @State private var showShelfPicker = false
     @State private var showAlignment = false
     @State private var showBookmarks = false
@@ -287,8 +307,11 @@ struct BookDetailView: View {
     /// presenting the full-screen player while the sheet is still up would
     /// be refused.
     @State private var pickedAudioFile: BookFileInfo?
-    /// Non-nil when the composer is open on an existing entry.
-    @State private var editingJournal: JournalEntry?
+    /// What the journal composer is open on, when it is. The entry rides
+    /// with the presentation rather than in a payload `@State` beside a Bool:
+    /// `.sheet(isPresented:)` captured its content before that payload landed,
+    /// so Edit opened a blank "New entry".
+    @State private var composing: ComposerTarget?
     /// Continuous page position, 0...6 — drives the art pan and fade.
     @State private var page: CGFloat = 0
     /// The Home panel's rest→lifted progress, 0...1 — drives the art's
@@ -362,9 +385,9 @@ struct BookDetailView: View {
                 }
             }
         }
-        .sheet(isPresented: $showJournalComposer) {
+        .sheet(item: $composing) { target in
             if let book = model.book {
-                JournalComposer(book: book, editing: editingJournal) {
+                JournalComposer(book: book, editing: target.entry) {
                     Task { await model.load(uuid: uuid) }
                 }
             }
@@ -421,8 +444,7 @@ struct BookDetailView: View {
                 isMine: entry.authorId == app.user?.id
             ) {
                 openJournal = nil
-                editingJournal = entry
-                showJournalComposer = true
+                composing = .editing(entry)
             } onDelete: {
                 openJournal = nil
                 Task {
@@ -626,8 +648,7 @@ struct BookDetailView: View {
                 book: book,
                 model: model,
                 onWrite: {
-                    editingJournal = nil
-                    showJournalComposer = true
+                    composing = .new
                 },
                 onOpen: { openJournal = $0 },
                 onAll: { showAllJournals = true }
