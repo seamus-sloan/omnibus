@@ -1,8 +1,15 @@
-//! Marquee book-detail stage (web): the cover pinned huge on the left
-//! under a soft parallax, content in a translucent panel on the right, and
-//! six snap-scrolled stops — Home · Stats · Highlights · Journals ·
-//! The files · More — with a hover-expanding dot-rail table of
-//! contents. Scroll mechanics live in `marquee.js` (installed post-mount, rule 07).
+//! Marquee book-detail stage (web): the cover pinned huge on the left,
+//! content in a translucent panel on the right, and six sections — Home ·
+//! Stats · Highlights · Journals · The files · More — under a
+//! hover-expanding dot-rail table of contents.
+//!
+//! The panel reads two ways, chosen by the viewer's `book_detail_scroll_stops`
+//! preference. Off (the default) is the flow: one continuous scroll, each
+//! section introduced by its number and a hairline, nothing capped. On is the
+//! marquee: the same six sections as snapped screens. Only the scroll
+//! mechanics and the section headers differ — every stop renders the same
+//! content either way. Mechanics live in `marquee.js` / `flow.js`, installed
+//! post-mount (rule 07).
 
 use dioxus::prelude::*;
 use omnibus_shared::progress::ProgressFormat;
@@ -39,8 +46,13 @@ pub(super) const MARQUEE_SECTIONS: [(&str, &str); 6] = [
     ("06", "More"),
 ];
 
-/// Scroll-mechanics glue (parallax, dot tracking, dot-rail navigation).
+/// Scroll-mechanics glue for the snapped marquee (parallax, dot tracking,
+/// dot-rail navigation).
 const MARQUEE_JS: &str = include_str!("marquee.js");
+
+/// The same glue for the continuous flow — drift, section tracking, jump
+/// navigation, and the back-to-the-book pill.
+const FLOW_JS: &str = include_str!("flow.js");
 
 /// Everything the stage needs beyond the book itself, bundled to keep the
 /// component under the prop-count guideline (mirrors `view::LoadedCtx`).
@@ -145,14 +157,20 @@ pub(super) fn MarqueeStage(
         }));
     }
 
-    // Install the scroll glue after mount and re-run it when the book
-    // changes (resets to stop 01, replaces listeners). Web-only interop —
-    // the eval is a no-op on SSR.
+    // Which way the panel reads. `None` until the viewer resolves — on SSR
+    // and the first WASM paint alike — so both render the flow, the default
+    // this preference ships as (rule 07).
+    let viewer = crate::use_current_user_summary();
+    let scroll_stops = use_memo(move || viewer().is_some_and(|u| u.book_detail_scroll_stops));
+
+    // Install the scroll glue after mount, and re-run it when the book or the
+    // mode changes (resets to the top, replaces the other mode's listeners).
+    // Web-only interop — the eval is a no-op on SSR.
     {
         let uuid = uuid.clone();
-        use_effect(use_reactive!(|uuid| {
+        use_effect(use_reactive!(|uuid, scroll_stops| {
             let _ = uuid;
-            let _ = dioxus::document::eval(MARQUEE_JS);
+            let _ = dioxus::document::eval(if scroll_stops() { MARQUEE_JS } else { FLOW_JS });
         }));
     }
 
@@ -253,23 +271,56 @@ pub(super) fn MarqueeStage(
                     }
                 }
             }
-            div { class: "bdmq-snap", id: "bdmq-snap",
-                for (i, (no, name)) in MARQUEE_SECTIONS.iter().enumerate() {
-                    section {
-                        key: "{no}",
-                        class: "bdmq-sec",
-                        "data-testid": "bdmq-sec-{i}",
-                        div { class: "bdmq-seclab", "{no} / 06 \u{2014} " b { "{name}" } }
-                        div { class: "bdmq-panel",
-                            div { class: "bdmq-panel-inner", {stops[i].clone()} }
-                        }
-                        if i < MARQUEE_SECTIONS.len() - 1 {
-                            div { class: "bdmq-next", aria_hidden: "true",
-                                "scroll \u{2014} next: {MARQUEE_SECTIONS[i + 1].1}"
-                                span { class: "arr", "\u{2193}" }
+            if scroll_stops() {
+                div { class: "bdmq-snap", id: "bdmq-snap",
+                    for (i, (no, name)) in MARQUEE_SECTIONS.iter().enumerate() {
+                        section {
+                            key: "{no}",
+                            class: "bdmq-sec",
+                            "data-testid": "bdmq-sec-{i}",
+                            div { class: "bdmq-seclab", "{no} / 06 \u{2014} " b { "{name}" } }
+                            div { class: "bdmq-panel",
+                                div { class: "bdmq-panel-inner", {stops[i].clone()} }
+                            }
+                            if i < MARQUEE_SECTIONS.len() - 1 {
+                                div { class: "bdmq-next", aria_hidden: "true",
+                                    "scroll \u{2014} next: {MARQUEE_SECTIONS[i + 1].1}"
+                                    span { class: "arr", "\u{2193}" }
+                                }
                             }
                         }
                     }
+                }
+            } else {
+                div { class: "bdmq-flowscroll", id: "bdmq-flow",
+                    div { class: "bdmq-flow",
+                        for (i, (no, name)) in MARQUEE_SECTIONS.iter().enumerate() {
+                            section {
+                                key: "{no}",
+                                class: if i == 0 { "bdmq-flowsec lead" } else { "bdmq-flowsec" },
+                                "data-testid": "bdmq-sec-{i}",
+                                // The first section is the book itself, so it
+                                // is not announced — its own title is the
+                                // heading, and a "01 HOME" rule above it would
+                                // label the page rather than a section of it.
+                                if i > 0 {
+                                    div { class: "bdmq-flowlab",
+                                        "{no}"
+                                        b { "{name}" }
+                                        i { class: "rule", aria_hidden: "true" }
+                                    }
+                                }
+                                div { class: "bdmq-flowbody", {stops[i].clone()} }
+                            }
+                        }
+                    }
+                }
+                button {
+                    r#type: "button",
+                    class: "bdmq-flowtop",
+                    id: "bdmq-flowtop",
+                    "data-testid": "bdmq-flowtop",
+                    "\u{2191} back to the book"
                 }
             }
         }

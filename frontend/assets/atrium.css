@@ -4476,18 +4476,75 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   margin-top: 1px;
 }
 
-/* Marks a control that is present but not yet live — the switch stays
-   rendered (and disabled) so the setting is discoverable before it bites. */
-.settings-soon {
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+/* A settings switch: the same checkbox underneath (so the label, the form
+   semantics and `role="switch"` all still work), painted as a track and a
+   knob. The track takes the accent only in the on position, which is what
+   makes the state readable at a glance rather than by reading the label. */
+.settings-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  font-size: 0.85rem;
+  color: var(--ink-1);
+  cursor: pointer;
+}
+
+/* The per-user feature switches, one row each — the list is expected to
+   grow, so the name and its current meaning read as a column rather than as
+   a heading per setting. */
+.settings-table .settings-row-name { color: var(--ink-0); }
+.settings-table .settings-row-note {
+  margin-top: 3px;
+  font-size: 0.8rem;
   color: var(--ink-3);
-  border: 1px solid var(--line-2);
+}
+.settings-table .settings-col-switch { text-align: right; width: 1%; white-space: nowrap; }
+.settings-switch input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  flex: 0 0 auto;
+  position: relative;
+  width: 38px;
+  height: 22px;
   border-radius: 999px;
-  padding: 2px 7px;
-  white-space: nowrap;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  cursor: pointer;
+  transition: background .18s, border-color .18s;
+}
+.settings-switch input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ink-2);
+  transform: translateY(-50%);
+  transition: transform .18s, background .18s;
+}
+.settings-switch input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.settings-switch input[type="checkbox"]:checked::after {
+  background: var(--bg-0);
+  transform: translateY(-50%) translateX(16px);
+}
+.settings-switch input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.settings-switch input[type="checkbox"]:disabled {
+  opacity: .5;
+  cursor: default;
+}
+.settings-switch:has(input:disabled) { cursor: default; }
+@media (prefers-reduced-motion: reduce) {
+  .settings-switch input[type="checkbox"],
+  .settings-switch input[type="checkbox"]::after { transition: none; }
 }
 
 .auth-requirements {
@@ -10931,6 +10988,90 @@ html {
   height: 100%;
   scroll-snap-align: start; scroll-snap-stop: always;
   position: relative;
+}
+
+/* ── Flow container (Option B — the marquee unrolled) ──────────────
+   The default reading of this page: the panel is one continuous scroller
+   instead of six snapped screens. Everything the stops render is unchanged —
+   only the scroll mechanics and the section headers differ, which is why this
+   block styles the container and the rules and nothing inside them. Mechanics
+   in `frontend/src/pages/book_detail/flow.js`. */
+.bdmq-flowscroll {
+  position: absolute; top: 0; bottom: 0; right: 0; width: 57%;
+  overflow-y: auto;
+  /* The flow is the page's own scroller, so a bounce at either end must not
+     hand the gesture to the document behind the fixed stage. */
+  overscroll-behavior: contain;
+  z-index: 1;
+  /* Same scrim as `.bdmq-panel`: the cover's right edge reads dissolved
+     behind the panel rather than cut off at the seam. */
+  background: color-mix(in oklch, var(--bg-0) 70%, transparent);
+  backdrop-filter: blur(12px);
+  border-left: 1px solid var(--line-2);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--accent) 60%, var(--bg-3)) transparent;
+}
+.bdmq-flowscroll::-webkit-scrollbar { width: 6px; }
+.bdmq-flowscroll::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--accent) 60%, var(--bg-3));
+  border-radius: 99px;
+}
+.bdmq-flowscroll::-webkit-scrollbar-track { background: transparent; }
+
+.bdmq-flow { padding: 44px 74px 90px 60px; display: flex; flex-direction: column; }
+
+/* A jump lands the heading clear of the scroller's top edge rather than
+   flush against it. */
+.bdmq-flowsec { scroll-margin-top: 44px; }
+.bdmq-flowsec + .bdmq-flowsec {
+  margin-top: 64px;
+  padding-top: 56px;
+  border-top: 1px solid var(--line-2);
+}
+
+/* The rule that introduces a section: its number, its name, and a hairline
+   running out to the edge. */
+.bdmq-flowlab {
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 26px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .24em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.bdmq-flowlab b { color: var(--ink-0); font-weight: 500; letter-spacing: .2em; }
+.bdmq-flowlab .rule {
+  flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--line-2), transparent);
+}
+
+/* Nothing is capped in the flow: a list that had to fit inside a stop now
+   simply makes the page longer, which is the whole point of this reading. */
+.bdmq-flowbody .bdmq-ladder,
+.bdmq-flowbody .st-log-compact .st-log-list {
+  max-height: none;
+  overflow: visible;
+}
+
+/* Back to the book — appears once the top is out of sight. Sits over the
+   cover's inner edge, clear of the panel's text column. */
+.bdmq-flowtop {
+  position: absolute; left: calc(43% + 30px); bottom: 22px;
+  z-index: 5;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .18em;
+  text-transform: uppercase; color: var(--ink-3);
+  background: color-mix(in oklch, var(--bg-0) 60%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line-2); border-radius: 99px;
+  padding: 7px 14px; cursor: pointer;
+  opacity: 0; pointer-events: none;
+  transition: opacity .2s;
+}
+.bdmq-flowtop.on { opacity: 1; pointer-events: auto; }
+.bdmq-flowtop:hover {
+  color: var(--ink-0);
+  border-color: color-mix(in oklch, var(--accent) 50%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .bdmq-flowtop { transition: none; }
 }
 
 /* ── Dot rail TOC ── */

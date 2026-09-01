@@ -133,6 +133,138 @@ test("renders the book detail layout", async ({ page, request }) => {
   ).toBeVisible();
 });
 
+// ---------------------------------------------------------------------------
+// Scroll stops — the panel reads two ways (#2395's preference, default off)
+// ---------------------------------------------------------------------------
+
+/**
+ * Set the caller's `book_detail_scroll_stops` preference, asserting it landed.
+ * A silent setup failure would otherwise surface as a confusing assertion
+ * about which layout rendered.
+ */
+async function setScrollStops(request: APIRequestContext, enabled: boolean) {
+  const resp = await request.post("/api/account/book-detail-scroll-stops", {
+    data: { enabled },
+  });
+  expect(resp.status(), `setting scroll stops to ${enabled} failed`).toBe(200);
+}
+
+test.describe("scroll stops preference", () => {
+  // Every other test in this file reads the default layout, so the switch
+  // must go back off however these two finish.
+  test.afterAll(async ({ request }) => {
+    await setScrollStops(request, false);
+  });
+
+  test("defaults to one continuous flow with numbered section rules", async ({
+    page,
+    request,
+  }) => {
+    await setScrollStops(request, false);
+    const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+    await gotoReady(page, `/books/${uuid}`);
+
+    // The flow owns the scrolling; the snap container is not rendered at all.
+    await expect(page.locator("#bdmq-flow")).toBeAttached();
+    await expect(page.locator("#bdmq-snap")).toHaveCount(0);
+    await expect(page.locator(".bdmq-flowsec")).toHaveCount(6);
+
+    // The first section is the book itself and carries no rule — its own
+    // title is the heading. Every later section is introduced by one.
+    await expect(page.locator(".bdmq-flowsec.lead")).toHaveCount(1);
+    await expect(page.locator(".bdmq-flowsec.lead .bdmq-flowlab")).toHaveCount(
+      0,
+    );
+    await expect(page.locator(".bdmq-flowlab")).toHaveCount(5);
+    await expect(page.locator(".bdmq-flowlab").first()).toContainText("Stats");
+
+    // Nothing snaps, so the per-stop "scroll — next" cue has no meaning.
+    await expect(page.locator(".bdmq-next")).toHaveCount(0);
+
+    // The back-to-the-book pill stays hidden until the top is out of sight,
+    // then appears — and takes the reader back to it.
+    const backToBook = page.getByTestId("bdmq-flowtop");
+    await expect(backToBook).toBeAttached();
+    await expect(backToBook).not.toHaveClass(/\bon\b/);
+
+    await page.locator("#bdmq-flow").evaluate((el) => {
+      el.scrollTop = 900;
+    });
+    await expect(backToBook).toHaveClass(/\bon\b/);
+
+    // The cover drifts with the scroll rather than panning stop to stop, so
+    // its transform tracks the position instead of sitting at one offset.
+    const drifted = await page
+      .locator("#bdmq-coverpx")
+      .evaluate((el) => el.style.transform);
+    expect(drifted).toMatch(/translateY/);
+
+    await backToBook.click();
+    await expect
+      .poll(() => page.locator("#bdmq-flow").evaluate((el) => el.scrollTop))
+      .toBe(0);
+    await expect(backToBook).not.toHaveClass(/\bon\b/);
+  });
+
+  test("flipping the switch in Settings changes the next detail page without a reload", async ({
+    page,
+    request,
+  }) => {
+    await setScrollStops(request, false);
+    const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+
+    // Arrive at the book first, so the app-wide viewer is already resolved
+    // and holding the old value — the state the stale read came from.
+    await gotoReady(page, `/books/${uuid}`);
+    await expect(page.locator("#bdmq-flow")).toBeAttached();
+
+    // Flip it in Settings the way a reader would, then come back by
+    // navigating rather than reloading.
+    await gotoReady(page, "/settings?section=account");
+    await expectMutation(
+      page,
+      {
+        method: "POST",
+        url: "/api/rpc/account/book-detail-scroll-stops",
+        expectedStatus: 200,
+      },
+      async () =>
+        page
+          .getByRole("switch", { name: "Use book details scroll stops" })
+          .click(),
+    );
+
+    await page.getByRole("link", { name: "Library" }).first().click();
+    await gotoReady(page, `/books/${uuid}`);
+
+    // The save refreshes the app-wide viewer, so the marquee is already in
+    // place — no reload needed to see the setting take effect.
+    await expect(page.locator("#bdmq-snap")).toBeAttached();
+    await expect(page.locator("#bdmq-flow")).toHaveCount(0);
+  });
+
+  test("turning the preference on restores the snap-stop marquee", async ({
+    page,
+    request,
+  }) => {
+    await setScrollStops(request, true);
+    const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+    await gotoReady(page, `/books/${uuid}`);
+
+    // The snap container is back and the flow is gone — the same six
+    // sections either way, only the mechanics differ.
+    await expect(page.locator("#bdmq-snap")).toBeAttached();
+    await expect(page.locator("#bdmq-flow")).toHaveCount(0);
+    await expect(page.locator(".bdmq-sec")).toHaveCount(6);
+    await expect(page.getByTestId("bdmq-flowtop")).toHaveCount(0);
+
+    // The dot rail is common to both readings.
+    await expect(page.getByTestId("bdmq-dots").getByRole("button")).toHaveCount(
+      6,
+    );
+  });
+});
+
 test("dot rail jumps between stops and tracks the active section", async ({
   page,
   request,

@@ -12,6 +12,7 @@ Numbered rules in [.claude/rules/](.claude/rules/), applied in order. Follow the
 - [02-error-handling.md](.claude/rules/02-error-handling.md) — `thiserror` for predictable failures, `anyhow` for unpredictable ones and handlers.
 - [03-unit-testing.md](.claude/rules/03-unit-testing.md) — sibling `<mod>/tests.rs`, `test_support` per crate, happy + per-variant coverage.
 - [04-playwright.md](.claude/rules/04-playwright.md) — full E2E conventions (selectors, fixtures, `expectMutation`, error paths).
+- [04a-playwright-surfaces.md](.claude/rules/04a-playwright-surfaces.md) — per-surface selector gotchas: the screens whose obvious selector matches nothing.
 - [05-rust-style.md](.claude/rules/05-rust-style.md) — Rust style guide: comments, function/file shape, errors, tests, mechanics. Long-form rationale in [docs/style-guide.md](docs/style-guide.md).
 - [06-migrations.md](.claude/rules/06-migrations.md) — authoring SQL migrations: `NNNN_` naming, never-edit-applied, the `_norm` backfill pattern, testing against `sqlite::memory:`, and the dev-bounce step.
 - [07-hydration.md](.claude/rules/07-hydration.md) — SSR/WASM hydration parity: never feature-gate a component body on `web`; how to confirm and fix a hydration mismatch.
