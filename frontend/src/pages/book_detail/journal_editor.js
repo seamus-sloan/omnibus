@@ -24,15 +24,20 @@ if (!window.OmnibusJournalEditor) {
     const byId = (id) => document.getElementById(id);
 
     // --- caret as an absolute character offset over textContent --------------
+    // Absolute character offset of one (node, offset) pair within `root`.
+    function offsetAt(root, node, off) {
+      if (!node || !root.contains(node)) return null;
+      const pre = document.createRange();
+      pre.selectNodeContents(root);
+      pre.setEnd(node, off);
+      return pre.toString().length;
+    }
     function caret(root) {
       const sel = window.getSelection();
       if (!sel || sel.rangeCount === 0) return null;
       const r = sel.getRangeAt(0);
       if (!root.contains(r.startContainer)) return null;
-      const pre = r.cloneRange();
-      pre.selectNodeContents(root);
-      pre.setEnd(r.startContainer, r.startOffset);
-      const start = pre.toString().length;
+      const start = offsetAt(root, r.startContainer, r.startOffset);
       return { start, end: start + r.toString().length };
     }
     // Resolve a character offset to a DOM (node, offset) caret position.
@@ -64,6 +69,13 @@ if (!window.OmnibusJournalEditor) {
       let n, tail = null;
       while ((n = walker.nextNode())) tail = n;
       return tail ? { node: tail, offset: tail.nodeValue.length } : { node: last, offset: 0 };
+    }
+    // Select `anchor` → `focus`, keeping which end is which. A Range is always
+    // document-ordered, so `place` cannot express a right-to-left selection —
+    // extending one through it would silently flip which edge is fixed.
+    function extend(root, anchor, focus) {
+      const a = locate(root, anchor), f = locate(root, focus);
+      window.getSelection().setBaseAndExtent(a.node, a.offset, f.node, f.offset);
     }
     function place(root, start, end) {
       const a = locate(root, start), b = locate(root, end);
@@ -247,6 +259,35 @@ if (!window.OmnibusJournalEditor) {
         if (e.key === "Enter") {
           e.preventDefault();
           insert(editor.id, "\n");
+          return;
+        }
+        // Document-start / document-end navigation. The browser resolves
+        // these against the decoration spans rather than the markdown source,
+        // so the caret lands mid-document and a reader who meant to append
+        // types into the middle of what they wrote. Route them through the
+        // editor's own absolute-offset model, the same one Enter and paste
+        // use. Shift extends the current selection from its anchor, matching
+        // native behaviour.
+        if ((e.key === "End" || e.key === "Home") && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          const target = e.key === "End" ? editor.textContent.length : 0;
+          if (e.shiftKey) {
+            // Read the anchor off the Selection, not off `caret` — that one
+            // reports the range in document order, so a selection made
+            // right-to-left would extend from the edge the reader is actually
+            // dragging rather than the one they started from.
+            const sel = window.getSelection();
+            const anchor = offsetAt(editor, sel && sel.anchorNode, sel ? sel.anchorOffset : 0);
+            extend(editor, anchor === null ? target : anchor, target);
+          } else {
+            place(editor, target, target);
+          }
+          markActive(editor);
+          // `place` moves the selection but never scrolls, so a long entry
+          // would jump the caret out of view.
+          const lines = editor.querySelectorAll(":scope > .cm-line");
+          const edge = e.key === "End" ? lines[lines.length - 1] : lines[0];
+          if (edge) edge.scrollIntoView({ block: "nearest" });
         }
       });
       editor.addEventListener("paste", (e) => {

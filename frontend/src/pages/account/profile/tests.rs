@@ -16,6 +16,7 @@ fn resolved_user(display_name: Option<&str>, has_avatar: bool) -> UserSummary {
         display_name: display_name.map(str::to_string),
         has_avatar,
         hidden_formats: Vec::new(),
+        book_detail_scroll_stops: false,
     }
 }
 

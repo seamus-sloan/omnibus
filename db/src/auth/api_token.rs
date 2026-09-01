@@ -121,6 +121,7 @@ pub async fn lookup_api_token(pool: &SqlitePool, raw_token: &str) -> AuthResult<
                 t.suffix,
                 u.id AS u_id, u.username, u.is_admin, u.can_upload, u.can_edit, u.can_download,
                 u.kindle_email, u.display_name, u.hidden_formats,
+                u.book_detail_scroll_stops,
                 EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = u.id) AS has_avatar
          FROM api_tokens t JOIN users u ON u.id = t.user_id
          WHERE t.token_hash = ?",

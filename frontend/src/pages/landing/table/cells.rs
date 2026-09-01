@@ -517,6 +517,14 @@ pub(super) fn EditableCell(props: EditableCellProps) -> Element {
                     class: "ebook-cell-edit",
                     "data-testid": "{testid_input}",
                     autofocus: true,
+                    // The attribute alone does not move DOM focus onto a node
+                    // mounted post-hydration by a click handler, so the cell
+                    // opened pre-filled but needed a second click before it
+                    // took a keystroke (#2351). Same next-frame focus the chip
+                    // editor's input already does.
+                    onmounted: move |evt: Event<MountedData>| {
+                        crate::focus_after_paint::focus_after_paint(&evt)
+                    },
                     value: "{draft}",
                     placeholder: "{placeholder}",
                     onclick: move |e| { e.stop_propagation(); },

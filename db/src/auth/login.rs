@@ -36,6 +36,7 @@ pub async fn verify_login(pool: &SqlitePool, username: &str, password: &str) -> 
     let row = sqlx::query(
         "SELECT u.id, u.username, u.password_hash, u.is_admin, u.can_upload, u.can_edit,
                 u.can_download, u.kindle_email, u.display_name, u.hidden_formats,
+                u.book_detail_scroll_stops,
                 EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = u.id) AS has_avatar,
                 u.failed_login_count, u.locked_until
          FROM users u WHERE u.username = ? COLLATE NOCASE",

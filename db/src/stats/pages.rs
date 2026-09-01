@@ -109,7 +109,7 @@ pub(super) fn finished_in_window() -> String {
 /// **their** calendar: one `(day, uuid, percent_gained)` row per bucket.
 ///
 /// Unions the ledger's two generations, which is the whole reason this exists.
-/// `reading_progress_slots` (migration `0093`) keys on a quarter-hour, so its
+/// `reading_progress_slots` (migration `0095`) keys on a quarter-hour, so its
 /// day is computed here against `offset_minutes` and follows the reader.
 /// `reading_progress_daily` (`0083`) stored a UTC day string and kept no
 /// instant, so there is nothing to re-bucket it from — those rows contribute

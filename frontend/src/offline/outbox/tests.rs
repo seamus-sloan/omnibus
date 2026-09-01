@@ -211,6 +211,7 @@ async fn queue_create_shelf_uses_cached_identity_for_owner_fields() {
             display_name: None,
             has_avatar: false,
             hidden_formats: Vec::new(),
+            book_detail_scroll_stops: false,
         },
     );
     let req = omnibus_shared::CreateShelfRequest {
@@ -623,6 +624,7 @@ async fn queue_create_journal_synthesizes_temp_record_and_caches_it() {
             display_name: None,
             has_avatar: false,
             hidden_formats: Vec::new(),
+            book_detail_scroll_stops: false,
         },
     );
 
@@ -738,6 +740,7 @@ async fn kindle_email_changed_patches_the_cached_account_summary() {
             display_name: None,
             has_avatar: false,
             hidden_formats: Vec::new(),
+            book_detail_scroll_stops: false,
         },
     );
 

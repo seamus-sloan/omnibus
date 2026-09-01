@@ -323,7 +323,12 @@ async fn merge_metadata_overrides_treats_none_as_untouched_but_empty_string_as_c
         .await
         .unwrap();
     let after_clear = get_book(&pool, id).await.unwrap().unwrap();
-    assert_eq!(after_clear.series.as_deref(), Some(""));
+    // `series` normalizes the sentinel away on read (like `isbn13`), because
+    // a cleared name must also drop the relational `series_id` it would
+    // otherwise keep pointing at (#2349). `publisher` has no such pairing, so
+    // it still reads back as the literal sentinel.
+    assert_eq!(after_clear.series, None);
+    assert_eq!(after_clear.series_id, None);
     assert_eq!(after_clear.publisher.as_deref(), Some(""));
 }
 

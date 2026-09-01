@@ -135,6 +135,24 @@ test("inline edit save error keeps the row showing the prior value", async ({
   await expect(titleCell).toContainText(originalText);
 });
 
+test("opens the inline title editor already focused", async ({ page }) => {
+  // The `autofocus` attribute does not move DOM focus onto a node mounted
+  // post-hydration by a click handler, so the editor opened pre-filled but
+  // swallowed the first keystroke until a second click (#2351).
+  await gotoReady(page, "/");
+  await switchToTableView(page);
+
+  const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
+  await row.getByTestId("ebook-cell-title").click();
+
+  const input = row.getByTestId("ebook-cell-title-input");
+  await expect(input).toBeFocused();
+
+  // Escape still closes without saving.
+  await input.press("Escape");
+  await expect(input).toHaveCount(0);
+});
+
 test("clicking the Authors cell renders the chip editor inline", async ({
   page,
 }) => {

@@ -1064,18 +1064,13 @@ async fn chart_series_drops_activity_dated_after_today() {
     // reach it, so the future sitting is left out — and only the real one is
     // plotted. The `/stats` totals still count it, which is the cost.
     //
-    // The bound is read from the clock, not written down: a hardcoded month
-    // passes until the calendar reaches it and then fails for a reason that has
-    // nothing to do with the behaviour under test.
+    // Derived from the same clock the fixture and the query use: a pinned
+    // month literal here passes only until the calendar leaves it behind.
     let this_month: String = sqlx::query_scalar("SELECT strftime('%Y-%m', 'now')")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert!(
-        !r.buckets.iter().any(|b| *b > this_month),
-        "axis ran past {this_month}: {:?}",
-        r.buckets
-    );
+    assert!(!r.buckets.iter().any(|b| b.as_str() > this_month.as_str()));
     let charted: f64 = r.series[0].values.iter().flatten().sum();
     assert_eq!(charted, 10.0);
 }

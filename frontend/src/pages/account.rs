@@ -21,6 +21,9 @@ pub(crate) mod kobo;
 // Display name + avatar, at the top of the Account section.
 #[cfg(not(feature = "mobile"))]
 mod profile;
+// The book-detail scroll-stops switch, above the goals it sits beside.
+#[cfg(not(feature = "mobile"))]
+pub(crate) mod scroll_stops;
 // Self-service "Your sessions" card (F5.4, #910).
 #[cfg(not(feature = "mobile"))]
 mod sessions;
@@ -295,6 +298,7 @@ fn kindle_email_form(
 fn account_web_body() -> Element {
     rsx! {
         profile::ProfileCard {}
+        scroll_stops::ScrollStopsCard {}
         goals::ReadingGoalsCard {}
         ChangePasswordCard {}
         sessions::SessionsCard {}

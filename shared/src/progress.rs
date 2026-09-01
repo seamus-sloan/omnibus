@@ -266,7 +266,7 @@ pub struct SessionReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utc_offset_minutes: Option<i64>,
     /// IANA zone name on the recording device at capture time —
-    /// `"America/Los_Angeles"`, `"Asia/Tokyo"` (migration `0092`).
+    /// `"America/Los_Angeles"`, `"Asia/Tokyo"` (migration `0094`).
     ///
     /// Recorded **alongside** [`Self::utc_offset_minutes`], not instead of it,
     /// because the two answer different questions. The offset says what the

@@ -71,6 +71,7 @@ pub(super) fn MarqueeHomeStop(
     };
 
     let dates_ready = use_local_dates_ready();
+    let mut desc_open = use_signal(|| false);
 
     let kicker = home_kicker(&b, &view, series_total, wish_mode, wishlist.as_ref());
     let dual = view.has_ebook && view.has_audio;
@@ -131,7 +132,25 @@ pub(super) fn MarqueeHomeStop(
             }
         }
         if !description().is_empty() {
-            div { class: "bdmq-desc bd-desc", "data-testid": "book-description", dangerous_inner_html: "{description()}" }
+            div {
+                id: "bdmq-desc-{uuid}",
+                class: if desc_open() { "bdmq-desc bd-desc is-open" } else { "bdmq-desc bd-desc" },
+                "data-testid": "book-description",
+                dangerous_inner_html: "{description()}",
+            }
+            // The clamp keeps the CTA row on the stop, so a long blurb needs
+            // an affordance to read the rest. `desc_open` starts closed on
+            // both SSR and the first WASM paint (rule 07).
+            if description_overflows(&description()) {
+                button {
+                    class: "btn ghost sm bdmq-desc-toggle",
+                    "data-testid": "book-description-toggle",
+                    "aria-expanded": if desc_open() { "true" } else { "false" },
+                    "aria-controls": "bdmq-desc-{uuid}",
+                    onclick: move |_| desc_open.set(!desc_open()),
+                    if desc_open() { "Show less" } else { "Show more" }
+                }
+            }
         }
         if summary_is_sparse(&description()) {
             FetchSummaryButton { uuid: uuid.clone(), on_fetched }
@@ -261,6 +280,18 @@ fn derive_readout(alignment: Option<&AlignmentView>, progress: &MarqueeProgress)
     }
 }
 
+/// Words above which `.bdmq-desc`'s five-line clamp is assumed to be hiding
+/// text. The clamp is a rendered-layout fact no Rust code can measure, so
+/// this is a deliberate approximation: five lines of ~560px at 15px hold
+/// roughly ten words each, and erring low only shows a toggle that expands
+/// an already-whole blurb.
+const DESC_CLAMP_WORDS: usize = 50;
+
+/// Whether `description` is long enough that the clamp is hiding some of it.
+fn description_overflows(description: &str) -> bool {
+    omnibus_shared::summary::summary_word_count(description) > DESC_CLAMP_WORDS
+}
+
 /// The kicker line's parts: an optional series link + trailing text, or one
 /// plain string.
 struct HomeKicker {
@@ -296,7 +327,15 @@ fn home_kicker(
         .unwrap_or_default();
     // The bare series name, not the `Name #N` label: the position follows it
     // as its own "Book N of M" clause, per the design.
-    if let Some(series) = b.series.clone().or_else(|| view.series.clone()) {
+    // An empty name is a cleared series, not a series called "". Falling
+    // through to the standalone branch is what keeps a cleared book from
+    // rendering a bare "· Book 3" crumb with nothing to name (#2349).
+    let series_name = b
+        .series
+        .clone()
+        .or_else(|| view.series.clone())
+        .filter(|s| !s.trim().is_empty());
+    if let Some(series) = series_name {
         // "Kingkiller Chronicle · Book 1 · 3 in your library". The index is
         // the book's position *in the series*, and the count is how many of
         // the series the library holds — two unrelated numbers, so they are

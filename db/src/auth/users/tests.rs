@@ -879,3 +879,28 @@ async fn list_users_surfaces_the_display_name_for_the_admin_table() {
     assert_eq!(row.display_name.as_deref(), Some("Alice A."));
     assert_eq!(row.username, "alice");
 }
+
+#[tokio::test]
+async fn set_book_detail_scroll_stops_round_trips_both_directions() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    // A fresh account reads the off default rather than a NULL.
+    assert!(!u.book_detail_scroll_stops);
+    assert!(!get_book_detail_scroll_stops(&p, u.id).await.unwrap());
+
+    set_book_detail_scroll_stops(&p, u.id, true).await.unwrap();
+    assert!(get_book_detail_scroll_stops(&p, u.id).await.unwrap());
+
+    set_book_detail_scroll_stops(&p, u.id, false).await.unwrap();
+    assert!(!get_book_detail_scroll_stops(&p, u.id).await.unwrap());
+}
+
+#[tokio::test]
+async fn get_user_by_id_carries_the_book_detail_scroll_stops_flag() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    set_book_detail_scroll_stops(&p, u.id, true).await.unwrap();
+
+    let reloaded = get_user_by_id(&p, u.id).await.unwrap().unwrap();
+    assert!(reloaded.book_detail_scroll_stops);
+}

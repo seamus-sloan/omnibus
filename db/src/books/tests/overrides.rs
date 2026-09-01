@@ -522,3 +522,55 @@ fn books_error_from_metadata_overrides_error_returns_other_for_bulk_write_varian
         "expected Other carrying the source message, got {too_many:?}"
     );
 }
+
+#[tokio::test]
+async fn get_book_clears_series_id_when_an_override_empties_the_series() {
+    // Clearing the name left the relational `books_series_link` row behind,
+    // so the book still carried a `series_id` pointing at a series it was no
+    // longer in — a nameless crumb linking to a page listing nothing (#2349).
+    let _covers = CoversTempDir::new("override_series_cleared");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed(
+            "saga1.epub",
+            Some("Saga: Book One"),
+            &["Author X"],
+            &[],
+            Some(("Saga", "1")),
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let seeded = books.first().unwrap();
+    assert!(seeded.series_id.is_some(), "fixture must start in a series");
+    let uuid = seeded.unique_identifier.clone().unwrap();
+    let book_id = seeded.id;
+
+    let ov = MetadataOverrides {
+        series: Some(String::new()),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+
+    let merged = get_book(&pool, book_id).await.unwrap().unwrap();
+    assert_eq!(
+        merged.series, None,
+        "an empty override name clears the name"
+    );
+    assert_eq!(
+        merged.series_id, None,
+        "and must clear the dangling id with it"
+    );
+}

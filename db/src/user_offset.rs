@@ -68,7 +68,7 @@ fn in_range(offset: i64) -> bool {
 /// read, not where they are now, and it is stale by an hour after a DST
 /// transition the reader has not read across. Only reached when the asking
 /// client declared no offset of its own — the sessions' `time_zone` column
-/// (migration `0092`) is what would answer this exactly, once there is a tz
+/// (migration `0094`) is what would answer this exactly, once there is a tz
 /// database to resolve it against.
 ///
 /// One indexed probe per table, compared here, rather than one `ORDER BY` over a

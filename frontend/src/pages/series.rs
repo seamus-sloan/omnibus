@@ -66,9 +66,19 @@ fn render_series(s: SeriesDetail) -> Element {
         div { class: "disc-page", style: "--accent: {accent}",
             {series_header(&s)}
             div { class: "disc-body",
-                div { class: "series-cards",
-                    for book in s.books.iter() {
-                        {series_book_row(book)}
+                // A series can outlive its last member — clearing a book's
+                // series by override drops the membership but not the row —
+                // so say so rather than rendering a titled void (#2349).
+                if s.books.is_empty() {
+                    p { class: "subtitle", "data-testid": "series-empty",
+                        "No books in this series are in your library."
+                    }
+                    Link { to: Route::SeriesIndex {}, class: "btn", "Back to series" }
+                } else {
+                    div { class: "series-cards",
+                        for book in s.books.iter() {
+                            {series_book_row(book)}
+                        }
                     }
                 }
             }

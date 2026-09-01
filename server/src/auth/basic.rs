@@ -214,6 +214,7 @@ fn basic_auth_user(user: auth_db::User) -> AuthUser {
         display_name: user.display_name,
         has_avatar: user.has_avatar,
         hidden_formats: user.hidden_formats,
+        book_detail_scroll_stops: user.book_detail_scroll_stops,
         session_id: 0,
         session_kind: SessionKind::Basic,
     }

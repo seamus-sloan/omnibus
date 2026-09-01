@@ -407,6 +407,11 @@ struct UserSummary: Codable, Hashable, Sendable {
     /// defaults a missing key to `[]`, so a pre-upgrade `CacheKey.me` blob
     /// still decodes.
     var hiddenFormats: [String] = []
+    /// Whether this reader's book detail page uses the snap-stop marquee.
+    /// The lenient `decode(Bool.Type,forKey:)` above defaults a missing key to
+    /// `false`, so a pre-0092 `/me` payload (or a cached blob from one) still
+    /// decodes, with the off default this setting ships as.
+    var bookDetailScrollStops: Bool = false
 
     /// The name to show for this user — never render `username` on its own.
     var display: String { displayName ?? username }
@@ -421,6 +426,7 @@ struct UserSummary: Codable, Hashable, Sendable {
         case displayName = "display_name"
         case hasAvatar = "has_avatar"
         case hiddenFormats = "hidden_formats"
+        case bookDetailScrollStops = "book_detail_scroll_stops"
     }
 }
 

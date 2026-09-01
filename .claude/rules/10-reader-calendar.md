@@ -64,7 +64,7 @@ You cannot have both. Protect the present.
 
 ## The ledger decides no calendar
 
-`reading_progress_slots` (migration `0093`) keys forward progress on the
+`reading_progress_slots` (migration `0095`) keys forward progress on the
 **quarter-hour** it was observed in, and the day is resolved on the way out.
 
 - **Never store a day.** Migration `0083` did, and a day string is the one thing

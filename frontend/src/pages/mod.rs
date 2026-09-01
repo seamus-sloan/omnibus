@@ -26,6 +26,7 @@ mod listen;
 #[cfg(not(feature = "mobile"))]
 mod logs;
 mod metadata_edit;
+mod not_found;
 mod reader;
 mod search;
 #[cfg(feature = "mobile")]
@@ -66,6 +67,7 @@ pub(crate) use listen::{mobile_dock_is_active, MobileAudioHost, MobileMiniPlayer
 #[cfg(not(feature = "mobile"))]
 pub use logs::LogsPage;
 pub use metadata_edit::MetadataEditPage;
+pub use not_found::NotFoundPage;
 pub use reader::BookReadPage;
 pub use search::SearchPage;
 #[cfg(feature = "mobile")]

@@ -136,7 +136,7 @@ async fn read_percent(pool: &SqlitePool, user: i64, uuid: &str, day: &str, gaine
 }
 
 /// Seed forward progress observed at a unix instant — the current ledger
-/// (migration `0093`), which keys on the quarter-hour so the day stays a read-
+/// (migration `0095`), which keys on the quarter-hour so the day stays a read-
 /// time question.
 async fn read_percent_at(pool: &SqlitePool, user: i64, uuid: &str, at: i64, gained: i64) {
     sqlx::query(

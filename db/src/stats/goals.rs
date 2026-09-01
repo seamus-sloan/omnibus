@@ -333,7 +333,7 @@ pub async fn set_daily_goal(
 /// # Which day both kinds are measured over
 ///
 /// The **same** one: today on the reader's calendar, from
-/// `claimed_offset_minutes`. That is what migration `0093` bought — the ledger
+/// `claimed_offset_minutes`. That is what migration `0095` bought — the ledger
 /// stopped writing a UTC day and started recording a quarter-hour, so pages can
 /// be re-bucketed to the reader's day exactly as minutes always could. Before
 /// it the two kinds answered on different calendars and could name different
