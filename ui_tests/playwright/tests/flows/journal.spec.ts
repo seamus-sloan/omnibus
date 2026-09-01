@@ -588,6 +588,46 @@ test("hides markdown markers on lines away from the caret", async ({
 });
 
 // ---------------------------------------------------------------------------
+// Action — document-end / document-start caret navigation
+// ---------------------------------------------------------------------------
+
+test("moves the caret to the end and start of the entry", async ({
+  page,
+  request,
+}) => {
+  // The editor intercepted only Enter, leaving document-end navigation to the
+  // browser's native contenteditable handling — which resolves it against the
+  // decoration spans and lands mid-document, so a reader who meant to append
+  // typed into the middle of what they wrote (#2269).
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  await page.getByTestId("journal-open-composer").click();
+  const ed = editor(page);
+  await ed.click();
+  await ed.pressSequentially("# First");
+  await ed.press("Enter");
+  await ed.pressSequentially("**second**");
+  await ed.press("Enter");
+  await ed.pressSequentially("third");
+
+  // Park the caret on the first line, then jump to the end and append.
+  await editor(page).locator(".cm-line").nth(0).click();
+  await ed.press("ControlOrMeta+End");
+  await ed.pressSequentially("!");
+  await expect(editorMarkdown(page)).toHaveValue("# First\n**second**\nthird!");
+
+  // Home is the mirror image — typing lands before the first character.
+  await ed.press("ControlOrMeta+Home");
+  await ed.pressSequentially(">");
+  await expect(editorMarkdown(page)).toHaveValue(
+    "># First\n**second**\nthird!",
+  );
+
+  await cancelComposerDiscardingDraft(page);
+});
+
+// ---------------------------------------------------------------------------
 // Error path — failed publish surfaces an error, composer stays open
 // ---------------------------------------------------------------------------
 

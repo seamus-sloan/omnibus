@@ -103,3 +103,86 @@ test("detail page fetch saves the summary and hides the button", async ({
   await expect(page.getByTestId("book-description")).toContainText(SUMMARY);
   await expect(page.getByTestId("fetch-summary")).toBeHidden();
 });
+
+test("expands a clamped description and collapses it again", async ({
+  page,
+  request,
+}) => {
+  // `.bdmq-desc` clamps to five lines so a long blurb can't push the CTA row
+  // off the stop; before #2290 there was no way to read the rest. The save is
+  // mocked (as above) so nothing leaks into the shared library.
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const LONG = `${"Every clause here exists only to push this blurb past the clamp. ".repeat(8)}End.`;
+  await mockSources(page, ["OpenLibrary"]);
+  await mockFetch(page, LONG);
+  await page.route("**/api/rpc/ebook/overrides", (route) =>
+    route.request().method() === "POST"
+      ? route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "null",
+        })
+      : route.continue(),
+  );
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/ebook/overrides", expectedStatus: 200 },
+    async () => page.getByTestId("fetch-summary").click(),
+  );
+
+  const desc = page.getByTestId("book-description");
+  const toggle = page.getByTestId("book-description-toggle");
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(desc).not.toHaveClass(/is-open/);
+
+  // Keyboard-reachable, per AC2 — focus it and press Enter rather than click.
+  await toggle.focus();
+  await expect(toggle).toBeFocused();
+  await toggle.press("Enter");
+
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(desc).toHaveClass(/is-open/);
+  // The whole blurb is now rendered, not just the clamped five lines.
+  await expect
+    .poll(async () =>
+      desc.evaluate((el) => el.scrollHeight - el.clientHeight <= 1),
+    )
+    .toBe(true);
+
+  await toggle.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(desc).not.toHaveClass(/is-open/);
+});
+
+test("offers no expand control for a description that fits", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const SHORT =
+    "A sufficiently long mocked summary with more than ten words to enrich the book.";
+  await mockSources(page, ["OpenLibrary"]);
+  await mockFetch(page, SHORT);
+  await page.route("**/api/rpc/ebook/overrides", (route) =>
+    route.request().method() === "POST"
+      ? route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "null",
+        })
+      : route.continue(),
+  );
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/ebook/overrides", expectedStatus: 200 },
+    async () => page.getByTestId("fetch-summary").click(),
+  );
+
+  await expect(page.getByTestId("book-description")).toContainText(SHORT);
+  await expect(page.getByTestId("book-description-toggle")).toHaveCount(0);
+});

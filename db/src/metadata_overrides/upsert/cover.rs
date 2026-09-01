@@ -107,7 +107,17 @@ pub(crate) fn apply_overrides(
         book.language = Some(l.clone());
     }
     if let Some(ref s) = ov.series {
-        book.series = Some(s.clone());
+        // Empty string is the clear sentinel (same convention as `isbn13`
+        // below). Clearing the name must also drop the relational
+        // `series_id` the `books_series_link` row supplied, or the book keeps
+        // pointing at a series it is no longer in — a crumb with no name that
+        // links to a page listing nothing (#2349).
+        if s.is_empty() {
+            book.series = None;
+            book.series_id = None;
+        } else {
+            book.series = Some(s.clone());
+        }
     }
     if let Some(ref si) = ov.series_index {
         book.series_index = Some(si.clone());

@@ -335,3 +335,31 @@ fn home_kicker_leads_a_standalone_with_its_category_and_year() {
     assert_eq!(kicker.text, "Horror \u{b7} standalone \u{b7} 2015");
     assert!(kicker.series_label.is_none());
 }
+
+#[test]
+fn home_kicker_treats_a_cleared_series_as_a_standalone() {
+    // An override that empties the series name left `series: Some("")`
+    // taking the series branch, which rendered a nameless "· Book 3"
+    // crumb linking at a series the book is no longer in (#2349).
+    let b = EbookMetadata {
+        series: Some(String::new()),
+        series_index: Some("3".into()),
+        genres: vec!["Horror".into()],
+        ..book()
+    };
+    let kicker = home_kicker(&b, &facts(true, false, false), Some(4), false, None);
+    assert_eq!(kicker.text, "Horror \u{b7} standalone");
+    assert!(kicker.series_label.is_none());
+    assert!(!kicker.text.contains("Book 3"), "{}", kicker.text);
+}
+
+#[test]
+fn description_overflows_only_past_the_clamps_worth_of_words() {
+    let short = "A dozen words is nowhere near five rendered lines of blurb text.";
+    assert!(!description_overflows(short));
+    let long = "word ".repeat(DESC_CLAMP_WORDS + 1);
+    assert!(description_overflows(&long));
+    // Markup is not text — a heavily tagged short blurb must not trip it.
+    let tagged = "<em>one</em> <em>two</em> <em>three</em>".repeat(3);
+    assert!(!description_overflows(&tagged));
+}

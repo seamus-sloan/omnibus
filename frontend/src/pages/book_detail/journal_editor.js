@@ -247,6 +247,31 @@ if (!window.OmnibusJournalEditor) {
         if (e.key === "Enter") {
           e.preventDefault();
           insert(editor.id, "\n");
+          return;
+        }
+        // Document-start / document-end navigation. The browser resolves
+        // these against the decoration spans rather than the markdown source,
+        // so the caret lands mid-document and a reader who meant to append
+        // types into the middle of what they wrote. Route them through the
+        // editor's own absolute-offset model, the same one Enter and paste
+        // use. Shift extends the selection from the far end of the current
+        // one, matching native behaviour.
+        if ((e.key === "End" || e.key === "Home") && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          const target = e.key === "End" ? editor.textContent.length : 0;
+          if (e.shiftKey) {
+            const sel = caret(editor) || { start: target, end: target };
+            const anchor = e.key === "End" ? sel.start : sel.end;
+            place(editor, Math.min(anchor, target), Math.max(anchor, target));
+          } else {
+            place(editor, target, target);
+          }
+          markActive(editor);
+          // `place` moves the selection but never scrolls, so a long entry
+          // would jump the caret out of view.
+          const lines = editor.querySelectorAll(":scope > .cm-line");
+          const edge = e.key === "End" ? lines[lines.length - 1] : lines[0];
+          if (edge) edge.scrollIntoView({ block: "nearest" });
         }
       });
       editor.addEventListener("paste", (e) => {
