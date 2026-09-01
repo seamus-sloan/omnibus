@@ -345,7 +345,7 @@ extension JournalMarkdown {
 
 /// A journal body set as real blocks — paragraphs, lists, headings, quotes —
 /// rather than one run-on run. `||spoilers||` render as bars; where they are
-/// revealable, tapping one opens it.
+/// revealable, tapping one opens it and tapping it again puts it back.
 struct JournalBody: View {
     let md: String
     /// Whether a spoiler here can be tapped open. False inside the all-entries
@@ -355,6 +355,14 @@ struct JournalBody: View {
 
     @Environment(\.palette) private var palette
     @State private var revealed: Set<Int> = []
+
+    /// Reveal is a toggle, not a latch: having read a span, you can hide it
+    /// again before handing the phone over.
+    static func toggling(_ id: Int, in revealed: Set<Int>) -> Set<Int> {
+        var next = revealed
+        if next.remove(id) == nil { next.insert(id) }
+        return next
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -367,7 +375,7 @@ struct JournalBody: View {
             // Links the author wrote still open; only the reveal scheme is ours
             // to swallow.
             guard let id = JournalMarkdown.revealID(url) else { return .systemAction }
-            withAnimation(Motion.snap) { _ = revealed.insert(id) }
+            withAnimation(Motion.snap) { revealed = Self.toggling(id, in: revealed) }
             return .handled
         })
     }
@@ -376,7 +384,7 @@ struct JournalBody: View {
     private func view(for block: JournalBlock) -> some View {
         switch block {
         case .heading(let level, let spans):
-            text(spans)
+            text(spans, ink: palette.ink0Color)
                 .font(.display(level <= 1 ? 25 : level == 2 ? 21 : 18, weight: .semibold))
                 .foregroundStyle(palette.ink0Color)
                 .lineSpacing(2)
@@ -404,12 +412,17 @@ struct JournalBody: View {
                         .fill(palette.bg2Color)
                 )
         case .rule:
-            Hairline().padding(.vertical, 3)
+            // Not `Hairline`: that is a row separator at line-2/0.5pt, which an
+            // authored break disappears into. A `---` is a deliberate mark.
+            Rectangle()
+                .fill(palette.lineColor)
+                .frame(height: 1)
+                .padding(.vertical, 5)
         }
     }
 
     private func prose(_ spans: [JournalSpan]) -> some View {
-        text(spans)
+        text(spans, ink: palette.ink1Color)
             .font(.display(18))
             .foregroundStyle(palette.ink1Color)
             .lineSpacing(6)
@@ -436,22 +449,28 @@ struct JournalBody: View {
         }
     }
 
-    /// The inline runs of one block, spoilers masked or open.
-    private func text(_ spans: [JournalSpan]) -> Text {
-        spans.reduce(Text(verbatim: "")) { line, span in line + piece(span) }
+    /// The inline runs of one block, spoilers masked or open. `ink` is the
+    /// block's own text colour, which an open spoiler has to restate: it keeps
+    /// its reveal link so a second tap re-hides it, and a link left to itself
+    /// would draw in the tint colour rather than as prose.
+    private func text(_ spans: [JournalSpan], ink: Color) -> Text {
+        spans.reduce(Text(verbatim: "")) { line, span in line + piece(span, ink: ink) }
     }
 
-    private func piece(_ span: JournalSpan) -> Text {
+    private func piece(_ span: JournalSpan, ink: Color) -> Text {
         switch span {
         case .prose(let source):
             return Text(JournalMarkdown.inline(source))
         case .spoiler(let source, let id):
             var run = JournalMarkdown.inline(source)
-            guard !revealed.contains(id) else { return Text(run) }
-            // Ink the colour of its own bar: the region keeps the width it will
-            // have once open, so revealing it never reflows the paragraph.
-            run.foregroundColor = palette.bg3Color
-            run.backgroundColor = palette.bg3Color
+            if revealed.contains(id) {
+                run.foregroundColor = ink
+            } else {
+                // Ink the colour of its own bar: the region keeps the width it
+                // will have open, so a reveal never reflows the paragraph.
+                run.foregroundColor = palette.bg3Color
+                run.backgroundColor = palette.bg3Color
+            }
             if revealable { run.link = JournalMarkdown.revealURL(id) }
             return Text(run)
         }

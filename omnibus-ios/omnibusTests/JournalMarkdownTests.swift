@@ -254,6 +254,17 @@ private func plain(_ spans: [JournalSpan]) -> String {
     #expect(JournalMarkdown.revealID(URL(string: "https://example.com/3")!) == nil)
 }
 
+@Test func revealIsAToggleSoASpanCanBeHiddenAgain() {
+    let opened = JournalBody.toggling(2, in: [])
+    #expect(opened == [2])
+    #expect(JournalBody.toggling(2, in: opened) == [])
+}
+
+@Test func togglingOneSpanLeavesTheOthersAlone() {
+    #expect(JournalBody.toggling(1, in: [0, 1, 2]) == [0, 2])
+    #expect(JournalBody.toggling(3, in: [0, 2]) == [0, 2, 3])
+}
+
 // MARK: - The whole entry
 
 @Test func blocksReadARealReviewEntryEndToEnd() {
