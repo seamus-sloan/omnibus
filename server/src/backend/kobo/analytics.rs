@@ -151,6 +151,9 @@ async fn ingest_session(
         // count towards every UTC-bucketed metric and sit outside the
         // local-time strips, as `db::stats::patterns` says unzoned rows do.
         utc_offset_minutes: None,
+        // A Kobo reports neither an offset nor a zone with its analytics
+        // events, so the reader's own calendar is the only one available.
+        time_zone: None,
     };
     // Same validator the web/mobile session-report path runs — rejects a
     // pre-epoch device clock (`started_at < 0`) or an oversized `SecondsRead`

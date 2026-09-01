@@ -645,6 +645,7 @@ async fn drain_replays_record_sessions_and_clears_the_queue() {
             device_id: None,
             client_id: Some("dev-1".into()),
             utc_offset_minutes: None,
+            time_zone: None,
         }],
     });
     drain().await;

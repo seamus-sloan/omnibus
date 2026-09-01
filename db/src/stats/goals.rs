@@ -10,7 +10,9 @@ use omnibus_shared::{
 };
 use sqlx::{Row, SqlitePool};
 
-use super::{compute, pages, patterns::SESSION_LOCAL_ROWS, StatsError};
+use crate::user_offset;
+
+use super::{calendar, compute, pages, patterns::SESSION_LOCAL_ROWS, StatsError};
 
 /// How far back the local-day minutes scan reaches before filtering on the
 /// reader's day, in seconds.
@@ -50,24 +52,45 @@ impl From<StatsError> for GoalError {
     }
 }
 
-/// The server's current calendar year (UTC). Read from SQLite rather than the
-/// process clock so it lands on the same "now" every other stats window does.
-pub async fn current_year(pool: &SqlitePool) -> Result<i64, StatsError> {
-    Ok(
-        sqlx::query_scalar("SELECT CAST(strftime('%Y', 'now') AS INTEGER)")
-            .fetch_one(pool)
-            .await?,
-    )
+impl From<user_offset::OffsetError> for GoalError {
+    fn from(e: user_offset::OffsetError) -> Self {
+        match e {
+            user_offset::OffsetError::Sqlx(inner) => Self::Sqlx(inner),
+        }
+    }
 }
 
-/// Unix-second bounds `[start, end)` of `year` in UTC.
-async fn year_bounds(pool: &SqlitePool, year: i64) -> Result<(i64, i64), StatsError> {
+/// The current calendar year on the reader's own clock. Read from SQLite rather
+/// than the process clock so it lands on the same "now" every other stats window
+/// does — and on their calendar, so a reader east of UTC filing a goal at 08:00
+/// on January 1st files it against the year they are actually in.
+pub async fn current_year(pool: &SqlitePool, offset_minutes: i64) -> Result<i64, StatsError> {
+    let sql = format!(
+        "SELECT CAST(strftime('%Y', datetime('now', '{offset_minutes} minutes')) AS INTEGER)"
+    );
+    Ok(sqlx::query_scalar(&sql).fetch_one(pool).await?)
+}
+
+/// Unix-second bounds `[start, end)` of `year` on the reader's calendar — the
+/// UTC instants their January 1sts actually fall on, so the count matches the
+/// year the rest of the page is reporting.
+async fn year_bounds(
+    pool: &SqlitePool,
+    year: i64,
+    offset_minutes: i64,
+) -> Result<(i64, i64), StatsError> {
+    // Both bounds shift by the same offset, so the pair stays exactly one year
+    // wide; `strftime` reads the literal as UTC and the subtraction moves it to
+    // the instant that wall-clock moment really was.
+    let shift = offset_minutes * 60;
     let row = sqlx::query(
-        "SELECT CAST(strftime('%s', ? || '-01-01 00:00:00') AS INTEGER) AS lo,
-                CAST(strftime('%s', ? || '-01-01 00:00:00') AS INTEGER) AS hi",
+        "SELECT CAST(strftime('%s', ? || '-01-01 00:00:00') AS INTEGER) - ? AS lo,
+                CAST(strftime('%s', ? || '-01-01 00:00:00') AS INTEGER) - ? AS hi",
     )
     .bind(format!("{year:04}"))
+    .bind(shift)
     .bind(format!("{:04}", year + 1))
+    .bind(shift)
     .fetch_one(pool)
     .await?;
     Ok((row.try_get("lo")?, row.try_get("hi")?))
@@ -87,9 +110,10 @@ async fn year_bounds(pool: &SqlitePool, year: i64) -> Result<(i64, i64), StatsEr
 pub(super) async fn current_goal_and_progress(
     pool: &SqlitePool,
     user_id: i64,
+    offset_minutes: i64,
 ) -> Result<(Option<ReadingGoal>, i64), StatsError> {
-    let year = current_year(pool).await?;
-    let current = year_count(pool, user_id, year).await?;
+    let year = current_year(pool, offset_minutes).await?;
+    let current = year_count(pool, user_id, year, offset_minutes).await?;
     let goal = year_target(pool, user_id, year)
         .await?
         .map(|target| ReadingGoal {
@@ -127,8 +151,13 @@ async fn year_target(
 /// Shared by both callers for the same reason [`year_target`] is: the count a
 /// goal reports and the count a bare figure reports have to be one number, and
 /// two copies of these bounds is how they stop being.
-async fn year_count(pool: &SqlitePool, user_id: i64, year: i64) -> Result<i64, StatsError> {
-    let (start, end) = year_bounds(pool, year).await?;
+async fn year_count(
+    pool: &SqlitePool,
+    user_id: i64,
+    year: i64,
+    offset_minutes: i64,
+) -> Result<i64, StatsError> {
+    let (start, end) = year_bounds(pool, year, offset_minutes).await?;
     compute::finished_count_bounded(pool, user_id, start, end).await
 }
 
@@ -142,14 +171,16 @@ pub async fn goal_for_year(
     pool: &SqlitePool,
     user_id: i64,
     year: i64,
+    claimed_offset_minutes: Option<i64>,
 ) -> Result<Option<ReadingGoal>, StatsError> {
     let Some(target) = year_target(pool, user_id, year).await? else {
         return Ok(None);
     };
+    let offset = user_offset::resolve_offset_minutes(pool, user_id, claimed_offset_minutes).await?;
     Ok(Some(ReadingGoal {
         kind: GOAL_KIND_BOOKS.to_string(),
         target,
-        current: year_count(pool, user_id, year).await?,
+        current: year_count(pool, user_id, year, offset).await?,
         year,
     }))
 }
@@ -168,14 +199,16 @@ pub async fn set_goal(
     pool: &SqlitePool,
     user_id: i64,
     update: &ReadingGoalUpdate,
+    claimed_offset_minutes: Option<i64>,
 ) -> Result<Option<ReadingGoal>, GoalError> {
     let kind = update.kind_or_default();
     if kind != GOAL_KIND_BOOKS {
         return Err(GoalError::UnsupportedKind(kind.to_string()));
     }
+    let offset = user_offset::resolve_offset_minutes(pool, user_id, claimed_offset_minutes).await?;
     let year = match update.year {
         Some(year) => year,
-        None => current_year(pool).await?,
+        None => current_year(pool, offset).await?,
     };
     if !(MIN_GOAL_YEAR..=MAX_GOAL_YEAR).contains(&year) {
         return Err(GoalError::InvalidYear(year));
@@ -216,7 +249,7 @@ pub async fn set_goal(
     }
 
     super::invalidate_user(user_id);
-    Ok(goal_for_year(pool, user_id, year).await?)
+    Ok(goal_for_year(pool, user_id, year, claimed_offset_minutes).await?)
 }
 
 /// Set, change, or clear one of the caller's daily goals, returning **both**
@@ -234,6 +267,7 @@ pub async fn set_daily_goal(
     pool: &SqlitePool,
     user_id: i64,
     update: &DailyGoalUpdate,
+    claimed_offset_minutes: Option<i64>,
 ) -> Result<DailyGoals, GoalError> {
     let Some(max) = DailyGoalUpdate::max_target(&update.kind) else {
         return Err(GoalError::UnsupportedKind(update.kind.clone()));
@@ -273,7 +307,7 @@ pub async fn set_daily_goal(
     }
 
     super::invalidate_user(user_id);
-    Ok(daily_goals(pool, user_id).await?)
+    Ok(daily_goals(pool, user_id, claimed_offset_minutes).await?)
 }
 
 /// The caller's standing daily goals, and today's figure for each kind
@@ -296,19 +330,31 @@ pub async fn set_daily_goal(
 /// number by construction — computed once and shared — so setting a target
 /// never appears to move the ground it measures.
 ///
-/// # Which day each kind is measured over
+/// # Which day both kinds are measured over
 ///
-/// Not the same one, and that is deliberate rather than an oversight.
-/// **Minutes** use the reader's *local* day, from the capture-time offset each
-/// session recorded (migration `0080`) — the treatment [`super::patterns`]
-/// already gives the time-of-day strips, and the only honest one for a target
-/// that resets at midnight. **Pages** use the **UTC** day, because the
-/// forward-progress ledger (migration `0083`) buckets to a UTC date string and
-/// retains no timestamp to re-bucket from. The two can therefore name different
-/// days for the same moment, by up to the reader's offset; closing that gap
-/// means teaching the ledger an offset, which moves the progress write path on
-/// both clients.
-pub async fn daily_goals(pool: &SqlitePool, user_id: i64) -> Result<DailyGoals, StatsError> {
+/// The **same** one: today on the reader's calendar, from
+/// `claimed_offset_minutes`. That is what migration `0093` bought — the ledger
+/// stopped writing a UTC day and started recording a quarter-hour, so pages can
+/// be re-bucketed to the reader's day exactly as minutes always could. Before
+/// it the two kinds answered on different calendars and could name different
+/// days for the same moment.
+pub async fn daily_goals(
+    pool: &SqlitePool,
+    user_id: i64,
+    claimed_offset_minutes: Option<i64>,
+) -> Result<DailyGoals, StatsError> {
+    let offset = user_offset::resolve_offset_minutes(pool, user_id, claimed_offset_minutes).await?;
+    daily_goals_at(pool, user_id, offset).await
+}
+
+/// [`daily_goals`] on an already-resolved offset — what `compute` calls, so a
+/// summary resolves the reader's calendar once and every figure in it shares
+/// that one answer.
+pub(super) async fn daily_goals_at(
+    pool: &SqlitePool,
+    user_id: i64,
+    offset_minutes: i64,
+) -> Result<DailyGoals, StatsError> {
     let rows =
         sqlx::query("SELECT kind, target FROM reading_goals WHERE user_id = ? AND scope = 'day'")
             .bind(user_id)
@@ -330,139 +376,74 @@ pub async fn daily_goals(pool: &SqlitePool, user_id: i64) -> Result<DailyGoals, 
         }
     }
 
-    let utc = utc_today(pool).await?;
-    let local_day = local_today(pool, user_id).await?;
-    let pages_today = pages::pages_read_on_day(pool, user_id, &utc).await?;
-    let (seconds, unzoned) = day_seconds(pool, user_id, &local_day, &utc).await?;
+    let day = user_offset::today(pool, offset_minutes).await?;
+    let pages_today = pages::pages_read_on_day(pool, user_id, &day, offset_minutes).await?;
     // Truncating, not rounding: a reader 59 seconds into their first minute
     // has not read a minute yet, and a goal that rounds up hands out progress
     // nobody earned.
-    let minutes_today = seconds / 60;
+    let minutes_today = day_seconds(pool, user_id, offset_minutes).await? / 60;
 
     let pages = pages_target.map(|target| DailyGoal {
         kind: GOAL_KIND_PAGES.to_string(),
         target,
         current: pages_today,
-        day: utc.clone(),
+        day: day.clone(),
     });
     let minutes = minutes_target.map(|target| DailyGoal {
         kind: GOAL_KIND_MINUTES.to_string(),
         target,
         current: minutes_today,
-        day: local_day,
+        day,
     });
 
     Ok(DailyGoals {
         pages,
         minutes,
-        // Reported whether or not a target is set, because `minutes_today` is
-        // now shown either way and the disclosure explains a shortfall in
-        // *that figure* — a bare readout that silently drops unplaceable time
-        // is exactly what this exists to prevent.
-        unzoned_seconds: unzoned,
+        // Always zero now, and kept only so a client built against the old shape
+        // still decodes. It counted seconds the minutes goal had to *exclude*
+        // because the session carried no capture-time offset to place it with;
+        // the day now comes from the reader's current offset instead, which
+        // every session can be measured against, so nothing is excluded and
+        // there is nothing left to disclose.
+        unzoned_seconds: 0,
         pages_today: Some(pages_today),
         minutes_today: Some(minutes_today),
     })
 }
 
-/// Today's UTC date as `YYYY-MM-DD` — the calendar the pages ledger buckets on.
-async fn utc_today(pool: &SqlitePool) -> Result<String, StatsError> {
-    Ok(sqlx::query_scalar("SELECT date('now')")
-        .fetch_one(pool)
-        .await?)
-}
-
-/// Today's date on the reader's own clock, as `YYYY-MM-DD`.
+/// Seconds read and listened today on the reader's calendar.
 ///
-/// The offset comes from their **most recent** session that recorded one, so a
-/// reader who has moved gets the day where they are now rather than where they
-/// were. Falling back to UTC when no session ever recorded an offset is the
-/// only option available — and it is the honest one, since a pre-`0080`
-/// account has told the server nothing about where it is.
-async fn local_today(pool: &SqlitePool, user_id: i64) -> Result<String, StatsError> {
-    let offset = current_offset_minutes(pool, user_id).await?.unwrap_or(0);
-    Ok(
-        sqlx::query_scalar("SELECT date(strftime('%s','now') + ? * 60, 'unixepoch')")
-            .bind(offset)
-            .fetch_one(pool)
-            .await?,
-    )
-}
-
-/// The reader's current UTC offset in minutes, from the most recent session
-/// carrying one. `None` when no session ever has.
+/// **Every** session counts, whether or not it recorded a capture-time offset.
+/// That is the difference from `super::patterns`, and it follows from what the
+/// two are measuring: an hour-of-day bucket is a claim about where the reader
+/// *was*, which an offsetless row cannot support, while a day boundary is a
+/// property of where they are *now* — and `started_at` alone is enough to place
+/// any row against it. So there is no unplaceable remainder here to disclose.
 ///
-/// One indexed probe per table, compared here, rather than one `ORDER BY` over
-/// a `UNION ALL` of both: SQLite cannot push the sort through the union, so
-/// that shape materialises and sorts a reader's whole offset-carrying session
-/// history on a read path that runs for every stats load. Each probe instead
-/// walks `idx_{reading,listening}_sessions_user_started` backwards and stops at
-/// the first row it wants.
-async fn current_offset_minutes(
-    pool: &SqlitePool,
-    user_id: i64,
-) -> Result<Option<i64>, StatsError> {
-    let mut latest: Option<(i64, i64)> = None;
-    for table in ["reading_sessions", "listening_sessions"] {
-        // `table` is one of two fixed literals chosen here, never user input.
-        let sql = format!(
-            "SELECT started_at, utc_offset_minutes FROM {table}
-             WHERE user_id = ? AND utc_offset_minutes IS NOT NULL
-             ORDER BY started_at DESC LIMIT 1"
-        );
-        let Some(row) = sqlx::query(&sql).bind(user_id).fetch_optional(pool).await? else {
-            continue;
-        };
-        let candidate: (i64, i64) = (
-            row.try_get("started_at")?,
-            row.try_get("utc_offset_minutes")?,
-        );
-        if latest.is_none_or(|(seen, _)| candidate.0 > seen) {
-            latest = Some(candidate);
-        }
-    }
-    Ok(latest.map(|(_, offset)| offset))
-}
-
-/// `(placed_seconds, unzoned_seconds)` for the reader's day.
-///
-/// Each session is bucketed by **its own** captured offset, not by the
-/// reader's current one — the same rule [`super::patterns`] follows, and what
-/// keeps an evening read in Tokyo on the Tokyo day after the reader flies home.
-///
-/// The two halves are counted against **different calendars**, and have to be.
-/// `local_day` places the sessions that recorded an offset. A session that did
-/// not record one cannot be placed on any local day at all, so the disclosure
-/// falls back to `utc_day` — the only calendar such a row has. Comparing an
-/// offsetless session against the local day instead would silently report zero
-/// for any reader whose offset pushes their day off the UTC one, which is
-/// every reader the disclosure exists for.
+/// Scanned from a bounded tail rather than over the reader's whole history: the
+/// day being asked about is at most ±14 hours off the UTC one, so every row that
+/// can land on it sits inside [`LOCAL_DAY_SCAN_SECS`], and the bound is what
+/// lets this use `(user_id, started_at)` instead of a full scan.
 async fn day_seconds(
     pool: &SqlitePool,
     user_id: i64,
-    local_day: &str,
-    utc_day: &str,
-) -> Result<(i64, i64), StatsError> {
+    offset_minutes: i64,
+) -> Result<i64, StatsError> {
     let sql = format!(
-        "SELECT COALESCE(SUM(CASE WHEN utc_offset_minutes IS NOT NULL
-                                   AND date(started_at + utc_offset_minutes * 60, 'unixepoch') = ?
-                                  THEN secs END), 0) AS placed,
-                COALESCE(SUM(CASE WHEN utc_offset_minutes IS NULL
-                                   AND date(started_at, 'unixepoch') = ?
-                                  THEN secs END), 0) AS unzoned
-         FROM ({SESSION_LOCAL_ROWS})"
+        "SELECT COALESCE(SUM(secs), 0)
+         FROM ({SESSION_LOCAL_ROWS})
+         WHERE {} = {}",
+        calendar::local_day("started_at", offset_minutes),
+        calendar::local_day("CAST(strftime('%s','now') AS INTEGER)", offset_minutes)
     );
     let start = scan_start(pool).await?;
-    let row = sqlx::query(&sql)
-        .bind(local_day)
-        .bind(utc_day)
+    Ok(sqlx::query_scalar(&sql)
         .bind(user_id)
         .bind(start)
         .bind(user_id)
         .bind(start)
         .fetch_one(pool)
-        .await?;
-    Ok((row.try_get("placed")?, row.try_get("unzoned")?))
+        .await?)
 }
 
 /// The unix second the local-day scan starts from — see

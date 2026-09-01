@@ -22,7 +22,7 @@ use super::{internal_rpc_error, AuthUser, PoolExt};
 /// route in `server::backend::stats`.
 #[post("/api/rpc/stats", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_stats(range: StatsRange) -> Result<StatsSummary> {
-    Ok(db::stats::user_stats(&pool.0, user.id, range)
+    Ok(db::stats::user_stats(&pool.0, user.id, range, None)
         .await
         .map_err(|e| internal_rpc_error("stats", e))?)
 }
@@ -34,7 +34,7 @@ pub async fn rpc_stats(range: StatsRange) -> Result<StatsSummary> {
 /// there's no REST counterpart.
 #[post("/api/rpc/book-insights", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_book_insights(uuid: String) -> Result<Option<BookInsights>> {
-    Ok(db::stats::book_insights(&pool.0, user.id, &uuid)
+    Ok(db::stats::book_insights(&pool.0, user.id, &uuid, None)
         .await
         .map_err(|e| internal_rpc_error("book insights", e))?)
 }
@@ -60,7 +60,7 @@ pub async fn rpc_library_size() -> Result<LibrarySize> {
 /// that follows a save reads the new target rather than the cached one.
 #[post("/api/rpc/stats-goal", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_set_reading_goal(update: ReadingGoalUpdate) -> Result<Option<ReadingGoal>> {
-    Ok(db::stats::set_goal(&pool.0, user.id, &update)
+    Ok(db::stats::set_goal(&pool.0, user.id, &update, None)
         .await
         .map_err(|e| internal_rpc_error("set reading goal", e))?)
 }
@@ -74,7 +74,7 @@ pub async fn rpc_set_reading_goal(update: ReadingGoalUpdate) -> Result<Option<Re
 /// never queued by the offline outbox.
 #[post("/api/rpc/stats-goal-daily", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_set_daily_goal(update: DailyGoalUpdate) -> Result<DailyGoals> {
-    Ok(db::stats::set_daily_goal(&pool.0, user.id, &update)
+    Ok(db::stats::set_daily_goal(&pool.0, user.id, &update, None)
         .await
         .map_err(|e| internal_rpc_error("set daily reading goal", e))?)
 }
@@ -137,7 +137,7 @@ pub async fn rpc_session_log(
 /// UI's guards are a convenience, not the contract.
 #[post("/api/rpc/chart-series", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_chart_series(spec: ChartSpec) -> Result<ChartResult> {
-    Ok(db::stats::chart_series(&pool.0, user.id, &spec)
+    Ok(db::stats::chart_series(&pool.0, user.id, &spec, None)
         .await
         .map_err(|e| match e {
             db::stats::ChartError::Spec(inner) => {

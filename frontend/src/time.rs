@@ -41,6 +41,40 @@ pub fn local_utc_offset_secs(unix_secs: i64) -> i64 {
     }
 }
 
+/// The browser's IANA zone name — `"America/Los_Angeles"` — or `None` off web
+/// and wherever the runtime declines to name one.
+///
+/// Reported alongside [`local_utc_offset_secs`], never instead of it: the offset
+/// is what the stats bucketing actually uses, and it is DST-correct for the
+/// instant it was taken. The zone answers *where*, which an offset cannot —
+/// `-420` is three different places depending on the month. The server stores it
+/// against the session and does not resolve it today; see
+/// `omnibus_shared::SessionReport::time_zone`.
+///
+/// Unlike the offset this takes no timestamp: `resolvedOptions` reports the
+/// zone the browser is configured for, which is not a per-instant fact.
+pub fn local_time_zone() -> Option<String> {
+    #[cfg(feature = "web")]
+    {
+        // `resolved_options` hands back a plain `Object`, so the property comes
+        // out through `Reflect` rather than a typed accessor.
+        let zone = js_sys::Reflect::get(
+            &js_sys::Intl::DateTimeFormat::default().resolved_options(),
+            &wasm_bindgen::JsValue::from_str("timeZone"),
+        )
+        .ok()?
+        .as_string()?;
+        // A blank would travel as a present-but-empty value and validate would
+        // reject the whole report; absent is the honest encoding for "the
+        // browser didn't say".
+        (!zone.trim().is_empty()).then_some(zone)
+    }
+    #[cfg(not(feature = "web"))]
+    {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

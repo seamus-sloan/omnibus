@@ -120,7 +120,7 @@ async fn streak_reports_active_days_longest_and_current_from_one_day_list() {
         reading_session(&pool, user, "uuid-1", T0 + d * DAY).await;
     }
 
-    let s = streak(&pool, user, 0, T0_DAY + 6).await.unwrap();
+    let s = streak(&pool, user, 0, T0_DAY + 6, 0).await.unwrap();
 
     assert_eq!(s.active_days, 5);
     assert_eq!(s.longest_days, 3);
@@ -138,7 +138,7 @@ async fn streak_counts_a_listening_only_day_towards_the_current_run() {
     reading_session(&pool, user, "uuid-1", T0).await;
     listening_session(&pool, user, "uuid-1", T0 + DAY).await;
 
-    let s = streak(&pool, user, 0, T0_DAY + 1).await.unwrap();
+    let s = streak(&pool, user, 0, T0_DAY + 1, 0).await.unwrap();
 
     assert_eq!(s.active_days, 2);
     assert_eq!(s.current_days, 2);
@@ -149,7 +149,7 @@ async fn streak_is_all_zero_for_a_user_with_no_sessions() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
 
-    let s = streak(&pool, user, 0, T0_DAY).await.unwrap();
+    let s = streak(&pool, user, 0, T0_DAY, 0).await.unwrap();
 
     assert_eq!(s.active_days, 0);
     assert_eq!(s.longest_days, 0);
@@ -170,7 +170,7 @@ async fn streak_reports_the_live_run_from_outside_the_window() {
     }
     let window_start = T0 - DAY;
 
-    let s = streak(&pool, user, window_start, T0_DAY).await.unwrap();
+    let s = streak(&pool, user, window_start, T0_DAY, 0).await.unwrap();
 
     assert_eq!(s.active_days, 2, "days active stay scoped to the window");
     assert_eq!(s.longest_days, 2, "so does the record");
@@ -187,7 +187,7 @@ async fn streak_reports_current_zero_when_the_last_session_is_stale() {
     let user = seed_user(&pool, "alice").await;
     reading_session(&pool, user, "uuid-1", T0).await;
 
-    let s = streak(&pool, user, 0, T0_DAY + 30).await.unwrap();
+    let s = streak(&pool, user, 0, T0_DAY + 30, 0).await.unwrap();
 
     assert_eq!(s.longest_days, 1, "the record survives");
     assert_eq!(s.current_days, 0, "the run does not");
@@ -201,7 +201,7 @@ async fn streak_propagates_sqlx_error_when_the_sessions_table_is_missing() {
         .await
         .unwrap();
 
-    let err = streak(&pool, 1, 0, T0_DAY).await.unwrap_err();
+    let err = streak(&pool, 1, 0, T0_DAY, 0).await.unwrap_err();
 
     assert!(matches!(err, StatsError::Sqlx(_)));
 }

@@ -309,6 +309,7 @@ fn session_report_rejects_inverted_time_range() {
         device_id: None,
         client_id: None,
         utc_offset_minutes: None,
+        time_zone: None,
     };
     let err = r.validate().expect_err("ended < started must be rejected");
     assert!(err.contains("ended_at"), "got: {err}");
@@ -325,6 +326,7 @@ fn session_report_rejects_negative_progress_units() {
         device_id: None,
         client_id: None,
         utc_offset_minutes: None,
+        time_zone: None,
     };
     let err = r
         .validate()
@@ -343,6 +345,7 @@ fn session_report_rejects_blank_client_id() {
         device_id: None,
         client_id: Some("   ".into()),
         utc_offset_minutes: None,
+        time_zone: None,
     };
     let err = r.validate().expect_err("a blank handle must be rejected");
     assert!(err.contains("client_id"), "got: {err}");
@@ -359,6 +362,7 @@ fn session_report_rejects_overlong_client_id() {
         device_id: None,
         client_id: Some("a".repeat(SessionReport::CLIENT_ID_MAX_LEN + 1)),
         utc_offset_minutes: None,
+        time_zone: None,
     };
     let err = r
         .validate()
@@ -379,6 +383,7 @@ fn session_report_accepts_a_client_id_at_the_cap() {
         device_id: None,
         client_id: Some("é".repeat(SessionReport::CLIENT_ID_MAX_LEN)),
         utc_offset_minutes: None,
+        time_zone: None,
     };
     assert!(r.validate().is_ok());
 }
@@ -395,6 +400,7 @@ fn session_report_accepts_a_missing_client_id() {
         device_id: None,
         client_id: None,
         utc_offset_minutes: None,
+        time_zone: None,
     };
     assert!(r.validate().is_ok());
 }
@@ -426,6 +432,7 @@ fn session_report_rejects_an_out_of_range_utc_offset() {
         device_id: None,
         client_id: None,
         utc_offset_minutes: Some(SessionReport::UTC_OFFSET_MAX_MINUTES + 1),
+        time_zone: None,
     };
     let err = r
         .validate()
@@ -450,6 +457,7 @@ fn session_report_accepts_the_real_span_of_utc_offsets() {
             device_id: None,
             client_id: None,
             utc_offset_minutes: Some(offset),
+            time_zone: None,
         };
         assert!(r.validate().is_ok(), "offset {offset} must be accepted");
     }

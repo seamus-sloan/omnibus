@@ -26,6 +26,7 @@ async fn record_session_inserts_per_format_row() {
             device_id: None,
             client_id: None,
             utc_offset_minutes: None,
+            time_zone: None,
         },
     )
     .await
@@ -52,6 +53,7 @@ async fn record_session_inserts_per_format_row() {
             device_id: None,
             client_id: None,
             utc_offset_minutes: None,
+            time_zone: None,
         },
     )
     .await
@@ -81,6 +83,7 @@ async fn record_session_inserts_per_format_row() {
             device_id: None,
             client_id: None,
             utc_offset_minutes: None,
+            time_zone: None,
         },
     )
     .await
@@ -107,6 +110,7 @@ async fn record_session_tx_inserts_row_when_committed() {
             device_id: None,
             client_id: None,
             utc_offset_minutes: None,
+            time_zone: None,
         },
     )
     .await
@@ -148,6 +152,7 @@ async fn insert_session_tx_inserts_epub_row_against_pre_resolved_uuid() {
             device_id: None,
             client_id: None,
             utc_offset_minutes: None,
+            time_zone: None,
         },
         &uuid,
     )
@@ -187,6 +192,7 @@ async fn insert_session_tx_inserts_audio_row_against_pre_resolved_uuid() {
             device_id: None,
             client_id: None,
             utc_offset_minutes: None,
+            time_zone: None,
         },
         &uuid,
     )
@@ -228,6 +234,7 @@ async fn record_session_tx_rollback_leaves_no_rows() {
                 device_id: None,
                 client_id: None,
                 utc_offset_minutes: None,
+                time_zone: None,
             },
         )
         .await
@@ -289,6 +296,7 @@ async fn record_session_resolves_merged_uuid_and_records_against_canonical_book(
             device_id: None,
             client_id: None,
             utc_offset_minutes: None,
+            time_zone: None,
         },
     )
     .await
@@ -327,6 +335,7 @@ async fn record_session_resolves_merged_audio_uuid_to_canonical_book() {
             device_id: None,
             client_id: None,
             utc_offset_minutes: None,
+            time_zone: None,
         },
     )
     .await
@@ -361,6 +370,7 @@ async fn record_session_replay_with_same_client_id_inserts_one_row() {
         device_id: None,
         client_id: Some("session-abc".into()),
         utc_offset_minutes: None,
+        time_zone: None,
     };
 
     // The reply to the first post is lost, so the client replays the very
@@ -396,6 +406,7 @@ async fn record_session_scopes_client_id_per_user_and_format() {
         device_id: None,
         client_id: Some("shared-handle".into()),
         utc_offset_minutes: None,
+        time_zone: None,
     };
 
     record_session(&pool, alice, &report(ProgressFormat::Epub))
@@ -442,6 +453,7 @@ async fn record_session_without_client_id_still_inserts_every_report() {
         device_id: None,
         client_id: None,
         utc_offset_minutes: None,
+        time_zone: None,
     };
     record_session(&pool, user, &report).await.unwrap();
     record_session(&pool, user, &report).await.unwrap();
@@ -477,6 +489,7 @@ async fn record_session_persists_the_capture_time_utc_offset_for_both_formats() 
                 device_id: None,
                 client_id: None,
                 utc_offset_minutes: Some(-420),
+                time_zone: None,
             },
         )
         .await
@@ -507,6 +520,7 @@ async fn record_session_leaves_the_utc_offset_null_when_the_client_sends_none() 
             device_id: None,
             client_id: None,
             utc_offset_minutes: None,
+            time_zone: None,
         },
     )
     .await

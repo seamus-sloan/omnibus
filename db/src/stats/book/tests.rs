@@ -56,7 +56,10 @@ async fn book_insights_returns_none_when_book_has_no_sessions() {
     seed_minimal_books(&pool, 1).await;
     let user = seed_user(&pool, "alice").await;
 
-    assert_eq!(book_insights(&pool, user, "uuid-1").await.unwrap(), None);
+    assert_eq!(
+        book_insights(&pool, user, "uuid-1", Some(0)).await.unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
@@ -65,7 +68,9 @@ async fn book_insights_returns_none_when_uuid_does_not_resolve_to_a_book() {
     let user = seed_user(&pool, "alice").await;
 
     assert_eq!(
-        book_insights(&pool, user, "no-such-uuid").await.unwrap(),
+        book_insights(&pool, user, "no-such-uuid", Some(0))
+            .await
+            .unwrap(),
         None
     );
 }
@@ -78,7 +83,10 @@ async fn book_insights_aggregates_started_time_and_session_count_across_formats(
     reading_session(&pool, user, "uuid-1", T0, 600).await;
     listening_session(&pool, user, "uuid-1", T0 - 3600, 300).await;
 
-    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+    let insights = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(insights.started_at, T0 - 3600);
     assert_eq!(insights.seconds_total, 900);
@@ -94,7 +102,7 @@ async fn book_insights_only_counts_sessions_for_the_given_user() {
     reading_session(&pool, alice, "uuid-1", T0, 600).await;
     reading_session(&pool, bob, "uuid-1", T0, 1200).await;
 
-    let alice_insights = book_insights(&pool, alice, "uuid-1")
+    let alice_insights = book_insights(&pool, alice, "uuid-1", Some(0))
         .await
         .unwrap()
         .unwrap();
@@ -102,7 +110,7 @@ async fn book_insights_only_counts_sessions_for_the_given_user() {
     assert_eq!(alice_insights.sessions, 1);
 
     assert_eq!(
-        book_insights(&pool, bob, "uuid-1")
+        book_insights(&pool, bob, "uuid-1", Some(0))
             .await
             .unwrap()
             .unwrap()
@@ -133,7 +141,7 @@ async fn book_insights_resolves_through_merged_uuids_to_the_canonical_book() {
 
     // Requested via the absorbed (merged-away) uuid; sessions were recorded
     // under the surviving book's canonical uuid.
-    let insights = book_insights(&pool, user, "absorbed-uuid")
+    let insights = book_insights(&pool, user, "absorbed-uuid", Some(0))
         .await
         .unwrap()
         .unwrap();
@@ -151,7 +159,9 @@ async fn book_insights_propagates_sqlx_error_when_sessions_table_is_missing() {
         .await
         .unwrap();
 
-    let err = book_insights(&pool, user, "uuid-1").await.unwrap_err();
+    let err = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap_err();
     assert!(matches!(err, StatsError::Sqlx(_)), "got: {err:?}");
 }
 
@@ -165,7 +175,10 @@ async fn book_insights_reports_longest_sit_breaking_ties_to_the_earliest() {
     // Same length as the winner, but later — the earlier one must win.
     reading_session(&pool, user, "uuid-1", T0 + 86_400, 1_800).await;
 
-    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+    let insights = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(insights.longest_seconds, 1_800);
     assert_eq!(insights.longest_started_at, T0 + 7_200);
@@ -182,7 +195,10 @@ async fn book_insights_buckets_daily_activity_by_utc_day_ascending() {
     listening_session(&pool, user, "uuid-1", T0 + 60, 300).await;
     reading_session(&pool, user, "uuid-1", T0 + 2 * 86_400, 240).await;
 
-    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+    let insights = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(
         insights.daily,
@@ -216,7 +232,10 @@ async fn book_insights_stitches_contiguous_checkpoint_rows_into_one_sitting() {
     let user = seed_user(&pool, "alice").await;
     heartbeat_hour(&pool, user, "uuid-1", T0).await;
 
-    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+    let insights = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(insights.sessions, 1, "an hour is one sitting, not 60 rows");
     assert_eq!(
@@ -238,8 +257,14 @@ async fn book_insights_counts_the_same_hour_alike_whatever_the_flush_cadence() {
         reading_session(&pool, user, "uuid-2", T0 + i * 300, 300).await;
     }
 
-    let web = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
-    let ios = book_insights(&pool, user, "uuid-2").await.unwrap().unwrap();
+    let web = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
+    let ios = book_insights(&pool, user, "uuid-2", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(web.sessions, ios.sessions);
     assert_eq!(web.seconds_total, ios.seconds_total);
@@ -255,7 +280,10 @@ async fn book_insights_splits_sittings_when_idle_longer_than_the_gap() {
     // Resumes 901s after the first ended — one second past the threshold.
     reading_session(&pool, user, "uuid-1", T0 + 600 + 901, 600).await;
 
-    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+    let insights = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(insights.sessions, 2);
     assert_eq!(insights.seconds_total, 1_200);
@@ -270,7 +298,10 @@ async fn book_insights_keeps_one_sitting_when_idle_exactly_the_gap() {
     // Exactly the threshold is still the same sitting — the break is `>`.
     reading_session(&pool, user, "uuid-1", T0 + 600 + 900, 600).await;
 
-    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+    let insights = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(insights.sessions, 1);
     assert_eq!(insights.longest_seconds, 1_200);
@@ -287,7 +318,10 @@ async fn book_insights_stitches_interleaved_reading_and_listening_into_one_sitti
     listening_session(&pool, user, "uuid-1", T0 + 300, 600).await;
     reading_session(&pool, user, "uuid-1", T0 + 900, 600).await;
 
-    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+    let insights = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(insights.sessions, 1, "one stretch is one sitting per book");
     assert_eq!(insights.seconds_total, 2_100);
@@ -305,7 +339,10 @@ async fn book_insights_reports_the_longest_stitched_sitting_not_the_longest_row(
     // The longest single *row*, but a shorter sitting.
     reading_session(&pool, user, "uuid-1", T0 + 86_400, 300).await;
 
-    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+    let insights = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(insights.longest_seconds, 600);
     assert_eq!(insights.longest_started_at, T0);
@@ -321,7 +358,10 @@ async fn book_insights_returns_none_when_every_sitting_is_under_the_minimum() {
     reading_session(&pool, user, "uuid-1", T0 + 86_400, 20).await;
     reading_session(&pool, user, "uuid-1", T0 + 2 * 86_400, 20).await;
 
-    assert_eq!(book_insights(&pool, user, "uuid-1").await.unwrap(), None);
+    assert_eq!(
+        book_insights(&pool, user, "uuid-1", Some(0)).await.unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
@@ -332,7 +372,10 @@ async fn book_insights_keeps_glance_seconds_in_the_total_it_excludes_from_the_co
     reading_session(&pool, user, "uuid-1", T0, 600).await;
     reading_session(&pool, user, "uuid-1", T0 + 86_400, 20).await;
 
-    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+    let insights = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(insights.sessions, 1, "the glance is not a sitting");
     assert_eq!(insights.seconds_total, 620, "but its seconds still count");
@@ -354,7 +397,10 @@ async fn book_insights_keeps_sitting_seconds_below_a_mean_of_the_longest_sit() {
         reading_session(&pool, user, "uuid-1", T0 + i * 86_400, 30).await;
     }
 
-    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+    let insights = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(insights.sessions, 1);
     assert_eq!(insights.seconds_total, 3_000);
@@ -373,7 +419,10 @@ async fn book_insights_counts_a_sitting_glances_add_up_to_over_the_minimum() {
         reading_session(&pool, user, "uuid-1", T0 + i * 100, 20).await;
     }
 
-    let insights = book_insights(&pool, user, "uuid-1").await.unwrap().unwrap();
+    let insights = book_insights(&pool, user, "uuid-1", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(insights.sessions, 1);
     assert_eq!(insights.seconds_total, 80);

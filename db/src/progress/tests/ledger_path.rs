@@ -12,11 +12,15 @@ use super::*;
 
 const T0: i64 = 1_700_000_000;
 
-/// Percent gained on the one book, by day.
+/// Percent gained on the one book, rolled up from quarter-hour slots to UTC
+/// days. The rollup is the read path's job now (migration `0093`); these tests
+/// are about *whether* a write reaches the ledger, so they read it back on the
+/// one calendar that needs no offset to state.
 async fn days(pool: &SqlitePool, user: i64) -> Vec<(String, i64)> {
     sqlx::query_as(
-        "SELECT day, percent_gained FROM reading_progress_daily
-         WHERE user_id = ? ORDER BY day",
+        "SELECT date(slot * 900, 'unixepoch') AS day, SUM(percent_gained) AS gained
+         FROM reading_progress_slots
+         WHERE user_id = ? GROUP BY day ORDER BY day",
     )
     .bind(user)
     .fetch_all(pool)

@@ -24,7 +24,9 @@
 use omnibus_shared::{LengthBucket, PagesReadDetail, TrendPoint};
 use sqlx::{Row, SqlitePool};
 
-use super::{StatsError, FINISHED_EVENTS};
+use crate::progress::SLOT_SECS;
+
+use super::{calendar, StatsError, FINISHED_EVENTS};
 
 /// Words per printed page, the standard prose estimate (the same ballpark
 /// self-publishing/KDP page-count calculators use for a 6x9 trade
@@ -103,26 +105,54 @@ pub(super) fn finished_in_window() -> String {
     )
 }
 
-/// The window's ledger rows joined to their book's resolved length: one
-/// `(day, percent_gained, pages)` row per `(book, day)` the reader moved
-/// forward in. `pages` is NULL for a book no rung measures, and the callers
-/// each decide what to do with those rather than the join dropping them
-/// silently — the total excludes them, the coverage counts them.
+/// Every forward-progress gain one reader has on record, resolved to a day on
+/// **their** calendar: one `(day, uuid, percent_gained)` row per bucket.
 ///
-/// Bind order is `user_id, start`. `start` is a unix second and the ledger
-/// buckets by UTC day, so it is compared as the day it falls in; every
-/// [`omnibus_shared::StatsRange`] begins on a day boundary, so nothing is
-/// gained or lost by that.
-pub(super) fn ledger_in_window() -> String {
+/// Unions the ledger's two generations, which is the whole reason this exists.
+/// `reading_progress_slots` (migration `0093`) keys on a quarter-hour, so its
+/// day is computed here against `offset_minutes` and follows the reader.
+/// `reading_progress_daily` (`0083`) stored a UTC day string and kept no
+/// instant, so there is nothing to re-bucket it from — those rows contribute
+/// their stored day verbatim and are the reason days around the cutover can sit
+/// a few hours out. The old table is frozen, so its share shrinks to nothing as
+/// its days age out of every window.
+///
+/// Bind order is `user_id, user_id`.
+fn ledger_days(offset_minutes: i64) -> String {
+    let slot_day = calendar::local_day(&format!("(s.slot * {SLOT_SECS})"), offset_minutes);
     format!(
-        "SELECT d.day AS day,
-                d.book_uuid AS uuid,
-                d.percent_gained AS percent_gained,
+        "SELECT {slot_day} AS day,
+                s.book_uuid AS uuid,
+                s.percent_gained AS percent_gained
+           FROM reading_progress_slots s WHERE s.user_id = ?
+         UNION ALL
+         SELECT d.day, d.book_uuid, d.percent_gained
+           FROM reading_progress_daily d WHERE d.user_id = ?"
+    )
+}
+
+/// The window's ledger gains joined to their book's resolved length: one
+/// `(day, uuid, percent_gained, pages)` row per bucket. `pages` is NULL for a
+/// book no rung measures, and the callers each decide what to do with those
+/// rather than the join dropping them silently — the total excludes them, the
+/// coverage counts them.
+///
+/// Bind order is `user_id, user_id, start`. `start` is a unix second compared as
+/// the day it falls in **on the reader's calendar**, so it lines up with the day
+/// labels the union produces; comparing it as a UTC day would include a
+/// leading extra day for every reader east of UTC.
+pub(super) fn ledger_in_window(offset_minutes: i64) -> String {
+    format!(
+        "SELECT g.day AS day,
+                g.uuid AS uuid,
+                g.percent_gained AS percent_gained,
                 p.pages AS pages
-         FROM reading_progress_daily d
-         JOIN ({}) p ON p.uuid = d.book_uuid
-         WHERE d.user_id = ? AND d.day >= date(?, 'unixepoch')",
-        book_pages_source()
+         FROM ({}) g
+         JOIN ({}) p ON p.uuid = g.uuid
+         WHERE g.day >= {}",
+        ledger_days(offset_minutes),
+        book_pages_source(),
+        calendar::local_day("?", offset_minutes)
     )
 }
 
@@ -141,6 +171,7 @@ pub(super) async fn pages_read(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
+    offset_minutes: i64,
 ) -> Result<Option<i64>, StatsError> {
     // `SUM` over zero rows is SQL NULL, which maps straight to the tile's
     // em-dash `None` — an unmeasured book must not read as a zero-page one.
@@ -148,9 +179,10 @@ pub(super) async fn pages_read(
         "SELECT CAST(ROUND(SUM(CAST(w.percent_gained AS REAL) * w.pages) / 100.0) AS INTEGER)
          FROM ({}) w
          WHERE w.pages IS NOT NULL",
-        ledger_in_window()
+        ledger_in_window(offset_minutes)
     );
     Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
         .bind(user_id)
         .bind(start)
         .fetch_one(pool)
@@ -252,16 +284,19 @@ pub(super) async fn pages_read_bounded(
     user_id: i64,
     start: i64,
     end: i64,
+    offset_minutes: i64,
 ) -> Result<i64, StatsError> {
     let sql = format!(
         "SELECT COALESCE(
                     CAST(ROUND(SUM(CAST(w.percent_gained AS REAL) * w.pages) / 100.0) AS INTEGER),
                     0)
          FROM ({}) w
-         WHERE w.pages IS NOT NULL AND w.day <= date(? - 1, 'unixepoch')",
-        ledger_in_window()
+         WHERE w.pages IS NOT NULL AND w.day <= {}",
+        ledger_in_window(offset_minutes),
+        calendar::local_day("? - 1", offset_minutes)
     );
     Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
         .bind(user_id)
         .bind(start)
         .bind(end)
@@ -278,25 +313,28 @@ pub(super) async fn pages_read_bounded(
 /// zero of their target, and an em-dash there would read as the goal being
 /// broken rather than as the day being young.
 ///
-/// **UTC, not the reader's local day.** The ledger buckets to a UTC date
-/// string and keeps no timestamp to re-bucket from, so this is the only
-/// calendar available to it; [`omnibus_shared::DailyGoal`] documents what that
-/// costs. Bind order is `user_id, day`.
+/// `day` is on the reader's own calendar, and so is the bucketing this compares
+/// it against — which is the point of migration `0093`. A gain the reader made
+/// at 21:00 counts toward the day they made it on, not the one UTC had rolled
+/// over into. Bind order is `user_id, user_id, day`.
 pub(super) async fn pages_read_on_day(
     pool: &SqlitePool,
     user_id: i64,
     day: &str,
+    offset_minutes: i64,
 ) -> Result<i64, StatsError> {
     let sql = format!(
         "SELECT COALESCE(
-                    CAST(ROUND(SUM(CAST(d.percent_gained AS REAL) * p.pages) / 100.0) AS INTEGER),
+                    CAST(ROUND(SUM(CAST(g.percent_gained AS REAL) * p.pages) / 100.0) AS INTEGER),
                     0)
-         FROM reading_progress_daily d
-         JOIN ({}) p ON p.uuid = d.book_uuid
-         WHERE d.user_id = ? AND d.day = ? AND p.pages IS NOT NULL",
+         FROM ({}) g
+         JOIN ({}) p ON p.uuid = g.uuid
+         WHERE g.day = ? AND p.pages IS NOT NULL",
+        ledger_days(offset_minutes),
         book_pages_source()
     );
     Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
         .bind(user_id)
         .bind(day)
         .fetch_one(pool)
@@ -310,15 +348,17 @@ pub(super) async fn pages_detail(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
+    offset_minutes: i64,
 ) -> Result<PagesReadDetail, StatsError> {
-    let (measured_books, unmeasured_books) = pages_book_counts(pool, user_id, start).await?;
+    let (measured_books, unmeasured_books) =
+        pages_book_counts(pool, user_id, start, offset_minutes).await?;
     let since_day = ledger_epoch(pool).await?;
     // Resolved here rather than from the `StatsRange`, because the range does
     // not answer it: a Year window in the calendar year after the epoch is
     // fully covered, and a Week window in the days just after it is not. Both
-    // sides are UTC `YYYY-MM-DD`, so a lexicographic compare is a date compare.
+    // sides are `YYYY-MM-DD`, so a lexicographic compare is a date compare.
     let window_predates_ledger = match since_day.as_deref() {
-        Some(epoch) => start_day(pool, start).await?.as_str() < epoch,
+        Some(epoch) => start_day(pool, start, offset_minutes).await?.as_str() < epoch,
         None => false,
     };
     Ok(PagesReadDetail {
@@ -326,25 +366,30 @@ pub(super) async fn pages_detail(
         measured_books,
         unmeasured_books,
         audio_books: audio_books(pool, user_id, start).await?,
-        daily: pages_daily(pool, user_id, start).await?,
+        daily: pages_daily(pool, user_id, start, offset_minutes).await?,
         window_predates_ledger,
     })
 }
 
-/// The UTC day a window's `start` unix second falls in, as `YYYY-MM-DD`.
-/// Resolved in SQLite so it uses the same calendar the ledger buckets on.
-async fn start_day(pool: &SqlitePool, start: i64) -> Result<String, StatsError> {
-    Ok(sqlx::query_scalar("SELECT date(?, 'unixepoch')")
-        .bind(start)
-        .fetch_one(pool)
-        .await?)
+/// The day a window's `start` unix second falls in on the reader's calendar, as
+/// `YYYY-MM-DD`. Resolved in SQLite so it uses the same calendar the union in
+/// [`ledger_days`] labels its buckets with.
+async fn start_day(
+    pool: &SqlitePool,
+    start: i64,
+    offset_minutes: i64,
+) -> Result<String, StatsError> {
+    let sql = format!("SELECT {}", calendar::local_day("?", offset_minutes));
+    Ok(sqlx::query_scalar(&sql).bind(start).fetch_one(pool).await?)
 }
 
-/// Pages per UTC day within the window, active days only, ascending.
+/// Pages per day within the window on the reader's calendar, active days only,
+/// ascending.
 async fn pages_daily(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
+    offset_minutes: i64,
 ) -> Result<Vec<TrendPoint>, StatsError> {
     let sql = format!(
         "SELECT w.day AS day,
@@ -354,9 +399,10 @@ async fn pages_daily(
          WHERE w.pages IS NOT NULL
          GROUP BY w.day
          ORDER BY w.day",
-        ledger_in_window()
+        ledger_in_window(offset_minutes)
     );
     let rows = sqlx::query(&sql)
+        .bind(user_id)
         .bind(user_id)
         .bind(start)
         .fetch_all(pool)
@@ -380,14 +426,16 @@ async fn pages_book_counts(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
+    offset_minutes: i64,
 ) -> Result<(i64, i64), StatsError> {
     let sql = format!(
         "SELECT COUNT(DISTINCT CASE WHEN w.pages IS NOT NULL THEN w.uuid END) AS measured,
                 COUNT(DISTINCT CASE WHEN w.pages IS NULL     THEN w.uuid END) AS unmeasured
          FROM ({}) w",
-        ledger_in_window()
+        ledger_in_window(offset_minutes)
     );
     let row = sqlx::query(&sql)
+        .bind(user_id)
         .bind(user_id)
         .bind(start)
         .fetch_one(pool)

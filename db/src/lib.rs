@@ -67,6 +67,7 @@ mod taxonomy;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod thumbs;
+pub mod user_offset;
 pub mod worker;
 
 // Flatten the query layer so callers write `omnibus_db::list_books(...)`

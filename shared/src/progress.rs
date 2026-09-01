@@ -265,6 +265,26 @@ pub struct SessionReport {
     /// charts rather than silently defaulted to UTC.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utc_offset_minutes: Option<i64>,
+    /// IANA zone name on the recording device at capture time —
+    /// `"America/Los_Angeles"`, `"Asia/Tokyo"` (migration `0092`).
+    ///
+    /// Recorded **alongside** [`Self::utc_offset_minutes`], not instead of it,
+    /// because the two answer different questions. The offset says what the
+    /// clock read, which is all the time-of-day strips need and is DST-correct
+    /// by construction. The zone says *where*, which an offset cannot: `-420` is
+    /// Los Angeles in summer, Phoenix year-round and Denver in winter. Only a
+    /// zone can resolve an offset for a **different** instant than the one
+    /// captured — which is what the stats fallback needs when a reader has not
+    /// read across a DST transition.
+    ///
+    /// Nothing reads it yet; resolving a zone needs a tz database, which is a
+    /// dependency this has not earned. It is captured now because a zone name
+    /// cannot be recovered from an offset after the fact.
+    ///
+    /// `None` from a client that doesn't report one, and on every row predating
+    /// migration `0092`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
 }
 
 impl SessionReport {
@@ -277,6 +297,12 @@ impl SessionReport {
     /// Upper bound (inclusive) on [`Self::utc_offset_minutes`] — UTC+14:00,
     /// the eastern extreme of the real IANA span (Kiritimati).
     pub const UTC_OFFSET_MAX_MINUTES: i64 = 14 * 60;
+
+    /// Maximum length (in chars) of [`Self::time_zone`]. The longest name in the
+    /// IANA database is well under this; the bound exists so an unbounded string
+    /// can't ride a batched route into a column, not to police the vocabulary —
+    /// the server stores the name opaquely and never resolves it.
+    pub const TIME_ZONE_MAX_LEN: usize = 64;
 
     /// Reject empty UUIDs, inverted time ranges, negative durations, and a
     /// malformed `client_id` before they reach the `reading_sessions` /
@@ -320,6 +346,22 @@ impl SessionReport {
                     "utc_offset_minutes must be between {} and {}",
                     Self::UTC_OFFSET_MIN_MINUTES,
                     Self::UTC_OFFSET_MAX_MINUTES
+                ));
+            }
+        }
+        // Bounded but not validated against the tz database: the server stores
+        // the name opaquely, so an unrecognised one costs nothing, while a
+        // vocabulary check here would reject a zone added to IANA after this
+        // build shipped. A blank is rejected outright rather than stored as an
+        // empty string, so "absent" has one representation.
+        if let Some(ref zone) = self.time_zone {
+            if zone.trim().is_empty() {
+                return Err("time_zone must not be blank".into());
+            }
+            if zone.chars().count() > Self::TIME_ZONE_MAX_LEN {
+                return Err(format!(
+                    "time_zone exceeds {} characters",
+                    Self::TIME_ZONE_MAX_LEN
                 ));
             }
         }

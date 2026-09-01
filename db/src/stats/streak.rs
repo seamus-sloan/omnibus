@@ -1,11 +1,11 @@
 //! Active-day and streak aggregation for the stats page. Sessions bucket to
-//! unix day numbers (`started_at / 86400`), so consecutiveness is an integer
+//! unix day numbers on the reader's calendar, so consecutiveness is an integer
 //! diff and no date crate is needed. One sorted day list yields all three
 //! figures: days active, the longest run, and the run still live today.
 
 use sqlx::SqlitePool;
 
-use super::StatsError;
+use super::{calendar, StatsError};
 
 /// The day-run figures one window yields, all derived from the same sorted
 /// distinct active-day list.
@@ -31,25 +31,32 @@ pub(super) struct Streak {
 /// period-scoped one, so a windowed value would also make the two clients
 /// disagree about a field that exists to stop exactly that.
 ///
-/// **UTC, like every other day figure in `db::stats`.** No user timezone is
-/// stored anywhere in the schema, so a reader at UTC-7 reading at 21:00 has
-/// that session filed on the following calendar day — which can both fabricate
-/// and break a streak. Fixing that means local-time bucketing, which moves the
-/// heatmap, active days, and every window boundary too; it is not this
-/// metric's to fix alone.
+/// **On the reader's calendar**, from `offset_minutes` — a session at 21:00 for
+/// a reader at UTC-7 is filed on the day they read it, not the following one.
+/// `today` must come from [`super::compute::as_of`] on the *same* offset: the
+/// run is a walk backwards from today, so a day list and an anchor cut on
+/// different calendars would compare days that aren't the same days.
+///
+/// A consequence worth knowing, and the accepted cost of a single calendar: a
+/// reader who changes zones re-dates their whole history, and a run can shorten
+/// where two days merge onto one or break where one splits in two. Anchoring
+/// each day to the zone it was read in would avoid that, but then today's
+/// reading could land on a day that hasn't happened yet where the reader now is
+/// — counting toward neither the streak nor a daily goal for the whole trip.
 pub(super) async fn streak(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
     today: i64,
+    offset_minutes: i64,
 ) -> Result<Streak, StatsError> {
-    let windowed = active_days(pool, user_id, start).await?;
+    let windowed = active_days(pool, user_id, start, offset_minutes).await?;
     // `start = 0` — every day on record, so the live run is the reader's real
     // one whatever period the page is showing.
     let all_time = if start == 0 {
         None
     } else {
-        Some(active_days(pool, user_id, 0).await?)
+        Some(active_days(pool, user_id, 0, offset_minutes).await?)
     };
 
     Ok(Streak {
@@ -60,21 +67,28 @@ pub(super) async fn streak(
 }
 
 /// The user's distinct active days (reading or listening) from `start`,
-/// ascending, as unix day numbers.
-async fn active_days(pool: &SqlitePool, user_id: i64, start: i64) -> Result<Vec<i64>, StatsError> {
-    Ok(sqlx::query_scalar(
-        "SELECT DISTINCT started_at / 86400 AS dnum FROM (
+/// ascending, as unix day numbers on the reader's calendar.
+async fn active_days(
+    pool: &SqlitePool,
+    user_id: i64,
+    start: i64,
+    offset_minutes: i64,
+) -> Result<Vec<i64>, StatsError> {
+    let sql = format!(
+        "SELECT DISTINCT {} AS dnum FROM (
              SELECT started_at FROM reading_sessions   WHERE user_id = ? AND started_at >= ?
              UNION ALL
              SELECT started_at FROM listening_sessions WHERE user_id = ? AND started_at >= ?
          ) ORDER BY dnum",
-    )
-    .bind(user_id)
-    .bind(start)
-    .bind(user_id)
-    .bind(start)
-    .fetch_all(pool)
-    .await?)
+        calendar::local_day_number("started_at", offset_minutes)
+    );
+    Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .bind(start)
+        .bind(user_id)
+        .bind(start)
+        .fetch_all(pool)
+        .await?)
 }
 
 /// Longest run of consecutive days in a sorted, distinct day list.

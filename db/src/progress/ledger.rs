@@ -1,8 +1,13 @@
-//! Forward-progress ledger (migration `0083`): turns the mutable position row
-//! into an append-only record of how much of a book was covered on each day.
-//! `db::stats::pages` reads it; the position write path is the only writer —
-//! every site that sets `reading_progress.progress_percent` must observe here
-//! too, or the ground that write covered is lost for good.
+//! Forward-progress ledger (migrations `0083`, `0093`): turns the mutable
+//! position row into an append-only record of how much of a book was covered,
+//! and when. `db::stats::pages` reads it; the position write path is the only
+//! writer — every site that sets `reading_progress.progress_percent` must
+//! observe here too, or the ground that write covered is lost for good.
+//!
+//! **This layer decides no calendar.** Gains accrue into quarter-hour slots and
+//! the day is resolved on the way out, against whatever offset the reading
+//! client is on — see `crate::user_offset`. Writing a day here, as `0083` did,
+//! is what made the daily pages goal reset at UTC midnight.
 
 use omnibus_shared::ProgressFormat;
 use sqlx::{Sqlite, SqlitePool, Transaction};
@@ -17,8 +22,17 @@ mod tests;
 /// date before which partial reading cannot be reconstructed.
 const PAGES_LEDGER_EPOCH_KEY: &str = "pages_ledger_epoch";
 
+/// Width of a ledger bucket, in seconds — a quarter of an hour.
+///
+/// The granularity a stored gain can be re-bucketed to a local day at: every
+/// modern IANA offset is a whole number of quarter-hours, so shifting a slot by
+/// one lands it exactly on a day boundary, which an hourly bucket could not do
+/// for UTC+05:30, UTC+05:45 or UTC-03:30. Read back by `crate::stats::pages`,
+/// which must resolve days on the same grid this writes them on.
+pub const SLOT_SECS: i64 = 900;
+
 /// Record an observed whole-book percent for `(user, book, format)` and accrue
-/// whatever forward ground it covers into that day's bucket.
+/// whatever forward ground it covers into the quarter-hour it was observed in.
 ///
 /// The gain is measured against the ledger's own mark, never against
 /// `reading_progress.progress_percent`: an epub write carrying only a CFI nulls
@@ -32,8 +46,8 @@ const PAGES_LEDGER_EPOCH_KEY: &str = "pages_ledger_epoch";
 /// not a thing; reading that ground again accrues on the way forward.
 ///
 /// `observed_at` is the surviving record's client event time, so a write
-/// replayed from an offline outbox lands on the day it happened rather than the
-/// day it drained.
+/// replayed from an offline outbox lands in the quarter-hour it happened in
+/// rather than the one it drained in.
 pub(super) async fn observe_percent_tx(
     tx: &mut Transaction<'_, Sqlite>,
     user_id: i64,
@@ -81,18 +95,22 @@ pub(super) async fn observe_percent_tx(
         return Ok(());
     }
 
+    // Floor division, and it has to be: Rust's `/` truncates toward zero, which
+    // for a pre-1970 `observed_at` would round the slot *up* and file the gain
+    // in the quarter-hour after the one it happened in.
+    let slot = observed_at.div_euclid(SLOT_SECS);
     sqlx::query(
-        "INSERT INTO reading_progress_daily
-             (user_id, book_uuid, format, day, percent_gained, updated_at)
-         VALUES (?, ?, ?, date(?, 'unixepoch'), ?, ?)
-         ON CONFLICT(user_id, book_uuid, day, format) DO UPDATE SET
+        "INSERT INTO reading_progress_slots
+             (user_id, book_uuid, format, slot, percent_gained, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, book_uuid, format, slot) DO UPDATE SET
              percent_gained = percent_gained + excluded.percent_gained,
              updated_at = excluded.updated_at",
     )
     .bind(user_id)
     .bind(book_uuid)
     .bind(fmt)
-    .bind(observed_at)
+    .bind(slot)
     .bind(gained)
     .bind(observed_at)
     .execute(&mut **tx)

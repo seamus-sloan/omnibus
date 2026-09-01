@@ -1486,6 +1486,62 @@ async fn merge_sums_forward_progress_day_buckets_onto_the_target() {
     assert_eq!(stranded, 0);
 }
 
+/// Seed one forward-progress quarter-hour slot (migration 0093) for a book.
+async fn seed_slot_ledger(pool: &sqlx::SqlitePool, user: i64, uuid: &str, slot: i64, gained: i64) {
+    sqlx::query(
+        "INSERT INTO reading_progress_slots
+             (user_id, book_uuid, format, slot, percent_gained, updated_at)
+         VALUES (?, ?, 'epub', ?, ?, 1)",
+    )
+    .bind(user)
+    .bind(uuid)
+    .bind(slot)
+    .bind(gained)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn merge_sums_forward_progress_slots_onto_the_target() {
+    // The slot table replaced the day buckets it sits beside, and inherits their
+    // semantics exactly: it is a counter, so a collision sums. A per-reader table
+    // left off `RETARGET_TABLES` strands its rows on the deleted source uuid,
+    // invisible to every query that joins `books` — which is why the new
+    // generation needs its own coverage rather than riding the old one's.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool).await;
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+
+    seed_slot_ledger(&pool, user, &target, 1_000, 10).await;
+    seed_slot_ledger(&pool, user, &source, 1_000, 15).await;
+    // A slot only the source has must survive the retarget untouched.
+    seed_slot_ledger(&pool, user, &source, 1_001, 7).await;
+
+    merge_books(&pool, &source, &target, Some(user))
+        .await
+        .unwrap();
+
+    let rows: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT slot, percent_gained FROM reading_progress_slots
+          WHERE book_uuid = ? ORDER BY slot",
+    )
+    .bind(&target)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows, vec![(1_000, 25), (1_001, 7)]);
+
+    let stranded: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM reading_progress_slots WHERE book_uuid = ?")
+            .bind(&source)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stranded, 0);
+}
+
 #[tokio::test]
 async fn merge_keeps_the_newer_forward_progress_mark() {
     // The mark shadows a position, so latest-wins is right here — unlike the
