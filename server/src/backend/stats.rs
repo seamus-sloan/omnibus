@@ -14,10 +14,22 @@ use axum::{
 };
 use omnibus_db::{self as db, stats::GoalError};
 use omnibus_shared::{DailyGoalUpdate, ReadingGoalUpdate, SessionCursor, StatsRange};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use super::{internal, AppState};
 use crate::auth::AuthUser;
+
+/// Read `utc_offset_minutes` leniently: anything that isn't a number becomes
+/// `None`, the same answer an absent field gives.
+///
+/// A plain `Option<i64>` would break the field's own contract before any handler
+/// runs — axum's `Query` rejects the whole *request* on `?utc_offset_minutes=`
+/// or `=abc`, which is what a client interpolating an absent offset into a URL
+/// sends, and the reader loses their stats page over an optional hint. Trimmed
+/// because a `+` in a query string decodes to a space.
+fn lenient_offset<'de, D: Deserializer<'de>>(de: D) -> Result<Option<i64>, D::Error> {
+    Ok(Option::<String>::deserialize(de)?.and_then(|raw| raw.trim().parse().ok()))
+}
 
 /// Query shape for `GET /api/stats`. `range` is optional so a bare GET serves
 /// the default window; an unknown value is a 400 from the extractor.
@@ -31,18 +43,20 @@ pub(super) struct StatsQuery {
     ///
     /// Optional so an older client still gets an answer: the server then falls
     /// back to the offset of the caller's most recent session, and to UTC if
-    /// there is none. Out-of-range values take the same fallback rather than
-    /// 400-ing, since a bad offset must not cost a reader their stats page.
-    #[serde(default)]
+    /// there is none. Unreadable values take that fallback via
+    /// [`lenient_offset`] and out-of-range ones via
+    /// `db::user_offset::resolve_offset_minutes`, rather than either 400-ing —
+    /// a bad offset must not cost a reader their stats page.
+    #[serde(default, deserialize_with = "lenient_offset")]
     utc_offset_minutes: Option<i64>,
 }
 
-/// Query shape for the goal writes: the same offset [`StatsQuery`] carries, and
-/// for the same reason — the response reports today's progress, so it has to
-/// know whose today. No `range`; a goal is not windowed.
+/// Query shape for the goal writes: the same offset [`StatsQuery`] carries, on
+/// the same lenient terms and for the same reason — the response reports today's
+/// progress, so it has to know whose today. No `range`; a goal is not windowed.
 #[derive(Debug, Deserialize)]
 pub(super) struct GoalQuery {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_offset")]
     utc_offset_minutes: Option<i64>,
 }
 

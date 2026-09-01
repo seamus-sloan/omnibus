@@ -376,12 +376,15 @@ pub(super) async fn daily_goals_at(
         }
     }
 
+    // Both figures are measured against this one label rather than each
+    // re-reading the clock, so a request that crosses local midnight cannot
+    // report one day's name against another day's total.
     let day = user_offset::today(pool, offset_minutes).await?;
     let pages_today = pages::pages_read_on_day(pool, user_id, &day, offset_minutes).await?;
     // Truncating, not rounding: a reader 59 seconds into their first minute
     // has not read a minute yet, and a goal that rounds up hands out progress
     // nobody earned.
-    let minutes_today = day_seconds(pool, user_id, offset_minutes).await? / 60;
+    let minutes_today = day_seconds(pool, user_id, &day, offset_minutes).await? / 60;
 
     let pages = pages_target.map(|target| DailyGoal {
         kind: GOAL_KIND_PAGES.to_string(),
@@ -411,7 +414,11 @@ pub(super) async fn daily_goals_at(
     })
 }
 
-/// Seconds read and listened today on the reader's calendar.
+/// Seconds read and listened on `day` (`YYYY-MM-DD`) on the reader's calendar.
+///
+/// The day is bound in rather than re-derived from `now` here: the caller has
+/// already resolved and reported one, and a second clock read can cross local
+/// midnight and measure a day the label does not name.
 ///
 /// **Every** session counts, whether or not it recorded a capture-time offset.
 /// That is the difference from `super::patterns`, and it follows from what the
@@ -420,21 +427,24 @@ pub(super) async fn daily_goals_at(
 /// property of where they are *now* — and `started_at` alone is enough to place
 /// any row against it. So there is no unplaceable remainder here to disclose.
 ///
-/// Scanned from a bounded tail rather than over the reader's whole history: the
-/// day being asked about is at most ±14 hours off the UTC one, so every row that
-/// can land on it sits inside [`LOCAL_DAY_SCAN_SECS`], and the bound is what
-/// lets this use `(user_id, started_at)` instead of a full scan.
+/// Scanned from a bounded tail rather than over the reader's whole history,
+/// which is what lets it ride `(user_id, started_at)` instead of a full scan —
+/// so `day` has to be *today* on that calendar. Whatever the offset, today's
+/// rows start no earlier than 24 hours back, well inside
+/// [`LOCAL_DAY_SCAN_SECS`]; an older day would fall off the back of the tail.
+///
+/// Binds in SQL order: the union's `user_id, start, user_id, start`, then `day`.
 async fn day_seconds(
     pool: &SqlitePool,
     user_id: i64,
+    day: &str,
     offset_minutes: i64,
 ) -> Result<i64, StatsError> {
     let sql = format!(
         "SELECT COALESCE(SUM(secs), 0)
          FROM ({SESSION_LOCAL_ROWS})
-         WHERE {} = {}",
-        calendar::local_day("started_at", offset_minutes),
-        calendar::local_day("CAST(strftime('%s','now') AS INTEGER)", offset_minutes)
+         WHERE {} = ?",
+        calendar::local_day("started_at", offset_minutes)
     );
     let start = scan_start(pool).await?;
     Ok(sqlx::query_scalar(&sql)
@@ -442,6 +452,7 @@ async fn day_seconds(
         .bind(start)
         .bind(user_id)
         .bind(start)
+        .bind(day)
         .fetch_one(pool)
         .await?)
 }
@@ -449,6 +460,11 @@ async fn day_seconds(
 /// The unix second the local-day scan starts from — see
 /// [`LOCAL_DAY_SCAN_SECS`]. Resolved in SQLite so it shares the clock every
 /// other window boundary is cut on.
+///
+/// Its own clock read is safe where a second read of the *day* would not be: it
+/// only bounds which rows the index walks, and the tail reaches a full day past
+/// the oldest row that can fall on today, so drifting a second across midnight
+/// excludes nothing.
 async fn scan_start(pool: &SqlitePool) -> Result<i64, StatsError> {
     Ok(
         sqlx::query_scalar("SELECT CAST(strftime('%s','now') AS INTEGER) - ?")

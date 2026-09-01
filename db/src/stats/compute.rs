@@ -131,7 +131,7 @@ pub(super) async fn compute(
     let books_per_month = books_per_month(pool, user_id, offset_minutes).await?;
     let previous = previous_period(pool, user_id, range, offset_minutes).await?;
     let listening_daily = listening_daily(pool, user_id, start, offset_minutes).await?;
-    let rating_monthly = ratings::rating_monthly(pool, user_id).await?;
+    let rating_monthly = ratings::rating_monthly(pool, user_id, offset_minutes).await?;
     let pages_read = pages::pages_read(pool, user_id, start, offset_minutes).await?;
     let pages_per_hour = pages::pages_per_hour(pool, user_id, start).await?;
     let length_buckets = pages::length_buckets(pool, user_id, start).await?;
@@ -144,7 +144,7 @@ pub(super) async fn compute(
     // Unwindowed for the same reason, one period down: a daily target recurs,
     // so today's progress is what every range shows.
     let daily_goals = goals::daily_goals_at(pool, user_id, offset_minutes).await?;
-    let superlatives = superlatives::superlatives(pool, user_id, start).await?;
+    let superlatives = superlatives::superlatives(pool, user_id, start, offset_minutes).await?;
     let pages_detail = pages::pages_detail(pool, user_id, start, offset_minutes).await?;
 
     Ok(StatsSummary {
@@ -667,21 +667,15 @@ pub(super) async fn books_per_month(
     // The spine and the completions are both cut on the reader's calendar: a
     // month spine in UTC joined against local completion months would drop
     // December's finishes off the end of a reader east of UTC every year.
-    let now_local = format!("datetime('now', '{offset_minutes} minutes')");
     let sql = format!(
-        "WITH RECURSIVE months(month) AS (
-             SELECT strftime('%Y-%m', {now_local}, 'start of month', '-11 months')
-             UNION ALL
-             SELECT strftime('%Y-%m', month || '-01', '+1 month')
-             FROM months
-             WHERE month < strftime('%Y-%m', {now_local})
-         )
+        "WITH RECURSIVE {}
          SELECT months.month AS month, COUNT(DISTINCT f.book_uuid) AS books
          FROM months
          LEFT JOIN ({}) f
                ON {} = months.month
          GROUP BY months.month
          ORDER BY months.month",
+        calendar::month_spine(offset_minutes),
         live_finished_events(),
         calendar::local_month("f.finished_at", offset_minutes)
     );

@@ -1,7 +1,8 @@
 //! Tests for the reading-stats REST handler. The `db::stats` cache is
-//! process-wide and keyed on `(user_id, range)`, and every fixture pool
-//! restarts user ids at 1 — so each content-asserting test uses a distinct
-//! range to keep its cache key unique across the test binary.
+//! process-wide and keyed on `(user_id, range, offset_minutes)`, and every
+//! fixture pool restarts user ids at 1 — so each content-asserting test uses a
+//! distinct range (or a distinct resolved offset) to keep its cache key unique
+//! across the test binary.
 
 use axum::{
     body::{to_bytes, Body},
@@ -22,15 +23,30 @@ async fn seed_reading_session(
     started_at: i64,
     secs: i64,
 ) {
+    seed_reading_session_at_offset(pool, user, uuid, started_at, secs, None).await;
+}
+
+/// A sitting carrying the capture-time offset column (migration `0080`) — what
+/// the day-boundary fallback reads when a request declares no offset of its own.
+async fn seed_reading_session_at_offset(
+    pool: &sqlx::SqlitePool,
+    user: i64,
+    uuid: &str,
+    started_at: i64,
+    secs: i64,
+    utc_offset_minutes: Option<i64>,
+) {
     sqlx::query(
-        "INSERT INTO reading_sessions (user_id, book_uuid, started_at, ended_at, seconds_read)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO reading_sessions
+             (user_id, book_uuid, started_at, ended_at, seconds_read, utc_offset_minutes)
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(user)
     .bind(uuid)
     .bind(started_at)
     .bind(started_at + secs)
     .bind(secs)
+    .bind(utc_offset_minutes)
     .execute(pool)
     .await
     .unwrap();
@@ -68,6 +84,41 @@ async fn api_get_stats_rejects_unknown_range() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+/// The offset is an optional hint, so every value the server can't use has to
+/// mean what an absent one means — including the empty string a client sends
+/// when it interpolates an offset it doesn't have. A 400 here would cost the
+/// reader the whole page over a field they never had to send.
+///
+/// The seeded session's own offset is what each request falls back to, which
+/// doubles as this test's cache key and keeps it off every other test's.
+#[tokio::test]
+async fn api_get_stats_falls_back_rather_than_400ing_on_an_unusable_offset() {
+    let (app, _state, pool) = fixture().await;
+    let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    seed_reading_session_at_offset(&pool, user.id, &uuid, now_secs(), 600, Some(330)).await;
+
+    // `%20` decodes to a space — present, but saying nothing.
+    for raw in ["", "abc", "12.5", "%20", "99999", "-99999"] {
+        let res = app
+            .clone()
+            .oneshot(get_with_bearer(
+                &format!("/api/stats?range=week&utc_offset_minutes={raw}"),
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "utc_offset_minutes={raw:?}");
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let summary: StatsSummary = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            summary.reading_seconds, 600,
+            "utc_offset_minutes={raw:?} answered, but with nothing in it"
+        );
+    }
 }
 
 #[tokio::test]
@@ -217,14 +268,20 @@ async fn api_get_library_size_reports_coverage_then_500s_when_the_db_fails() {
 
 // --- PUT /api/stats/goal ------------------------------------------------
 
-fn put_goal_req(token: &str, body: serde_json::Value) -> Request<Body> {
+/// Shared by both goal routes, which differ only in their path — and, for the
+/// offset tests, in the query string on it.
+fn put_json_req(uri: &str, token: &str, body: serde_json::Value) -> Request<Body> {
     Request::builder()
-        .uri("/api/stats/goal")
+        .uri(uri)
         .method("PUT")
         .header("content-type", "application/json")
         .header(AUTHORIZATION, format!("Bearer {token}"))
         .body(Body::from(body.to_string()))
         .unwrap()
+}
+
+fn put_goal_req(token: &str, body: serde_json::Value) -> Request<Body> {
+    put_json_req("/api/stats/goal", token, body)
 }
 
 async fn goal_body(res: axum::response::Response) -> Option<ReadingGoal> {
@@ -388,13 +445,7 @@ async fn api_put_stats_goal_returns_500_when_db_fails() {
 // --- PUT /api/stats/goal/daily -------------------------------------------
 
 fn put_daily_goal_req(token: &str, body: serde_json::Value) -> Request<Body> {
-    Request::builder()
-        .uri("/api/stats/goal/daily")
-        .method("PUT")
-        .header("content-type", "application/json")
-        .header(AUTHORIZATION, format!("Bearer {token}"))
-        .body(Body::from(body.to_string()))
-        .unwrap()
+    put_json_req("/api/stats/goal/daily", token, body)
 }
 
 async fn daily_body(res: axum::response::Response) -> DailyGoals {
@@ -569,6 +620,41 @@ async fn api_put_stats_daily_goal_returns_500_when_db_fails() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+/// Both goal routes read the offset on the same lenient terms `GET /api/stats`
+/// does. It only decides whose *today* the returned progress is measured on, so
+/// an unreadable one falls back — refusing the write would lose the reader their
+/// goal over a hint.
+#[tokio::test]
+async fn api_put_stats_goals_accept_an_unusable_offset_on_both_routes() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    for raw in ["", "abc", "99999"] {
+        let res = app
+            .clone()
+            .oneshot(put_json_req(
+                &format!("/api/stats/goal?utc_offset_minutes={raw}"),
+                &token,
+                serde_json::json!({ "target": 24 }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "utc_offset_minutes={raw:?}");
+
+        let res = app
+            .clone()
+            .oneshot(put_json_req(
+                &format!("/api/stats/goal/daily?utc_offset_minutes={raw}"),
+                &token,
+                serde_json::json!({ "kind": "pages", "target": 30 }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "utc_offset_minutes={raw:?}");
+    }
 }
 
 // --- GET /api/library-composition ---------------------------------------

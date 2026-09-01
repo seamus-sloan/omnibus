@@ -9,25 +9,43 @@
 //! # Why the offset is interpolated, not bound
 //!
 //! It arrives as an `i64` that `crate::user_offset::resolve_offset_minutes` has
-//! already forced into `-720..=840`, so there is no string to escape and no
-//! injection surface. Binding it instead would mean threading two extra
-//! placeholders through every call site's bind order — which is exactly the kind
-//! of positional bookkeeping that silently mis-binds a query.
+//! already forced into `-720..=840` — and that [`bounded`] re-applies here, so
+//! the argument rests on this module rather than on every caller. There is no
+//! string to escape and no injection surface. Binding it instead would mean
+//! threading two extra placeholders through every call site's bind order —
+//! which is exactly the kind of positional bookkeeping that silently mis-binds
+//! a query.
 
-use omnibus_shared::StatsRange;
+use omnibus_shared::{SessionReport, StatsRange};
 
 #[cfg(test)]
 mod tests;
 
+/// The offset held to the range `crate::user_offset::resolve_offset_minutes`
+/// already guarantees, so the invariant this module's SQL rests on is enforced
+/// where it is used rather than only where it is produced.
+///
+/// Applied by both builders below rather than by one of them: a bounded shift
+/// paired with an unbounded modifier would put [`window_start_expr`] nowhere
+/// near anyone's midnight, which is worse than either value alone. Clamped, not
+/// rejected — every caller is a read path, and misdating a day degrades better
+/// than overflowing the multiply in [`shift`].
+fn bounded(offset_minutes: i64) -> i64 {
+    offset_minutes.clamp(
+        SessionReport::UTC_OFFSET_MIN_MINUTES,
+        SessionReport::UTC_OFFSET_MAX_MINUTES,
+    )
+}
+
 /// The offset as a signed second count, parenthesised so it can be subtracted
 /// without `- -900` lexing as a `--` line comment.
 fn shift(offset_minutes: i64) -> String {
-    format!("({})", offset_minutes * 60)
+    format!("({})", bounded(offset_minutes) * 60)
 }
 
 /// The offset as a SQLite datetime modifier — `'-420 minutes'`.
 fn modifier(offset_minutes: i64) -> String {
-    format!("'{offset_minutes} minutes'")
+    format!("'{} minutes'", bounded(offset_minutes))
 }
 
 /// `YYYY-MM-DD` of the reader's day containing the unix-seconds column `col`.
@@ -53,6 +71,30 @@ pub(super) fn local_day_number(col: &str, offset_minutes: i64) -> String {
     // Truncating division, corrected down by one whenever it rounded the wrong
     // way — which is exactly when the remainder is negative.
     format!("(({shifted} / 86400) - (CASE WHEN {shifted} % 86400 < 0 THEN 1 ELSE 0 END))")
+}
+
+/// The trailing-12-month `months(month)` CTE body, on the reader's calendar.
+///
+/// Lives here rather than beside its callers because it is a *shift*, and rule
+/// 10's whole point is that there is one place those are written. It reaches for
+/// a datetime modifier where the rest of this module shifts seconds, because a
+/// spine steps in **months** — which only SQLite's calendar arithmetic can do,
+/// and which a second-count cannot express.
+///
+/// Shared by `compute::books_per_month` and `ratings::rating_monthly` so the two
+/// trend charts cannot come to disagree about which month a completion or a
+/// rating falls in.
+pub(super) fn month_spine(offset_minutes: i64) -> String {
+    let now_local = format!("datetime('now', {})", modifier(offset_minutes));
+    format!(
+        "months(month) AS (
+             SELECT strftime('%Y-%m', {now_local}, 'start of month', '-11 months')
+             UNION ALL
+             SELECT strftime('%Y-%m', month || '-01', '+1 month')
+             FROM months
+             WHERE month < strftime('%Y-%m', {now_local})
+         )"
+    )
 }
 
 /// `YYYY-MM` of the reader's month containing the unix-seconds column `col`.

@@ -3,6 +3,7 @@
 //! vs refresh-after-expiry).
 
 use omnibus_shared::{PeriodComparison, StatsRange};
+use sqlx::Row;
 
 use super::*;
 use crate::init_db;
@@ -197,6 +198,32 @@ async fn all_time_aggregates_hours_sessions_and_active_days() {
     assert_eq!(s.active_days, 3);
     assert_eq!(s.heatmap.len(), 3);
     assert_eq!(s.heatmap.iter().map(|d| d.seconds).sum::<i64>(), 2100);
+}
+
+#[tokio::test]
+async fn heatmap_and_biggest_day_name_the_same_day_for_a_reader_west_of_utc() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    // UTC-7, one Monday: 10:00 local, then 20:00 local — which is 03:00 UTC
+    // the next day. In UTC the evening sitting is a separate, larger day.
+    const OFFSET: i64 = -420;
+    const D: i64 = 19_675 * DAY; // 2023-11-14 00:00 UTC
+    reading_session(&pool, user, "uuid-1", D - 7 * 3600, 3000).await;
+    reading_session(&pool, user, "uuid-1", D + 3 * 3600, 3600).await;
+
+    let s = compute(&pool, user, StatsRange::AllTime, OFFSET)
+        .await
+        .unwrap();
+
+    // Both figures ride one summary onto one page, so a superlative naming a
+    // day the heatmap draws as empty is a contradiction the reader can see.
+    assert_eq!(s.heatmap.len(), 1);
+    assert_eq!(s.heatmap[0].day, "2023-11-13");
+    assert_eq!(s.heatmap[0].seconds, 6600);
+    let biggest = s.superlatives.biggest_day.unwrap();
+    assert_eq!(biggest.day, s.heatmap[0].day);
+    assert_eq!(biggest.seconds, s.heatmap[0].seconds);
 }
 
 #[tokio::test]
@@ -879,7 +906,7 @@ async fn rating_monthly_returns_twelve_months_zeroed_when_unrated() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "loner").await;
 
-    let months = rating_monthly(&pool, user).await.unwrap();
+    let months = rating_monthly(&pool, user, 0).await.unwrap();
     assert_eq!(months.len(), 12);
     assert!(months.iter().all(|m| m.value == 0.0));
 }
@@ -892,8 +919,40 @@ async fn rating_monthly_places_a_rating_in_its_calendar_month() {
     let now = months_ago_secs(&pool, 0).await;
     rate_book(&pool, user, "uuid-1", 7, now).await;
 
-    let months = rating_monthly(&pool, user).await.unwrap();
+    let months = rating_monthly(&pool, user, 0).await.unwrap();
     assert_eq!(months.last().unwrap().value, 3.5);
+}
+
+#[tokio::test]
+async fn rating_monthly_cuts_its_spine_and_its_buckets_on_the_readers_calendar() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    // UTC+13. The first instant of the reader's current month is always still
+    // the previous month in UTC, so a UTC spine and a UTC join file this
+    // rating a month early — the exact drift against `books_per_month` and
+    // the chart builder that this covers.
+    const OFFSET: i64 = 780;
+    // Both off one clock read, so a month rollover between them can't flake.
+    let row = sqlx::query(&format!(
+        "SELECT CAST(strftime('%s', 'now', '+{OFFSET} minutes', 'start of month') AS INTEGER)
+                    - {OFFSET} * 60 AS at,
+                strftime('%Y-%m', 'now', '+{OFFSET} minutes') AS month"
+    ))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (at, local_month): (i64, String) = (row.get("at"), row.get("month"));
+    rate_book(&pool, user, "uuid-1", 7, at).await;
+
+    let months = rating_monthly(&pool, user, OFFSET).await.unwrap();
+
+    let last = months.last().unwrap();
+    assert_eq!(last.label, local_month, "spine ends on the reader's month");
+    assert!(
+        (last.value - 3.5).abs() < f64::EPSILON,
+        "the rating belongs to that month: {months:?}"
+    );
 }
 
 /// Seed a user with an explicit id. The stats cache is a process-wide static
@@ -1052,7 +1111,7 @@ async fn rating_monthly_excludes_a_rating_whose_book_is_gone() {
     rate_book(&pool, user, "uuid-2", 2, at).await;
     drop_book_row(&pool, "uuid-2").await;
 
-    let months = rating_monthly(&pool, user).await.unwrap();
+    let months = rating_monthly(&pool, user, 0).await.unwrap();
     assert_eq!(months.len(), 12);
     // Same filter as `avg_stars`, so the tile and its trend agree.
     assert!(

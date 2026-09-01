@@ -19,8 +19,14 @@ falls back to the reader's most recent session offset, then to UTC.
 
 That covers the heatmap, the streak and active days, `listening_daily`,
 `busiest_week`, both daily goals, the annual goal's year bounds, `as_of`,
-`books_per_month`, the chart builder's buckets **and its axis**, and where the
-Week/Month/Year window itself opens.
+`books_per_month`, `rating_monthly`, the superlatives that name a day
+(`biggest_day`, `fastest_read`), the chart builder's buckets **and its axis**,
+and where the Week/Month/Year window itself opens.
+
+The list is long on purpose. Converting *most* of it is the failure mode: a
+`biggest_day` left on UTC beside a local heatmap names a day the grid shows as
+empty, and a `rating_monthly` left on UTC months files one rating in a different
+month from the chart built over the same data. Both shipped that way once.
 
 - **Never hand-write the shift.** Compose from `stats::calendar` —
   `local_day`, `local_day_number`, `local_month`, `window_start_expr`,

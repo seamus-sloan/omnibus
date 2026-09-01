@@ -6,7 +6,7 @@
 use omnibus_shared::{RatingBucket, TrendPoint};
 use sqlx::{Row, SqlitePool};
 
-use super::StatsError;
+use super::{calendar, StatsError};
 
 /// A rating on a book that still exists, scoped to one user — the same
 /// liveness rule `compute::live_finished_events` applies to completions.
@@ -111,26 +111,27 @@ pub(super) async fn rating_histogram(
 
 /// Mean star rating per calendar month over the trailing 12 months (oldest
 /// first, ending at the current month) — the Avg rating tile's drill-in trend
-/// chart. Same trailing-window CTE shape as `compute::books_per_month`; a month
-/// with no ratings comes back as `0.0` rather than being omitted.
+/// chart. A month with no ratings comes back as `0.0` rather than being omitted.
+///
+/// Spine and join are both cut on the reader's calendar: the spine off
+/// [`calendar::month_spine`], so this trend and `compute::books_per_month` span
+/// the same twelve months, and the join off `updated_at`'s local month, so a
+/// rating lands here where the chart builder's `AvgRating` arm also puts it.
 pub(super) async fn rating_monthly(
     pool: &SqlitePool,
     user_id: i64,
+    offset_minutes: i64,
 ) -> Result<Vec<TrendPoint>, StatsError> {
     let sql = format!(
-        "WITH RECURSIVE months(month) AS (
-             SELECT strftime('%Y-%m', 'now', 'start of month', '-11 months')
-             UNION ALL
-             SELECT strftime('%Y-%m', month || '-01', '+1 month')
-             FROM months
-             WHERE month < strftime('%Y-%m', 'now')
-         )
+        "WITH RECURSIVE {}
          SELECT months.month AS month, AVG(ur.half_stars) / 2.0 AS avg_stars
          FROM months
          LEFT JOIN ({LIVE_RATINGS}) ur
-                ON strftime('%Y-%m', ur.updated_at, 'unixepoch') = months.month
+                ON {} = months.month
          GROUP BY months.month
-         ORDER BY months.month"
+         ORDER BY months.month",
+        calendar::month_spine(offset_minutes),
+        calendar::local_month("ur.updated_at", offset_minutes)
     );
     let rows = sqlx::query(&sql).bind(user_id).fetch_all(pool).await?;
 
