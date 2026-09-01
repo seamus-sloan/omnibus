@@ -240,3 +240,63 @@ private func sitting(
     #expect(preview == "The Cinder scene lands differently in audio")
 }
 
+
+// MARK: - Two-position Home geometry
+
+@Test func restTopSitsUnderAWholeCoverOnAPhone() {
+    #expect(DetailRead.restTop(width: 402, height: 874) == 603)
+}
+
+@Test func restTopYieldsToAShortScreenSoThePanelKeepsItsStrip() {
+    // A 375pt-wide cover runs 562pt tall; a 700pt screen caps the rest
+    // position so the panel keeps its 240pt strip.
+    #expect(DetailRead.restTop(width: 375, height: 700) == 460)
+}
+
+@Test func restTopKeepsAFloorOfArtOnADegenerateScreen() {
+    #expect(DetailRead.restTop(width: 800, height: 400) == 220)
+}
+
+@Test func scrollMapLiftsAcrossTheRestRunBeforeAnyPageTurns() {
+    let mid = DetailRead.scrollMap(offset: 300, restTop: 600, viewport: 874)
+    #expect(abs(mid.lift - 0.5) < 0.001)
+    #expect(mid.page == 0)
+
+    let lifted = DetailRead.scrollMap(offset: 600, restTop: 600, viewport: 874)
+    #expect(lifted.lift == 1)
+    #expect(lifted.page == 0)
+}
+
+@Test func scrollMapCountsPagesPastTheRestRun() {
+    let map = DetailRead.scrollMap(offset: 600 + 874 * 2, restTop: 600, viewport: 874)
+    #expect(map.lift == 1)
+    #expect(abs(map.page - 2) < 0.001)
+}
+
+@Test func scrollMapDegeneratesToPlainPagingWithoutARestRun() {
+    let map = DetailRead.scrollMap(offset: 874, restTop: 0, viewport: 874)
+    #expect(map.lift == 1)
+    #expect(abs(map.page - 1) < 0.001)
+}
+
+// MARK: - Home sync row
+
+@Test func syncRowInvitesALinkWhileFormatsAreNotLinked() {
+    let copy = DetailSyncCopy(label: "Positions unlinked", action: "Link", linked: false)
+    #expect(DetailRead.syncRow(state: .notLinked) == copy)
+    // No answer yet (offline, or the fetch hasn't landed) reads the same —
+    // the sheet it opens states the truth either way.
+    #expect(DetailRead.syncRow(state: nil) == copy)
+}
+
+@Test func syncRowAsksForAReconfirmWhenTheLinkWentStale() {
+    #expect(DetailRead.syncRow(state: .linkStale)
+        == DetailSyncCopy(label: "Sync needs re-confirm", action: "Re-confirm", linked: false))
+}
+
+@Test func syncRowStatesLinkedForEveryLinkedState() {
+    let linked = DetailSyncCopy(label: "Positions linked", action: "Manage", linked: true)
+    #expect(DetailRead.syncRow(state: .aligned) == linked)
+    #expect(DetailRead.syncRow(state: .candidate) == linked)
+    #expect(DetailRead.syncRow(state: .nothingNewer) == linked)
+}
