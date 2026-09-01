@@ -240,6 +240,20 @@ private func sitting(
     #expect(preview == "The Cinder scene lands differently in audio")
 }
 
+@Test func journalRowPreviewUnwrapsANumberedOrQuotedOpeningLine() {
+    #expect(JournalRow.preview("1. Started it again") == "Started it again")
+    #expect(JournalRow.preview("> The Beauty of the House") == "The Beauty of the House")
+    // Prose that merely opens with a year keeps its digits — the marker needs
+    // its `.` or `)`.
+    #expect(JournalRow.preview("1984 reads differently now") == "1984 reads differently now")
+}
+
+@Test func journalRowPreviewCensorsASpoilerSoTheRowCannotLeakIt() {
+    // The row is always visible, so the span never reaches it in the clear.
+    let preview = JournalRow.preview("Cannot believe ||Fitchner was **ARES**|| honestly")
+    #expect(preview == "Cannot believe \u{2588}\u{2588}\u{2588} honestly")
+}
+
 
 // MARK: - Two-position Home geometry
 
