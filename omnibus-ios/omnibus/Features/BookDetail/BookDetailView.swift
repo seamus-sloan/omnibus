@@ -1,13 +1,14 @@
 //  BookDetailView.swift
-//  The book detail marquee: full-bleed cover art running off the top edge,
-//  a translucent panel riding over its lower edge, and the page organised as
-//  seven snap stops on a vertical pager — Home · Shelf · Stats · Highlights ·
-//  Journals · The files · Recommendations. Home has two positions: the page
-//  opens on the artwork whole — the cover, or the generated plate at the
-//  same size — with the panel resting under it, and the first swipe lifts
-//  the panel to full height before the next one moves on to stop 02. Chrome
-//  is immersive: glass discs over the art, a tappable dot rail, and a
-//  persistent bottom action bar so Resume never scrolls away.
+//  The book detail: full-bleed cover art running off the top edge and the
+//  page opening on it whole — the cover, or the generated plate at the same
+//  size — with the panel resting under it. Past that, the layout follows the
+//  reader's scroll-stops preference. Off (the default), the flow: every
+//  section — Home · Stats · Highlights · Journals · The files · More —
+//  runs on in one continuous list, nothing capped. On, the marquee: the
+//  same sections as six snap stops on a vertical pager, one screenful
+//  each. Chrome is immersive either way: glass discs over the
+//  art, a persistent bottom action bar so Resume never scrolls away, and
+//  the marquee's tappable dot rail or the flow's nav strip behind the discs.
 
 import SwiftUI
 
@@ -114,7 +115,10 @@ final class BookDetailModel {
             }
             group.addTask { @MainActor in
                 for await items in UserDataService.highlights(uuid: uuid).values() {
-                    self.highlights = items
+                    // Sorted once at ingestion: the stops re-render on every
+                    // scroll tick, so a per-render sort is a real cost the
+                    // flow's uncapped list would pay constantly.
+                    self.highlights = items.sorted { $0.createdAt > $1.createdAt }
                 }
             }
             group.addTask { @MainActor in
@@ -228,21 +232,22 @@ final class BookDetailModel {
     }
 }
 
-/// The seven stops, in scroll order.
+/// The six stops, in scroll order. The trailing More folds what used to be
+/// two stops — the shelf block and the recommendations — into one, matching
+/// the design's six-section list on both clients.
 enum DetailStop: Int, CaseIterable, Identifiable {
-    case home, shelf, stats, highlights, journals, files, recommendations
+    case home, stats, highlights, journals, files, more
 
     var id: Int { rawValue }
 
     var name: String {
         switch self {
         case .home: "Home"
-        case .shelf: "Shelf"
         case .stats: "Stats"
         case .highlights: "Highlights"
         case .journals: "Journals"
         case .files: "The files"
-        case .recommendations: "Recommendations"
+        case .more: "More"
         }
     }
 }
@@ -261,6 +266,9 @@ struct BookDetailView: View {
     /// Scroll id of the rest run above the Home stop — the pre-Home snap
     /// target the two-position panel rests at.
     static let restMarkerID = -1
+    /// Scroll id of the flow body's snap position, `DetailRead.flowNavPeek`
+    /// short of the cover's end — where the lift cue's tap sends the list.
+    static let flowLiftedMarkerID = -2
 
     /// What the journal composer was opened for. `Identifiable` so the
     /// composer can be an item-driven sheet, which is what keeps a chosen
@@ -322,6 +330,9 @@ struct BookDetailView: View {
     @State private var lifted = false
     /// The stop the scroller has settled nearest to.
     @State private var at: Int = 0
+    /// Flow only: whether the cover has scrolled away — the discs go flat
+    /// and the nav strip fades in under them.
+    @State private var flowPast = false
     /// Scroll-position binding for the dot rail's jumps. Written on a tap;
     /// the scroller keeps it updated as pages snap.
     @State private var scrollTarget: Int?
@@ -476,6 +487,13 @@ struct BookDetailView: View {
 
     // MARK: - Shell
 
+    /// Whether this reader opted into the snap-stop marquee. Off — the
+    /// default — renders the page as the flow: one snap stop (the cover,
+    /// whole), then every section in a single continuous list.
+    private var usesScrollStops: Bool {
+        app.user?.bookDetailScrollStops ?? false
+    }
+
     private func content(_ book: Book) -> some View {
         GeometryReader { geometry in
             // The scroller and art ignore the safe areas, so the rest
@@ -493,16 +511,28 @@ struct BookDetailView: View {
                 ScreenBackground()
                 DetailArtLayer(book: book, page: page, lift: lift)
                     .ignoresSafeArea()
-                snapScroller(book, restTop: restTop)
-                    .ignoresSafeArea()
+                if usesScrollStops {
+                    snapScroller(book, restTop: restTop)
+                        .ignoresSafeArea()
+                } else {
+                    flowScroller(book, restTop: restTop)
+                        .ignoresSafeArea()
+                }
+            }
+            .overlay(alignment: .top) {
+                if !usesScrollStops { FlowNavStrip(shown: flowPast) }
             }
             .overlay(alignment: .top) { chromeDiscs(book) }
             .overlay(alignment: .trailing) {
-                DetailDotRail(at: at) { stop in
-                    withAnimation(Motion.settle) { scrollTarget = stop.rawValue }
+                if usesScrollStops {
+                    DetailDotRail(at: at) { stop in
+                        withAnimation(Motion.settle) { scrollTarget = stop.rawValue }
+                    }
                 }
             }
-            .overlay(alignment: .bottomTrailing) { nextHint }
+            .overlay(alignment: .bottomTrailing) {
+                if usesScrollStops { nextHint }
+            }
             .overlay(alignment: .bottom) { restFade }
             .overlay(alignment: .bottom) { actionBar(book) }
         }
@@ -606,6 +636,86 @@ struct BookDetailView: View {
         }
     }
 
+    // MARK: - Flow (Option B)
+
+    /// The marquee unrolled: the rest run is the one snap stop, and past it
+    /// every section runs on in a single continuous list. Only the hero
+    /// region snaps (`FlowSnapBehavior`); the list itself scrolls free.
+    private func flowScroller(_ book: Book, restTop: CGFloat) -> some View {
+        ScrollView(.vertical) {
+            VStack(spacing: 0) {
+                Color.clear
+                    .frame(height: max(0, restTop - DetailRead.flowNavPeek))
+                    .id(Self.restMarkerID)
+                // The body's snap position: this marker's top edge, a
+                // nav strip's worth of art short of the cover's end.
+                Color.clear
+                    .frame(height: DetailRead.flowNavPeek)
+                    .id(Self.flowLiftedMarkerID)
+                flowBody(book)
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(FlowSnapBehavior(restTop: restTop))
+        .scrollPosition(id: $scrollTarget)
+        .scrollIndicators(.hidden)
+        .onScrollGeometryChange(for: DetailScrollState.self) { geometry in
+            DetailScrollState(
+                offset: geometry.contentOffset.y + geometry.contentInsets.top,
+                viewport: geometry.containerSize.height
+            )
+        } action: { _, state in
+            guard state.viewport > 0 else { return }
+            let map = DetailRead.flowMap(
+                offset: state.offset,
+                restTop: restTop,
+                navPeek: DetailRead.flowNavPeek
+            )
+            lift = map.lift
+            page = map.page
+            if map.past != flowPast {
+                withAnimation(Motion.snap) { flowPast = map.past }
+            }
+            let settled = map.lift > 0.6
+            if settled != lifted {
+                withAnimation(Motion.snap) { lifted = settled }
+            }
+        }
+    }
+
+    /// The list itself: the lift cue, then every section in stop order,
+    /// each introduced by its number and a hairline — and nothing capped,
+    /// so every kept line and journal entry is in the list.
+    private func flowBody(_ book: Book) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            FlowCue(visible: !lifted) {
+                withAnimation(Motion.settle) { scrollTarget = Self.flowLiftedMarkerID }
+            }
+            ForEach(DetailStop.allCases) { stop in
+                VStack(alignment: .leading, spacing: 0) {
+                    if stop != .home {
+                        Hairline()
+                            .padding(.top, 34)
+                        FlowSectionLabel(stop: stop)
+                            .padding(.top, 30)
+                    }
+                    stopContent(stop, book, uncapped: true)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(EdgeInsets(top: 13, leading: 22, bottom: 132, trailing: 30))
+        .background {
+            // Slightly lighter than a full stop's 0.82: the art ghosts
+            // through near the top and the ground is behind the rest.
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                palette.bg0Color.opacity(0.74)
+            }
+        }
+        .overlay(alignment: .top) { Hairline() }
+    }
+
     /// At rest the panel's lower content runs on under the action bar; this
     /// fades it into the ground the way the design masks it out, and lifts
     /// away with the panel.
@@ -626,7 +736,9 @@ struct BookDetailView: View {
     }
 
     @ViewBuilder
-    private func stopContent(_ stop: DetailStop, _ book: Book) -> some View {
+    private func stopContent(
+        _ stop: DetailStop, _ book: Book, uncapped: Bool = false
+    ) -> some View {
         switch stop {
         case .home:
             StopHome(
@@ -637,16 +749,17 @@ struct BookDetailView: View {
                 onAlignment: { showAlignment = true },
                 onRemovedWishlist: { model.wishlistEntry = nil }
             )
-        case .shelf:
-            StopShelf(book: book, model: model) { showShelfPicker = true }
         case .stats:
             StopStats(book: book, model: model)
         case .highlights:
-            StopHighlights(book: book, model: model) { showAllHighlights = true }
+            StopHighlights(book: book, model: model, uncapped: uncapped) {
+                showAllHighlights = true
+            }
         case .journals:
             StopJournals(
                 book: book,
                 model: model,
+                uncapped: uncapped,
                 onWrite: {
                     composing = .new
                 },
@@ -661,12 +774,27 @@ struct BookDetailView: View {
                 onListen: { listen(book) },
                 onAlignment: { showAlignment = true }
             )
-        case .recommendations:
-            StopRecommendations(book: book, model: model)
+        case .more:
+            // The old Shelf and Recommendations stops, concatenated — the
+            // shelf block keeps its chips and strips, minus its author strip,
+            // which the recommendations' author cluster already carries.
+            VStack(alignment: .leading, spacing: 0) {
+                StopShelf(book: book, model: model, authorStrip: false) {
+                    showShelfPicker = true
+                }
+                StopRecommendations(book: book, model: model)
+                    .padding(.top, 26)
+            }
         }
     }
 
     // MARK: - Chrome
+
+    /// Whether the chrome discs still float over artwork: the marquee's
+    /// first stop, or the flow while the cover has not yet scrolled away.
+    private var discsOverArt: Bool {
+        usesScrollStops ? at == 0 : !flowPast
+    }
 
     /// Back and ⋯, as glass discs over the art — flat controls once the
     /// panel has taken the screen and there is no artwork left to blur.
@@ -679,7 +807,7 @@ struct BookDetailView: View {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 16, weight: .semibold))
             }
-            .buttonStyle(DiscButtonStyle(overArt: at == 0))
+            .buttonStyle(DiscButtonStyle(overArt: discsOverArt))
             .accessibilityLabel("Back")
 
             Spacer()
@@ -711,12 +839,12 @@ struct BookDetailView: View {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 15, weight: .semibold))
             }
-            .buttonStyle(DiscButtonStyle(overArt: at == 0))
+            .buttonStyle(DiscButtonStyle(overArt: discsOverArt))
             .accessibilityLabel("More")
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
-        .animation(Motion.snap, value: at == 0)
+        .animation(Motion.snap, value: discsOverArt)
     }
 
     /// A quiet pointer at what the next swipe reaches. Home speaks for

@@ -1,7 +1,8 @@
 //  BookDetailStops.swift
-//  The seven snap-stop panels of the book detail marquee, the small pieces
-//  they share (kicker, ruler, stat tiles, cover strips, inset lists), and the
-//  pure derivations behind them (`DetailRead`, `DetailStats`).
+//  The section panels of the book detail — six in either layout, with the
+//  trailing More holding the shelf block and the recommendations — the small
+//  pieces they share (kicker, ruler, stat tiles, cover strips, inset lists),
+//  and the pure derivations behind them (`DetailRead`, `DetailStats`).
 
 import SwiftUI
 
@@ -99,6 +100,28 @@ enum DetailRead {
         return (
             lift: min(1, max(0, offset / restTop)),
             page: max(0, (offset - restTop) / viewport)
+        )
+    }
+
+    /// How much art keeps peeking behind the nav strip at the flow body's
+    /// snap position, measured from the screen's top — the one source for
+    /// the snap behavior, the scroll map, and the scroller's marker.
+    static let flowNavPeek: CGFloat = 96
+
+    /// The Option B flow's scroll → shell state. `lift` is the rest→lifted
+    /// progress across the run to the body's snap position (it drives the
+    /// art's whole→windowed morph and the rest fade); `page` feeds the art's
+    /// pan and wash as the list runs on; `past` is when the cover has gone
+    /// and the nav strip takes over under the discs.
+    static func flowMap(
+        offset: CGFloat, restTop: CGFloat, navPeek: CGFloat = DetailRead.flowNavPeek
+    ) -> (lift: CGFloat, page: CGFloat, past: Bool) {
+        let run = max(1, restTop - navPeek)
+        let ratio = offset / max(1, restTop)
+        return (
+            lift: min(1, max(0, offset / run)),
+            page: max(0, (ratio - 0.35) * 2.4),
+            past: ratio > 0.55
         )
     }
 
@@ -956,11 +979,16 @@ struct StopHome: View {
     }
 }
 
-// MARK: - 02 · Shelf
+// MARK: - 06 · More — the shelf block
 
 struct StopShelf: View {
     let book: Book
     let model: BookDetailModel
+    /// Whether this block stands alone as a full stop. Off inside the More
+    /// section, which drops the "more by <author>" strip (the
+    /// recommendations half already carries the author cluster) and the
+    /// full-screen ruled void (the section continues right below it).
+    var authorStrip = true
     var onShelfPicker: () -> Void
 
     @Environment(\.palette) private var palette
@@ -1061,11 +1089,16 @@ struct StopShelf: View {
             if series.count <= 1, knowsMembership, model.authorBooks.isEmpty, shelfNames.isEmpty {
                 MonoNote(text: "a shelf gathers books by hand, or fills itself from a rule")
                     .padding(.top, 20)
-                StopRuledVoid(rows: 2)
-                    .padding(.top, 18)
+                // The ruled void filled the old standalone stop's screen; in
+                // the More section the page continues below, so it would read
+                // as a gap rather than a waiting page.
+                if authorStrip {
+                    StopRuledVoid(rows: 2)
+                        .padding(.top, 18)
+                }
             }
 
-            if series.count <= 1, !model.authorBooks.isEmpty {
+            if authorStrip, series.count <= 1, !model.authorBooks.isEmpty {
                 MonoNote(text: "more by \(book.authorDisplay)")
                     .padding(.top, 20)
                 ScrollView(.horizontal) {
@@ -1086,7 +1119,7 @@ struct StopShelf: View {
     }
 }
 
-// MARK: - 03 · Stats
+// MARK: - 02 · Stats
 
 struct StopStats: View {
     let book: Book
@@ -1229,11 +1262,14 @@ struct StopStats: View {
     }
 }
 
-// MARK: - 04 · Highlights
+// MARK: - 03 · Highlights
 
 struct StopHighlights: View {
     let book: Book
     let model: BookDetailModel
+    /// The flow (Option B) has no fixed screenful to fit, so it lists every
+    /// kept line inline instead of capping at `stopCount` behind a sheet.
+    var uncapped = false
     var onAll: () -> Void
 
     /// Passages shown on the stop before the sheet takes over.
@@ -1266,17 +1302,28 @@ struct StopHighlights: View {
             } else {
                 DetailKicker(text: "Kept lines · \(all.count)")
 
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Self.preview(of: all)) { highlight in
-                        HighlightRow(highlight: highlight)
+                if uncapped {
+                    // Lazy: the flow's list is unbounded, and the model
+                    // already stores highlights newest-first.
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(all) { highlight in
+                            HighlightRow(highlight: highlight)
+                        }
                     }
-                }
-                .padding(.top, 6)
+                    .padding(.top, 6)
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Self.preview(of: all)) { highlight in
+                            HighlightRow(highlight: highlight)
+                        }
+                    }
+                    .padding(.top, 6)
 
-                MoreRowButton(
-                    label: "All \(all.count) highlights",
-                    identifier: "highlights-show-more"
-                ) { onAll() }
+                    MoreRowButton(
+                        label: "All \(all.count) highlights",
+                        identifier: "highlights-show-more"
+                    ) { onAll() }
+                }
             }
         }
     }
@@ -1322,11 +1369,14 @@ struct HighlightRow: View {
     }
 }
 
-// MARK: - 05 · Journals
+// MARK: - 04 · Journals
 
 struct StopJournals: View {
     let book: Book
     let model: BookDetailModel
+    /// The flow (Option B) has no fixed screenful to fit, so it lists every
+    /// entry inline instead of capping at `stopCount` behind a sheet.
+    var uncapped = false
     var onWrite: () -> Void
     var onOpen: (JournalEntry) -> Void
     var onAll: () -> Void
@@ -1359,14 +1409,24 @@ struct StopJournals: View {
                 StopRuledVoid()
                     .padding(.top, 22)
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(entries.prefix(Self.stopCount)) { entry in
-                        JournalRow(entry: entry) { onOpen(entry) }
+                if uncapped {
+                    // Lazy, and no copied slice: the flow's list is unbounded.
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(entries) { entry in
+                            JournalRow(entry: entry) { onOpen(entry) }
+                        }
                     }
+                    .padding(.top, 8)
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(entries.prefix(Self.stopCount)) { entry in
+                            JournalRow(entry: entry) { onOpen(entry) }
+                        }
+                    }
+                    .padding(.top, 8)
                 }
-                .padding(.top, 8)
 
-                if entries.count > Self.stopCount {
+                if !uncapped, entries.count > Self.stopCount {
                     MoreRowButton(label: "All \(entries.count) entries") { onAll() }
                 } else {
                     MonoNote(text: "everyone reading this book writes here")
@@ -1470,7 +1530,7 @@ struct JournalRow: View {
     }
 }
 
-// MARK: - 06 · The files
+// MARK: - 05 · The files
 
 struct StopFiles: View {
     let book: Book
@@ -1708,7 +1768,7 @@ struct DownloadBadge: View {
     }
 }
 
-// MARK: - 07 · Recommendations
+// MARK: - 06 · More — the recommendations block
 
 struct StopRecommendations: View {
     let book: Book

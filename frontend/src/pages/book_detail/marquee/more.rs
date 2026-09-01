@@ -1,36 +1,78 @@
-//! Stop 02 · Shelf — the book in its company. Series books render the whole
-//! series as a cover shelf in reading order with an "Up next" pill; a
-//! standalone shows the hand-picked shelves holding it. Both fetch post-mount
-//! (rule 07: SSR and the first WASM paint render the same quiet shell).
+//! Stop 06 · More — everything that points away from this book, in one
+//! place: the shelf it sits on (its series, or the shelves holding a
+//! standalone), the rest of the author's work, then what to read next.
+//! Fetches post-mount (rule 07: SSR and the first WASM paint render the
+//! same quiet shell).
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{EbookMetadata, SeriesDetail, ShelfSummary};
+use omnibus_shared::{EbookMetadata, SeriesDetail, ShelfSummary, SuggestionsResponse};
 
 use crate::components::atrium::Cover;
 use crate::{data, use_server_url, Route};
 
+use super::super::body::{BdAuthorCluster, BdPageCtx, BdSameHand, BdSuggestionsStrip};
 use super::MarqueeViewFacts;
 
-/// The Shelf stop: series shelf or standalone shelves. The series itself is
-/// fetched once by the stage and threaded in, so this stop and the Home
-/// kicker read the same record.
+/// Everything the More stop needs beyond the book, bundled to keep the
+/// component under the prop-count guideline (mirrors `MarqueeStageCtx`).
+#[derive(Clone, PartialEq, Props)]
+pub(super) struct MoreStopCtx {
+    pub series: Option<SeriesDetail>,
+    pub author_books: Vec<EbookMetadata>,
+    pub suggestions: Option<SuggestionsResponse>,
+    pub page: BdPageCtx,
+}
+
+/// The More stop: the shelf beside this book, the author's other work, then
+/// suggestions. The series is fetched once by the stage and threaded in, so
+/// this stop and the Home kicker read the same record.
+///
+/// These were two stops until the running order collapsed to six — the shelf
+/// is not a subject of its own, it is one of the three ways this page points
+/// away from the book it is about.
 #[component]
-pub(super) fn MarqueeShelfStop(
+pub(super) fn MarqueeMoreStop(
     b: EbookMetadata,
     view: MarqueeViewFacts,
-    series: Option<SeriesDetail>,
+    ctx: MoreStopCtx,
 ) -> Element {
+    let MoreStopCtx {
+        series,
+        author_books,
+        suggestions,
+        page,
+    } = ctx;
     rsx! {
-        if let Some(series_id) = b.series_id {
-            MarqueeSeriesShelf {
-                series_id,
-                series_name: view.series.clone().unwrap_or_default(),
-                current_uuid: b.unique_identifier.clone().unwrap_or_default(),
-                detail: series,
+        div { class: "bdmq-tight bdmq-more", "data-testid": "bdmq-more",
+            if let Some(series_id) = b.series_id {
+                MarqueeSeriesShelf {
+                    series_id,
+                    series_name: view.series.clone().unwrap_or_default(),
+                    current_uuid: b.unique_identifier.clone().unwrap_or_default(),
+                    detail: series,
+                }
+            } else {
+                MarqueeStandaloneShelves { uuid: b.unique_identifier.clone().unwrap_or_default() }
             }
-        } else {
-            MarqueeStandaloneShelves { uuid: b.unique_identifier.clone().unwrap_or_default() }
+            div { class: "bdmq-morerule" }
+            BdSameHand {
+                author: BdAuthorCluster {
+                    primary_author: view.primary_author.clone(),
+                    author_id: view.author_id,
+                    author_books,
+                },
+            }
+            // The suggestions strip opens with its own `.divider`, which the
+            // panel hides (`.bdmq-tight .divider`) — so inside More it would
+            // butt straight up against the author's shelf. Give it the same
+            // rule the block above it gets.
+            div { class: "bdmq-morerule" }
+            BdSuggestionsStrip {
+                book_title: view.title.clone(),
+                suggestions,
+                ctx: page,
+            }
         }
     }
 }
