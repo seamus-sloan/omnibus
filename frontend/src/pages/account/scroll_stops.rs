@@ -1,11 +1,8 @@
 //! "Omnibus User Settings" account card (Settings → Account): the table of
-//! per-user feature switches, of which the book detail's scroll stops is the
-//! first — whether that page uses the snap-stop marquee or reads as one
-//! continuous scroll. A table rather than a run of cards because the list is
-//! expected to grow: a new switch is a row, not a section.
-//!
-//! Each row saves on change rather than behind a Save button — the switches
-//! are independent, so there is nothing to batch a Save across.
+//! per-user feature switches, the book detail's scroll stops being the first.
+//! A table because the list is expected to grow — a new switch is a row, not
+//! a section — and each row saves on change, since independent switches have
+//! nothing to batch a Save across.
 
 use dioxus::prelude::*;
 
@@ -41,13 +38,20 @@ fn scroll_stops_toggle_handler(
                 Ok(()) => {
                     confirmed.set(Some(next));
                     error.set(None);
-                    // Refresh the app-wide viewer so a book detail page
-                    // opened next reads the new value. Without this the
-                    // context keeps the stale one and the page renders the
-                    // layout the reader just turned off, until a reload.
-                    if let Ok(resolved) = data::current_user().await {
-                        viewer_slot.set(Some(resolved));
-                    }
+                    // Patch the app-wide viewer so a book detail page opened
+                    // next reads the new value — without this the context
+                    // keeps the stale one and the page renders the layout the
+                    // reader just turned off, until a reload.
+                    //
+                    // Written from the value the server just accepted rather
+                    // than re-fetched: a failed refetch would leave the
+                    // context stale with nothing to report, and this is the
+                    // one field whose new value is already known here.
+                    viewer_slot.with_mut(|slot| {
+                        if let Some(Some(user)) = slot.as_mut() {
+                            user.book_detail_scroll_stops = next;
+                        }
+                    });
                 }
                 Err(e) => {
                     // Push the checkbox back to what the server still holds.

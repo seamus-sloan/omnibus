@@ -1,15 +1,8 @@
-//! Marquee book-detail stage (web): the cover pinned huge on the left,
-//! content in a translucent panel on the right, and six sections — Home ·
-//! Stats · Highlights · Journals · The files · More — under a
-//! hover-expanding dot-rail table of contents.
-//!
-//! The panel reads two ways, chosen by the viewer's `book_detail_scroll_stops`
-//! preference. Off (the default) is the flow: one continuous scroll, each
-//! section introduced by its number and a hairline, nothing capped. On is the
-//! marquee: the same six sections as snapped screens. Only the scroll
-//! mechanics and the section headers differ — every stop renders the same
-//! content either way. Mechanics live in `marquee.js` / `flow.js`, installed
-//! post-mount (rule 07).
+//! Marquee book-detail stage (web): the cover pinned huge on the left, six
+//! sections in a translucent panel on the right, a dot-rail TOC. The panel
+//! reads two ways on the viewer's `book_detail_scroll_stops` preference — off
+//! (the default) is one continuous flow, on is the snapped marquee, same
+//! content either way. Mechanics: `flow.js` / `marquee.js`, post-mount.
 
 use dioxus::prelude::*;
 use omnibus_shared::progress::ProgressFormat;

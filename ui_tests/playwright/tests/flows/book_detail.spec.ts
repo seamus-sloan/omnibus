@@ -243,6 +243,27 @@ test.describe("scroll stops preference", () => {
     await expect(page.locator("#bdmq-flow")).toHaveCount(0);
   });
 
+  test("the marquee's own scroll glue is installed when the preference is on", async ({
+    page,
+    request,
+  }) => {
+    await setScrollStops(request, true);
+    const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+    await gotoReady(page, `/books/${uuid}`);
+    await expect(page.locator("#bdmq-snap")).toBeAttached();
+
+    // The mode is only known once the viewer resolves, so the first paint is
+    // the flow and the marquee replaces it. The glue has to follow that swap:
+    // if the flow's listeners stay bound, the snap container scrolls with no
+    // dot tracking and no parallax, and the rail goes dead.
+    await page.locator("#bdmq-snap").evaluate((el) => {
+      el.scrollTop = 3 * el.clientHeight;
+    });
+
+    await expect(page.getByTestId("bdmq-dot-3")).toHaveClass(/\bon\b/);
+    await expect(page.getByTestId("bdmq-dot-0")).not.toHaveClass(/\bon\b/);
+  });
+
   test("turning the preference on restores the snap-stop marquee", async ({
     page,
     request,
