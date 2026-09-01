@@ -565,16 +565,18 @@ async fn fold_daily_ledger(
 /// read would otherwise suppress every gain below 90% on the merged book for a
 /// whole sitting — the reader reads 15%→60% and the tile reports nothing.
 ///
-/// Scoped to readers holding a mark on **both** books, which is exactly the set
-/// the dedupe resolves. A reader with a mark on only one of them keeps a clock
-/// that still describes their own reading: a source-only mark is retargeted onto
-/// a book holding the same content, and a target-only mark is not touched at
-/// all. Clearing those too would re-baseline a sitting nothing had disturbed,
-/// letting the mark fall and handing back ground already counted — the very
-/// over-credit this migration exists to remove.
+/// Scoped to `(reader, format)` pairs holding a mark on **both** books, which is
+/// exactly the set the dedupe resolves — it keys on `format` too, so an epub
+/// mark and an audio mark never collide and neither one's provenance is in
+/// doubt. That distinction carries the common case rather than an edge one: a
+/// merge is usually cross-format, so the reader most often holds an epub mark on
+/// one book and an audio mark on the other, and a reader-wide clear would
+/// re-baseline both sittings when the dedupe had touched neither. Anything
+/// cleared needlessly lets its mark fall on the next observation and hands back
+/// ground already counted — the over-credit this whole change exists to remove.
 ///
 /// Must run *before* the dedupe: afterwards one of the two rows has been
-/// deleted, so the readers holding both are no longer identifiable.
+/// deleted, so the pairs holding both are no longer identifiable.
 async fn clear_sitting_clock(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     source_uuid: &str,
@@ -583,10 +585,10 @@ async fn clear_sitting_clock(
     sqlx::query(
         "UPDATE reading_progress_marks SET sitting_observed_at = NULL
           WHERE book_uuid IN (?1, ?2)
-            AND user_id IN (
-                SELECT user_id FROM reading_progress_marks WHERE book_uuid = ?1
+            AND (user_id, format) IN (
+                SELECT user_id, format FROM reading_progress_marks WHERE book_uuid = ?1
                 INTERSECT
-                SELECT user_id FROM reading_progress_marks WHERE book_uuid = ?2
+                SELECT user_id, format FROM reading_progress_marks WHERE book_uuid = ?2
             )",
     )
     .bind(source_uuid)
