@@ -2,12 +2,16 @@
 //! reading day, longest sit, fastest read. Every input is already persisted;
 //! each figure is one ranked query over a table the rest of `db::stats`
 //! already aggregates.
+//!
+//! The two day-shaped figures — biggest day, fastest read — cut their days on
+//! `offset_minutes` via `calendar`, because they render beside the heatmap and
+//! the pages tile that do the same.
 
 use omnibus_shared::{BookSuperlative, DayActivity, Superlatives, FASTEST_READ_MIN_SECS};
 use sqlx::{Row, SqlitePool};
 
 use super::compute::{SESSION_ROWS, USER_SESSION_ROWS};
-use super::{pages, sessionize, StatsError};
+use super::{calendar, pages, sessionize, StatsError};
 
 /// The author join every book-naming superlative shares: position-0 creator,
 /// left-joined so a book with no author link still wins its category.
@@ -29,12 +33,13 @@ pub(super) async fn superlatives(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
+    offset_minutes: i64,
 ) -> Result<Superlatives, StatsError> {
     let longest_book = extreme_book(pool, user_id, start, Extreme::Longest).await?;
     let shortest_book = extreme_book(pool, user_id, start, Extreme::Shortest).await?;
-    let biggest_day = biggest_day(pool, user_id, start).await?;
+    let biggest_day = biggest_day(pool, user_id, start, offset_minutes).await?;
     let longest_sit = longest_sit(pool, user_id, start).await?;
-    let fastest_read = fastest_read(pool, user_id, start).await?;
+    let fastest_read = fastest_read(pool, user_id, start, offset_minutes).await?;
 
     Ok(Superlatives {
         shortest_book: drop_degenerate_shortest(longest_book.as_ref(), shortest_book),
@@ -112,9 +117,12 @@ fn drop_degenerate_shortest(
     (long.book_uuid != short.book_uuid && long.value != short.value).then_some(short)
 }
 
-/// The single busiest calendar day in the window, reading and listening
-/// together — a `MAX` over the same per-day rollup `compute::heatmap` builds,
-/// with the same UTC bucketing. Ties break to the earliest day.
+/// The single busiest day in the window, reading and listening together — a
+/// `MAX` over the same per-day rollup `compute::heatmap` builds, on the same
+/// [`calendar::local_day`] buckets. Ties break to the earliest day.
+///
+/// The two ride one `StatsSummary` onto one page, so a `MAX` cut in UTC
+/// headlines a day the heatmap beside it draws as empty.
 ///
 /// A day under [`sessionize::MIN_SITTING_SECS`] is no day at all: the surfaces
 /// render this figure in whole minutes, so a window whose only activity was a
@@ -125,12 +133,14 @@ async fn biggest_day(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
+    offset_minutes: i64,
 ) -> Result<Option<DayActivity>, StatsError> {
     let sql = format!(
-        "SELECT date(started_at, 'unixepoch') AS day, SUM(secs) AS seconds
+        "SELECT {} AS day, SUM(secs) AS seconds
          FROM ({SESSION_ROWS})
          GROUP BY day HAVING seconds >= {}
          ORDER BY seconds DESC, day ASC LIMIT 1",
+        calendar::local_day("started_at", offset_minutes),
         sessionize::MIN_SITTING_SECS
     );
     let row = sqlx::query(&sql)
@@ -179,8 +189,12 @@ async fn longest_sit(
 }
 
 /// The book finished in the window in the fewest days from its **first
-/// recorded session**, in whole days with a same-day read reported as one
-/// rather than zero.
+/// recorded session**, in whole days on the reader's calendar, with a same-day
+/// read reported as one rather than zero.
+///
+/// Both ends go through [`calendar::local_day_number`]. The shift is common to
+/// them and usually cancels — but not when it carries only one end across a
+/// midnight, which is precisely when the reader counts the days differently.
 ///
 /// Three deliberate choices, each of which the naive version gets wrong:
 ///
@@ -202,10 +216,13 @@ async fn fastest_read(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
+    offset_minutes: i64,
 ) -> Result<Option<BookSuperlative>, StatsError> {
+    let finished_day = calendar::local_day_number("f.finished_at", offset_minutes);
+    let first_day = calendar::local_day_number("s.first_at", offset_minutes);
     let sql = format!(
         "SELECT {BOOK_COLUMNS},
-                MAX(1, (f.finished_at / 86400) - (s.first_at / 86400)) AS value
+                MAX(1, {finished_day} - {first_day}) AS value
          FROM (
              SELECT book_uuid, MIN(finished_at) AS finished_at
              FROM ({}) WHERE finished_at >= ? GROUP BY book_uuid

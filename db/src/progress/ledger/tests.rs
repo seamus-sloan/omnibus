@@ -1,6 +1,6 @@
 //! Unit tests for the forward-progress ledger: baselining, forward accrual,
 //! the sitting boundary that makes a there-and-back move free, out-of-order
-//! observations, and day bucketing.
+//! observations, and slot bucketing.
 
 use super::*;
 use crate::init_db;
@@ -17,16 +17,29 @@ const PAST_GAP: i64 = IDLE_GAP_SECS + 1;
 
 const UUID: &str = "uuid-a";
 
-/// The whole ledger for one book, as `(day, percent_gained)` ascending.
-async fn days(pool: &SqlitePool, user: i64) -> Vec<(String, i64)> {
+/// The whole ledger for one book rolled up to days, as `(day, percent_gained)`
+/// ascending, read back at `offset_minutes`.
+///
+/// The rollup lives here rather than in the ledger because that is now the whole
+/// design: storage keeps a quarter-hour, and *which day* that is stays a
+/// question the reader's offset answers at read time.
+async fn days_at(pool: &SqlitePool, user: i64, offset_minutes: i64) -> Vec<(String, i64)> {
     sqlx::query_as(
-        "SELECT day, percent_gained FROM reading_progress_daily
-         WHERE user_id = ? ORDER BY day",
+        "SELECT date(slot * 900 + ? * 60, 'unixepoch') AS day,
+                SUM(percent_gained) AS gained
+         FROM reading_progress_slots
+         WHERE user_id = ? GROUP BY day ORDER BY day",
     )
+    .bind(offset_minutes)
     .bind(user)
     .fetch_all(pool)
     .await
     .unwrap()
+}
+
+/// [`days_at`] in UTC — what the ledger used to store outright.
+async fn days(pool: &SqlitePool, user: i64) -> Vec<(String, i64)> {
+    days_at(pool, user, 0).await
 }
 
 /// The sitting's high-water percent.
@@ -205,7 +218,7 @@ async fn observe_percent_credits_forward_ground_covered_across_a_sitting_boundar
 }
 
 #[tokio::test]
-async fn observe_percent_buckets_each_gain_into_its_own_utc_day() {
+async fn observe_percent_buckets_each_gain_into_its_own_day() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
 
@@ -219,6 +232,82 @@ async fn observe_percent_buckets_each_gain_into_its_own_utc_day() {
     assert_eq!(
         days(&pool, user).await,
         vec![("2023-11-14".into(), 10), ("2023-11-15".into(), 20)]
+    );
+}
+
+#[tokio::test]
+async fn a_stored_gain_rebuckets_to_the_day_the_reader_is_on() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    // 22:13 UTC — an evening read west of UTC, already tomorrow east of it.
+    observe(&pool, user, 0, T0).await;
+    observe(&pool, user, 20, T0 + 60).await;
+
+    // The point of migration 0093: one stored gain, three calendars, no
+    // rewrite. Storing a day string could only ever have answered the first.
+    assert_eq!(
+        days_at(&pool, user, 0).await,
+        vec![("2023-11-14".into(), 20)]
+    );
+    assert_eq!(
+        days_at(&pool, user, -420).await,
+        vec![("2023-11-14".into(), 20)],
+        "still the 14th in Los Angeles"
+    );
+    assert_eq!(
+        days_at(&pool, user, 540).await,
+        vec![("2023-11-15".into(), 20)],
+        "already the 15th in Tokyo"
+    );
+}
+
+#[tokio::test]
+async fn a_gain_lands_in_the_quarter_hour_it_was_observed_in() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    // Two observations 20 minutes apart straddle a quarter-hour boundary, so
+    // they take separate rows — the granularity that makes a quarter-hour zone
+    // (UTC+05:45) re-bucketable at all.
+    observe(&pool, user, 0, T0).await;
+    observe(&pool, user, 10, T0 + 60).await;
+    observe(&pool, user, 25, T0 + 1_200).await;
+
+    let slots: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT slot, percent_gained FROM reading_progress_slots
+         WHERE user_id = ? ORDER BY slot",
+    )
+    .bind(user)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(slots.len(), 2, "got {slots:?}");
+    assert_eq!(slots[0], ((T0 + 60) / 900, 10));
+    assert_eq!(slots[1], ((T0 + 1_200) / 900, 15));
+}
+
+#[tokio::test]
+async fn a_gain_observed_before_the_epoch_floors_into_the_earlier_slot() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    // A device with a badly wrong clock files one. Rust's `/` truncates toward
+    // zero, which would round a negative instant *up* into the slot after the
+    // one it happened in.
+    observe(&pool, user, 0, -1_000).await;
+    observe(&pool, user, 10, -900).await;
+
+    let slot: i64 = sqlx::query_scalar("SELECT slot FROM reading_progress_slots WHERE user_id = ?")
+        .bind(user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        slot, -1,
+        "-900s is the quarter-hour before the epoch, not 0"
     );
 }
 

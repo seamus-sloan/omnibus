@@ -1,7 +1,8 @@
 //! Unit tests for `db::stats::goals`: the read/write happy paths for both
 //! scopes, every `GoalError` variant, the per-year isolation AC7 turns on, the
-//! local-versus-UTC day the two daily kinds are measured over, and the cache
-//! invalidation a just-saved goal depends on.
+//! local-versus-UTC day the two daily kinds are measured over and its agreement
+//! with the day they label, and the cache invalidation a just-saved goal depends
+//! on.
 
 use omnibus_shared::{
     StatsRange, GOAL_KIND_BOOKS, MAX_DAILY_MINUTES, MAX_DAILY_PAGES, MAX_GOAL_TARGET,
@@ -55,12 +56,12 @@ async fn set_goal_stores_a_target_and_reads_back_with_progress() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 3).await;
     let user = seed_user(&pool, "alice").await;
-    let year = current_year(&pool).await.unwrap();
+    let year = current_year(&pool, 0).await.unwrap();
     let when = early_in(&pool, year).await;
     finish(&pool, user, "uuid-1", when).await;
     finish(&pool, user, "uuid-2", when).await;
 
-    let saved = set_goal(&pool, user, &ReadingGoalUpdate::books(24))
+    let saved = set_goal(&pool, user, &ReadingGoalUpdate::books(24), None)
         .await
         .unwrap()
         .expect("a target was set, so a goal comes back");
@@ -70,7 +71,10 @@ async fn set_goal_stores_a_target_and_reads_back_with_progress() {
     assert_eq!(saved.year, year);
 
     // And it is durable: an independent read sees the same thing.
-    let read = goal_for_year(&pool, user, year).await.unwrap().unwrap();
+    let read = goal_for_year(&pool, user, year, None)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(read, saved);
 }
 
@@ -79,10 +83,10 @@ async fn set_goal_overwrites_an_existing_target_for_the_same_year() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
 
-    set_goal(&pool, user, &ReadingGoalUpdate::books(12))
+    set_goal(&pool, user, &ReadingGoalUpdate::books(12), None)
         .await
         .unwrap();
-    let raised = set_goal(&pool, user, &ReadingGoalUpdate::books(40))
+    let raised = set_goal(&pool, user, &ReadingGoalUpdate::books(40), None)
         .await
         .unwrap()
         .unwrap();
@@ -100,11 +104,11 @@ async fn set_goal_overwrites_an_existing_target_for_the_same_year() {
 async fn set_goal_with_no_target_clears_the_row_rather_than_storing_zero() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    set_goal(&pool, user, &ReadingGoalUpdate::books(12))
+    set_goal(&pool, user, &ReadingGoalUpdate::books(12), None)
         .await
         .unwrap();
 
-    let cleared = set_goal(&pool, user, &ReadingGoalUpdate::clear_books())
+    let cleared = set_goal(&pool, user, &ReadingGoalUpdate::clear_books(), None)
         .await
         .unwrap();
     assert!(cleared.is_none());
@@ -126,7 +130,7 @@ async fn set_goal_returns_unsupported_kind_for_a_kind_other_than_books() {
         target: Some(12),
         ..Default::default()
     };
-    let err = set_goal(&pool, user, &update).await.unwrap_err();
+    let err = set_goal(&pool, user, &update, None).await.unwrap_err();
     assert!(matches!(err, GoalError::UnsupportedKind(k) if k == "pages"));
 }
 
@@ -136,7 +140,7 @@ async fn set_goal_returns_invalid_target_outside_one_to_the_maximum() {
     let user = seed_user(&pool, "alice").await;
 
     for bad in [0, -3, MAX_GOAL_TARGET + 1] {
-        let err = set_goal(&pool, user, &ReadingGoalUpdate::books(bad))
+        let err = set_goal(&pool, user, &ReadingGoalUpdate::books(bad), None)
             .await
             .unwrap_err();
         assert!(
@@ -157,7 +161,7 @@ async fn set_goal_returns_invalid_year_outside_the_supported_range() {
             target: Some(12),
             ..Default::default()
         };
-        let err = set_goal(&pool, user, &update).await.unwrap_err();
+        let err = set_goal(&pool, user, &update, None).await.unwrap_err();
         assert!(
             matches!(err, GoalError::InvalidYear(y) if y == bad),
             "expected InvalidYear for {bad}, got {err:?}"
@@ -171,7 +175,7 @@ async fn set_goal_propagates_a_db_error_when_the_pool_is_closed() {
     let user = seed_user(&pool, "alice").await;
     pool.close().await;
 
-    let err = set_goal(&pool, user, &ReadingGoalUpdate::books(12))
+    let err = set_goal(&pool, user, &ReadingGoalUpdate::books(12), None)
         .await
         .unwrap_err();
     assert!(matches!(err, GoalError::Sqlx(_)), "got {err:?}");
@@ -185,20 +189,20 @@ async fn current_goal_and_progress_counts_the_year_with_or_without_a_target() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 3).await;
     let user = seed_user(&pool, "alice").await;
-    let year = current_year(&pool).await.unwrap();
+    let year = current_year(&pool, 0).await.unwrap();
     let when = early_in(&pool, year).await;
     for uuid in ["uuid-1", "uuid-2"] {
         finish(&pool, user, uuid, when).await;
     }
 
-    let (goal, count) = current_goal_and_progress(&pool, user).await.unwrap();
+    let (goal, count) = current_goal_and_progress(&pool, user, 0).await.unwrap();
     assert!(goal.is_none(), "no target set");
     assert_eq!(count, 2, "the year is counted anyway");
 
-    set_goal(&pool, user, &ReadingGoalUpdate::books(30))
+    set_goal(&pool, user, &ReadingGoalUpdate::books(30), None)
         .await
         .unwrap();
-    let (goal, after) = current_goal_and_progress(&pool, user).await.unwrap();
+    let (goal, after) = current_goal_and_progress(&pool, user, 0).await.unwrap();
     assert_eq!(after, count, "the count did not move when the goal was set");
     assert_eq!(
         goal.map(|g| g.current),
@@ -211,8 +215,11 @@ async fn current_goal_and_progress_counts_the_year_with_or_without_a_target() {
 async fn goal_for_year_is_none_when_the_user_has_set_nothing() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    let year = current_year(&pool).await.unwrap();
-    assert!(goal_for_year(&pool, user, year).await.unwrap().is_none());
+    let year = current_year(&pool, 0).await.unwrap();
+    assert!(goal_for_year(&pool, user, year, None)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
@@ -220,7 +227,7 @@ async fn goal_for_year_counts_only_completions_inside_that_year() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 4).await;
     let user = seed_user(&pool, "alice").await;
-    let year = current_year(&pool).await.unwrap();
+    let year = current_year(&pool, 0).await.unwrap();
 
     // Two finished this year, one finished two years ago.
     finish(&pool, user, "uuid-1", early_in(&pool, year).await).await;
@@ -228,7 +235,7 @@ async fn goal_for_year_counts_only_completions_inside_that_year() {
     finish(&pool, user, "uuid-3", early_in(&pool, year - 2).await).await;
 
     // A goal on each of the two years, so both are readable.
-    set_goal(&pool, user, &ReadingGoalUpdate::books(24))
+    set_goal(&pool, user, &ReadingGoalUpdate::books(24), None)
         .await
         .unwrap();
     let past = ReadingGoalUpdate {
@@ -236,18 +243,27 @@ async fn goal_for_year_counts_only_completions_inside_that_year() {
         target: Some(5),
         ..Default::default()
     };
-    set_goal(&pool, user, &past).await.unwrap();
+    set_goal(&pool, user, &past, None).await.unwrap();
 
-    let this_year = goal_for_year(&pool, user, year).await.unwrap().unwrap();
+    let this_year = goal_for_year(&pool, user, year, None)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(this_year.current, 2);
 
     // AC7: filing a goal against a past year reports that year's real total
     // and leaves this year's alone.
-    let then = goal_for_year(&pool, user, year - 2).await.unwrap().unwrap();
+    let then = goal_for_year(&pool, user, year - 2, None)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(then.current, 1);
     assert_eq!(then.target, 5);
     assert_eq!(
-        goal_for_year(&pool, user, year).await.unwrap().unwrap(),
+        goal_for_year(&pool, user, year, None)
+            .await
+            .unwrap()
+            .unwrap(),
         this_year
     );
 }
@@ -258,15 +274,21 @@ async fn goal_for_year_ignores_another_users_goal_and_completions() {
     seed_minimal_books(&pool, 2).await;
     let alice = seed_user(&pool, "alice").await;
     let bob = seed_user(&pool, "bob").await;
-    let year = current_year(&pool).await.unwrap();
+    let year = current_year(&pool, 0).await.unwrap();
     finish(&pool, bob, "uuid-1", early_in(&pool, year).await).await;
 
-    set_goal(&pool, alice, &ReadingGoalUpdate::books(10))
+    set_goal(&pool, alice, &ReadingGoalUpdate::books(10), None)
         .await
         .unwrap();
-    let alices = goal_for_year(&pool, alice, year).await.unwrap().unwrap();
+    let alices = goal_for_year(&pool, alice, year, None)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(alices.current, 0);
-    assert!(goal_for_year(&pool, bob, year).await.unwrap().is_none());
+    assert!(goal_for_year(&pool, bob, year, None)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
@@ -274,15 +296,15 @@ async fn goal_for_year_ignores_a_completion_on_a_book_that_no_longer_exists() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 1).await;
     let user = seed_user(&pool, "alice").await;
-    let year = current_year(&pool).await.unwrap();
+    let year = current_year(&pool, 0).await.unwrap();
     // Same liveness filter every other completion metric applies.
     finish(&pool, user, "uuid-ghost", early_in(&pool, year).await).await;
-    set_goal(&pool, user, &ReadingGoalUpdate::books(10))
+    set_goal(&pool, user, &ReadingGoalUpdate::books(10), None)
         .await
         .unwrap();
 
     assert_eq!(
-        goal_for_year(&pool, user, year)
+        goal_for_year(&pool, user, year, None)
             .await
             .unwrap()
             .unwrap()
@@ -296,9 +318,9 @@ async fn current_goal_rides_every_summary_and_does_not_move_with_the_range() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 2).await;
     let user = seed_user(&pool, "alice").await;
-    let year = current_year(&pool).await.unwrap();
+    let year = current_year(&pool, 0).await.unwrap();
     finish(&pool, user, "uuid-1", early_in(&pool, year).await).await;
-    set_goal(&pool, user, &ReadingGoalUpdate::books(24))
+    set_goal(&pool, user, &ReadingGoalUpdate::books(24), None)
         .await
         .unwrap();
 
@@ -306,7 +328,7 @@ async fn current_goal_rides_every_summary_and_does_not_move_with_the_range() {
     // though a January-2nd completion falls outside the Week window.
     let mut seen = Vec::new();
     for range in StatsRange::ALL {
-        let summary = compute::compute(&pool, user, range).await.unwrap();
+        let summary = compute::compute(&pool, user, range, 0).await.unwrap();
         seen.push(summary.goal.expect("every range carries the goal"));
     }
     assert!(seen.windows(2).all(|w| w[0] == w[1]), "{seen:?}");
@@ -336,18 +358,18 @@ async fn set_goal_invalidates_the_cached_summary_so_the_next_read_is_current() {
     let user = seed_user_with_id(&pool, 9931, "goal-cache").await;
 
     // Warm the cache with the no-goal answer, well inside the TTL.
-    let before = super::super::user_stats(&pool, user, StatsRange::Week)
+    let before = super::super::user_stats(&pool, user, StatsRange::Week, None)
         .await
         .unwrap();
     assert!(before.goal.is_none());
 
-    set_goal(&pool, user, &ReadingGoalUpdate::books(24))
+    set_goal(&pool, user, &ReadingGoalUpdate::books(24), None)
         .await
         .unwrap();
 
     // AC5: without the invalidation this would still be the cached `None`
     // for up to STATS_TTL_SECS.
-    let after = super::super::user_stats(&pool, user, StatsRange::Week)
+    let after = super::super::user_stats(&pool, user, StatsRange::Week, None)
         .await
         .unwrap();
     assert_eq!(after.goal.map(|g| g.target), Some(24));
@@ -501,11 +523,16 @@ async fn daily_goals_take_the_offset_from_the_most_recent_session_in_either_tabl
     let alice = seed_user(&pool, "alice").await;
     read_session(&pool, alice, "uuid-1", now - 3_600, 60, Some(WEST)).await;
     listen_session(&pool, alice, "uuid-1", now - 60, 60, OFFSET_PLUS_13).await;
-    set_daily_goal(&pool, alice, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20))
-        .await
-        .unwrap();
+    set_daily_goal(
+        &pool,
+        alice,
+        &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        daily_goals(&pool, alice)
+        daily_goals(&pool, alice, None)
             .await
             .unwrap()
             .minutes
@@ -519,11 +546,21 @@ async fn daily_goals_take_the_offset_from_the_most_recent_session_in_either_tabl
     let bob = seed_user(&pool, "bob").await;
     listen_session(&pool, bob, "uuid-1", now - 3_600, 60, OFFSET_PLUS_13).await;
     read_session(&pool, bob, "uuid-1", now - 60, 60, Some(WEST)).await;
-    set_daily_goal(&pool, bob, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20))
-        .await
-        .unwrap();
+    set_daily_goal(
+        &pool,
+        bob,
+        &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        daily_goals(&pool, bob).await.unwrap().minutes.unwrap().day,
+        daily_goals(&pool, bob, None)
+            .await
+            .unwrap()
+            .minutes
+            .unwrap()
+            .day,
         west_day
     );
 }
@@ -533,19 +570,29 @@ async fn set_daily_goal_stores_both_kinds_independently_and_reads_them_back() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
 
-    let after_pages = set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_PAGES, 30))
-        .await
-        .unwrap();
+    let after_pages = set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_PAGES, 30),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(after_pages.pages.as_ref().map(|g| g.target), Some(30));
     assert!(after_pages.minutes.is_none());
 
     // Setting the second kind must leave the first exactly as it was.
-    let both = set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20))
-        .await
-        .unwrap();
+    let both = set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(both.pages.as_ref().map(|g| g.target), Some(30));
     assert_eq!(both.minutes.as_ref().map(|g| g.target), Some(20));
-    assert_eq!(daily_goals(&pool, user).await.unwrap(), both);
+    assert_eq!(daily_goals(&pool, user, None).await.unwrap(), both);
 }
 
 #[tokio::test]
@@ -553,12 +600,22 @@ async fn set_daily_goal_overwrites_the_same_kind_rather_than_adding_a_second_row
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
 
-    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_PAGES, 30))
-        .await
-        .unwrap();
-    let raised = set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_PAGES, 50))
-        .await
-        .unwrap();
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_PAGES, 30),
+        None,
+    )
+    .await
+    .unwrap();
+    let raised = set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_PAGES, 50),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(raised.pages.map(|g| g.target), Some(50));
 
     // The partial unique index is what makes this a change and not a duplicate
@@ -577,14 +634,24 @@ async fn set_daily_goal_overwrites_the_same_kind_rather_than_adding_a_second_row
 async fn set_daily_goal_with_no_target_clears_only_that_kind() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_PAGES, 30))
-        .await
-        .unwrap();
-    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20))
-        .await
-        .unwrap();
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_PAGES, 30),
+        None,
+    )
+    .await
+    .unwrap();
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20),
+        None,
+    )
+    .await
+    .unwrap();
 
-    let left = set_daily_goal(&pool, user, &DailyGoalUpdate::clear(GOAL_KIND_PAGES))
+    let left = set_daily_goal(&pool, user, &DailyGoalUpdate::clear(GOAL_KIND_PAGES), None)
         .await
         .unwrap();
     assert!(left.pages.is_none(), "the cleared kind is gone");
@@ -599,16 +666,21 @@ async fn set_daily_goal_with_no_target_clears_only_that_kind() {
 async fn set_daily_goal_does_not_disturb_the_annual_goal_in_the_same_table() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    set_goal(&pool, user, &ReadingGoalUpdate::books(24))
+    set_goal(&pool, user, &ReadingGoalUpdate::books(24), None)
         .await
         .unwrap();
 
-    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_PAGES, 30))
-        .await
-        .unwrap();
-    let year = current_year(&pool).await.unwrap();
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_PAGES, 30),
+        None,
+    )
+    .await
+    .unwrap();
+    let year = current_year(&pool, 0).await.unwrap();
     assert_eq!(
-        goal_for_year(&pool, user, year)
+        goal_for_year(&pool, user, year, None)
             .await
             .unwrap()
             .unwrap()
@@ -617,11 +689,11 @@ async fn set_daily_goal_does_not_disturb_the_annual_goal_in_the_same_table() {
     );
 
     // And clearing the annual one leaves the daily one standing.
-    set_goal(&pool, user, &ReadingGoalUpdate::clear_books())
+    set_goal(&pool, user, &ReadingGoalUpdate::clear_books(), None)
         .await
         .unwrap();
     assert_eq!(
-        daily_goals(&pool, user)
+        daily_goals(&pool, user, None)
             .await
             .unwrap()
             .pages
@@ -636,7 +708,7 @@ async fn set_daily_goal_returns_unsupported_kind_for_a_kind_with_no_daily_measur
     let user = seed_user(&pool, "alice").await;
 
     for bad in [GOAL_KIND_BOOKS, "hours"] {
-        let err = set_daily_goal(&pool, user, &DailyGoalUpdate::set(bad, 5))
+        let err = set_daily_goal(&pool, user, &DailyGoalUpdate::set(bad, 5), None)
             .await
             .unwrap_err();
         assert!(
@@ -656,7 +728,7 @@ async fn set_daily_goal_returns_invalid_daily_target_against_the_per_kind_maximu
         (GOAL_KIND_MINUTES, MAX_DAILY_MINUTES),
     ] {
         for bad in [0, -3, max + 1] {
-            let err = set_daily_goal(&pool, user, &DailyGoalUpdate::set(kind, bad))
+            let err = set_daily_goal(&pool, user, &DailyGoalUpdate::set(kind, bad), None)
                 .await
                 .unwrap_err();
             assert!(
@@ -671,16 +743,22 @@ async fn set_daily_goal_returns_invalid_daily_target_against_the_per_kind_maximu
     }
 
     // The bound really is per-kind: a target legal as pages is not as minutes.
-    assert!(
-        set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_PAGES, 1_500))
-            .await
-            .is_ok()
-    );
-    assert!(
-        set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 1_500))
-            .await
-            .is_err()
-    );
+    assert!(set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_PAGES, 1_500),
+        None
+    )
+    .await
+    .is_ok());
+    assert!(set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 1_500),
+        None
+    )
+    .await
+    .is_err());
 }
 
 #[tokio::test]
@@ -689,9 +767,14 @@ async fn set_daily_goal_propagates_a_db_error_when_the_pool_is_closed() {
     let user = seed_user(&pool, "alice").await;
     pool.close().await;
 
-    let err = set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_PAGES, 30))
-        .await
-        .unwrap_err();
+    let err = set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_PAGES, 30),
+        None,
+    )
+    .await
+    .unwrap_err();
     assert!(matches!(err, GoalError::Sqlx(_)), "got {err:?}");
 }
 
@@ -704,7 +787,7 @@ async fn daily_goals_still_reports_todays_figures_when_no_target_is_set() {
     let today = utc_day(&pool).await;
     accrue(&pool, user, "uuid-1", &today, 10).await;
 
-    let goals = daily_goals(&pool, user).await.unwrap();
+    let goals = daily_goals(&pool, user, None).await.unwrap();
     // No goal is still no goal — the surfaces gate their rings on this.
     assert!(goals.is_empty());
     assert!(goals.pages.is_none() && goals.minutes.is_none());
@@ -726,11 +809,16 @@ async fn daily_goals_report_the_same_figure_with_and_without_a_target() {
     let today = utc_day(&pool).await;
     accrue(&pool, user, "uuid-1", &today, 10).await;
 
-    let before = daily_goals(&pool, user).await.unwrap();
-    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_PAGES, 50))
-        .await
-        .unwrap();
-    let after = daily_goals(&pool, user).await.unwrap();
+    let before = daily_goals(&pool, user, None).await.unwrap();
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_PAGES, 50),
+        None,
+    )
+    .await
+    .unwrap();
+    let after = daily_goals(&pool, user, None).await.unwrap();
 
     assert_eq!(before.pages_today, after.pages_today);
     assert_eq!(
@@ -758,10 +846,15 @@ async fn daily_goals_counts_pages_from_the_ledger_on_the_utc_day_only() {
     accrue(&pool, user, "uuid-2", &today, 25).await;
     accrue(&pool, user, "uuid-1", &yesterday, 50).await;
 
-    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_PAGES, 40))
-        .await
-        .unwrap();
-    let goal = daily_goals(&pool, user).await.unwrap().pages.unwrap();
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_PAGES, 40),
+        None,
+    )
+    .await
+    .unwrap();
+    let goal = daily_goals(&pool, user, None).await.unwrap().pages.unwrap();
     assert_eq!(goal.current, 55, "yesterday's 150 pages are not today's");
     assert_eq!(goal.day, today);
     assert!(goal.is_met());
@@ -798,10 +891,19 @@ async fn daily_goals_counts_minutes_on_the_readers_local_day_not_the_utc_day() {
     )
     .await;
 
-    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20))
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20),
+        None,
+    )
+    .await
+    .unwrap();
+    let goal = daily_goals(&pool, user, None)
         .await
+        .unwrap()
+        .minutes
         .unwrap();
-    let goal = daily_goals(&pool, user).await.unwrap().minutes.unwrap();
     assert_eq!(goal.current, 10, "only the session on the local day counts");
     assert!(!goal.is_met());
     assert_eq!(goal.remaining(), 10);
@@ -818,6 +920,95 @@ async fn daily_goals_counts_minutes_on_the_readers_local_day_not_the_utc_day() {
     assert!(same_utc_day, "the fixture must straddle only the local day");
 }
 
+/// The day is an argument, not a second clock read: a request that crossed
+/// local midnight between resolving the label and measuring the figure would
+/// otherwise report one day's date against the next day's minutes.
+#[tokio::test]
+async fn day_seconds_measures_the_day_it_is_handed_rather_than_re_reading_the_clock() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    let midday = local_day_start_plus(&pool, OFFSET_PLUS_13, 43_200).await;
+    read_session(&pool, user, "uuid-1", midday, 600, Some(OFFSET_PLUS_13)).await;
+    read_session(
+        &pool,
+        user,
+        "uuid-1",
+        midday - 86_400,
+        1_800,
+        Some(OFFSET_PLUS_13),
+    )
+    .await;
+
+    let today = local_day(&pool, OFFSET_PLUS_13).await;
+    let yesterday: String = sqlx::query_scalar("SELECT date(?, '-1 day')")
+        .bind(&today)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        day_seconds(&pool, user, &today, OFFSET_PLUS_13)
+            .await
+            .unwrap(),
+        600
+    );
+    assert_eq!(
+        day_seconds(&pool, user, &yesterday, OFFSET_PLUS_13)
+            .await
+            .unwrap(),
+        1_800,
+        "the day asked for decides the figure, not `now`"
+    );
+}
+
+/// The reported `day` and the figure beside it describe the same day, for both
+/// kinds — the label is resolved once and every measurement is taken against it.
+#[tokio::test]
+async fn daily_goals_label_and_figure_name_the_same_day() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    let midday = local_day_start_plus(&pool, OFFSET_PLUS_13, 43_200).await;
+    read_session(&pool, user, "uuid-1", midday, 600, Some(OFFSET_PLUS_13)).await;
+    read_session(
+        &pool,
+        user,
+        "uuid-1",
+        midday - 86_400,
+        1_800,
+        Some(OFFSET_PLUS_13),
+    )
+    .await;
+    for kind in [GOAL_KIND_PAGES, GOAL_KIND_MINUTES] {
+        set_daily_goal(
+            &pool,
+            user,
+            &DailyGoalUpdate::set(kind, 20),
+            Some(OFFSET_PLUS_13),
+        )
+        .await
+        .unwrap();
+    }
+
+    let goals = daily_goals(&pool, user, Some(OFFSET_PLUS_13))
+        .await
+        .unwrap();
+    let minutes = goals.minutes.unwrap();
+    assert_eq!(minutes.day, local_day(&pool, OFFSET_PLUS_13).await);
+    assert_eq!(
+        minutes.current, 10,
+        "the previous local day's half hour belongs to that day's label"
+    );
+    assert_eq!(
+        goals.pages.unwrap().day,
+        minutes.day,
+        "both kinds carry the one label"
+    );
+}
+
 #[tokio::test]
 async fn daily_goals_counts_listening_toward_the_minutes_goal_alongside_reading() {
     let pool = init_db("sqlite::memory:").await.unwrap();
@@ -828,10 +1019,19 @@ async fn daily_goals_counts_listening_toward_the_minutes_goal_alongside_reading(
     read_session(&pool, user, "uuid-1", midday, 600, Some(OFFSET_PLUS_13)).await;
     listen_session(&pool, user, "uuid-1", midday, 900, OFFSET_PLUS_13).await;
 
-    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 30))
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 30),
+        None,
+    )
+    .await
+    .unwrap();
+    let goal = daily_goals(&pool, user, None)
         .await
+        .unwrap()
+        .minutes
         .unwrap();
-    let goal = daily_goals(&pool, user).await.unwrap().minutes.unwrap();
     assert_eq!(goal.current, 25, "10 read + 15 listened");
 }
 
@@ -843,40 +1043,104 @@ async fn daily_goals_truncates_a_partial_minute_rather_than_rounding_it_up() {
     let midday = local_day_start_plus(&pool, OFFSET_PLUS_13, 43_200).await;
     read_session(&pool, user, "uuid-1", midday, 59, Some(OFFSET_PLUS_13)).await;
 
-    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 1))
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 1),
+        None,
+    )
+    .await
+    .unwrap();
+    let goal = daily_goals(&pool, user, None)
         .await
+        .unwrap()
+        .minutes
         .unwrap();
-    let goal = daily_goals(&pool, user).await.unwrap().minutes.unwrap();
     assert_eq!(goal.current, 0, "59 seconds is not a minute read");
     assert!(!goal.is_met());
 }
 
 #[tokio::test]
-async fn daily_goals_discloses_todays_seconds_from_sessions_with_no_recorded_offset() {
+async fn daily_goals_counts_a_session_that_recorded_no_offset() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 1).await;
     let user = seed_user(&pool, "alice").await;
     let midday = local_day_start_plus(&pool, OFFSET_PLUS_13, 43_200).await;
     read_session(&pool, user, "uuid-1", midday, 600, Some(OFFSET_PLUS_13)).await;
+    // A pre-0080 row. It used to be unplaceable — the day came from each
+    // session's *own* captured offset, and this one has none — so it was
+    // excluded from the goal and disclosed separately. The day now comes from
+    // the reader's current offset instead, which `started_at` alone can be
+    // measured against, so there is nothing left that cannot be placed.
+    read_session(&pool, user, "uuid-1", midday + 60, 300, None).await;
 
-    // A pre-0080 row: real reading, on no local day the server can name.
-    let utc_midday: i64 =
-        sqlx::query_scalar("SELECT CAST(strftime('%s', date('now') || ' 12:00:00') AS INTEGER)")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    read_session(&pool, user, "uuid-1", utc_midday, 300, None).await;
-
-    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 30))
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 30),
+        Some(OFFSET_PLUS_13),
+    )
+    .await
+    .unwrap();
+    let goals = daily_goals(&pool, user, Some(OFFSET_PLUS_13))
         .await
         .unwrap();
-    let goals = daily_goals(&pool, user).await.unwrap();
+
     assert_eq!(
         goals.minutes.unwrap().current,
-        10,
-        "the unplaceable session is excluded, not folded in"
+        15,
+        "both sessions count toward the reader's day"
     );
-    assert_eq!(goals.unzoned_seconds, 300, "and disclosed instead");
+    assert_eq!(
+        goals.unzoned_seconds, 0,
+        "nothing is excluded, so there is nothing to disclose"
+    );
+}
+
+#[tokio::test]
+async fn daily_goals_answer_the_asking_clients_day_not_the_stored_offsets() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    // A minute past midnight on the UTC+13 day, recorded with that offset — but
+    // the reader has since moved, and the client asking is 12 hours west of UTC.
+    // Just-past-midnight rather than midday on purpose: the two zones are 25
+    // hours apart, so only a sitting near a boundary is guaranteed to fall on
+    // different days for them.
+    let just_after_midnight = local_day_start_plus(&pool, OFFSET_PLUS_13, 60).await;
+    read_session(
+        &pool,
+        user,
+        "uuid-1",
+        just_after_midnight,
+        600,
+        Some(OFFSET_PLUS_13),
+    )
+    .await;
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 30),
+        Some(OFFSET_PLUS_13),
+    )
+    .await
+    .unwrap();
+
+    let there = daily_goals(&pool, user, Some(OFFSET_PLUS_13))
+        .await
+        .unwrap();
+    let here = daily_goals(&pool, user, Some(-12 * 60)).await.unwrap();
+
+    // The client's claim decides, not the offset the session recorded — that is
+    // the single calendar, and it is why the figure is not a property of the
+    // stored rows alone.
+    assert_eq!(there.minutes_today, Some(10));
+    assert_eq!(here.minutes_today, Some(0));
+    assert_ne!(
+        there.minutes.map(|g| g.day),
+        here.minutes.map(|g| g.day),
+        "the two clients are not on the same day"
+    );
 }
 
 #[tokio::test]
@@ -892,16 +1156,26 @@ async fn daily_goals_ignores_another_readers_sessions_and_ledger_rows() {
     accrue(&pool, bob, "uuid-1", &today, 50).await;
     read_session(&pool, bob, "uuid-1", midday, 3_600, Some(OFFSET_PLUS_13)).await;
 
-    set_daily_goal(&pool, alice, &DailyGoalUpdate::set(GOAL_KIND_PAGES, 30))
-        .await
-        .unwrap();
-    set_daily_goal(&pool, alice, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20))
-        .await
-        .unwrap();
-    let goals = daily_goals(&pool, alice).await.unwrap();
+    set_daily_goal(
+        &pool,
+        alice,
+        &DailyGoalUpdate::set(GOAL_KIND_PAGES, 30),
+        None,
+    )
+    .await
+    .unwrap();
+    set_daily_goal(
+        &pool,
+        alice,
+        &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20),
+        None,
+    )
+    .await
+    .unwrap();
+    let goals = daily_goals(&pool, alice, None).await.unwrap();
     assert_eq!(goals.pages.unwrap().current, 0);
     assert_eq!(goals.minutes.unwrap().current, 0);
-    assert!(daily_goals(&pool, bob).await.unwrap().is_empty());
+    assert!(daily_goals(&pool, bob, None).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -911,14 +1185,19 @@ async fn daily_goals_ride_every_summary_and_do_not_move_with_the_range() {
     let user = seed_user(&pool, "alice").await;
     set_pages(&pool, "uuid-1", 300).await;
     accrue(&pool, user, "uuid-1", &utc_day(&pool).await, 10).await;
-    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_PAGES, 40))
-        .await
-        .unwrap();
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_PAGES, 40),
+        None,
+    )
+    .await
+    .unwrap();
 
     let mut seen = Vec::new();
     for range in StatsRange::ALL {
         seen.push(
-            compute::compute(&pool, user, range)
+            compute::compute(&pool, user, range, 0)
                 .await
                 .unwrap()
                 .daily_goals,
@@ -933,16 +1212,21 @@ async fn set_daily_goal_invalidates_the_cached_summary_so_the_next_read_is_curre
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user_with_id(&pool, 9932, "daily-goal-cache").await;
 
-    let before = super::super::user_stats(&pool, user, StatsRange::Week)
+    let before = super::super::user_stats(&pool, user, StatsRange::Week, None)
         .await
         .unwrap();
     assert!(before.daily_goals.is_empty());
 
-    set_daily_goal(&pool, user, &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20))
-        .await
-        .unwrap();
+    set_daily_goal(
+        &pool,
+        user,
+        &DailyGoalUpdate::set(GOAL_KIND_MINUTES, 20),
+        None,
+    )
+    .await
+    .unwrap();
 
-    let after = super::super::user_stats(&pool, user, StatsRange::Week)
+    let after = super::super::user_stats(&pool, user, StatsRange::Week, None)
         .await
         .unwrap();
     assert_eq!(after.daily_goals.minutes.map(|g| g.target), Some(20));

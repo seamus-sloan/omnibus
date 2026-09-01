@@ -25,6 +25,7 @@ use omnibus_shared::{
 };
 use sqlx::{Row, SqlitePool};
 
+use super::calendar;
 use super::compute::{live_finished_events, window_start};
 use super::pages::{book_pages_source, ledger_in_window};
 use super::ratings::LIVE_RATINGS;
@@ -42,6 +43,12 @@ pub enum ChartError {
 impl From<sqlx::Error> for ChartError {
     fn from(e: sqlx::Error) -> Self {
         ChartError::Stats(StatsError::Sqlx(e))
+    }
+}
+
+impl From<crate::user_offset::OffsetError> for ChartError {
+    fn from(e: crate::user_offset::OffsetError) -> Self {
+        ChartError::Stats(e.into())
     }
 }
 
@@ -72,8 +79,8 @@ fn bucket_expr(bucket: ChartBucket, day: &str) -> String {
     }
 }
 
-/// The first UTC day a bucket key covers — the inverse of [`bucket_expr`],
-/// used to seed the dense axis from the earliest bucket the data reached.
+/// The first day a bucket key covers — the inverse of [`bucket_expr`], used to
+/// seed the dense axis from the earliest bucket the data reached.
 fn bucket_start_day(bucket: ChartBucket, key: &str) -> String {
     match bucket {
         // Both are already a `YYYY-MM-DD` (a week's key is its Monday).
@@ -90,8 +97,11 @@ fn bucket_start_day(bucket: ChartBucket, key: &str) -> String {
 /// those would report a book twice, and averaging over them would weight it
 /// twice. Both completion measures build on this one subquery so they always
 /// describe the same set of books. Binds: `user_id, user_id, start`.
-fn completion_pairs(bucket: ChartBucket) -> String {
-    let k = bucket_expr(bucket, "date(f.finished_at, 'unixepoch')");
+fn completion_pairs(bucket: ChartBucket, offset_minutes: i64) -> String {
+    let k = bucket_expr(
+        bucket,
+        &calendar::local_day("f.finished_at", offset_minutes),
+    );
     format!(
         "SELECT DISTINCT {k} AS k, f.book_uuid AS uuid \
          FROM ({}) f WHERE f.finished_at >= ?",
@@ -101,8 +111,8 @@ fn completion_pairs(bucket: ChartBucket) -> String {
 
 /// The `(bucket, seconds)` rows of every sitting in the window, both formats.
 /// Binds: `user_id, start, user_id, start`.
-fn sitting_seconds(bucket: ChartBucket) -> String {
-    let k = bucket_expr(bucket, "date(started_at, 'unixepoch')");
+fn sitting_seconds(bucket: ChartBucket, offset_minutes: i64) -> String {
+    let k = bucket_expr(bucket, &calendar::local_day("started_at", offset_minutes));
     format!(
         "SELECT {k} AS k, seconds_read AS secs FROM reading_sessions \
              WHERE user_id = ? AND started_at >= ? \
@@ -123,13 +133,14 @@ async fn series_rows(
     measure: ChartMeasure,
     bucket: ChartBucket,
     start: i64,
+    offset_minutes: i64,
 ) -> Result<Vec<Bucketed>, ChartError> {
     let (sql, binds): (String, Vec<i64>) = match measure {
         ChartMeasure::BooksFinished => (
             format!(
                 "SELECT k, CAST(COUNT(*) AS REAL) AS total, CAST(COUNT(*) AS REAL) AS n \
                  FROM ({}) GROUP BY k ORDER BY k",
-                completion_pairs(bucket)
+                completion_pairs(bucket, offset_minutes)
             ),
             vec![user_id, user_id, start],
         ),
@@ -142,7 +153,7 @@ async fn series_rows(
                  FROM ({}) x JOIN ({}) p ON p.uuid = x.uuid \
                  WHERE p.pages IS NOT NULL AND p.pages > 0 \
                  GROUP BY x.k ORDER BY x.k",
-                completion_pairs(bucket),
+                completion_pairs(bucket, offset_minutes),
                 book_pages_source()
             ),
             vec![user_id, user_id, start],
@@ -154,7 +165,7 @@ async fn series_rows(
             format!(
                 "SELECT {} AS k, SUM(half_stars) / 2.0 AS total, CAST(COUNT(*) AS REAL) AS n \
                  FROM ({LIVE_RATINGS}) WHERE updated_at >= ? GROUP BY k ORDER BY k",
-                bucket_expr(bucket, "date(updated_at, 'unixepoch')")
+                bucket_expr(bucket, &calendar::local_day("updated_at", offset_minutes))
             ),
             vec![user_id, start],
         ),
@@ -163,7 +174,7 @@ async fn series_rows(
                 "SELECT {} AS k, SUM(seconds_read) / 60.0 AS total, CAST(COUNT(*) AS REAL) AS n \
                  FROM reading_sessions WHERE user_id = ? AND started_at >= ? \
                  GROUP BY k ORDER BY k",
-                bucket_expr(bucket, "date(started_at, 'unixepoch')")
+                bucket_expr(bucket, &calendar::local_day("started_at", offset_minutes))
             ),
             vec![user_id, start],
         ),
@@ -173,7 +184,7 @@ async fn series_rows(
                         CAST(COUNT(*) AS REAL) AS n \
                  FROM listening_sessions WHERE user_id = ? AND started_at >= ? \
                  GROUP BY k ORDER BY k",
-                bucket_expr(bucket, "date(started_at, 'unixepoch')")
+                bucket_expr(bucket, &calendar::local_day("started_at", offset_minutes))
             ),
             vec![user_id, start],
         ),
@@ -181,7 +192,7 @@ async fn series_rows(
             format!(
                 "SELECT k, CAST(COUNT(*) AS REAL) AS total, CAST(COUNT(*) AS REAL) AS n \
                  FROM ({}) GROUP BY k ORDER BY k",
-                sitting_seconds(bucket)
+                sitting_seconds(bucket, offset_minutes)
             ),
             vec![user_id, start, user_id, start],
         ),
@@ -189,12 +200,12 @@ async fn series_rows(
             format!(
                 "SELECT k, SUM(secs) / 60.0 AS total, CAST(COUNT(*) AS REAL) AS n \
                  FROM ({}) GROUP BY k ORDER BY k",
-                sitting_seconds(bucket)
+                sitting_seconds(bucket, offset_minutes)
             ),
             vec![user_id, start, user_id, start],
         ),
-        // The ledger's `day` is already a UTC `YYYY-MM-DD`, so it buckets
-        // directly with no epoch conversion.
+        // `ledger_in_window` has already resolved each gain to a day on the
+        // reader's calendar, so this buckets that key directly.
         ChartMeasure::PagesRead => (
             format!(
                 "SELECT {} AS k, \
@@ -202,9 +213,9 @@ async fn series_rows(
                         CAST(COUNT(*) AS REAL) AS n \
                  FROM ({}) w WHERE w.pages IS NOT NULL GROUP BY k ORDER BY k",
                 bucket_expr(bucket, "w.day"),
-                ledger_in_window()
+                ledger_in_window(offset_minutes)
             ),
-            vec![user_id, start],
+            vec![user_id, user_id, start],
         ),
     };
 
@@ -235,6 +246,7 @@ async fn breakdown_rows(
     measure: ChartMeasure,
     bucket: ChartBucket,
     start: i64,
+    offset_minutes: i64,
 ) -> Result<Vec<(String, Bucketed)>, ChartError> {
     // Only the completion measures reach here (`supports_breakdown`), and they
     // differ solely in what they accumulate over the same joined set.
@@ -255,7 +267,7 @@ async fn breakdown_rows(
          {extra_join} \
          WHERE json_type(mo.overrides, '$.genres') IS NOT NULL {extra_where} \
          GROUP BY g.id, x.k ORDER BY x.k",
-        completion_pairs(bucket)
+        completion_pairs(bucket, offset_minutes)
     );
     Ok(sqlx::query(&sql)
         .bind(user_id)
@@ -293,13 +305,19 @@ async fn axis(
     bucket: ChartBucket,
     start: i64,
     first_data_bucket: &str,
+    offset_minutes: i64,
 ) -> Result<Vec<String>, ChartError> {
+    // Spine and data are cut on the same calendar: a UTC spine under local
+    // bucket keys would leave the newest day off the axis for a reader east of
+    // UTC, and open it a day early for one west.
     let sql = format!(
         "WITH RECURSIVE d(day) AS ( \
-             SELECT MAX(date(?, 'unixepoch'), ?) \
+             SELECT MAX({}, ?) \
              UNION ALL \
-             SELECT date(day, '+1 day') FROM d WHERE day < date('now') \
+             SELECT date(day, '+1 day') FROM d WHERE day < {} \
          ) SELECT DISTINCT {} AS k FROM d ORDER BY k",
+        calendar::local_day("?", offset_minutes),
+        calendar::local_day("CAST(strftime('%s','now') AS INTEGER)", offset_minutes),
         bucket_expr(bucket, "day")
     );
     Ok(sqlx::query_scalar(&sql)
@@ -382,6 +400,7 @@ pub async fn chart_series(
     pool: &SqlitePool,
     user_id: i64,
     spec: &ChartSpec,
+    claimed_offset_minutes: Option<i64>,
 ) -> Result<ChartResult, ChartError> {
     spec.validate()?;
     // Nothing selected is a real state, not a mistake — and it needs no
@@ -389,7 +408,12 @@ pub async fn chart_series(
     if spec.measures.is_empty() {
         return Ok(empty_result(spec, Vec::new()));
     }
-    let start = window_start(pool, spec.range).await?;
+    // Resolved once for the whole spec: every measure, the breakdown and the
+    // axis have to bucket on one calendar or a series and the axis it is
+    // plotted against disagree about which bucket a day belongs to.
+    let offset =
+        crate::user_offset::resolve_offset_minutes(pool, user_id, claimed_offset_minutes).await?;
+    let start = window_start(pool, spec.range, offset).await?;
     let caveats: Vec<String> = spec.caveats().into_iter().map(str::to_string).collect();
 
     // Each measure runs against its own grain; the only thing they share is
@@ -401,11 +425,14 @@ pub async fn chart_series(
         // `validate` has already established there is exactly one measure to
         // split; `first` rather than `[0]` keeps the path panic-free anyway.
         if let Some(&m) = spec.measures.first() {
-            split = breakdown_rows(pool, user_id, m, spec.bucket, start).await?;
+            split = breakdown_rows(pool, user_id, m, spec.bucket, start, offset).await?;
         }
     } else {
         for &m in &spec.measures {
-            fetched.push((m, series_rows(pool, user_id, m, spec.bucket, start).await?));
+            fetched.push((
+                m,
+                series_rows(pool, user_id, m, spec.bucket, start, offset).await?,
+            ));
         }
     }
 
@@ -427,7 +454,7 @@ pub async fn chart_series(
     // `SessionReport.started_at` above, so a device with a fast clock would
     // otherwise stretch the axis months into an empty future. The cost is that
     // such a session is missing here while the `/stats` totals still count it.
-    let all = axis(pool, spec.bucket, start, first).await?;
+    let all = axis(pool, spec.bucket, start, first, offset).await?;
     let truncated = all.len() > MAX_BUCKETS;
     // Keep the most recent window — a clipped axis that dropped the newest
     // buckets would answer a question nobody asked.

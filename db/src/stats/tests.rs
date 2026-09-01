@@ -3,6 +3,7 @@
 //! vs refresh-after-expiry).
 
 use omnibus_shared::{PeriodComparison, StatsRange};
+use sqlx::Row;
 
 use super::*;
 use crate::init_db;
@@ -188,7 +189,7 @@ async fn all_time_aggregates_hours_sessions_and_active_days() {
     reading_session(&pool, user, "uuid-1", T0 + DAY, 1200).await;
     listening_session(&pool, user, "uuid-1", T0 + 2 * DAY, 300).await;
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
 
     assert_eq!(s.reading_seconds, 1800);
     assert_eq!(s.listening_seconds, 300);
@@ -197,6 +198,32 @@ async fn all_time_aggregates_hours_sessions_and_active_days() {
     assert_eq!(s.active_days, 3);
     assert_eq!(s.heatmap.len(), 3);
     assert_eq!(s.heatmap.iter().map(|d| d.seconds).sum::<i64>(), 2100);
+}
+
+#[tokio::test]
+async fn heatmap_and_biggest_day_name_the_same_day_for_a_reader_west_of_utc() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    // UTC-7, one Monday: 10:00 local, then 20:00 local — which is 03:00 UTC
+    // the next day. In UTC the evening sitting is a separate, larger day.
+    const OFFSET: i64 = -420;
+    const D: i64 = 19_675 * DAY; // 2023-11-14 00:00 UTC
+    reading_session(&pool, user, "uuid-1", D - 7 * 3600, 3000).await;
+    reading_session(&pool, user, "uuid-1", D + 3 * 3600, 3600).await;
+
+    let s = compute(&pool, user, StatsRange::AllTime, OFFSET)
+        .await
+        .unwrap();
+
+    // Both figures ride one summary onto one page, so a superlative naming a
+    // day the heatmap draws as empty is a contradiction the reader can see.
+    assert_eq!(s.heatmap.len(), 1);
+    assert_eq!(s.heatmap[0].day, "2023-11-13");
+    assert_eq!(s.heatmap[0].seconds, 6600);
+    let biggest = s.superlatives.biggest_day.unwrap();
+    assert_eq!(biggest.day, s.heatmap[0].day);
+    assert_eq!(biggest.seconds, s.heatmap[0].seconds);
 }
 
 #[tokio::test]
@@ -209,7 +236,7 @@ async fn session_count_stitches_contiguous_checkpoint_rows_into_one_sitting() {
         reading_session(&pool, user, "uuid-1", T0 + i * 60, 60).await;
     }
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
 
     assert_eq!(s.sessions, 1);
     assert_eq!(s.reading_seconds, 3600, "the stitch must not lose time");
@@ -225,7 +252,7 @@ async fn session_count_counts_two_books_read_back_to_back_separately() {
     reading_session(&pool, user, "uuid-1", T0, 600).await;
     reading_session(&pool, user, "uuid-2", T0 + 600, 600).await;
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
 
     assert_eq!(s.sessions, 2);
 }
@@ -238,7 +265,7 @@ async fn session_count_excludes_glances_but_keeps_their_seconds() {
     reading_session(&pool, user, "uuid-1", T0, 600).await;
     reading_session(&pool, user, "uuid-1", T0 + DAY, 20).await;
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
 
     assert_eq!(s.sessions, 1);
     assert_eq!(s.reading_seconds, 620);
@@ -255,7 +282,7 @@ async fn streak_counts_longest_consecutive_run() {
         reading_session(&pool, user, "uuid-1", T0 + d * DAY, 60).await;
     }
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
     assert_eq!(s.active_days, 5);
     assert_eq!(s.longest_streak_days, 3);
     // T0 is years in the past, so the record stands but no run is live.
@@ -269,7 +296,7 @@ async fn as_of_returns_a_day_string_and_day_number_describing_the_same_day() {
     // The whole reason `as_of` reads both out of one statement: the heatmap
     // anchors on the string and the streak on the number, so a disagreement
     // between them silently moves the streak's anchor by a day.
-    let (day, dnum) = as_of(&pool).await.unwrap();
+    let (day, dnum) = as_of(&pool, 0).await.unwrap();
     let round_tripped: String = sqlx::query_scalar("SELECT date(? * 86400, 'unixepoch')")
         .bind(dnum)
         .fetch_one(&pool)
@@ -294,7 +321,7 @@ async fn current_streak_runs_up_to_the_servers_today() {
         reading_session(&pool, user, "uuid-1", today_noon - back * DAY, 600).await;
     }
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
 
     assert_eq!(s.current_streak_days, 3);
     assert_eq!(s.longest_streak_days, 3);
@@ -310,7 +337,7 @@ async fn busiest_week_picks_highest_seconds_week() {
     reading_session(&pool, user, "uuid-1", T0, 100).await;
     reading_session(&pool, user, "uuid-1", T0 + 14 * DAY, 5000).await;
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
     assert_eq!(s.busiest_week_seconds, 5000);
     // The winning session falls on Tue 2023-11-28; the field is the week's own
     // Monday, not the first day the reader was active in it, so that surfaces
@@ -328,7 +355,7 @@ async fn busiest_week_start_is_the_weeks_monday_not_its_first_active_day() {
     reading_session(&pool, user, "uuid-1", T0 + DAY, 1000).await;
     reading_session(&pool, user, "uuid-1", T0 + 2 * DAY, 1000).await;
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
     assert_eq!(s.busiest_week_start.as_deref(), Some("2023-11-13"));
 }
 
@@ -349,7 +376,7 @@ async fn top_authors_and_tags_rank_by_seconds() {
     reading_session(&pool, user, "uuid-1", T0, 900).await;
     reading_session(&pool, user, "uuid-2", T0, 300).await;
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
 
     assert_eq!(s.top_authors[0].name, "Ursula K. Le Guin");
     assert_eq!(s.top_authors[0].seconds, 900);
@@ -380,7 +407,7 @@ async fn finished_books_come_from_hundred_percent_journal_entries() {
     .await
     .unwrap();
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
     assert_eq!(s.books_finished, 1);
     assert_eq!(s.finished_books.len(), 1);
     assert_eq!(s.finished_books[0].book_uuid, "uuid-1");
@@ -428,7 +455,7 @@ async fn finished_books_count_explicit_read_status_finishes() {
     .await
     .unwrap();
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
     assert_eq!(s.books_finished, 2);
     let uuids: Vec<&str> = s
         .finished_books
@@ -449,7 +476,7 @@ async fn book_finished_both_ways_counts_once() {
     finish_journal(&pool, user, "uuid-1", T0).await;
     finish_read_status(&pool, user, "uuid-1", T0 + 100).await;
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
     assert_eq!(s.books_finished, 1);
     assert_eq!(s.finished_books.len(), 1);
     // The rail's finish time is the newest completion moment across sources.
@@ -461,7 +488,7 @@ async fn empty_library_returns_zeroed_summary() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "loner").await;
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
     assert!(s.is_empty());
     assert_eq!(s.total_seconds(), 0);
     assert_eq!(s.sessions, 0);
@@ -482,7 +509,7 @@ async fn stats_are_scoped_to_the_requesting_user() {
 
     reading_session(&pool, alice, "uuid-1", T0, 600).await;
 
-    let bob_stats = compute(&pool, bob, StatsRange::AllTime).await.unwrap();
+    let bob_stats = compute(&pool, bob, StatsRange::AllTime, 0).await.unwrap();
     assert!(bob_stats.is_empty());
 }
 
@@ -498,20 +525,26 @@ async fn cache_serves_within_ttl_and_refreshes_after_expiry() {
     reading_session(&pool, user, "uuid-1", T0, 600).await;
 
     // Prime the cache at t=1000.
-    let first = user_stats_at(&pool, user, StatsRange::AllTime, 1000)
+    let first = user_stats_at(&pool, user, StatsRange::AllTime, 0, 1000)
         .await
         .unwrap();
     assert_eq!(first.reading_seconds, 600);
 
     // A new session lands, but a call inside the TTL still sees the cached value.
     reading_session(&pool, user, "uuid-1", T0 + DAY, 900).await;
-    let cached = user_stats_at(&pool, user, StatsRange::AllTime, 1000 + STATS_TTL_SECS - 1)
-        .await
-        .unwrap();
+    let cached = user_stats_at(
+        &pool,
+        user,
+        StatsRange::AllTime,
+        0,
+        1000 + STATS_TTL_SECS - 1,
+    )
+    .await
+    .unwrap();
     assert_eq!(cached.reading_seconds, 600);
 
     // Past the TTL the SQL re-runs and picks up the new session.
-    let refreshed = user_stats_at(&pool, user, StatsRange::AllTime, 1000 + STATS_TTL_SECS)
+    let refreshed = user_stats_at(&pool, user, StatsRange::AllTime, 0, 1000 + STATS_TTL_SECS)
         .await
         .unwrap();
     assert_eq!(refreshed.reading_seconds, 1500);
@@ -533,7 +566,7 @@ async fn genre_share_counts_distinct_books_per_genre_not_seconds() {
     reading_session(&pool, user, "uuid-1", T0 + DAY, 90_000).await;
     listening_session(&pool, user, "uuid-2", T0, 60).await;
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
 
     assert_eq!(s.genre_share.len(), 2, "inactive book's genre is excluded");
     assert_eq!(s.genre_share[0].name, "Sci-Fi");
@@ -628,7 +661,7 @@ async fn avg_stars_is_none_when_nothing_was_rated() {
 
     assert_eq!(avg_stars(&pool, user, 0).await.unwrap(), None);
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
     assert_eq!(s.avg_stars, None);
 }
 
@@ -644,7 +677,7 @@ async fn week_window_keeps_only_the_rolling_last_seven_days() {
     reading_session(&pool, user, "uuid-1", now - 8 * DAY, 600).await;
     reading_session(&pool, user, "uuid-1", now, 300).await;
 
-    let s = compute(&pool, user, StatsRange::Week).await.unwrap();
+    let s = compute(&pool, user, StatsRange::Week, 0).await.unwrap();
     assert_eq!(s.reading_seconds, 300);
     assert_eq!(s.sessions, 1);
 }
@@ -661,7 +694,7 @@ async fn month_window_starts_at_the_first_of_the_current_month() {
     reading_session(&pool, user, "uuid-1", now - 32 * DAY, 600).await;
     reading_session(&pool, user, "uuid-1", now, 300).await;
 
-    let s = compute(&pool, user, StatsRange::Month).await.unwrap();
+    let s = compute(&pool, user, StatsRange::Month, 0).await.unwrap();
     assert_eq!(s.reading_seconds, 300);
     assert_eq!(s.sessions, 1);
 }
@@ -675,7 +708,7 @@ async fn year_window_excludes_old_sessions() {
     // T0 is in 2023; the Year window (current calendar year) excludes it.
     reading_session(&pool, user, "uuid-1", T0, 600).await;
 
-    let s = compute(&pool, user, StatsRange::Year).await.unwrap();
+    let s = compute(&pool, user, StatsRange::Year, 0).await.unwrap();
     assert_eq!(s.reading_seconds, 0);
     assert!(s.is_empty());
 }
@@ -694,7 +727,7 @@ async fn books_per_month_returns_twelve_months_with_zeroed_gaps_and_excludes_old
     // Outside the trailing-12 window — must not appear or widen it.
     finish_journal(&pool, user, "uuid-3", thirteen_back).await;
 
-    let months = books_per_month(&pool, user).await.unwrap();
+    let months = books_per_month(&pool, user, 0).await.unwrap();
 
     assert_eq!(months.len(), 12);
     assert_eq!(months.iter().map(|m| m.books).sum::<i64>(), 2);
@@ -718,7 +751,7 @@ async fn books_per_month_never_includes_a_future_month() {
     seed_minimal_books(&pool, 1).await;
     let user = seed_user(&pool, "alice").await;
 
-    let months = books_per_month(&pool, user).await.unwrap();
+    let months = books_per_month(&pool, user, 0).await.unwrap();
 
     let current: String = sqlx::query_scalar("SELECT strftime('%Y-%m', 'now')")
         .fetch_one(&pool)
@@ -754,7 +787,7 @@ async fn books_per_month_counts_only_hundred_percent_journal_entries() {
     .await
     .unwrap();
 
-    let months = books_per_month(&pool, user).await.unwrap();
+    let months = books_per_month(&pool, user, 0).await.unwrap();
     assert_eq!(months.last().unwrap().books, 1);
 }
 
@@ -763,7 +796,7 @@ async fn books_per_month_is_empty_of_finishes_for_a_user_with_no_activity() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "loner").await;
 
-    let months = books_per_month(&pool, user).await.unwrap();
+    let months = books_per_month(&pool, user, 0).await.unwrap();
     assert_eq!(months.len(), 12);
     assert_eq!(months.iter().map(|m| m.books).sum::<i64>(), 0);
 }
@@ -781,7 +814,7 @@ async fn finished_books_carry_cover_url_only_when_the_book_has_a_cover() {
     finish_journal(&pool, user, "uuid-1", T0).await;
     finish_journal(&pool, user, "uuid-2", T0).await;
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
     let by_uuid = |u: &str| s.finished_books.iter().find(|b| b.book_uuid == u).unwrap();
     assert_eq!(
         by_uuid("uuid-1").cover_url.as_deref(),
@@ -798,7 +831,7 @@ async fn finished_books_carry_the_users_rating_when_rated() {
     rate_book(&pool, user, "uuid-1", 9, T0).await;
     finish_journal(&pool, user, "uuid-1", T0).await;
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
     assert_eq!(s.finished_books[0].rating, Some(4.5));
 }
 
@@ -809,7 +842,7 @@ async fn finished_books_rating_is_none_when_unrated() {
     let user = seed_user(&pool, "alice").await;
     finish_journal(&pool, user, "uuid-1", T0).await;
 
-    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
     assert_eq!(s.finished_books[0].rating, None);
 }
 
@@ -820,7 +853,7 @@ async fn previous_period_is_zeroed_for_all_time() {
     let user = seed_user(&pool, "alice").await;
     listening_session(&pool, user, "uuid-1", T0, 600).await;
 
-    let prev = previous_period(&pool, user, StatsRange::AllTime)
+    let prev = previous_period(&pool, user, StatsRange::AllTime, 0)
         .await
         .unwrap();
     assert_eq!(prev, PeriodComparison::default());
@@ -845,7 +878,7 @@ async fn previous_period_month_sums_only_last_calendar_months_activity() {
     rate_book(&pool, user, "uuid-1", 10, last_month).await;
     finish_journal(&pool, user, "uuid-1", last_month).await;
 
-    let prev = previous_period(&pool, user, StatsRange::Month)
+    let prev = previous_period(&pool, user, StatsRange::Month, 0)
         .await
         .unwrap();
     assert_eq!(prev.listening_seconds, 500);
@@ -862,7 +895,7 @@ async fn listening_daily_sums_seconds_per_day_within_the_window() {
     listening_session(&pool, user, "uuid-1", T0 + 100, 200).await;
     listening_session(&pool, user, "uuid-1", T0 + DAY, 400).await;
 
-    let daily = listening_daily(&pool, user, T0).await.unwrap();
+    let daily = listening_daily(&pool, user, T0, 0).await.unwrap();
     assert_eq!(daily.len(), 2);
     assert_eq!(daily[0].seconds, 500);
     assert_eq!(daily[1].seconds, 400);
@@ -873,7 +906,7 @@ async fn rating_monthly_returns_twelve_months_zeroed_when_unrated() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "loner").await;
 
-    let months = rating_monthly(&pool, user).await.unwrap();
+    let months = rating_monthly(&pool, user, 0).await.unwrap();
     assert_eq!(months.len(), 12);
     assert!(months.iter().all(|m| m.value == 0.0));
 }
@@ -886,8 +919,40 @@ async fn rating_monthly_places_a_rating_in_its_calendar_month() {
     let now = months_ago_secs(&pool, 0).await;
     rate_book(&pool, user, "uuid-1", 7, now).await;
 
-    let months = rating_monthly(&pool, user).await.unwrap();
+    let months = rating_monthly(&pool, user, 0).await.unwrap();
     assert_eq!(months.last().unwrap().value, 3.5);
+}
+
+#[tokio::test]
+async fn rating_monthly_cuts_its_spine_and_its_buckets_on_the_readers_calendar() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    // UTC+13. The first instant of the reader's current month is always still
+    // the previous month in UTC, so a UTC spine and a UTC join file this
+    // rating a month early — the exact drift against `books_per_month` and
+    // the chart builder that this covers.
+    const OFFSET: i64 = 780;
+    // Both off one clock read, so a month rollover between them can't flake.
+    let row = sqlx::query(&format!(
+        "SELECT CAST(strftime('%s', 'now', '+{OFFSET} minutes', 'start of month') AS INTEGER)
+                    - {OFFSET} * 60 AS at,
+                strftime('%Y-%m', 'now', '+{OFFSET} minutes') AS month"
+    ))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (at, local_month): (i64, String) = (row.get("at"), row.get("month"));
+    rate_book(&pool, user, "uuid-1", 7, at).await;
+
+    let months = rating_monthly(&pool, user, OFFSET).await.unwrap();
+
+    let last = months.last().unwrap();
+    assert_eq!(last.label, local_month, "spine ends on the reader's month");
+    assert!(
+        (last.value - 3.5).abs() < f64::EPSILON,
+        "the rating belongs to that month: {months:?}"
+    );
 }
 
 /// Seed a user with an explicit id. The stats cache is a process-wide static
@@ -912,7 +977,9 @@ async fn user_stats_returns_summary_through_the_public_entry_point() {
     let user = seed_user_with_id(&pool, 9901, "entry-point").await;
     reading_session(&pool, user, "uuid-1", T0, 600).await;
 
-    let summary = user_stats(&pool, user, StatsRange::AllTime).await.unwrap();
+    let summary = user_stats(&pool, user, StatsRange::AllTime, None)
+        .await
+        .unwrap();
 
     assert_eq!(summary.reading_seconds, 600);
     assert_eq!(summary.sessions, 1);
@@ -927,7 +994,7 @@ async fn user_stats_surfaces_sqlx_error_when_sessions_table_is_missing() {
         .await
         .unwrap();
 
-    let err = user_stats(&pool, user, StatsRange::AllTime)
+    let err = user_stats(&pool, user, StatsRange::AllTime, None)
         .await
         .unwrap_err();
     assert!(matches!(err, StatsError::Sqlx(_)), "got: {err:?}");
@@ -992,7 +1059,7 @@ async fn finished_metrics_agree_when_a_completion_outlives_its_book() {
     // 2 while the tile above it reported 1, for the same month.
     let headline = finished_count(&pool, user, 0).await.unwrap();
     let rail = finished_books(&pool, user, 0).await.unwrap();
-    let months = books_per_month(&pool, user).await.unwrap();
+    let months = books_per_month(&pool, user, 0).await.unwrap();
     assert_eq!(headline, 1);
     assert_eq!(rail.len(), 1);
     assert_eq!(months.last().unwrap().books, 1);
@@ -1013,7 +1080,7 @@ async fn previous_period_excludes_a_completion_whose_book_is_gone() {
 
     // The delta's baseline must count the same population the current window
     // does, or the drill-in invents a drop the reader never had.
-    let previous = previous_period(&pool, user, StatsRange::Month)
+    let previous = previous_period(&pool, user, StatsRange::Month, 0)
         .await
         .unwrap();
     assert_eq!(previous.books_finished, 1);
@@ -1044,7 +1111,7 @@ async fn rating_monthly_excludes_a_rating_whose_book_is_gone() {
     rate_book(&pool, user, "uuid-2", 2, at).await;
     drop_book_row(&pool, "uuid-2").await;
 
-    let months = rating_monthly(&pool, user).await.unwrap();
+    let months = rating_monthly(&pool, user, 0).await.unwrap();
     assert_eq!(months.len(), 12);
     // Same filter as `avg_stars`, so the tile and its trend agree.
     assert!(
@@ -1055,15 +1122,15 @@ async fn rating_monthly_excludes_a_rating_whose_book_is_gone() {
 
 /// First second of the period preceding `range`'s current one.
 async fn prev_period_start(pool: &SqlitePool, range: StatsRange) -> i64 {
-    prev_window_bounds(pool, range).await.unwrap().unwrap().0
+    prev_window_bounds(pool, range, 0).await.unwrap().unwrap().0
 }
 
 #[tokio::test]
 async fn prev_window_bounds_cover_the_elapsed_slice_of_the_previous_period() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     for range in [StatsRange::Week, StatsRange::Month, StatsRange::Year] {
-        let (start, end) = prev_window_bounds(&pool, range).await.unwrap().unwrap();
-        let cur_start = window_start(&pool, range).await.unwrap();
+        let (start, end) = prev_window_bounds(&pool, range, 0).await.unwrap().unwrap();
+        let cur_start = window_start(&pool, range, 0).await.unwrap();
         let elapsed = now_secs() - cur_start;
 
         // The baseline sits wholly before the current window …
@@ -1095,7 +1162,7 @@ async fn previous_period_aggregates_only_within_the_baseline_bounds() {
     // honour the window — that the window is the *right* window is
     // `prev_window_bounds_cover_the_elapsed_slice_of_the_previous_period`'s
     // job, and only that test detects a regression in the bounds arithmetic.
-    let (start, end) = prev_window_bounds(&pool, StatsRange::Week)
+    let (start, end) = prev_window_bounds(&pool, StatsRange::Week, 0)
         .await
         .unwrap()
         .unwrap();
@@ -1106,7 +1173,7 @@ async fn previous_period_aggregates_only_within_the_baseline_bounds() {
     listening_session(&pool, user, "uuid-1", end + 1, 999).await;
     listening_session(&pool, user, "uuid-1", start - 1, 777).await;
 
-    let prev = previous_period(&pool, user, StatsRange::Week)
+    let prev = previous_period(&pool, user, StatsRange::Week, 0)
         .await
         .unwrap();
     assert_eq!(prev.listening_seconds, 500);
@@ -1198,7 +1265,7 @@ async fn previous_period_avg_stars_excludes_a_rating_whose_book_is_gone() {
 
     // `avg_stars_bounded` carries its own copy of the filter; without this the
     // baseline mean could disagree with the current window's for the same books.
-    let previous = previous_period(&pool, user, StatsRange::Month)
+    let previous = previous_period(&pool, user, StatsRange::Month, 0)
         .await
         .unwrap();
     assert_eq!(previous.avg_stars, Some(5.0));

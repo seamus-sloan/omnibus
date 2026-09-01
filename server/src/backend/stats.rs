@@ -14,10 +14,22 @@ use axum::{
 };
 use omnibus_db::{self as db, stats::GoalError};
 use omnibus_shared::{DailyGoalUpdate, ReadingGoalUpdate, SessionCursor, StatsRange};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use super::{internal, AppState};
 use crate::auth::AuthUser;
+
+/// Read `utc_offset_minutes` leniently: anything that isn't a number becomes
+/// `None`, the same answer an absent field gives.
+///
+/// A plain `Option<i64>` would break the field's own contract before any handler
+/// runs — axum's `Query` rejects the whole *request* on `?utc_offset_minutes=`
+/// or `=abc`, which is what a client interpolating an absent offset into a URL
+/// sends, and the reader loses their stats page over an optional hint. Trimmed
+/// because a `+` in a query string decodes to a space.
+fn lenient_offset<'de, D: Deserializer<'de>>(de: D) -> Result<Option<i64>, D::Error> {
+    Ok(Option::<String>::deserialize(de)?.and_then(|raw| raw.trim().parse().ok()))
+}
 
 /// Query shape for `GET /api/stats`. `range` is optional so a bare GET serves
 /// the default window; an unknown value is a 400 from the extractor.
@@ -25,6 +37,27 @@ use crate::auth::AuthUser;
 pub(super) struct StatsQuery {
     #[serde(default)]
     range: StatsRange,
+    /// Minutes east of UTC on the calling device, which every day boundary in
+    /// the response is cut on — the heatmap's columns, the streak, both daily
+    /// goals, and where the window itself opens.
+    ///
+    /// Optional so an older client still gets an answer: the server then falls
+    /// back to the offset of the caller's most recent session, and to UTC if
+    /// there is none. Unreadable values take that fallback via
+    /// [`lenient_offset`] and out-of-range ones via
+    /// `db::user_offset::resolve_offset_minutes`, rather than either 400-ing —
+    /// a bad offset must not cost a reader their stats page.
+    #[serde(default, deserialize_with = "lenient_offset")]
+    utc_offset_minutes: Option<i64>,
+}
+
+/// Query shape for the goal writes: the same offset [`StatsQuery`] carries, on
+/// the same lenient terms and for the same reason — the response reports today's
+/// progress, so it has to know whose today. No `range`; a goal is not windowed.
+#[derive(Debug, Deserialize)]
+pub(super) struct GoalQuery {
+    #[serde(default, deserialize_with = "lenient_offset")]
+    utc_offset_minutes: Option<i64>,
 }
 
 /// Fetch the authed user's stats summary over the requested range.
@@ -33,7 +66,7 @@ pub(super) async fn get_stats(
     State(state): State<AppState>,
     Query(query): Query<StatsQuery>,
 ) -> Response {
-    match db::stats::user_stats(&state.pool, user.id, query.range).await {
+    match db::stats::user_stats(&state.pool, user.id, query.range, query.utc_offset_minutes).await {
         Ok(summary) => Json(summary).into_response(),
         Err(e) => internal("get_stats", e),
     }
@@ -65,9 +98,10 @@ pub(super) async fn get_library_size(_user: AuthUser, State(state): State<AppSta
 pub(super) async fn put_stats_goal(
     user: AuthUser,
     State(state): State<AppState>,
+    Query(query): Query<GoalQuery>,
     Json(update): Json<ReadingGoalUpdate>,
 ) -> Response {
-    match db::stats::set_goal(&state.pool, user.id, &update).await {
+    match db::stats::set_goal(&state.pool, user.id, &update, query.utc_offset_minutes).await {
         Ok(goal) => Json(goal).into_response(),
         Err(GoalError::Sqlx(e)) => internal("set_reading_goal", e),
         // The remaining variants are all boundary checks on the payload, and
@@ -102,9 +136,10 @@ pub(super) async fn put_stats_goal(
 pub(super) async fn put_stats_daily_goal(
     user: AuthUser,
     State(state): State<AppState>,
+    Query(query): Query<GoalQuery>,
     Json(update): Json<DailyGoalUpdate>,
 ) -> Response {
-    match db::stats::set_daily_goal(&state.pool, user.id, &update).await {
+    match db::stats::set_daily_goal(&state.pool, user.id, &update, query.utc_offset_minutes).await {
         Ok(goals) => Json(goals).into_response(),
         Err(GoalError::Sqlx(e)) => internal("set_daily_reading_goal", e),
         // As above: every other variant is a boundary check the payload failed.

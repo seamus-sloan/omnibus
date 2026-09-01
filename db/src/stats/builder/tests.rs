@@ -122,6 +122,7 @@ async fn a_count_axis_comes_back_with_whole_number_gridlines() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -223,6 +224,7 @@ async fn chart_series_counts_books_finished_per_month() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -250,6 +252,7 @@ async fn chart_series_counts_a_doubly_recorded_completion_once() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -274,6 +277,7 @@ async fn chart_series_averages_the_length_of_the_books_finished_in_each_bucket()
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -297,6 +301,7 @@ async fn chart_series_sums_reading_minutes_from_the_sitting_grain() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -319,6 +324,7 @@ async fn chart_series_counts_sittings_across_both_session_tables() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -341,6 +347,7 @@ async fn chart_series_averages_ratings_on_the_rating_grain() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -368,6 +375,7 @@ async fn chart_series_reads_pages_from_the_progress_ledger() {
             ChartBucket::Day,
             StatsRange::Month,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -395,6 +403,7 @@ async fn chart_series_aligns_two_different_grains_on_one_bucket_key() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -433,6 +442,7 @@ async fn chart_series_plots_more_measures_than_there_are_axes() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -467,6 +477,7 @@ async fn chart_series_scales_two_measures_sharing_a_unit_against_one_axis() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -493,6 +504,7 @@ async fn chart_series_rejects_a_measure_that_would_need_a_third_axis() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap_err();
@@ -519,6 +531,7 @@ async fn chart_series_opens_a_second_axis_only_for_a_differing_unit() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -535,6 +548,7 @@ async fn chart_series_opens_a_second_axis_only_for_a_differing_unit() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -559,6 +573,7 @@ async fn chart_series_returns_a_dense_axis_including_buckets_with_no_activity() 
             ChartBucket::Month,
             StatsRange::AllTime,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -590,6 +605,7 @@ async fn chart_series_leaves_an_average_absent_in_a_bucket_with_no_data() {
             ChartBucket::Month,
             StatsRange::AllTime,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -615,6 +631,7 @@ async fn chart_series_drops_a_zero_page_book_from_the_length_average() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -639,6 +656,7 @@ async fn chart_series_scopes_every_measure_to_the_asking_user() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -658,6 +676,7 @@ async fn chart_series_returns_an_empty_result_for_a_window_with_nothing_in_it() 
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -686,7 +705,7 @@ async fn chart_series_splits_a_completion_measure_by_genre_and_folds_the_tail() 
         StatsRange::Year,
     );
     s.breakdown = ChartBreakdown::Genre;
-    let r = chart_series(&pool, user, &s).await.unwrap();
+    let r = chart_series(&pool, user, &s, None).await.unwrap();
 
     assert_eq!(r.series.len(), BREAKDOWN_LIMIT + 1);
     assert_eq!(r.series.last().unwrap().slice.as_deref(), Some(OTHER_LABEL));
@@ -713,7 +732,12 @@ async fn chart_series_stacks_a_split_count_but_never_a_split_average() {
         StatsRange::Year,
     );
     counted.breakdown = ChartBreakdown::Genre;
-    assert!(chart_series(&pool, user, &counted).await.unwrap().stacked);
+    assert!(
+        chart_series(&pool, user, &counted, None)
+            .await
+            .unwrap()
+            .stacked
+    );
 
     // Average book length is a mean, and means do not add.
     let mut averaged = spec(
@@ -722,7 +746,12 @@ async fn chart_series_stacks_a_split_count_but_never_a_split_average() {
         StatsRange::Year,
     );
     averaged.breakdown = ChartBreakdown::Genre;
-    assert!(!chart_series(&pool, user, &averaged).await.unwrap().stacked);
+    assert!(
+        !chart_series(&pool, user, &averaged, None)
+            .await
+            .unwrap()
+            .stacked
+    );
 
     // Two separate measures never stack — books on top of pages is not a
     // quantity.
@@ -731,7 +760,12 @@ async fn chart_series_stacks_a_split_count_but_never_a_split_average() {
         ChartBucket::Month,
         StatsRange::Year,
     );
-    assert!(!chart_series(&pool, user, &unsplit).await.unwrap().stacked);
+    assert!(
+        !chart_series(&pool, user, &unsplit, None)
+            .await
+            .unwrap()
+            .stacked
+    );
 }
 
 #[tokio::test]
@@ -755,7 +789,7 @@ async fn a_stacked_axis_clears_the_tallest_column_not_the_tallest_slice() {
         StatsRange::Year,
     );
     s.breakdown = ChartBreakdown::Genre;
-    let r = chart_series(&pool, user, &s).await.unwrap();
+    let r = chart_series(&pool, user, &s, None).await.unwrap();
 
     assert!(r.stacked);
     let last = r.buckets.len() - 1;
@@ -801,7 +835,7 @@ async fn chart_series_re_averages_a_folded_genre_slice_from_sums() {
         StatsRange::Year,
     );
     s.breakdown = ChartBreakdown::Genre;
-    let r = chart_series(&pool, user, &s).await.unwrap();
+    let r = chart_series(&pool, user, &s, None).await.unwrap();
 
     let other = r
         .series
@@ -826,6 +860,7 @@ async fn chart_series_carries_a_bounded_measures_caveat_into_the_result() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -845,6 +880,7 @@ async fn chart_series_answers_an_empty_selection_without_touching_the_db() {
         &pool,
         user,
         &spec(vec![], ChartBucket::Month, StatsRange::Year),
+        None,
     )
     .await
     .unwrap();
@@ -867,6 +903,7 @@ async fn chart_series_rejects_a_spec_the_vocabulary_forbids() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap_err();
@@ -890,6 +927,7 @@ async fn chart_series_propagates_a_db_error_when_the_pool_is_closed() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap_err();
@@ -917,6 +955,7 @@ async fn chart_series_buckets_a_week_to_its_monday() {
             ChartBucket::Week,
             StatsRange::AllTime,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -950,6 +989,7 @@ async fn chart_series_ignores_a_completion_on_a_book_that_no_longer_exists() {
             ChartBucket::Month,
             StatsRange::Year,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -979,6 +1019,7 @@ async fn chart_series_clips_a_long_axis_to_the_most_recent_buckets_and_says_so()
             ChartBucket::Day,
             StatsRange::AllTime,
         ),
+        None,
     )
     .await
     .unwrap();
@@ -1014,6 +1055,7 @@ async fn chart_series_drops_activity_dated_after_today() {
             ChartBucket::Month,
             StatsRange::AllTime,
         ),
+        None,
     )
     .await
     .unwrap();

@@ -404,10 +404,11 @@ async fn move_links(
 /// merged into another drops off its shelf. That is a separate pre-existing
 /// bug with its own semantics to settle (which shelf wins, what an inherited
 /// wishlist entry means), deliberately not folded in here.
-const RETARGET_TABLES: [&str; 12] = [
+const RETARGET_TABLES: [&str; 13] = [
     "reading_progress",
     "reading_progress_marks",
     "reading_progress_daily",
+    "reading_progress_slots",
     "audiobook_playback_preferences",
     "bookmarks",
     "reading_sessions",
@@ -464,7 +465,7 @@ async fn move_progress_and_history(
     for (table, extra_key) in DEDUPE_TABLES {
         dedupe_latest_wins(tx, table, extra_key, &source_uuid, &target_uuid).await?;
     }
-    fold_daily_ledger(tx, &source_uuid, &target_uuid).await?;
+    fold_ledger_counters(tx, &source_uuid, &target_uuid).await?;
     // Per-device annotation sync state keys on (device_id, book_uuid) rather
     // than on a user, so it can't use the latest-wins helper. Where a device
     // tracks BOTH uuids, keep the target's row (the retarget below would
@@ -492,51 +493,65 @@ async fn move_progress_and_history(
     Ok(())
 }
 
-/// Fold the source book's forward-progress day buckets into the target's,
-/// clearing the `(user_id, book_uuid, day, format)` collisions the retarget
-/// would otherwise hit.
+/// The two forward-progress counter tables and the column each buckets on —
+/// `0083`'s frozen day buckets and `0095`'s quarter-hour slots, which replaced
+/// them so the day could be resolved at read time. Both generations are still
+/// read, so both have to survive a merge.
+const LEDGER_COUNTER_TABLES: [(&str, &str); 2] = [
+    ("reading_progress_daily", "day"),
+    ("reading_progress_slots", "slot"),
+];
+
+/// Fold the source book's forward-progress buckets into the target's, clearing
+/// the collisions the retarget would otherwise hit.
 ///
 /// **Summed, not deduped.** Every other colliding table here holds a snapshot —
 /// a position, a rating, a read status — where keeping the newest row is the
-/// only sensible answer. `reading_progress_daily` holds a *counter*, and a
-/// reader who covered ground in both editions on the same day covered all of
-/// it; latest-wins would throw one side's reading away outright.
+/// only sensible answer. These hold a *counter*, and a reader who covered ground
+/// in both editions in the same bucket covered all of it; latest-wins would
+/// throw one side's reading away outright.
 ///
 /// The source rows the fold consumed are deleted, so the blanket retarget that
-/// follows moves only the days the target had nothing on.
-async fn fold_daily_ledger(
+/// follows moves only the buckets the target had nothing in.
+async fn fold_ledger_counters(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     source_uuid: &str,
     target_uuid: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE reading_progress_daily AS t
-            SET percent_gained = t.percent_gained + (
-                    SELECT SUM(s.percent_gained) FROM reading_progress_daily s
-                     WHERE s.book_uuid = ?2 AND s.user_id = t.user_id
-                       AND s.day = t.day AND s.format = t.format)
-          WHERE t.book_uuid = ?1
-            AND EXISTS (SELECT 1 FROM reading_progress_daily s
+    for (table, bucket) in LEDGER_COUNTER_TABLES {
+        // `table` and `bucket` are fixed literals from the array above, never
+        // user input.
+        let sql = format!(
+            "UPDATE {table} AS t
+                SET percent_gained = t.percent_gained + (
+                        SELECT SUM(s.percent_gained) FROM {table} s
                          WHERE s.book_uuid = ?2 AND s.user_id = t.user_id
-                           AND s.day = t.day AND s.format = t.format)",
-    )
-    .bind(target_uuid)
-    .bind(source_uuid)
-    .execute(&mut **tx)
-    .await?;
+                           AND s.{bucket} = t.{bucket} AND s.format = t.format)
+              WHERE t.book_uuid = ?1
+                AND EXISTS (SELECT 1 FROM {table} s
+                             WHERE s.book_uuid = ?2 AND s.user_id = t.user_id
+                               AND s.{bucket} = t.{bucket} AND s.format = t.format)"
+        );
+        sqlx::query(&sql)
+            .bind(target_uuid)
+            .bind(source_uuid)
+            .execute(&mut **tx)
+            .await?;
 
-    sqlx::query(
-        "DELETE FROM reading_progress_daily
-          WHERE book_uuid = ?2 AND EXISTS (
-            SELECT 1 FROM reading_progress_daily t
-             WHERE t.book_uuid = ?1 AND t.user_id = reading_progress_daily.user_id
-               AND t.day = reading_progress_daily.day
-               AND t.format = reading_progress_daily.format)",
-    )
-    .bind(target_uuid)
-    .bind(source_uuid)
-    .execute(&mut **tx)
-    .await?;
+        let sql = format!(
+            "DELETE FROM {table}
+              WHERE book_uuid = ?2 AND EXISTS (
+                SELECT 1 FROM {table} t
+                 WHERE t.book_uuid = ?1 AND t.user_id = {table}.user_id
+                   AND t.{bucket} = {table}.{bucket}
+                   AND t.format = {table}.format)"
+        );
+        sqlx::query(&sql)
+            .bind(target_uuid)
+            .bind(source_uuid)
+            .execute(&mut **tx)
+            .await?;
+    }
     Ok(())
 }
 
@@ -560,7 +575,7 @@ async fn fold_daily_ledger(
 /// merged book re-baselines.
 ///
 /// `dedupe_latest_wins` picks that mark by `updated_at` alone, and since
-/// migration `0093` a mark is a *ceiling* on accrual rather than a value the
+/// migration `0095` a mark is a *ceiling* on accrual rather than a value the
 /// next write simply replaces. A source book 90% read winning over a target 10%
 /// read would otherwise suppress every gain below 90% on the merged book for a
 /// whole sitting — the reader reads 15%→60% and the tile reports nothing.

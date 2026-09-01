@@ -5,13 +5,19 @@
 //! day-of-week strips, `ratings` for the star metrics, `superlatives` for
 //! the window's most-X figures — keeping each file under the house
 //! line-count cap.
+//!
+//! `offset_minutes` threads through everything with a day boundary. It is the
+//! reader's calendar for this request, and `calendar` builds every expression
+//! that applies it; see the module docs on `super`.
 
 use omnibus_shared::{
     DayActivity, FinishedBook, MonthCount, PeriodComparison, RankedEntity, StatsRange, StatsSummary,
 };
 use sqlx::{Row, SqlitePool};
 
-use super::{genre, goals, pages, patterns, ratings, sessionize, streak, superlatives, StatsError};
+use super::{
+    calendar, genre, goals, pages, patterns, ratings, sessionize, streak, superlatives, StatsError,
+};
 
 /// How many rows the top-authors / top-tags rollups return.
 const TOP_N: i64 = 8;
@@ -92,8 +98,9 @@ pub(super) async fn compute(
     pool: &SqlitePool,
     user_id: i64,
     range: StatsRange,
+    offset_minutes: i64,
 ) -> Result<StatsSummary, StatsError> {
-    let start = window_start(pool, range).await?;
+    let start = window_start(pool, range, offset_minutes).await?;
     let reading_seconds =
         sum_seconds(pool, user_id, start, "reading_sessions", "seconds_read").await?;
     let listening_seconds = sum_seconds(
@@ -107,12 +114,13 @@ pub(super) async fn compute(
     let sessions = session_count(pool, user_id, start).await?;
     let avg_stars = ratings::avg_stars(pool, user_id, start).await?;
     let rating_histogram = ratings::rating_histogram(pool, user_id, start).await?;
-    let heatmap = heatmap(pool, user_id, start).await?;
+    let heatmap = heatmap(pool, user_id, start, offset_minutes).await?;
     // One clock read feeds both the heatmap's right edge and the streak's
     // anchor, so the two can never land on different days.
-    let (as_of_day, today) = as_of(pool).await?;
-    let streak = streak::streak(pool, user_id, start, today).await?;
-    let (busiest_week_start, busiest_week_seconds) = busiest_week(pool, user_id, start).await?;
+    let (as_of_day, today) = as_of(pool, offset_minutes).await?;
+    let streak = streak::streak(pool, user_id, start, today, offset_minutes).await?;
+    let (busiest_week_start, busiest_week_seconds) =
+        busiest_week(pool, user_id, start, offset_minutes).await?;
     let top_authors = top_authors(pool, user_id, start).await?;
     let top_tags = top_tags(pool, user_id, start).await?;
     let genre_share = genre::genre_share(pool, user_id, start).await?;
@@ -120,23 +128,24 @@ pub(super) async fn compute(
     let books_active = books_active(pool, user_id, start).await?;
     let finished_books = finished_books(pool, user_id, start).await?;
     let books_finished = finished_count(pool, user_id, start).await?;
-    let books_per_month = books_per_month(pool, user_id).await?;
-    let previous = previous_period(pool, user_id, range).await?;
-    let listening_daily = listening_daily(pool, user_id, start).await?;
-    let rating_monthly = ratings::rating_monthly(pool, user_id).await?;
-    let pages_read = pages::pages_read(pool, user_id, start).await?;
+    let books_per_month = books_per_month(pool, user_id, offset_minutes).await?;
+    let previous = previous_period(pool, user_id, range, offset_minutes).await?;
+    let listening_daily = listening_daily(pool, user_id, start, offset_minutes).await?;
+    let rating_monthly = ratings::rating_monthly(pool, user_id, offset_minutes).await?;
+    let pages_read = pages::pages_read(pool, user_id, start, offset_minutes).await?;
     let pages_per_hour = pages::pages_per_hour(pool, user_id, start).await?;
     let length_buckets = pages::length_buckets(pool, user_id, start).await?;
     let time_patterns = patterns::time_patterns(pool, user_id, start).await?;
     // Deliberately not windowed on `range`: a goal is annual, so the same
     // current-year value rides every summary and a period switch never moves
     // it (the analogue of `current_streak_days`).
-    let (goal, books_this_year) = goals::current_goal_and_progress(pool, user_id).await?;
+    let (goal, books_this_year) =
+        goals::current_goal_and_progress(pool, user_id, offset_minutes).await?;
     // Unwindowed for the same reason, one period down: a daily target recurs,
     // so today's progress is what every range shows.
-    let daily_goals = goals::daily_goals(pool, user_id).await?;
-    let superlatives = superlatives::superlatives(pool, user_id, start).await?;
-    let pages_detail = pages::pages_detail(pool, user_id, start).await?;
+    let daily_goals = goals::daily_goals_at(pool, user_id, offset_minutes).await?;
+    let superlatives = superlatives::superlatives(pool, user_id, start, offset_minutes).await?;
+    let pages_detail = pages::pages_detail(pool, user_id, start, offset_minutes).await?;
 
     Ok(StatsSummary {
         range,
@@ -177,27 +186,15 @@ pub(super) async fn compute(
     })
 }
 
-/// SQLite expression for a range's period start. Calendar math (start-of-year,
-/// month arithmetic) stays in SQLite rather than Rust; each arm is a fixed
-/// literal, never user input.
-///
-/// Shared by [`window_start`] and [`prev_window_bounds`] so the current window
-/// and the baseline it is compared against cannot drift onto different
-/// definitions of where a period begins.
-fn window_start_expr(range: StatsRange) -> &'static str {
-    match range {
-        // Rolling 7 calendar days ending today — deliberately not aligned
-        // to a weekday, per the converged stats design.
-        StatsRange::Week => "strftime('%s', 'now', '-6 days', 'start of day')",
-        StatsRange::Month => "strftime('%s', strftime('%Y-%m-01 00:00:00', 'now'))",
-        StatsRange::Year => "strftime('%s', strftime('%Y-01-01 00:00:00', 'now'))",
-        StatsRange::AllTime => "0",
-    }
-}
-
-/// Lower bound (unix secs, inclusive) of the reporting window.
-pub(super) async fn window_start(pool: &SqlitePool, range: StatsRange) -> Result<i64, StatsError> {
-    let expr = window_start_expr(range);
+/// Lower bound (unix secs, inclusive) of the reporting window, cut on the
+/// reader's calendar — a Week ends at *their* midnight, not UTC's. See
+/// [`calendar::window_start_expr`].
+pub(super) async fn window_start(
+    pool: &SqlitePool,
+    range: StatsRange,
+    offset_minutes: i64,
+) -> Result<i64, StatsError> {
+    let expr = calendar::window_start_expr(range, offset_minutes);
     Ok(
         sqlx::query_scalar(&format!("SELECT CAST({expr} AS INTEGER)"))
             .fetch_one(pool)
@@ -257,22 +254,25 @@ pub(super) async fn heatmap(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
+    offset_minutes: i64,
 ) -> Result<Vec<DayActivity>, StatsError> {
-    let rows = sqlx::query(
+    let day = calendar::local_day("started_at", offset_minutes);
+    let sql = format!(
         "SELECT day, SUM(secs) AS seconds FROM (
-             SELECT date(started_at, 'unixepoch') AS day, seconds_read AS secs
+             SELECT {day} AS day, seconds_read AS secs
                  FROM reading_sessions   WHERE user_id = ? AND started_at >= ?
              UNION ALL
-             SELECT date(started_at, 'unixepoch'), seconds_listened
+             SELECT {day}, seconds_listened
                  FROM listening_sessions WHERE user_id = ? AND started_at >= ?
-         ) GROUP BY day ORDER BY day",
-    )
-    .bind(user_id)
-    .bind(start)
-    .bind(user_id)
-    .bind(start)
-    .fetch_all(pool)
-    .await?;
+         ) GROUP BY day ORDER BY day"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(user_id)
+        .bind(start)
+        .bind(user_id)
+        .bind(start)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows
         .into_iter()
@@ -301,11 +301,13 @@ pub(super) async fn busiest_week(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
+    offset_minutes: i64,
 ) -> Result<(Option<String>, i64), StatsError> {
+    let dnum = calendar::local_day_number("started_at", offset_minutes);
     let sql = format!(
         "SELECT date(week_start * 86400, 'unixepoch') AS start_day,
                 SUM(secs) AS seconds FROM (
-             SELECT (started_at / 86400) - (((started_at / 86400) + 3) % 7) AS week_start,
+             SELECT {dnum} - ((({dnum}) + 3) % 7) AS week_start,
                     secs
              FROM ({SESSION_ROWS})
          ) GROUP BY week_start ORDER BY seconds DESC, week_start ASC LIMIT 1"
@@ -394,19 +396,25 @@ pub(super) async fn books_active(
         .await?)
 }
 
-/// The server's current UTC day as both the `YYYY-MM-DD` string stamped on the
-/// summary — so the heatmap grid anchors to the server clock instead of the
-/// client's — and its unix day number, which anchors the current streak.
+/// Today on the reader's calendar, as both the `YYYY-MM-DD` string stamped on
+/// the summary — the heatmap grid's right edge — and its unix day number, which
+/// anchors the current streak.
 ///
-/// Both come out of **one** statement on purpose: SQLite holds `'now'` fixed
-/// for a single statement, so the two can't straddle midnight and describe
-/// different days.
-pub(super) async fn as_of(pool: &SqlitePool) -> Result<(String, i64), StatsError> {
-    let row = sqlx::query(
-        "SELECT date('now') AS day, CAST(strftime('%s', 'now') AS INTEGER) / 86400 AS dnum",
-    )
-    .fetch_one(pool)
-    .await?;
+/// The server still owns the arithmetic and the clock; the client contributes
+/// only *where it is*. That distinction is what keeps the web page, the iOS tab
+/// and any widget from each deriving their own streak and disagreeing, while
+/// still letting a reader's day end at their own midnight.
+///
+/// Both come out of **one** statement on purpose: SQLite holds `'now'` fixed for
+/// a single statement, so the two can't straddle midnight and describe different
+/// days.
+pub(super) async fn as_of(
+    pool: &SqlitePool,
+    offset_minutes: i64,
+) -> Result<(String, i64), StatsError> {
+    let row = sqlx::query(&calendar::today_expr(offset_minutes))
+        .fetch_one(pool)
+        .await?;
     Ok((row.get("day"), row.get("dnum")))
 }
 
@@ -499,17 +507,12 @@ pub(super) async fn finished_books(
 pub(super) async fn prev_window_bounds(
     pool: &SqlitePool,
     range: StatsRange,
+    offset_minutes: i64,
 ) -> Result<Option<(i64, i64)>, StatsError> {
-    let prev_start_expr = match range {
-        StatsRange::Week => "strftime('%s', 'now', '-13 days', 'start of day')",
-        // Month arithmetic runs on a month-start anchor: applying '-1 month'
-        // to a month-end 'now' (e.g. July 31) normalizes to day 1 of the
-        // *current* month and collapses the window.
-        StatsRange::Month => "strftime('%s', 'now', 'start of month', '-1 month')",
-        StatsRange::Year => "strftime('%s', strftime('%Y-01-01 00:00:00', 'now', '-1 year'))",
-        StatsRange::AllTime => return Ok(None),
+    let Some(prev_start_expr) = calendar::prev_window_start_expr(range, offset_minutes) else {
+        return Ok(None);
     };
-    let cur_start_expr = window_start_expr(range);
+    let cur_start_expr = calendar::window_start_expr(range, offset_minutes);
     // One statement, so `now` is read from the same clock tick as both period
     // starts and the elapsed offset can't straddle a second boundary.
     let row = sqlx::query(&format!(
@@ -548,8 +551,9 @@ pub(super) async fn previous_period(
     pool: &SqlitePool,
     user_id: i64,
     range: StatsRange,
+    offset_minutes: i64,
 ) -> Result<PeriodComparison, StatsError> {
-    let Some((start, end)) = prev_window_bounds(pool, range).await? else {
+    let Some((start, end)) = prev_window_bounds(pool, range, offset_minutes).await? else {
         return Ok(PeriodComparison::default());
     };
     let listening_seconds = sum_seconds_bounded(
@@ -563,7 +567,7 @@ pub(super) async fn previous_period(
     .await?;
     let avg_stars = ratings::avg_stars_bounded(pool, user_id, start, end).await?;
     let books_finished = finished_count_bounded(pool, user_id, start, end).await?;
-    let pages_read = pages::pages_read_bounded(pool, user_id, start, end).await?;
+    let pages_read = pages::pages_read_bounded(pool, user_id, start, end, offset_minutes).await?;
     Ok(PeriodComparison {
         books_finished,
         avg_stars,
@@ -624,16 +628,19 @@ pub(super) async fn listening_daily(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
+    offset_minutes: i64,
 ) -> Result<Vec<DayActivity>, StatsError> {
-    let rows = sqlx::query(
-        "SELECT date(started_at, 'unixepoch') AS day, SUM(seconds_listened) AS seconds
+    let sql = format!(
+        "SELECT {} AS day, SUM(seconds_listened) AS seconds
          FROM listening_sessions WHERE user_id = ? AND started_at >= ?
          GROUP BY day ORDER BY day",
-    )
-    .bind(user_id)
-    .bind(start)
-    .fetch_all(pool)
-    .await?;
+        calendar::local_day("started_at", offset_minutes)
+    );
+    let rows = sqlx::query(&sql)
+        .bind(user_id)
+        .bind(start)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows
         .into_iter()
@@ -655,22 +662,22 @@ pub(super) async fn listening_daily(
 pub(super) async fn books_per_month(
     pool: &SqlitePool,
     user_id: i64,
+    offset_minutes: i64,
 ) -> Result<Vec<MonthCount>, StatsError> {
+    // The spine and the completions are both cut on the reader's calendar: a
+    // month spine in UTC joined against local completion months would drop
+    // December's finishes off the end of a reader east of UTC every year.
     let sql = format!(
-        "WITH RECURSIVE months(month) AS (
-             SELECT strftime('%Y-%m', 'now', 'start of month', '-11 months')
-             UNION ALL
-             SELECT strftime('%Y-%m', month || '-01', '+1 month')
-             FROM months
-             WHERE month < strftime('%Y-%m', 'now')
-         )
+        "WITH RECURSIVE {}
          SELECT months.month AS month, COUNT(DISTINCT f.book_uuid) AS books
          FROM months
          LEFT JOIN ({}) f
-               ON strftime('%Y-%m', f.finished_at, 'unixepoch') = months.month
+               ON {} = months.month
          GROUP BY months.month
          ORDER BY months.month",
-        live_finished_events()
+        calendar::month_spine(offset_minutes),
+        live_finished_events(),
+        calendar::local_month("f.finished_at", offset_minutes)
     );
     let rows = sqlx::query(&sql)
         .bind(user_id)

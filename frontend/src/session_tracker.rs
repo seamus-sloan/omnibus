@@ -150,6 +150,7 @@ fn build_report(uuid: &str, format: ProgressFormat, start: i64, end: i64) -> Opt
         // is no replay for a handle to make idempotent.
         client_id: None,
         utc_offset_minutes: local_utc_offset_minutes(start),
+        time_zone: crate::time::local_time_zone(),
     })
 }
 

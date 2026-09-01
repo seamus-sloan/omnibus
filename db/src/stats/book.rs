@@ -45,7 +45,10 @@ pub async fn book_insights(
     pool: &SqlitePool,
     user_id: i64,
     uuid: &str,
+    claimed_offset_minutes: Option<i64>,
 ) -> Result<Option<BookInsights>, StatsError> {
+    let offset =
+        crate::user_offset::resolve_offset_minutes(pool, user_id, claimed_offset_minutes).await?;
     let Some(book_uuid) = crate::books::resolve_canonical_book_uuid(pool, uuid).await? else {
         return Ok(None);
     };
@@ -94,11 +97,14 @@ pub async fn book_insights(
     let longest_seconds: i64 = row.get("secs");
     let longest_started_at: i64 = row.get("started_at");
 
-    // Per-day totals, same UTC bucketing as the user-wide heatmap. Active
-    // days only — the client fills calendar gaps against `as_of_day`.
+    // Per-day totals, on the reader's calendar like the user-wide heatmap —
+    // the strip sits beside it, so a session must not land on one day here and
+    // another there. Active days only; the client fills calendar gaps against
+    // `as_of_day`, which is why that has to be resolved on this same offset.
     let sql = format!(
-        "SELECT date(started_at, 'unixepoch') AS day, SUM(secs) AS seconds \
-         FROM ({BOOK_SESSIONS}) GROUP BY day ORDER BY day"
+        "SELECT {} AS day, SUM(secs) AS seconds \
+         FROM ({BOOK_SESSIONS}) GROUP BY day ORDER BY day",
+        super::calendar::local_day("started_at", offset)
     );
     let daily = sqlx::query(&sql)
         .bind(user_id)
@@ -122,7 +128,7 @@ pub async fn book_insights(
         longest_seconds,
         longest_started_at,
         daily,
-        as_of_day: super::compute::as_of(pool).await?.0,
+        as_of_day: super::compute::as_of(pool, offset).await?.0,
     }))
 }
 

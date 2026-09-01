@@ -199,6 +199,7 @@ mod tests {
             device_id: None,
             client_id: None,
             utc_offset_minutes: None,
+            time_zone: None,
         }
     }
 

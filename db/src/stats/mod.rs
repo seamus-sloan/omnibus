@@ -6,11 +6,24 @@
 //! `sessionize` for how checkpoint rows become sittings, `library` /
 //! `composition` for the two aggregates here that describe the collection
 //! rather than a reader, and `sessions` for the uncached per-sitting log
-//! those aggregates summarize. Every rollup here buckets in UTC except
-//! `patterns`, which is local-time by necessity — see its module docs.
+//! those aggregates summarize.
+//!
+//! # Which calendar
+//!
+//! Every **day boundary** here is cut on one offset per request — the asking
+//! client's, via `crate::user_offset`. Days are ordinal (today, yesterday, seven
+//! in a row), and a sequence measured on two calendars cannot be ordered, so
+//! there is exactly one per summary.
+//!
+//! `patterns` is the deliberate exception, and not a second calendar: it buckets
+//! by **hour of day** and weekday against the offset each session recorded at
+//! capture time, so an evening read in Tokyo stays an evening after the reader
+//! flies home. A shape-of-a-day distribution needs no ordering, which is why it
+//! can answer a question the day boundaries cannot.
 
 mod book;
 mod builder;
+mod calendar;
 mod composition;
 mod compute;
 mod genre;
@@ -68,6 +81,14 @@ pub enum StatsError {
     Sqlx(#[from] sqlx::Error),
 }
 
+impl From<crate::user_offset::OffsetError> for StatsError {
+    fn from(e: crate::user_offset::OffsetError) -> Self {
+        match e {
+            crate::user_offset::OffsetError::Sqlx(inner) => StatsError::Sqlx(inner),
+        }
+    }
+}
+
 impl From<crate::books::BooksError> for StatsError {
     fn from(e: crate::books::BooksError) -> Self {
         match e {
@@ -87,11 +108,17 @@ impl From<crate::books::BooksError> for StatsError {
     }
 }
 
-type Cache = Mutex<HashMap<(i64, StatsRange), (i64, StatsSummary)>>;
+type Cache = Mutex<HashMap<(i64, StatsRange, i64), (i64, StatsSummary)>>;
 
 /// Process-wide cache shared by every request for every user — keyed by
-/// `(user_id, range)` so no cached aggregate leaks between users, and read
-/// through by [`user_stats_at`] before any SQL runs.
+/// `(user_id, range, offset_minutes)` so no cached aggregate leaks between
+/// users, and read through by [`user_stats_at`] before any SQL runs.
+///
+/// The offset belongs in the key because it moves the answer: every day boundary
+/// in a summary is cut on it, so a phone in Tokyo and a laptop in Los Angeles
+/// have genuinely different summaries to be served, and omitting it would hand
+/// one of them the other's days. It costs nothing in practice — a reader is in
+/// one place at a time, so this stays one entry per range.
 fn cache() -> &'static Cache {
     static CACHE: OnceLock<Cache> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -106,40 +133,67 @@ pub(super) fn now_secs() -> i64 {
 
 /// Aggregate one user's reading/listening stats over `range`, cached for
 /// [`STATS_TTL_SECS`].
+///
+/// `claimed_offset_minutes` is what the asking client says its UTC offset is,
+/// and every day boundary in the result is cut on it — the heatmap's columns,
+/// the streak's today, both daily goals, and where the window itself begins.
+/// `None` falls back to the reader's most recent session offset and then to UTC;
+/// see [`crate::user_offset::resolve_offset_minutes`].
 pub async fn user_stats(
     pool: &SqlitePool,
     user_id: i64,
     range: StatsRange,
+    claimed_offset_minutes: Option<i64>,
 ) -> Result<StatsSummary, StatsError> {
-    user_stats_at(pool, user_id, range, now_secs()).await
+    let offset =
+        crate::user_offset::resolve_offset_minutes(pool, user_id, claimed_offset_minutes).await?;
+    user_stats_at(pool, user_id, range, offset, now_secs()).await
 }
 
-/// Clock-injected core of [`user_stats`]. A cache hit fresher than the TTL
-/// returns without touching the DB; otherwise the SQL runs and the result is
-/// cached under `(user_id, range)` stamped at `now`.
+/// Clock-injected core of [`user_stats`], taking an already-resolved offset. A
+/// cache hit fresher than the TTL returns without touching the DB; otherwise the
+/// SQL runs and the result is cached under `(user_id, range, offset)` stamped at
+/// `now`.
 async fn user_stats_at(
     pool: &SqlitePool,
     user_id: i64,
     range: StatsRange,
+    offset_minutes: i64,
     now: i64,
 ) -> Result<StatsSummary, StatsError> {
-    if let Some(hit) = cache_get(user_id, range, now) {
+    if let Some(hit) = cache_get(user_id, range, offset_minutes, now) {
         return Ok(hit);
     }
-    let summary = compute(pool, user_id, range).await?;
-    cache_put(user_id, range, now, summary.clone());
+    let summary = compute(pool, user_id, range, offset_minutes).await?;
+    cache_put(user_id, range, offset_minutes, now, summary.clone());
     Ok(summary)
 }
 
-fn cache_get(user_id: i64, range: StatsRange, now: i64) -> Option<StatsSummary> {
+fn cache_get(
+    user_id: i64,
+    range: StatsRange,
+    offset_minutes: i64,
+    now: i64,
+) -> Option<StatsSummary> {
     let guard = cache().lock().ok()?;
-    let (at, summary) = guard.get(&(user_id, range))?;
+    let (at, summary) = guard.get(&(user_id, range, offset_minutes))?;
     (now.saturating_sub(*at) < STATS_TTL_SECS).then(|| summary.clone())
 }
 
-fn cache_put(user_id: i64, range: StatsRange, now: i64, summary: StatsSummary) {
+fn cache_put(
+    user_id: i64,
+    range: StatsRange,
+    offset_minutes: i64,
+    now: i64,
+    summary: StatsSummary,
+) {
     if let Ok(mut guard) = cache().lock() {
-        guard.insert((user_id, range), (now, summary));
+        // Bounded by the TTL, not a count: an entry past it can never be served
+        // again, so age reclaims exactly the dead ones — where a capacity cap
+        // would have to evict a live reader's summary, and a summary is not
+        // small (a heatmap vec plus up to `FINISHED_BOOKS_LIMIT` books).
+        guard.retain(|_, (at, _)| now.saturating_sub(*at) < STATS_TTL_SECS);
+        guard.insert((user_id, range, offset_minutes), (now, summary));
     }
 }
 
@@ -159,6 +213,35 @@ pub(crate) fn clear_cache() {
 /// cache isn't thrown away for a change that can't affect them.
 pub fn invalidate_user(user_id: i64) {
     if let Ok(mut guard) = cache().lock() {
-        guard.retain(|(uid, _), _| *uid != user_id);
+        guard.retain(|(uid, _, _), _| *uid != user_id);
+    }
+}
+
+/// Eviction, inline rather than in the sibling `tests.rs` because it needs no
+/// pool and no fixtures — the cache is a map behind an injected clock.
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn cache_put_evicts_entries_the_ttl_has_passed() {
+        // Stamped near zero so the sweep can't reach a sibling test's entry: the
+        // cache is a process-wide static, and everything else in this crate is
+        // stamped at `now_secs()` or at 1000.
+        let stale = (9_401, StatsRange::Week, 0);
+        let fresh = (9_402, StatsRange::Week, 0);
+        cache_put(stale.0, stale.1, stale.2, 0, StatsSummary::default());
+        cache_put(
+            fresh.0,
+            fresh.1,
+            fresh.2,
+            STATS_TTL_SECS,
+            StatsSummary::default(),
+        );
+
+        // Read back at the instant it was written, where the TTL alone would
+        // still have served it — so a miss here is reclamation, not expiry.
+        assert!(cache_get(stale.0, stale.1, stale.2, 0).is_none());
+        assert!(cache_get(fresh.0, fresh.1, fresh.2, STATS_TTL_SECS).is_some());
     }
 }

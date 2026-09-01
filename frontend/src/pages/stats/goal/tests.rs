@@ -63,15 +63,6 @@ fn daily_goal_percent_clamps_but_the_caption_stays_honest() {
 }
 
 #[test]
-fn disclosure_minutes_truncates_like_the_goal_it_sits_under() {
-    // Reported the same way the goal counts, so the disclosure and the
-    // figure above it can't appear to contradict each other.
-    assert_eq!(disclosure_minutes(59), 0);
-    assert_eq!(disclosure_minutes(60), 1);
-    assert_eq!(disclosure_minutes(3_599), 59);
-}
-
-#[test]
 fn year_fraction_runs_from_one_day_in_to_the_whole_year() {
     let first = year_fraction("2026-01-01").expect("a real day");
     assert!((first - 1.0 / 365.0).abs() < 1e-9, "{first}");
@@ -187,7 +178,10 @@ mod render_tests {
                 daily: DailyGoals {
                     pages: None,
                     minutes: None,
-                    unzoned_seconds: 0,
+                    // Non-zero on purpose: only a server predating the
+                    // one-calendar-per-request rule sends this, and it must
+                    // still render nothing.
+                    unzoned_seconds: 420,
                     pages_today: Some(47),
                     minutes_today: Some(0),
                 },
@@ -265,6 +259,10 @@ mod render_tests {
         assert!(!html.contains("Pages today"), "{html}");
         // One short call to action for the card, not one per row.
         assert_eq!(html.matches("stats-daily-set-link").count(), 1, "{html}");
+        // Every session is placeable on the reader's own day now, so there is
+        // no disclosure left to draw — not even for the non-zero figure an
+        // older server would still send.
+        assert!(!html.contains("stats-daily-unzoned"), "{html}");
     }
 
     /// A half-set card runs the targeted kind as a goal and the untargeted one

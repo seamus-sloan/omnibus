@@ -66,8 +66,8 @@ pub async fn insert_session_tx(
             sqlx::query(
                 "INSERT OR IGNORE INTO reading_sessions
                     (user_id, book_uuid, started_at, ended_at, seconds_read, device_id,
-                     client_id, utc_offset_minutes)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                     client_id, utc_offset_minutes, time_zone)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(user_id)
             .bind(canonical_uuid)
@@ -77,6 +77,7 @@ pub async fn insert_session_tx(
             .bind(report.device_id)
             .bind(report.client_id.as_deref())
             .bind(report.utc_offset_minutes)
+            .bind(zone_or_null(report))
             .execute(&mut **tx)
             .await?;
         }
@@ -84,8 +85,8 @@ pub async fn insert_session_tx(
             sqlx::query(
                 "INSERT OR IGNORE INTO listening_sessions
                     (user_id, book_uuid, started_at, ended_at, seconds_listened, device_id,
-                     client_id, utc_offset_minutes)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                     client_id, utc_offset_minutes, time_zone)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(user_id)
             .bind(canonical_uuid)
@@ -95,11 +96,24 @@ pub async fn insert_session_tx(
             .bind(report.device_id)
             .bind(report.client_id.as_deref())
             .bind(report.utc_offset_minutes)
+            .bind(zone_or_null(report))
             .execute(&mut **tx)
             .await?;
         }
     }
     Ok(())
+}
+
+/// The report's capture-time zone name, blank-to-NULL at the bind rather than
+/// only at `validate` — an internal caller that skipped validation must not be
+/// able to store an empty string, or "absent" grows a second representation the
+/// read path would have to know about.
+fn zone_or_null(report: &SessionReport) -> Option<&str> {
+    report
+        .time_zone
+        .as_deref()
+        .map(str::trim)
+        .filter(|z| !z.is_empty())
 }
 
 /// Append one session row to the per-format table. Returns `Ok(true)` when
