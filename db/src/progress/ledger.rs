@@ -137,10 +137,9 @@ pub(super) async fn observe_percent_tx(
 /// The `(new sitting high-water, ground gained)` an observation produces
 /// against an existing mark.
 ///
-/// `last_at` is NULL for a row that predates migration `0093` and has not been
-/// observed since — the migration leaves those clocks unset on purpose. It
-/// reads as "no sitting in progress", which re-baselines, so a mark carrying
-/// the old last-position-seen meaning can never continue a live sitting.
+/// `last_at` is NULL for a mark whose sitting was deliberately ended without
+/// one being started — `merge::transaction::clear_sitting_clock` is the only
+/// writer that does so. It reads as "no sitting in progress", which re-baselines.
 fn sitting_gain(mark: i64, last_at: Option<i64>, percent: i64, observed_at: i64) -> (i64, i64) {
     // A negative gap is an out-of-order observation, not idleness, so it
     // continues the sitting rather than opening one — `<=` covers both.

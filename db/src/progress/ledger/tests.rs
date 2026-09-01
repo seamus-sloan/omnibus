@@ -279,9 +279,9 @@ async fn observe_percent_baselines_a_row_carrying_no_sitting_clock() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
 
-    // Every row migration 0093 inherits looks like this — it sets no clock on
-    // purpose. The mark still holds the pre-migration last-position-seen value,
-    // so it must re-baseline rather than continue a sitting from it.
+    // What `merge::transaction::clear_sitting_clock` leaves behind: a mark whose
+    // sitting was ended without a new one starting, because the merge could have
+    // handed this reader the other book's mark.
     sqlx::query(
         "INSERT INTO reading_progress_marks
              (user_id, book_uuid, format, sitting_max_percent, sitting_observed_at, updated_at)

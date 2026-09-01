@@ -458,10 +458,12 @@ async fn move_progress_and_history(
         .fetch_one(&mut **tx)
         .await?;
 
+    // Before the dedupe, which is what makes the readers it applies to
+    // identifiable — afterwards the losing row is gone.
+    clear_sitting_clock(tx, &source_uuid, &target_uuid).await?;
     for (table, extra_key) in DEDUPE_TABLES {
         dedupe_latest_wins(tx, table, extra_key, &source_uuid, &target_uuid).await?;
     }
-    clear_sitting_clock(tx, &source_uuid, &target_uuid).await?;
     fold_daily_ledger(tx, &source_uuid, &target_uuid).await?;
     // Per-device annotation sync state keys on (device_id, book_uuid) rather
     // than on a user, so it can't use the latest-wins helper. Where a device
@@ -553,17 +555,26 @@ async fn fold_daily_ledger(
 /// deleting a loser on whichever side it falls, and pass 2's blanket delete of
 /// colliding target rows is only correct once pass 1 has removed the source
 /// rows the target already beat.
-/// Unset the forward-progress sitting clock on both books' marks, so the next
-/// observation on the merged book re-baselines.
+/// Unset the forward-progress sitting clock for the readers whose surviving
+/// mark the dedupe is about to choose between, so their next observation on the
+/// merged book re-baselines.
 ///
-/// `dedupe_latest_wins` picks the surviving mark by `updated_at` alone, and
-/// since migration `0093` that mark is a *ceiling* on accrual rather than a
-/// value the next write simply replaces. A source book 90% read winning over a
-/// target 10% read would otherwise suppress every gain below 90% on the merged
-/// book for a whole sitting — the reader reads 15%→60% and the tile reports
-/// nothing. Re-baselining costs at most the first observation's gain and cannot
-/// suppress anything, which is the same trade migration `0093` makes for the
-/// rows it inherits.
+/// `dedupe_latest_wins` picks that mark by `updated_at` alone, and since
+/// migration `0093` a mark is a *ceiling* on accrual rather than a value the
+/// next write simply replaces. A source book 90% read winning over a target 10%
+/// read would otherwise suppress every gain below 90% on the merged book for a
+/// whole sitting — the reader reads 15%→60% and the tile reports nothing.
+///
+/// Scoped to readers holding a mark on **both** books, which is exactly the set
+/// the dedupe resolves. A reader with a mark on only one of them keeps a clock
+/// that still describes their own reading: a source-only mark is retargeted onto
+/// a book holding the same content, and a target-only mark is not touched at
+/// all. Clearing those too would re-baseline a sitting nothing had disturbed,
+/// letting the mark fall and handing back ground already counted — the very
+/// over-credit this migration exists to remove.
+///
+/// Must run *before* the dedupe: afterwards one of the two rows has been
+/// deleted, so the readers holding both are no longer identifiable.
 async fn clear_sitting_clock(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     source_uuid: &str,
@@ -571,7 +582,12 @@ async fn clear_sitting_clock(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE reading_progress_marks SET sitting_observed_at = NULL
-          WHERE book_uuid IN (?1, ?2)",
+          WHERE book_uuid IN (?1, ?2)
+            AND user_id IN (
+                SELECT user_id FROM reading_progress_marks WHERE book_uuid = ?1
+                INTERSECT
+                SELECT user_id FROM reading_progress_marks WHERE book_uuid = ?2
+            )",
     )
     .bind(source_uuid)
     .bind(target_uuid)

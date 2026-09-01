@@ -49,13 +49,18 @@ ALTER TABLE reading_progress_marks RENAME COLUMN percent TO sitting_max_percent;
 -- with the position's older event time) cannot drag the boundary backward and
 -- manufacture a gap.
 --
--- Nullable, and deliberately left NULL on every existing row rather than
--- backfilled from `updated_at`. NULL reads as "no sitting in progress", which
--- re-baselines on the next observation — and that is what the existing rows
--- want, because each one holds a mark under the *old* last-position-seen
--- meaning. Seeding a clock from `updated_at` would let a recently-written one
--- carry that stale mark into a live sitting and charge the reader once more for
--- ground it had already counted, which is the bug this migration exists to end.
--- Nothing is lost by starting them cold: the first observation after the deploy
--- baselines, exactly as a book seen for the first time does.
+-- Nullable, because SQLite cannot add a NOT NULL column without a constant
+-- default and there is no honest constant here. NULL reads as "no sitting in
+-- progress", which re-baselines on the next observation.
+--
+-- The existing rows are backfilled from `updated_at` rather than left NULL, and
+-- the direction matters. The gain no longer depends on the clock at all — it is
+-- `max(0, observed - mark)` either way — so the only thing a clock decides is
+-- whether the mark may fall. Seeding one *keeps* the mark, and NULL drops it to
+-- wherever the reader currently is, which hands back every point between the
+-- two on the way up. For a pre-migration mark, which is the reader's last known
+-- position, keeping it is the conservative answer and NULL is the one that
+-- re-charges ground already counted.
 ALTER TABLE reading_progress_marks ADD COLUMN sitting_observed_at INTEGER;
+
+UPDATE reading_progress_marks SET sitting_observed_at = updated_at;

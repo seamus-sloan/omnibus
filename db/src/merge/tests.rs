@@ -1562,3 +1562,55 @@ async fn merge_unsets_the_sitting_clock_so_the_surviving_mark_cannot_act_as_a_ce
             .unwrap();
     assert_eq!(clock, None, "merge must leave no sitting in progress");
 }
+
+#[tokio::test]
+async fn merge_leaves_the_sitting_clock_alone_for_a_reader_holding_only_one_of_the_books() {
+    // The clear is scoped to the readers the dedupe actually chooses between.
+    // This reader has a mark on the target only, so nothing about their mark
+    // changes — re-baselining it anyway would let it fall on their next
+    // observation and hand back ground already counted.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let both = seed_user(&pool).await;
+    let target_only: i64 = sqlx::query_scalar(
+        "INSERT INTO users (username, password_hash, is_admin) VALUES ('bob', 'x', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+
+    for (user, uuid) in [(both, &target), (both, &source), (target_only, &target)] {
+        sqlx::query(
+            "INSERT INTO reading_progress_marks
+                 (user_id, book_uuid, format, sitting_max_percent, sitting_observed_at, updated_at)
+             VALUES (?, ?, 'epub', 50, 4000, 4000)",
+        )
+        .bind(user)
+        .bind(uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    merge_books(&pool, &source, &target, Some(both))
+        .await
+        .unwrap();
+
+    let clocks: Vec<(i64, Option<i64>)> =
+        sqlx::query_as("SELECT user_id, sitting_observed_at FROM reading_progress_marks")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(clocks.len(), 2, "one surviving mark per reader");
+    assert_eq!(
+        clocks.iter().find(|(u, _)| *u == both).unwrap().1,
+        None,
+        "the reader who held both books re-baselines"
+    );
+    assert_eq!(
+        clocks.iter().find(|(u, _)| *u == target_only).unwrap().1,
+        Some(4000),
+        "the reader who held only the target keeps their sitting"
+    );
+}
