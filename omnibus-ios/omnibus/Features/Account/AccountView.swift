@@ -10,6 +10,11 @@
 import SwiftUI
 
 struct AccountView: View {
+    /// Whether the book-detail scroll-stops switch is inert. `true` until
+    /// the book detail page actually branches on the stored preference — see
+    /// `bookDetailSection`. The web card carries the same constant.
+    static let scrollStopsParked = true
+
     /// Owned by `MainTabView` — see `isImmersiveDetail` there.
     @Binding var path: [Destination]
 
@@ -27,6 +32,8 @@ struct AccountView: View {
     @State private var kindleEmail = ""
     @State private var kindleSaved = false
     @State private var kindleError: String?
+    @State private var scrollStops = false
+    @State private var scrollStopsError: String?
     @State private var hiddenFormats: Set<String> = []
     @State private var hiddenSaved = false
     @State private var hiddenError: String?
@@ -52,6 +59,7 @@ struct AccountView: View {
                     library
                     offline
                     sendToKindle
+                    bookDetailSection
                     hiddenFormatsSection
                     session
                     colophon
@@ -85,6 +93,7 @@ struct AccountView: View {
         .task {
             kindleEmail = app.user?.kindleEmail ?? ""
             hiddenFormats = Set(app.user?.hiddenFormats ?? [])
+            scrollStops = app.user?.bookDetailScrollStops ?? false
             await connectivity.refreshPendingCount()
         }
         .onChange(of: kindleEmail) { _, _ in
@@ -94,6 +103,25 @@ struct AccountView: View {
         .onChange(of: hiddenFormats) { _, _ in
             hiddenSaved = false
             hiddenError = nil
+        }
+        .onChange(of: scrollStops) { previous, next in
+            guard next != (app.user?.bookDetailScrollStops ?? false) else { return }
+            Task {
+                do {
+                    try await AuthService.setBookDetailScrollStops(next)
+                    await app.refreshUser()
+                    scrollStopsError = nil
+                    Haptics.success()
+                } catch {
+                    // Account configuration, so no outbox takes this (rule
+                    // 08) — a swallowed failure would leave the switch
+                    // showing a setting that exists nowhere.
+                    scrollStops = previous
+                    scrollStopsError = (error as? APIError)?.errorDescription
+                        ?? error.localizedDescription
+                    Haptics.warning()
+                }
+            }
         }
     }
 
@@ -317,6 +345,42 @@ struct AccountView: View {
                     .contentTransition(.numericText())
                     .animation(Motion.snap, value: kindleSaved)
                 }
+            }
+        }
+    }
+
+    /// Whether this reader's book detail page uses the snap-stop marquee.
+    /// Account configuration: saved directly, never queued (rule 08).
+    ///
+    /// Parked behind `AccountView.scrollStopsParked` — nothing reads the
+    /// preference yet, so the switch renders disabled under a "Coming soon"
+    /// marker rather than letting a reader set a value that changes nothing.
+    /// Dropping that constant is what lights it up.
+    private var bookDetailSection: some View {
+        group("Book details") {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                Plate {
+                    PlateRow(label: "Use scroll stops", isFirst: true) {
+                        if Self.scrollStopsParked {
+                            Text("Coming soon")
+                                .font(.monoUI(9.5, weight: .medium))
+                                .tracking(0.8)
+                                .textCase(.uppercase)
+                                .foregroundStyle(palette.ink3Color)
+                        }
+                        Toggle("", isOn: $scrollStops)
+                            .labelsHidden()
+                            .tint(palette.accentColor)
+                            .disabled(Self.scrollStopsParked || !connectivity.isOnline)
+                    }
+                }
+
+                Text(
+                    scrollStopsError
+                        ?? "Snap through the book detail page one panel at a time, instead of scrolling it continuously."
+                )
+                .font(.ui(12))
+                .foregroundStyle(scrollStopsError == nil ? palette.ink3Color : palette.badColor)
             }
         }
     }

@@ -85,6 +85,7 @@ pub async fn create_user(pool: &SqlitePool, username: &str, password: &str) -> A
         display_name: None,
         has_avatar: false,
         hidden_formats: Vec::new(),
+        book_detail_scroll_stops: false,
     })
 }
 
@@ -133,7 +134,7 @@ async fn check_registration_preconditions(
 /// `user_avatars` rows it describes.
 pub(crate) const USER_COLUMNS: &str =
     "u.id, u.username, u.is_admin, u.can_upload, u.can_edit, u.can_download,
-     u.kindle_email, u.display_name, u.hidden_formats,
+     u.kindle_email, u.display_name, u.hidden_formats, u.book_detail_scroll_stops,
      EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = u.id) AS has_avatar";
 
 /// Look up a user record by username (case-insensitive); returns `None` if no match.
@@ -308,6 +309,33 @@ pub async fn get_hidden_formats(pool: &SqlitePool, user_id: i64) -> AuthResult<V
             .fetch_optional(pool)
             .await?;
     Ok(crate::auth::parse_hidden_formats(v.flatten()))
+}
+
+/// Set whether a user's book detail page uses the snap-stop marquee. Off by
+/// default, so an account that has never touched it reads the page as one
+/// continuous scroll.
+pub async fn set_book_detail_scroll_stops(
+    pool: &SqlitePool,
+    user_id: i64,
+    enabled: bool,
+) -> AuthResult<()> {
+    sqlx::query("UPDATE users SET book_detail_scroll_stops = ? WHERE id = ?")
+        .bind(i64::from(enabled))
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Read a user's book-detail scroll-stops preference. `false` when unset or
+/// when the user no longer exists.
+pub async fn get_book_detail_scroll_stops(pool: &SqlitePool, user_id: i64) -> AuthResult<bool> {
+    let v: Option<i64> =
+        sqlx::query_scalar("SELECT book_detail_scroll_stops FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(v.unwrap_or(0) != 0)
 }
 
 /// Change a user's password. Verifies `current` against the stored hash to

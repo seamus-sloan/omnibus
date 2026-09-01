@@ -1,7 +1,8 @@
-//! `/api/account/hidden-formats` — the caller's own hidden-formats
-//! preference (which formats the landing All Books view excludes for them).
-//! Mirrors the web server function `rpc_set_hidden_formats`; the read side
-//! rides `GET /api/auth/me` as `UserSummary::hidden_formats`.
+//! `/api/account/*` — the caller's own reading preferences: which formats the
+//! landing All Books view excludes for them, and whether their book detail
+//! page uses the snap-stop marquee. Mirrors the web server functions in
+//! `frontend::rpc::account`; both read sides ride `GET /api/auth/me` as
+//! `UserSummary` fields.
 
 use axum::{
     extract::State,
@@ -36,6 +37,24 @@ pub(super) async fn post_hidden_formats(
             (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response()
         }
         Err(e) => internal("set hidden formats", e),
+    }
+}
+
+/// Body for `POST /api/account/book-detail-scroll-stops`.
+#[derive(Debug, Deserialize)]
+pub(super) struct SetBookDetailScrollStops {
+    enabled: bool,
+}
+
+/// Set the authenticated user's book-detail scroll-stops preference.
+pub(super) async fn post_book_detail_scroll_stops(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<SetBookDetailScrollStops>,
+) -> Response {
+    match db::auth::set_book_detail_scroll_stops(&state.pool, user.id, body.enabled).await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(e) => internal("set book detail scroll stops", e),
     }
 }
 

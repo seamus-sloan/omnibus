@@ -4476,6 +4476,20 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   margin-top: 1px;
 }
 
+/* Marks a control that is present but not yet live — the switch stays
+   rendered (and disabled) so the setting is discoverable before it bites. */
+.settings-soon {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
 .auth-requirements {
   margin-top: 0.9rem;
   padding: 0.7rem 0.85rem;

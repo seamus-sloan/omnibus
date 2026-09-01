@@ -41,6 +41,12 @@ test("renders the account section layout", async ({ page }) => {
   await expect(currentPassword(page)).toBeVisible();
   await expect(newPassword(page)).toBeVisible();
   await expect(page.getByTestId("change-password-submit")).toBeVisible();
+  // Book-details card sits above the goals, and its switch is parked: it
+  // renders so the setting is discoverable, disabled with a "Coming soon"
+  // marker because nothing reads the preference yet.
+  await expect(page.getByTestId("account-scroll-stops-card")).toBeVisible();
+  await expect(page.getByTestId("scroll-stops-toggle")).toBeDisabled();
+  await expect(page.getByTestId("scroll-stops-soon")).toHaveText("Coming soon");
   // Hidden-formats card (its behavior is covered by hidden_formats.spec.ts).
   await expect(page.getByTestId("account-hidden-formats-card")).toBeVisible();
 

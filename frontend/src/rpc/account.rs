@@ -34,6 +34,16 @@ pub async fn rpc_set_hidden_formats(formats: Vec<String>) -> Result<()> {
     }
 }
 
+/// Set the authenticated user's book-detail scroll-stops preference — whether
+/// their book detail page uses the snap-stop marquee or one continuous scroll.
+#[post("/api/rpc/account/book-detail-scroll-stops", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_set_book_detail_scroll_stops(enabled: bool) -> Result<()> {
+    match db::auth::set_book_detail_scroll_stops(&pool.0, user.id, enabled).await {
+        Ok(()) => Ok(()),
+        Err(e) => Err(internal_rpc_error("set book detail scroll stops", e).into()),
+    }
+}
+
 /// Set (or clear, with `None`/blank) the authenticated user's display name.
 /// The db layer renames their Wishlist shelf in the same transaction, so the
 /// shelf label can't drift from the name it was derived from.
