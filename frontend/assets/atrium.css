@@ -4605,9 +4605,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    `.screen` (mobile-only wrapper) already carries the safe-area top padding,
    so the web-sized hero/header paddings stack into a large blank band —
    collapse them to the library screen's rhythm. The `.disc-back` button is
-   rendered on every target (rule 07) but only shown here; web has no
-   breadcrumb affordance on these pages. Declared after `.m-icon-btn` so the
-   hidden-by-default rule wins their specificity tie. */
+   emitted by the mobile shell alone (see `components/back_link.rs`); the
+   hidden base rule stays so a stray instance can never paint outside
+   `.screen`, and is declared after `.m-icon-btn` so it wins their
+   specificity tie. */
 .disc-back { display: none; }
 .screen .disc-back { display: grid; margin-bottom: 12px; }
 .screen .idx-header { padding: 4px 0 16px; }
@@ -10976,11 +10977,18 @@ html {
 /* The row supplies the vertical rhythm, so the list inside it doesn't. */
 .bd-chip-row .bd-tag-list { margin-top: 0; }
 .bdmq-desc { margin-top: 18px; font-size: 15px; color: var(--ink-1); line-height: 1.6; max-width: 560px; }
-/* Long blurbs must not push the CTA row off the stop. */
+/* Long blurbs must not push the CTA row off the stop; the toggle beneath
+   lifts the clamp on demand (#2290). */
 .bdmq-desc {
   display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.bdmq-desc.is-open {
+  display: block;
+  -webkit-line-clamp: none;
+  overflow: visible;
+}
+.bdmq-desc-toggle { margin-top: 8px; }
 
 .bdmq-ctarow { display: flex; gap: 10px; margin-top: 24px; flex-wrap: wrap; align-items: center; }
 .bdmq-statusrow { display: flex; align-items: center; gap: 16px; margin-top: 20px; flex-wrap: wrap; }
