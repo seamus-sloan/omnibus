@@ -624,6 +624,20 @@ test("moves the caret to the end and start of the entry", async ({
     "># First\n**second**\nthird!",
   );
 
+  // Shift extends from the selection's *anchor*. A Range reports its ends in
+  // document order, so reading the anchor off it would extend a right-to-left
+  // selection from the wrong edge: selecting backwards to the start and then
+  // pressing Shift+End must collapse the selection, not re-select everything.
+  await ed.press("ControlOrMeta+End");
+  await ed.press("Shift+ControlOrMeta+Home");
+  await expect
+    .poll(async () => page.evaluate(() => window.getSelection()?.toString()))
+    .toBe("># First\n**second**\nthird!");
+  await ed.press("Shift+ControlOrMeta+End");
+  await expect
+    .poll(async () => page.evaluate(() => window.getSelection()?.toString()))
+    .toBe("");
+
   await cancelComposerDiscardingDraft(page);
 });
 
