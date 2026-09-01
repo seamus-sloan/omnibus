@@ -100,12 +100,13 @@ async fn upsert_progress_ledgers_nothing_for_a_cfi_only_write() {
         .unwrap();
 
     assert!(days(&pool, user).await.is_empty());
-    let mark: Option<i64> =
-        sqlx::query_scalar("SELECT percent FROM reading_progress_marks WHERE user_id = ?")
-            .bind(user)
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
+    let mark: Option<i64> = sqlx::query_scalar(
+        "SELECT sitting_max_percent FROM reading_progress_marks WHERE user_id = ?",
+    )
+    .bind(user)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
     assert_eq!(mark, None);
 }
 
@@ -161,12 +162,13 @@ async fn attach_derived_percent_ledgers_nothing_when_the_attach_is_a_no_op() {
 
     assert!(!attached);
     assert!(days(&pool, user).await.is_empty());
-    let mark: Option<i64> =
-        sqlx::query_scalar("SELECT percent FROM reading_progress_marks WHERE user_id = ?")
-            .bind(user)
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
+    let mark: Option<i64> = sqlx::query_scalar(
+        "SELECT sitting_max_percent FROM reading_progress_marks WHERE user_id = ?",
+    )
+    .bind(user)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
     assert_eq!(mark, Some(10));
 }
 
@@ -208,7 +210,7 @@ async fn attach_derived_kobo_location_ledgers_the_percent_it_fills() {
 }
 
 #[tokio::test]
-async fn attach_derived_kobo_location_does_not_move_the_mark_back_to_a_percent_it_did_not_set() {
+async fn attach_derived_kobo_location_ledgers_the_settled_percent_not_the_offered_one() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
     let (_, uuid) = seed(&pool, "/lib", "Ledger").await;
@@ -221,10 +223,13 @@ async fn attach_derived_kobo_location_does_not_move_the_mark_back_to_a_percent_i
     .await
     .unwrap();
 
-    // The row already has a percent, so `COALESCE` keeps 60 and the offered 10
-    // is discarded. Ledgering the *offered* value would drag the mark down to
-    // 10 and let the next write re-accrue ground already counted.
-    attach_derived_kobo_location(&pool, user, &uuid, "{}", Some(10), T0)
+    // The row already has a percent, so `COALESCE` keeps 60 and `RETURNING`
+    // hands back 60 rather than the offered 90. The offer is deliberately
+    // *above* the stored value: once the mark became a high-water mark a
+    // too-low offer stopped being able to do damage, and only a too-high one
+    // discriminates — ledgering it would credit 30% of a book the row never
+    // moved to, permanently, since the day buckets only ever accumulate.
+    attach_derived_kobo_location(&pool, user, &uuid, "{}", Some(90), T0)
         .await
         .unwrap();
     upsert_progress(
@@ -235,5 +240,6 @@ async fn attach_derived_kobo_location_does_not_move_the_mark_back_to_a_percent_i
     .await
     .unwrap();
 
+    // 70 - 60. Ledgering the offer would report 30 and then nothing.
     assert_eq!(days(&pool, user).await, vec![("2023-11-14".into(), 10)]);
 }

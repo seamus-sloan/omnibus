@@ -19,7 +19,8 @@ mod library;
 mod pages;
 mod patterns;
 mod ratings;
-mod sessionize;
+// `pub(crate)` for `IDLE_GAP_SECS` alone — see its own docs.
+pub(crate) mod sessionize;
 mod sessions;
 mod streak;
 mod superlatives;
