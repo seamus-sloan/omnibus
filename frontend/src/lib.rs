@@ -352,6 +352,52 @@ fn use_mobile_viewport_fix() {
 #[cfg(not(feature = "mobile"))]
 fn use_mobile_viewport_fix() {}
 
+/// JS installed on the Android shell to report this device's zone.
+///
+/// Sends on install and again on every `visibilitychange`, which is what makes
+/// the answer survive travel and a DST transition: a reader who flies and then
+/// brings the app forward is re-asked, rather than carrying launch-time state.
+/// `getTimezoneOffset` is (UTC - local) in minutes, so the sign flips here to
+/// match the minutes-east-of-UTC convention the wire uses everywhere else.
+#[cfg(feature = "mobile")]
+const ZONE_CAPTURE_JS: &str = "\
+    const report = () => {\
+      let z = null;\
+      try { z = Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (e) {}\
+      dioxus.send([-new Date().getTimezoneOffset(), z]);\
+    };\
+    document.addEventListener('visibilitychange', () => {\
+      if (!document.hidden) report();\
+    });\
+    report();";
+
+/// Keep `time::local_utc_offset_minutes` answering on the Android shell.
+///
+/// The shell builds native — `std` exposes no local offset and the crate
+/// carries no date library — but it renders in a WebView that knows the answer.
+/// Without this the offset is `None` there, the server falls back to UTC, and
+/// an Android reader keeps the UTC day boundary this whole change exists to
+/// remove (rule 10).
+///
+/// Pushed into a cache rather than awaited per call because
+/// `session_tracker::build_report` is sync and cannot await; see
+/// `time::set_local_zone`. Effect-only, so no markup depends on it (rule 07).
+#[cfg(feature = "mobile")]
+fn use_mobile_zone_capture() {
+    let mut eval = use_hook(|| dioxus::document::eval(ZONE_CAPTURE_JS));
+    use_future(move || async move {
+        // Ends when the channel closes; the app root never unmounts in practice.
+        while let Ok((offset, zone)) = eval.recv::<(i64, Option<String>)>().await {
+            time::set_local_zone(offset, zone);
+        }
+    });
+}
+
+/// Non-mobile stub: web asks the browser synchronously and SSR has nothing to
+/// ask. Called unconditionally from [`App`], per `use_mobile_viewport_fix`.
+#[cfg(not(feature = "mobile"))]
+fn use_mobile_zone_capture() {}
+
 /// Offline runtime (mobile): keeps the sync engine's server URL fresh and
 /// runs the probe/drain loop. Cfg lives in the body per the
 /// `use_mobile_viewport_fix` pattern so [`App`]'s call site stays gate-free.
@@ -521,6 +567,7 @@ pub fn App() -> Element {
     components::atrium::init_theme();
 
     use_mobile_viewport_fix();
+    use_mobile_zone_capture();
     use_offline_runtime();
 
     // The single `<audio>` element, mounted at the App root (sibling of the

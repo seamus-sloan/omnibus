@@ -161,6 +161,36 @@ async fn api_get_stats_honors_the_range_param() {
     assert_eq!(summary.reading_seconds, 900);
 }
 
+#[tokio::test]
+async fn api_get_stats_cuts_the_day_on_the_declared_offset() {
+    let (app, _state, pool) = fixture().await;
+    let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    // 2023-11-14 22:13:20 UTC — an evening west of UTC, already the 15th east.
+    seed_reading_session(&pool, user.id, &uuid, 1_700_000_000, 900).await;
+
+    let day_at = |offset: &str| {
+        let path = format!("/api/stats?range=all_time&utc_offset_minutes={offset}");
+        let app = app.clone();
+        let token = token.clone();
+        async move {
+            let res = app.oneshot(get_with_bearer(&path, &token)).await.unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+            let summary: StatsSummary = serde_json::from_slice(&bytes).unwrap();
+            summary.heatmap[0].day.clone()
+        }
+    };
+
+    // The same session, filed on two different days — the whole point of the
+    // caller declaring where it is. Distinct offsets also prove the aggregate
+    // cache is keyed on it, since a shared key would serve the first answer
+    // to the second call.
+    assert_eq!(day_at("-480").await, "2023-11-14");
+    assert_eq!(day_at("540").await, "2023-11-15");
+}
+
 /// Mirrors the ebooks/audiobooks sibling suites' DROP TABLE pattern: a DB
 /// failure inside `db::stats` must surface as a 500. Uses `range=year` —
 /// a range no other test caches — so the process-wide stats cache can't

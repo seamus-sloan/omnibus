@@ -149,13 +149,21 @@ fn build_report(uuid: &str, format: ProgressFormat, start: i64, end: i64) -> Opt
         // Web posts a report once, on unmount, and never retries it — there
         // is no replay for a handle to make idempotent.
         client_id: None,
-        utc_offset_minutes: local_utc_offset_minutes(start),
+        utc_offset_minutes: capture_offset_minutes(start),
         time_zone: crate::time::local_time_zone(),
     })
 }
 
 /// Minutes east of UTC on this device as of `unix_secs` — `-420` in Los
-/// Angeles, `330` in Kolkata. Stamped onto every session so the server can
+/// Angeles, `330` in Kolkata.
+///
+/// Named apart from `time::local_utc_offset_minutes` on purpose: that one
+/// answers *where the reader is now*, for the day boundaries, and this one
+/// answers *what the clock read while the reading happened*, for the
+/// time-of-day strips. Rule 10 exists because those are different questions,
+/// so they must not share a name in one crate.
+///
+/// Stamped onto every session so the server can
 /// bucket it on the reader's own clock (`db::stats::patterns`) instead of on
 /// UTC.
 ///
@@ -168,7 +176,7 @@ fn build_report(uuid: &str, format: ProgressFormat, start: i64, end: i64) -> Opt
 ///
 /// Not a hydration concern (rule 07): this runs from the tracker's flush
 /// path, never from a component body, so no markup depends on it.
-fn local_utc_offset_minutes(unix_secs: i64) -> Option<i64> {
+fn capture_offset_minutes(unix_secs: i64) -> Option<i64> {
     #[cfg(feature = "web")]
     {
         // `time::local_utc_offset_secs` already owns the JS sign flip and the
@@ -176,13 +184,20 @@ fn local_utc_offset_minutes(unix_secs: i64) -> Option<i64> {
         // drift apart.
         Some(crate::time::local_utc_offset_secs(unix_secs) / 60)
     }
-    // The Android shell builds native, where `std` exposes no local offset and
-    // the crate carries no date library to ask. `local_utc_offset_secs`
-    // answers 0 there, which is a *claim* of UTC rather than an absence — so
-    // this reports `None` instead, and the session stays out of the
-    // local-time strips (it still counts everywhere else) until the shell
-    // grows a source for it.
-    #[cfg(not(feature = "web"))]
+    // The Android shell builds native, so there is no synchronous clock to
+    // ask — but its WebView reported one, cached by `use_mobile_zone_capture`.
+    // That answer is for *now* rather than for `unix_secs`, which is the one
+    // way this differs from web: a sitting that spans a DST transition is
+    // stamped with the offset in force when it flushed, not when it started.
+    // A minute of skew on the hour-of-day strips beats the `None` that kept
+    // Android out of them entirely.
+    #[cfg(feature = "mobile")]
+    {
+        let _ = unix_secs;
+        crate::time::local_utc_offset_minutes()
+    }
+    // SSR has no device to describe and never flushes a session anyway.
+    #[cfg(not(any(feature = "web", feature = "mobile")))]
     {
         let _ = unix_secs;
         None

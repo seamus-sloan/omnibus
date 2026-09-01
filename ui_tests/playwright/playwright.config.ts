@@ -39,6 +39,14 @@ export default defineConfig({
     // repo root and `cd ui_tests/playwright && pnpm exec playwright test`
     // both hit the same file.
     storageState: STORAGE_STATE_PATH,
+    // Pinned, because the browser's zone is now an *input* to what the server
+    // answers: the stats reads declare `Intl`'s offset and every day boundary
+    // in the response is cut on it (rule 10). Left to inherit, the same spec
+    // would ask for different days on a laptop in Denver than in a UTC CI
+    // container, and a day-bucketed assertion would pass in one and fail in the
+    // other. UTC specifically so seeded fixtures dated in UTC land on the day
+    // they read as.
+    timezoneId: "UTC",
     // Server-side `origin_check` middleware rejects cookie-authed
     // state-changing requests with no `Origin`/`Referer`. Playwright does
     // not send Origin by default, so set it here for browser pages and the

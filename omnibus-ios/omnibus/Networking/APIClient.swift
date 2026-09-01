@@ -170,8 +170,12 @@ actor APIClient {
     }
 
     @discardableResult
-    func put<Body: Encodable, T: Decodable>(_ path: String, body: Body) async throws -> T {
-        try await send(path: path, method: "PUT", body: body)
+    func put<Body: Encodable, T: Decodable>(
+        _ path: String,
+        query: [String: String?] = [:],
+        body: Body
+    ) async throws -> T {
+        try await send(path: path, method: "PUT", query: query, body: body)
     }
 
     @discardableResult

@@ -627,6 +627,19 @@ struct SessionReport: Codable, Sendable {
     /// Defaulted at init, which is capture time for every call site here:
     /// each of them builds the report as it ends the sitting.
     var utcOffsetMinutes: Int64? = SessionReport.localOffsetMinutes()
+    /// This device's IANA zone name at capture time — `"America/Los_Angeles"`.
+    ///
+    /// Recorded **alongside** ``utcOffsetMinutes``, not instead of it. The
+    /// offset says what the clock read, which is all the time-of-day charts
+    /// need and is DST-correct for the instant it was taken; the zone says
+    /// *where*, which an offset cannot — `-420` is Los Angeles in summer,
+    /// Phoenix year-round and Denver in winter. Only a zone can resolve an
+    /// offset for a **different** instant than the captured one.
+    ///
+    /// Nothing on the server reads it yet (resolving a zone wants a tz
+    /// database). It is sent now because it cannot be recovered from an offset
+    /// after the fact. Defaulted at init, like the offset beside it.
+    var timeZone: String? = SessionReport.localTimeZoneName()
 
     /// This device's current offset from UTC, in whole minutes.
     ///
@@ -638,6 +651,16 @@ struct SessionReport: Codable, Sendable {
         Int64(zone.secondsFromGMT() / 60)
     }
 
+    /// This device's IANA zone identifier. `zone` is a seam for the tests, as
+    /// above.
+    static func localTimeZoneName(in zone: TimeZone = .current) -> String? {
+        let name = zone.identifier
+        // A blank would encode as a present-but-empty value, which the
+        // server's `SessionReport::validate` rejects outright — failing the
+        // whole batched report over a field nothing reads yet.
+        return name.isEmpty ? nil : name
+    }
+
     enum CodingKeys: String, CodingKey {
         case format
         case bookUUID = "book_uuid"
@@ -647,6 +670,7 @@ struct SessionReport: Codable, Sendable {
         case deviceId = "device_id"
         case clientID = "client_id"
         case utcOffsetMinutes = "utc_offset_minutes"
+        case timeZone = "time_zone"
     }
 }
 

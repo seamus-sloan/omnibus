@@ -4,6 +4,13 @@
 //! web/SSR (the matching server functions). Both variants share their
 //! signatures so the stats page stays platform-agnostic; the `#[cfg]` gates
 //! carry the split.
+//!
+//! Every read and write here declares **where the device is**, via
+//! [`crate::time::local_utc_offset_minutes`], because the server cuts each
+//! answer's day boundaries on it (rule 10). It is attached in this layer rather
+//! than threaded through the page, for the same reason `with_bearer` attaches
+//! auth here: it is a property of the request, not of the thing being asked
+//! for, and a call site that forgot it would silently get someone else's day.
 
 #[cfg(not(feature = "mobile"))]
 use omnibus_shared::{ChartResult, ChartSpec};
@@ -17,6 +24,19 @@ use super::note_server_fn_err;
 use super::DataError;
 #[cfg(feature = "mobile")]
 use super::{drain_error, encode_query_value, http_client, note_status, with_bearer};
+
+/// `?utc_offset_minutes=…` for the goal writes, or an empty string when this
+/// build has no offset to declare.
+///
+/// The two goal routes take no other query, so the leading `?` lives here. The
+/// Android shell has no browser to ask and reports `None`, which leaves the
+/// server on its session-offset fallback rather than claiming UTC.
+#[cfg(feature = "mobile")]
+fn offset_query() -> String {
+    crate::time::local_utc_offset_minutes()
+        .map(|offset| format!("?utc_offset_minutes={offset}"))
+        .unwrap_or_default()
+}
 
 /// GET `/api/stats?range=…` — fetch the current user's stats summary.
 #[cfg(feature = "mobile")]
@@ -34,7 +54,10 @@ pub(crate) async fn fetch_stats_online(
     server_url: &str,
     range: StatsRange,
 ) -> Result<StatsSummary, DataError> {
-    let url = format!("{server_url}/api/stats?range={}", range.as_query());
+    let mut url = format!("{server_url}/api/stats?range={}", range.as_query());
+    if let Some(offset) = crate::time::local_utc_offset_minutes() {
+        url.push_str(&format!("&utc_offset_minutes={offset}"));
+    }
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
@@ -46,7 +69,7 @@ pub(crate) async fn fetch_stats_online(
 /// Web/SSR `fetch_stats` — server-function wrapper that proxies to `rpc_stats`.
 #[cfg(not(feature = "mobile"))]
 pub async fn fetch_stats(_server_url: &str, range: StatsRange) -> Result<StatsSummary, DataError> {
-    crate::rpc::rpc_stats(range)
+    crate::rpc::rpc_stats(range, crate::time::local_utc_offset_minutes())
         .await
         .map_err(note_server_fn_err)
 }
@@ -87,7 +110,7 @@ pub async fn save_reading_goal(
     server_url: &str,
     update: &ReadingGoalUpdate,
 ) -> Result<Option<ReadingGoal>, DataError> {
-    let url = format!("{server_url}/api/stats/goal");
+    let url = format!("{server_url}/api/stats/goal{}", offset_query());
     let response = with_bearer(http_client().put(&url))
         .json(update)
         .send()
@@ -105,7 +128,7 @@ pub async fn save_reading_goal(
     _server_url: &str,
     update: &ReadingGoalUpdate,
 ) -> Result<Option<ReadingGoal>, DataError> {
-    crate::rpc::rpc_set_reading_goal(update.clone())
+    crate::rpc::rpc_set_reading_goal(update.clone(), crate::time::local_utc_offset_minutes())
         .await
         .map_err(note_server_fn_err)
 }
@@ -121,7 +144,7 @@ pub async fn save_daily_goal(
     server_url: &str,
     update: &DailyGoalUpdate,
 ) -> Result<DailyGoals, DataError> {
-    let url = format!("{server_url}/api/stats/goal/daily");
+    let url = format!("{server_url}/api/stats/goal/daily{}", offset_query());
     let response = with_bearer(http_client().put(&url))
         .json(update)
         .send()
@@ -139,7 +162,7 @@ pub async fn save_daily_goal(
     _server_url: &str,
     update: &DailyGoalUpdate,
 ) -> Result<DailyGoals, DataError> {
-    crate::rpc::rpc_set_daily_goal(update.clone())
+    crate::rpc::rpc_set_daily_goal(update.clone(), crate::time::local_utc_offset_minutes())
         .await
         .map_err(note_server_fn_err)
 }
@@ -227,7 +250,7 @@ pub async fn fetch_chart_series(
     _server_url: &str,
     spec: ChartSpec,
 ) -> Result<ChartResult, DataError> {
-    crate::rpc::rpc_chart_series(spec)
+    crate::rpc::rpc_chart_series(spec, crate::time::local_utc_offset_minutes())
         .await
         .map_err(note_server_fn_err)
 }

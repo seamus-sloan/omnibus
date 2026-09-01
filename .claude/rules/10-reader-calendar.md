@@ -35,9 +35,16 @@ month from the chart built over the same data. Both shipped that way once.
 - **A spec resolves the offset once.** Every measure, breakdown and axis in one
   response shares it, or a series and the axis it is drawn against disagree
   about which bucket a day belongs to.
-- **The cache key carries the offset.** `stats`'s aggregate cache is keyed
-  `(user_id, range, offset_minutes)`. Omitting it serves a reader in Tokyo the
-  days of a reader in Los Angeles.
+- **The server's cache key carries the offset.** `stats`'s aggregate cache is
+  keyed `(user_id, range, offset_minutes)`. Omitting it serves a reader in Tokyo
+  the days of a reader in Los Angeles.
+  **The two offline client caches deliberately do not**, and that is not the
+  same bug: they key on range alone (`CacheKey.stats(range)` on iOS,
+  `keys::stats(…)` on web). Adding the offset there would be more correct after
+  a flight — the stale entry would miss instead of briefly showing yesterday's
+  boundary — but it would leave a just-landed reader with *nothing* to show
+  offline, and these clients are local-first. The live read corrects it on
+  arrival, so the wrong boundary is one frame, not sticky.
 - **The server still owns the arithmetic.** The client contributes only *where
   it is*. A client that derived its own bucketing is what makes the web page,
   the iOS tab and a widget disagree about one streak.

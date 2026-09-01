@@ -435,7 +435,10 @@ test.describe
         {
           method: "POST",
           url: "/api/rpc/stats-goal",
-          expectedBody: { update: { target: 24 } },
+          // `utc_offset_minutes` is the browser's own offset, which the config
+          // pins to UTC (`timezoneId`) so this is deterministically 0 — it is
+          // where the server cuts the answer's day boundaries (rule 10).
+          expectedBody: { update: { target: 24 }, utc_offset_minutes: 0 },
           expectedStatus: 200,
         },
         async () => page.getByTestId("goals-save").click(),
@@ -480,8 +483,9 @@ test.describe
           method: "POST",
           url: "/api/rpc/stats-goal-daily",
           // `target` is `skip_serializing_if = "Option::is_none"`, so a clear
-          // travels as the kind alone — same shape the annual clear uses.
-          expectedBody: { update: { kind: "pages" } },
+          // travels as the kind alone — same shape the annual clear uses. The
+          // offset rides every stats write; the config pins it to 0.
+          expectedBody: { update: { kind: "pages" }, utc_offset_minutes: 0 },
           expectedStatus: 200,
         },
         async () => page.getByTestId("goals-save").click(),

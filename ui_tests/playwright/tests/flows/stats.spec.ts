@@ -55,8 +55,11 @@ async function selectPeriod(
       method: "POST",
       url: "/api/rpc/stats",
       // The testid *is* the wire name (`StatsRange::as_query`), so the pill
-      // and the request it fires can't drift apart.
-      expectedBody: { range },
+      // and the request it fires can't drift apart. `utc_offset_minutes` is
+      // the browser's own offset, which the config pins to UTC (`timezoneId`)
+      // so it is deterministically 0 — it is where the server cuts the
+      // answer's day boundaries (rule 10).
+      expectedBody: { range, utc_offset_minutes: 0 },
       expectedStatus: 200,
     },
     async () => periodPill(page, range).click(),
