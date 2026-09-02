@@ -179,3 +179,47 @@ fn relocate_legacy_journal_images_is_a_noop_when_the_legacy_dir_is_absent() {
 
     assert!(dest_marker.exists(), "the configured dir must be untouched");
 }
+
+/// The `rename` in `move_across_volumes` succeeds whenever both sides share a
+/// filesystem, which every test temp dir does — so the fallback, which is the
+/// only path a Docker upgrade takes across the `/cache` and `/config` mounts,
+/// is exercised directly here rather than through the boot hook.
+#[test]
+fn copy_then_unlink_moves_the_bytes_and_leaves_no_temp_file() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let from = src.path().join(IMAGE_NAME);
+    let to = dst.path().join(IMAGE_NAME);
+    std::fs::write(&from, b"png-bytes").unwrap();
+
+    copy_then_unlink(&from, &to).expect("cross-volume move");
+
+    assert_eq!(std::fs::read(&to).unwrap(), b"png-bytes");
+    assert!(!from.exists(), "the source is unlinked once the copy lands");
+    let left: Vec<_> = std::fs::read_dir(dst.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert_eq!(
+        left,
+        [std::ffi::OsString::from(IMAGE_NAME)],
+        "no .part may survive"
+    );
+}
+
+#[test]
+fn copy_then_unlink_leaves_no_temp_file_when_the_copy_fails() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let from = src.path().join(IMAGE_NAME); // deliberately never created
+    let to = dst.path().join(IMAGE_NAME);
+
+    copy_then_unlink(&from, &to).expect_err("a missing source must error");
+
+    assert_eq!(
+        std::fs::read_dir(dst.path()).unwrap().count(),
+        0,
+        "a failed copy must not leave a .part behind"
+    );
+}

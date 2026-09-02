@@ -35,33 +35,20 @@ fn data_dir_journal_images() -> PathBuf {
 /// the volume operators are told they may delete. Relocation is best-effort
 /// and never fails the boot: a name already present at the destination is
 /// left on both sides rather than overwritten, a name we don't mint is left
-/// alone, and a cross-volume `rename` falls back to copy-then-unlink.
+/// alone, and a cross-volume `rename` falls back to copy-then-unlink. Sync
+/// `std::fs` — call from `spawn_blocking`.
 pub fn relocate_legacy_journal_images() {
     let dest = journal_images_dir();
     let legacy = data_dir_journal_images();
     if same_dir(&dest, &legacy) || !legacy.is_dir() {
         return;
     }
-    let entries = match std::fs::read_dir(&legacy) {
-        Ok(entries) => entries,
-        Err(e) => {
-            tracing::warn!(dir = %legacy.display(), error = %e, "cannot read legacy journal image dir");
-            return;
-        }
+    let Some(names) = minted_image_names_in(&legacy) else {
+        return;
     };
-    // Only the `<uuidv4>.<ext>` names we mint — anything else in the
-    // directory belongs to someone other than us.
-    let names: Vec<String> = entries
-        .flatten()
-        .filter_map(|e| {
-            e.file_name()
-                .to_str()
-                .filter(|n| is_valid_image_name(n))
-                .map(str::to_owned)
-        })
-        .collect();
+    let found = names.len();
     let mut moved = 0usize;
-    if !names.is_empty() {
+    if found > 0 {
         if let Err(e) = std::fs::create_dir_all(&dest) {
             tracing::warn!(dir = %dest.display(), error = %e, "cannot create journal image dir");
             return;
@@ -78,9 +65,13 @@ pub fn relocate_legacy_journal_images() {
         }
     }
 
-    if moved > 0 {
+    if found > 0 {
+        // `found` is the denominator on purpose: `moved` alone cannot tell an
+        // operator whether anything is still sitting in the volume the docs
+        // then invite them to delete.
         tracing::info!(
             moved,
+            found,
             from = %legacy.display(),
             to = %dest.display(),
             "relocated journal images out of the data dir default"
@@ -89,6 +80,39 @@ pub fn relocate_legacy_journal_images() {
     // Succeeds only once the directory is empty, which is exactly when we
     // want it gone so later boots stop scanning it.
     let _ = std::fs::remove_dir(&legacy);
+}
+
+/// Every `<uuidv4>.<ext>` name in `dir` — the names we mint, and so the only
+/// ones we may move; anything else there belongs to someone other than us.
+/// `None` means the directory could not be read at all. An entry that fails
+/// individually warns rather than being dropped silently, because the caller
+/// reports a count an operator acts on.
+fn minted_image_names_in(dir: &Path) -> Option<Vec<String>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(dir = %dir.display(), error = %e, "cannot read legacy journal image dir");
+            return None;
+        }
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => {
+                if let Some(name) = entry
+                    .file_name()
+                    .to_str()
+                    .filter(|n| is_valid_image_name(n))
+                {
+                    names.push(name.to_owned());
+                }
+            }
+            Err(e) => {
+                tracing::warn!(dir = %dir.display(), error = %e, "skipped an unreadable dir entry")
+            }
+        }
+    }
+    Some(names)
 }
 
 /// Whether two paths name the same directory, resolving symlinks and
@@ -104,22 +128,43 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Move one file that may be crossing a volume boundary: `rename` first
-/// (atomic, and all it ever is on one filesystem), else copy into a `.part`
-/// sibling and rename that into place, so a partial copy is never visible
-/// under a real serving name. The source is unlinked only once the
-/// destination is complete.
+/// Move one file that may be crossing a volume boundary: `rename` first,
+/// which is atomic and all it ever needs to be on one filesystem.
 fn move_across_volumes(from: &Path, to: &Path) -> std::io::Result<()> {
     if std::fs::rename(from, to).is_ok() {
         return Ok(());
     }
+    copy_then_unlink(from, to)
+}
+
+/// The cross-volume half of [`move_across_volumes`], split out because it is
+/// the path a Docker upgrade actually takes — `/cache` and `/config` are
+/// separate mounts, so `rename` answers `EXDEV` there and this is what runs.
+///
+/// Copies into a `.part` sibling and renames that into place, so a partial
+/// copy is never visible under a name the read path would serve, and no temp
+/// file survives a failure at either step. The source is unlinked only once
+/// the destination is complete; a source that won't unlink (a read-only
+/// `/cache`) is a leftover to warn about, not a failed relocation, since the
+/// bytes are already safe at `to`.
+fn copy_then_unlink(from: &Path, to: &Path) -> std::io::Result<()> {
     let part = to.with_extension("part");
     if let Err(e) = std::fs::copy(from, &part) {
         let _ = std::fs::remove_file(&part);
         return Err(e);
     }
-    std::fs::rename(&part, to)?;
-    std::fs::remove_file(from)
+    if let Err(e) = std::fs::rename(&part, to) {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::remove_file(from) {
+        tracing::warn!(
+            path = %from.display(),
+            error = %e,
+            "relocated a journal image but could not remove the original"
+        );
+    }
+    Ok(())
 }
 
 /// Persist an uploaded journal image and return its generated file name

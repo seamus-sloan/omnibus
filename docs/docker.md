@@ -42,10 +42,13 @@ cap, so deleting that volume costs only the next re-encode.
 Journal images used to land in `/cache/data/journal-images` — inside the volume
 this page calls safe to delete. On the first boot after upgrading, the server
 moves any it finds there into `/config/journal-images` and logs `relocated
-journal images out of the data dir default` with a count. There is nothing to do
-by hand. If you had already cleared `/cache` (or run `docker compose down -v`) on
-an affected release, those images are gone and the entries embedding them render
-a broken image.
+journal images out of the data dir default` with `moved` and `found` counts.
+There is nothing to do by hand when those two agree; if `moved` is short of
+`found`, a `failed to relocate journal image` warning above it names each file
+still sitting in `/cache`, so fix that before deleting the volume. If you had
+already cleared `/cache` (or run `docker compose down -v`) on an affected
+release, those images are gone and the entries embedding them render a broken
+image.
 
 ## Key environment variables
 
