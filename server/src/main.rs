@@ -44,6 +44,10 @@ mod server {
     pub(crate) async fn launch() -> anyhow::Result<Router> {
         init_boot_metadata();
         log_startup_warnings();
+        // Docker instances predating OMNIBUS_JOURNAL_IMAGES_DIR's image
+        // default put these in the regenerable /cache volume, which operators
+        // are told they may delete (#2382). No-op once caught up.
+        omnibus_db::journal_images::relocate_legacy_journal_images();
 
         let pool = init_database().await?;
         let state = backend::AppState::new(pool.clone());

@@ -26,14 +26,26 @@ docker compose up -d --build
 
 | Container path | Contents | Back up? | Compose default |
 |---|---|---|---|
-| `/config` | SQLite DB (`omnibus.db`) + cover images | **Yes** | `./config` |
+| `/config` | SQLite DB (`omnibus.db`) + cover images + journal images | **Yes** | `./config` |
 | `/cache` | WebP thumbnails + HLS transcode segments | No (regenerated) | `./cache` |
 | `/books` | Ebook library | n/a (your data) | edit the `:ro` mount |
 | `/audiobooks` | Audiobook library | n/a (your data) | edit the `:ro` mount |
 
-Covers live under `/config` because they aren't reconstructible from the
-library files; thumbnails and HLS segments live under `/cache` because the
-server rebuilds them on demand and evicts them under a size cap.
+Covers live under `/config` because they aren't reconstructible from the library
+files, and images a reader attaches to a journal entry sit beside them for the
+same reason — nothing else holds a copy. Thumbnails and HLS segments live under
+`/cache` because the server rebuilds them on demand and evicts them under a size
+cap, so deleting that volume costs only the next re-encode.
+
+### Upgrading from a release before journal images moved
+
+Journal images used to land in `/cache/data/journal-images` — inside the volume
+this page calls safe to delete. On the first boot after upgrading, the server
+moves any it finds there into `/config/journal-images` and logs `relocated
+journal images out of the data dir default` with a count. There is nothing to do
+by hand. If you had already cleared `/cache` (or run `docker compose down -v`) on
+an affected release, those images are gone and the entries embedding them render
+a broken image.
 
 ## Key environment variables
 
@@ -45,8 +57,8 @@ server rebuilds them on demand and evicts them under a size cap.
 | `IP` / `PORT` | Bind address. The image defaults to `IP=0.0.0.0` so the container is reachable; `PORT` defaults to `3000`. |
 
 The image bakes sensible defaults for `DATABASE_URL`, `OMNIBUS_COVERS_DIR`,
-`OMNIBUS_THUMBS_DIR`, and `OMNIBUS_DATA_DIR` so they land in the volumes above —
-override only if you change the mount layout. See [`.env.example`](../.env.example)
+`OMNIBUS_JOURNAL_IMAGES_DIR`, `OMNIBUS_THUMBS_DIR`, and `OMNIBUS_DATA_DIR` so they
+land in the volumes above — override only if you change the mount layout. See [`.env.example`](../.env.example)
 for the full annotated list of supported variables.
 
 ## File ownership (PUID / PGID)

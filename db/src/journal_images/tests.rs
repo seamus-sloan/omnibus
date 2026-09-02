@@ -1,9 +1,13 @@
 //! Unit tests for the `journal_images` module — write/read round-trip,
-//! unsupported-mime rejection, path-traversal/malformed-name rejection, and
-//! the orphan-cleanup helpers (`referenced_image_names`, `delete_journal_image`).
+//! unsupported-mime rejection, path-traversal/malformed-name rejection, the
+//! orphan-cleanup helpers (`referenced_image_names`, `delete_journal_image`),
+//! and the boot-time relocation out of the `$OMNIBUS_DATA_DIR` default.
 
 use super::*;
 use crate::test_support::EnvVarGuard;
+
+/// A name of the exact `<uuidv4>.<ext>` shape `write_journal_image` mints.
+const IMAGE_NAME: &str = "0b0c8bcc-2f5c-4f8e-9df1-0a2f4e21a111.png";
 
 /// Point `OMNIBUS_JOURNAL_IMAGES_DIR` at a fresh temp dir for the duration
 /// of `f`. Both the env var (via `EnvVarGuard`) and the temp dir (via
@@ -89,4 +93,89 @@ fn delete_journal_image_removes_an_existing_file_and_is_a_noop_for_a_missing_one
         // Deleting again (already gone) must not panic.
         delete_journal_image(&name);
     });
+}
+
+/// Seed a `$OMNIBUS_DATA_DIR/journal-images` holding one file, and pin both
+/// vars for the call — `dest` of `None` is the no-override case, where the
+/// configured directory *is* the one being relocated from.
+fn with_legacy_image<T>(
+    name: &str,
+    bytes: &[u8],
+    dest: Option<&Path>,
+    f: impl FnOnce(&Path) -> T,
+) -> T {
+    let data = tempfile::tempdir().unwrap();
+    let legacy = data.path().join("journal-images");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::write(legacy.join(name), bytes).unwrap();
+
+    let _guard = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(data.path().as_os_str()))
+        .also_set_os("OMNIBUS_JOURNAL_IMAGES_DIR", dest.map(|d| d.as_os_str()));
+    f(&legacy)
+}
+
+#[test]
+fn relocate_legacy_journal_images_moves_images_out_of_the_data_dir_default() {
+    let dest = tempfile::tempdir().unwrap();
+    with_legacy_image(IMAGE_NAME, b"png-bytes", Some(dest.path()), |legacy| {
+        relocate_legacy_journal_images();
+
+        let (_, bytes) = read_journal_image(IMAGE_NAME).expect("readable at the new location");
+        assert_eq!(bytes, b"png-bytes");
+        assert!(!legacy.exists(), "an emptied legacy dir must be removed");
+    });
+}
+
+#[test]
+fn relocate_legacy_journal_images_is_a_noop_when_no_override_is_set() {
+    with_legacy_image(IMAGE_NAME, b"png-bytes", None, |legacy| {
+        relocate_legacy_journal_images();
+
+        assert!(
+            legacy.join(IMAGE_NAME).exists(),
+            "the only copy must stay where it is"
+        );
+        assert!(read_journal_image(IMAGE_NAME).is_some());
+    });
+}
+
+#[test]
+fn relocate_legacy_journal_images_keeps_the_destination_copy_on_a_name_collision() {
+    let dest = tempfile::tempdir().unwrap();
+    std::fs::write(dest.path().join(IMAGE_NAME), b"current").unwrap();
+
+    with_legacy_image(IMAGE_NAME, b"stale", Some(dest.path()), |legacy| {
+        relocate_legacy_journal_images();
+
+        let (_, bytes) = read_journal_image(IMAGE_NAME).expect("readable");
+        assert_eq!(bytes, b"current", "the destination copy must win");
+        // Never unlink a file we didn't move — the /cache wipe takes it.
+        assert!(legacy.join(IMAGE_NAME).exists());
+    });
+}
+
+#[test]
+fn relocate_legacy_journal_images_leaves_names_it_did_not_mint_behind() {
+    let dest = tempfile::tempdir().unwrap();
+    with_legacy_image("notes.txt", b"not ours", Some(dest.path()), |legacy| {
+        relocate_legacy_journal_images();
+
+        assert!(legacy.join("notes.txt").exists(), "must stay put");
+        assert!(!dest.path().join("notes.txt").exists(), "must not be swept");
+    });
+}
+
+#[test]
+fn relocate_legacy_journal_images_is_a_noop_when_the_legacy_dir_is_absent() {
+    let data = tempfile::tempdir().unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let dest_marker = dest.path().join(IMAGE_NAME);
+    std::fs::write(&dest_marker, b"png-bytes").unwrap();
+
+    let _guard = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(data.path().as_os_str()))
+        .also_set_os("OMNIBUS_JOURNAL_IMAGES_DIR", Some(dest.path().as_os_str()));
+
+    relocate_legacy_journal_images();
+
+    assert!(dest_marker.exists(), "the configured dir must be untouched");
 }

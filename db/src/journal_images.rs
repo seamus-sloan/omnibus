@@ -5,7 +5,7 @@
 //! best-effort by `journals::{update_journal_entry, delete_journal_entry}`.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Root directory for journal images.
 ///
@@ -16,8 +16,110 @@ pub fn journal_images_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("OMNIBUS_JOURNAL_IMAGES_DIR") {
         return PathBuf::from(dir);
     }
+    data_dir_journal_images()
+}
+
+/// The `$OMNIBUS_DATA_DIR` default location — where images land when
+/// `OMNIBUS_JOURNAL_IMAGES_DIR` is unset, and where every Docker instance
+/// predating that variable's image default put them.
+fn data_dir_journal_images() -> PathBuf {
     let base = std::env::var("OMNIBUS_DATA_DIR").unwrap_or_else(|_| "./data".into());
     PathBuf::from(base).join("journal-images")
+}
+
+/// Move journal images sitting in the `$OMNIBUS_DATA_DIR` default into the
+/// directory `OMNIBUS_JOURNAL_IMAGES_DIR` now names. Call once at boot; a
+/// no-op when the variable is unset or already names that same directory.
+///
+/// The Docker image left the variable unset, so images landed in `/cache` —
+/// the volume operators are told they may delete. Relocation is best-effort
+/// and never fails the boot: a name already present at the destination is
+/// left on both sides rather than overwritten, a name we don't mint is left
+/// alone, and a cross-volume `rename` falls back to copy-then-unlink.
+pub fn relocate_legacy_journal_images() {
+    let dest = journal_images_dir();
+    let legacy = data_dir_journal_images();
+    if same_dir(&dest, &legacy) || !legacy.is_dir() {
+        return;
+    }
+    let entries = match std::fs::read_dir(&legacy) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(dir = %legacy.display(), error = %e, "cannot read legacy journal image dir");
+            return;
+        }
+    };
+    // Only the `<uuidv4>.<ext>` names we mint — anything else in the
+    // directory belongs to someone other than us.
+    let names: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()
+                .filter(|n| is_valid_image_name(n))
+                .map(str::to_owned)
+        })
+        .collect();
+    let mut moved = 0usize;
+    if !names.is_empty() {
+        if let Err(e) = std::fs::create_dir_all(&dest) {
+            tracing::warn!(dir = %dest.display(), error = %e, "cannot create journal image dir");
+            return;
+        }
+        for name in names {
+            let to = dest.join(&name);
+            if to.exists() {
+                continue;
+            }
+            match move_across_volumes(&legacy.join(&name), &to) {
+                Ok(()) => moved += 1,
+                Err(e) => tracing::warn!(name, error = %e, "failed to relocate journal image"),
+            }
+        }
+    }
+
+    if moved > 0 {
+        tracing::info!(
+            moved,
+            from = %legacy.display(),
+            to = %dest.display(),
+            "relocated journal images out of the data dir default"
+        );
+    }
+    // Succeeds only once the directory is empty, which is exactly when we
+    // want it gone so later boots stop scanning it.
+    let _ = std::fs::remove_dir(&legacy);
+}
+
+/// Whether two paths name the same directory, resolving symlinks and
+/// `.`/`..` when both exist so `./data/journal-images` and an absolute spelling
+/// of it aren't treated as two places.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Move one file that may be crossing a volume boundary: `rename` first
+/// (atomic, and all it ever is on one filesystem), else copy into a `.part`
+/// sibling and rename that into place, so a partial copy is never visible
+/// under a real serving name. The source is unlinked only once the
+/// destination is complete.
+fn move_across_volumes(from: &Path, to: &Path) -> std::io::Result<()> {
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    let part = to.with_extension("part");
+    if let Err(e) = std::fs::copy(from, &part) {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    std::fs::rename(&part, to)?;
+    std::fs::remove_file(from)
 }
 
 /// Persist an uploaded journal image and return its generated file name
