@@ -7,7 +7,7 @@ When touching any of the following areas, re-read the matching skill and update 
 | Code area | Skill to re-check |
 |---|---|
 | `server/src/backend.rs`, `server/src/backend/conditional.rs`, `server/src/main.rs`, `frontend/src/rpc/`, `frontend/src/data.rs`, `db/src/books/`, `db/src/settings/`, `db/src/scanner.rs`, `db/src/ebook.rs`, `db/src/indexer/`, `db/src/library_layout.rs`, `db/src/worker.rs`, `db/migrations/`, `shared/src/lib.rs` | [add-backend-route](../skills/add-backend-route/SKILL.md) |
-| `ui_tests/playwright/tests/fixtures/`, `ui_tests/playwright/tests/utils/`, selector conventions | [add-playwright-flow](../skills/add-playwright-flow/SKILL.md) |
+| `ui_tests/playwright/tests/fixtures/`, `ui_tests/playwright/tests/utils/`, selector conventions (incl. [04a-playwright-surfaces.md](04a-playwright-surfaces.md)) | [add-playwright-flow](../skills/add-playwright-flow/SKILL.md) |
 | `frontend/src/pages/landing/`, `frontend/assets/atrium.css` (`.lmq` block) | [ui-validate](../skills/ui-validate/SKILL.md) — it drives the landing page as its smoke surface |
 | `server/src/backend.rs` (`_health`), `server/src/auth/{boot.rs,gate.rs,handlers.rs}`, `scripts/dev-server-up.sh`, `justfile` (`dev-up`), `.env.example`, `ui_tests/playwright/playwright.config.ts` (baseURL) | [ui-validate](../skills/ui-validate/SKILL.md) |
 | `docs/qa/agentic_exploration/` (esp. the `flows/README.md` weight table the sampler parses), `scripts/explore/` (incl. `audit_lib/` — the skill quotes `audit.json`'s field names and the journal's location), `server/src/backend/users.rs` (account provisioning), `server/src/auth/handlers.rs` (login) | [agentic-exploration](../skills/agentic-exploration/SKILL.md) |

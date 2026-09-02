@@ -1,19 +1,12 @@
-//! "Book details" account card (Settings → Account): whether the caller's
-//! book detail page uses the snap-stop marquee or reads as one continuous
-//! scroll. One switch, saved on change rather than behind a Save button —
-//! there is nothing else in the card to batch with. Currently inert; see
-//! [`PARKED`].
+//! "Omnibus User Settings" account card (Settings → Account): the table of
+//! per-user feature switches, the book detail's scroll stops being the first.
+//! A table because the list is expected to grow — a new switch is a row, not
+//! a section — and each row saves on change, since independent switches have
+//! nothing to batch a Save across.
 
 use dioxus::prelude::*;
 
 use crate::data;
-
-/// Whether the switch is inert. `true` until the book detail pages actually
-/// branch on the stored preference: until then a live toggle would let a
-/// reader set a value that changes nothing, so the switch renders disabled
-/// behind a "Coming soon" marker. The save path below is wired and tested,
-/// so lighting it up is dropping this constant and the marker beside it.
-const PARKED: bool = true;
 
 /// `onchange` for the scroll-stops switch, extracted so its guards and its
 /// failure revert are reachable from a test without a browser. Mirrors the
@@ -26,6 +19,7 @@ fn scroll_stops_toggle_handler(
     mut shown: Signal<Option<bool>>,
     mut error: Signal<Option<String>>,
     mut saving: Signal<bool>,
+    mut viewer_slot: Signal<Option<Option<omnibus_shared::UserSummary>>>,
 ) -> impl FnMut(Event<FormData>) {
     move |_| {
         let Some(current) = confirmed() else {
@@ -44,6 +38,20 @@ fn scroll_stops_toggle_handler(
                 Ok(()) => {
                     confirmed.set(Some(next));
                     error.set(None);
+                    // Patch the app-wide viewer so a book detail page opened
+                    // next reads the new value — without this the context
+                    // keeps the stale one and the page renders the layout the
+                    // reader just turned off, until a reload.
+                    //
+                    // Written from the value the server just accepted rather
+                    // than re-fetched: a failed refetch would leave the
+                    // context stale with nothing to report, and this is the
+                    // one field whose new value is already known here.
+                    viewer_slot.with_mut(|slot| {
+                        if let Some(Some(user)) = slot.as_mut() {
+                            user.book_detail_scroll_stops = next;
+                        }
+                    });
                 }
                 Err(e) => {
                     // Push the checkbox back to what the server still holds.
@@ -59,9 +67,6 @@ fn scroll_stops_toggle_handler(
 /// Subtitle describing what the setting currently does, in terms of how the
 /// page reads rather than restating the switch.
 fn scroll_stops_status_line(enabled: Option<bool>) -> &'static str {
-    if PARKED {
-        return "Book details scroll continuously, top to bottom.";
-    }
     match enabled {
         None => "Checking…",
         Some(true) => "Book details snap through one panel at a time.",
@@ -103,32 +108,49 @@ pub(crate) fn ScrollStopsCard() -> Element {
         }
     });
 
-    let toggle = scroll_stops_toggle_handler(confirmed, shown, error, saving);
+    // Captured before the async save: `use_current_user` is a hook and can
+    // only run during render.
+    let viewer_slot = crate::use_current_user().0;
+    let toggle = scroll_stops_toggle_handler(confirmed, shown, error, saving, viewer_slot);
     let is_on = shown() == Some(true);
 
     rsx! {
         section { class: "card", "data-testid": "account-scroll-stops-card",
-            div { class: "users-head",
-                div {
-                    h2 { "Book details" }
-                    p { class: "subtitle", "{scroll_stops_status_line(confirmed())}" }
-                }
-                label { class: "auth-checkbox",
-                    input {
-                        r#type: "checkbox",
-                        "data-testid": "scroll-stops-toggle",
-                        checked: is_on,
-                        disabled: PARKED || confirmed().is_none() || saving(),
-                        onchange: toggle,
+            h2 { "Omnibus User Settings" }
+            p { class: "subtitle", "Features you can turn on for your account alone." }
+
+            table { class: "users-table settings-table", "data-testid": "user-settings-table",
+                thead {
+                    tr {
+                        th { "Setting" }
+                        th { class: "settings-col-switch", "Enabled" }
                     }
-                    span { "Use book details scroll stops" }
-                    if PARKED {
-                        span { class: "settings-soon", "data-testid": "scroll-stops-soon",
-                            "Coming soon"
+                }
+                tbody {
+                    tr { "data-testid": "user-setting-scroll-stops",
+                        td {
+                            div { class: "settings-row-name", "Book details scroll stops" }
+                            div { class: "settings-row-note",
+                                "{scroll_stops_status_line(confirmed())}"
+                            }
+                        }
+                        td { class: "settings-col-switch",
+                            label { class: "settings-switch",
+                                input {
+                                    r#type: "checkbox",
+                                    role: "switch",
+                                    "aria-label": "Use book details scroll stops",
+                                    "data-testid": "scroll-stops-toggle",
+                                    checked: is_on,
+                                    disabled: confirmed().is_none() || saving(),
+                                    onchange: toggle,
+                                }
+                            }
                         }
                     }
                 }
             }
+
             if let Some(err) = error() {
                 p {
                     role: "alert",
