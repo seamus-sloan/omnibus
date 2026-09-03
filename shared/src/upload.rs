@@ -34,8 +34,10 @@ pub struct UploadInspection {
 pub struct AudiobookInspection {
     pub title: Option<String>,
     pub author: Option<String>,
-    /// Every creator the tags declare, `author` first — the sibling of
-    /// [`UploadInspection::creators`].
+    /// Every creator the indexer would record from the tags, `author` first —
+    /// the sibling of [`UploadInspection::creators`]. Audio containers carry
+    /// one artist tag, so this holds at most that one name today; it is a
+    /// list so the form reads both inspections the same way.
     #[serde(default)]
     pub creators: Vec<String>,
     /// Whether any uploaded part carried embedded cover art.

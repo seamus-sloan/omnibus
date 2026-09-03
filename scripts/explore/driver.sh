@@ -77,9 +77,13 @@ driver::port() { echo $((PORT_BASE + $1 - 1)); }
 driver::agent_of_port() { echo $(($1 - PORT_BASE + 1)); }
 driver::window_ports() { seq "$PORT_BASE" $((PORT_BASE + WINDOW - 1)); }
 
+# An agent number must land inside the window, or `run`/`guard`/`restart`
+# would drive a port that `status` and `down` never sweep.
 driver::check_n() {
   [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] \
     || { echo "agent number must be a positive integer (got: $1)" >&2; exit 2; }
+  [ "$1" -le "$WINDOW" ] \
+    || { echo "agent number $1 is outside the $WINDOW-port window — raise OMNIBUS_EXPLORE_PORT_WINDOW" >&2; exit 2; }
 }
 
 driver::alive() {

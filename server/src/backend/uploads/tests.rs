@@ -310,6 +310,33 @@ async fn inspect_returns_every_creator_the_file_declares() {
     );
 }
 
+/// The renamed lead creator keeps its refinements and loses only its author
+/// row; the co-author rides along untouched (#2355).
+#[test]
+fn edited_creators_keeps_the_first_creators_refinements() {
+    let embedded = vec![
+        Contributor {
+            name: "Hopper, G.".to_string(),
+            role: Some("aut".to_string()),
+            file_as: Some("Hopper, Grace".to_string()),
+            id: Some(7),
+        },
+        Contributor {
+            name: "Margaret Hamilton".to_string(),
+            role: None,
+            file_as: None,
+            id: Some(8),
+        },
+    ];
+    let out = edited_creators("Grace Hopper".to_string(), &embedded);
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].name, "Grace Hopper");
+    assert_eq!(out[0].role.as_deref(), Some("aut"));
+    assert_eq!(out[0].file_as.as_deref(), Some("Hopper, Grace"));
+    assert_eq!(out[0].id, None);
+    assert_eq!(out[1], embedded[1]);
+}
+
 /// Editing the Author field replaces the first creator only; the co-author
 /// the file declared survives the commit (#2355).
 #[tokio::test]

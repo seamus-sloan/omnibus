@@ -390,18 +390,18 @@ struct CommitForm {
 }
 
 /// The creators to save when the review form's Author differs from the file's
-/// first creator. The form edits the first name only (#2355): the others the
-/// file declared ride along unchanged, so correcting a garbled lead author
-/// never drops a co-author.
+/// first creator. The form edits the first *name* only (#2355): that creator
+/// keeps its role and file-as form, and the others the file declared ride
+/// along unchanged, so correcting a garbled lead author never drops a
+/// co-author or a refinement. The `id` is cleared because the renamed
+/// contributor no longer denotes the author row the file's name resolved to.
 pub(super) fn edited_creators(first: String, embedded: &[Contributor]) -> Vec<Contributor> {
-    std::iter::once(Contributor {
-        name: first,
-        role: None,
-        file_as: None,
-        id: None,
-    })
-    .chain(embedded.iter().skip(1).cloned())
-    .collect()
+    let mut lead = embedded.first().cloned().unwrap_or_default();
+    lead.name = first;
+    lead.id = None;
+    std::iter::once(lead)
+        .chain(embedded.iter().skip(1).cloned())
+        .collect()
 }
 
 /// File the uploaded EPUB into the canonical library folder using the user's
