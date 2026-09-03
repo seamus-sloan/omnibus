@@ -12,13 +12,6 @@ struct ReturnPoint: Equatable {
     let page: Int
 }
 
-/// A passage on its way to the quote-card sheet. Identity is per request, so
-/// making a card of the same passage twice reopens the sheet.
-struct QuoteRequest: Identifiable {
-    let id = UUID()
-    let text: String
-}
-
 struct ReaderView: View {
     let book: Book
 
