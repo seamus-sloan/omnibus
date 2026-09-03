@@ -31,7 +31,7 @@ journal line that names it.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable
 
 from . import vocabulary
@@ -52,6 +52,25 @@ AUTO_READ_STATUS_NOUNS = frozenset({"reader", "player", "book"})
 
 # Where an unrecognised action's noun still names the audited slot it touched.
 UNKNOWN_NOUN_FAMILY = {"rating": "rating", "status": "read_status", "journal": "journal"}
+
+# The highlight palette as `shared/src/highlight.rs` spells it, plus the
+# everyday names an agent reaches for. Anything else is unparsed, not a
+# mismatch: "yellowish" is not evidence about the stored colour.
+HIGHLIGHT_COLOURS = ("amber", "green", "blue", "rose", "violet")
+COLOUR_SYNONYMS = {
+    "yellow": "amber",
+    "orange": "amber",
+    "gold": "amber",
+    "pink": "rose",
+    "red": "rose",
+    "purple": "violet",
+    "lilac": "violet",
+    "indigo": "blue",
+    "teal": "green",
+}
+
+# The surface whose journal may name a book by title instead of uuid.
+TITLE_KEYED_SURFACE = "ios"
 
 
 @dataclass
@@ -199,6 +218,27 @@ def parse_cfi(value: Any) -> Any:
     return UNPARSED
 
 
+_COLOUR_WORD = re.compile(r"[a-z]+")
+
+
+def parse_colour(value: Any) -> Any:
+    """A palette token, pulled out of prose.
+
+    `"amber (the reader's default)"` is amber. When the prose names two, the
+    last one is taken — "changed from green to violet" describes what was
+    left behind, which is what the audit checks (#2362).
+    """
+    if not isinstance(value, str):
+        return UNPARSED
+    found = UNPARSED
+    for word in _COLOUR_WORD.findall(value.lower()):
+        if word in HIGHLIGHT_COLOURS:
+            found = word
+        elif word in COLOUR_SYNONYMS:
+            found = COLOUR_SYNONYMS[word]
+    return found
+
+
 def parse_percent(value: Any) -> Any:
     if isinstance(value, bool):
         return UNPARSED
@@ -327,7 +367,14 @@ def _highlight_keys(entry: Entry) -> dict[str, Any]:
     p = entry.params
     note = _first_parsable((_get(p, "note_text", "note", "annotation"),), parse_text)
     quote = _first_parsable((_get(p, "text", "quote", "selected_text", "passage"),), parse_text)
-    colour = _first_parsable((_get(p, "colour", "color"),), parse_text)
+    colour = _first_parsable(
+        (
+            _get(p, "new_colour", "new_color", "to_colour", "to_color"),
+            _get(p, "colour", "color"),
+            _get(p, "to"),
+        ),
+        parse_colour,
+    )
     cfi = _first_parsable((_get(p, "epub_cfi_range", "cfi_range", "epub_cfi", "cfi", "location"),), parse_cfi)
     return {
         "note": None if note is UNPARSED else note,
@@ -341,6 +388,17 @@ def _old_note(entry: Entry) -> Any:
     return _first_parsable(
         (_get(entry.params, "old_note", "previous_note", "note_before", "before_note", "old"),),
         parse_text,
+    )
+
+
+def _old_colour(entry: Entry) -> Any:
+    """The colour a recolour moved away from — how it names its prior."""
+    return _first_parsable(
+        (
+            _get(entry.params, "old_colour", "old_color", "from_colour", "from_color"),
+            _get(entry.params, "previous_colour", "previous_color", "from"),
+        ),
+        parse_colour,
     )
 
 
@@ -363,6 +421,42 @@ def _uuid(entry: Entry) -> Any:
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     return UNPARSED
+
+
+def _no_uuid(entry: Entry) -> str:
+    why = f"{entry.action}: no book uuid on the entry or in params"
+    return f"{why} — {entry.target_note}" if entry.target_note else why
+
+
+def _title(entry: Entry) -> Any:
+    return _first_parsable((_get(entry.params, "title", "book_title", "book"),), parse_text)
+
+
+def resolve_targets(
+    entries: list[Entry], resolve: Callable[[str], tuple[str | None, str]]
+) -> list[Entry]:
+    """Fill a null `target` on an iOS entry from the title it names.
+
+    The native app has no screen that shows a uuid (#2365), so that lane's
+    entries carry the book's exact title in `params.title` instead and the
+    audit resolves it against the library. Only the `ios` surface gets this:
+    a web agent has the uuid on the page, and resolving for it would hide a
+    journal that broke the contract. A title that resolves to nothing, or to
+    more than one book, leaves the target null with the reason attached, so
+    the entry is declined for a stated cause rather than a bare "no uuid".
+    """
+    out: list[Entry] = []
+    for entry in entries:
+        if entry.surface != TITLE_KEYED_SURFACE or _uuid(entry) is not UNPARSED:
+            out.append(entry)
+            continue
+        title = _title(entry)
+        if title is UNPARSED:
+            out.append(entry)
+            continue
+        uuid, why = resolve(str(title))
+        out.append(replace(entry, target=uuid) if uuid else replace(entry, target_note=why))
+    return out
 
 
 # --- folding ---------------------------------------------------------------
@@ -452,7 +546,7 @@ def _fold_entry(fold: _Fold, entry: Entry, cls: vocabulary.Classification) -> No
     if family in SCALAR_FAMILIES:
         uuid = _uuid(entry)
         if uuid is UNPARSED:
-            fold.skip(entry, f"{entry.action}: no book uuid on the entry or in params")
+            fold.skip(entry, _no_uuid(entry))
             return
         if family == "rating":
             stars = _rating(entry)
@@ -503,7 +597,7 @@ def _fold_entry(fold: _Fold, entry: Entry, cls: vocabulary.Classification) -> No
     if family == "journal":
         uuid = _uuid(entry)
         if uuid is UNPARSED:
-            fold.skip(entry, f"{entry.action}: no book uuid on the entry or in params")
+            fold.skip(entry, _no_uuid(entry))
             return
         if detail == "delete":
             text = _journal_text(entry)
@@ -544,7 +638,7 @@ def _fold_entry(fold: _Fold, entry: Entry, cls: vocabulary.Classification) -> No
     if family in ("highlight", "bookmark"):
         uuid = _uuid(entry)
         if uuid is UNPARSED:
-            fold.skip(entry, f"{entry.action}: no book uuid on the entry or in params")
+            fold.skip(entry, _no_uuid(entry))
             return
         noun = family
         keys = _highlight_keys(entry) if family == "highlight" else _bookmark_keys(entry)
@@ -562,6 +656,9 @@ def _fold_entry(fold: _Fold, entry: Entry, cls: vocabulary.Classification) -> No
                 want: dict[str, Any] = {"note": old}
             else:
                 want = {k: v for k, v in ident.items() if k in ("quote", "label", "position")}
+                old_colour = _old_colour(entry) if family == "highlight" else UNPARSED
+                if old_colour is not UNPARSED:
+                    want["colour"] = old_colour
             popped = fold.pop(family, uuid, _ann_match(want)) if want else fold.pop_single(family, uuid)
             if popped is None:
                 # An edit the fold cannot attribute must not be guessed onto a
@@ -605,7 +702,7 @@ def _fold_entry(fold: _Fold, entry: Entry, cls: vocabulary.Classification) -> No
     if family == "wishlist":
         uuid = _uuid(entry)
         if uuid is UNPARSED:
-            fold.skip(entry, f"{entry.action}: no book uuid on the entry or in params")
+            fold.skip(entry, _no_uuid(entry))
             return
         if detail == "remove":
             if not fold.pop("wishlist", None, lambda e: e.value == uuid):

@@ -203,6 +203,10 @@ VERBS: dict[tuple[str, str], tuple[str, str | None, str | None]] = {
     ("highlight", "note"): (WRITE, "highlight", "update"),
     ("highlight", "colour"): (WRITE, "highlight", "update"),
     ("highlight", "color"): (WRITE, "highlight", "update"),
+    # adding_highlight.md's own name for the colour step. Unlisted, it fell to
+    # UNKNOWN and the create's colour was never superseded (#2362).
+    ("highlight", "recolour"): (WRITE, "highlight", "update"),
+    ("highlight", "recolor"): (WRITE, "highlight", "update"),
     ("highlight", "delete"): (WRITE, "highlight", "delete"),
     ("highlight", "remove"): (WRITE, "highlight", "delete"),
     ("bookmark", "create"): (WRITE, "bookmark", "create"),

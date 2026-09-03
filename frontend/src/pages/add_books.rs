@@ -30,6 +30,9 @@ struct UploadState {
     audio_files: Signal<Vec<(String, Vec<u8>)>>,
     title: Signal<String>,
     author: Signal<String>,
+    /// Creators after the first, as the file declared them (#2355). Listed
+    /// under the Author field and kept on commit; never edited here.
+    more_creators: Signal<Vec<String>>,
     series: Signal<String>,
     series_index: Signal<String>,
     inspected: Signal<bool>,
@@ -47,6 +50,7 @@ impl UploadState {
         self.audio_files.set(Vec::new());
         self.title.set(String::new());
         self.author.set(String::new());
+        self.more_creators.set(Vec::new());
         self.series.set(String::new());
         self.series_index.set(String::new());
         self.inspected.set(false);
@@ -72,6 +76,7 @@ pub fn AddBooksPage() -> Element {
         audio_files: use_signal(Vec::new),
         title: use_signal(String::new),
         author: use_signal(String::new),
+        more_creators: use_signal(Vec::new),
         series: use_signal(String::new),
         series_index: use_signal(String::new),
         inspected: use_signal(|| false),
@@ -168,6 +173,8 @@ fn inspect_ebook_file(server_url: String, state: UploadState, evt: Event<FormDat
                     Ok(insp) => {
                         s.title.set(insp.title.unwrap_or_default());
                         s.author.set(insp.author.unwrap_or_default());
+                        s.more_creators
+                            .set(insp.creators.iter().skip(1).cloned().collect());
                         s.series.set(insp.series.unwrap_or_default());
                         s.series_index.set(insp.series_index.unwrap_or_default());
                         s.filename.set(name);
@@ -228,6 +235,8 @@ fn inspect_audiobook_files(server_url: String, state: UploadState, evt: Event<Fo
             Ok(insp) => {
                 s.title.set(insp.title.unwrap_or_default());
                 s.author.set(insp.author.unwrap_or_default());
+                s.more_creators
+                    .set(insp.creators.iter().skip(1).cloned().collect());
                 s.filename.set(audiobook_summary(&files));
                 s.audio_files.set(files);
                 s.inspected.set(true);
@@ -260,6 +269,7 @@ fn clear_stage(s: &mut UploadState) {
     s.inspected.set(false);
     s.file_bytes.set(None);
     s.audio_files.set(Vec::new());
+    s.more_creators.set(Vec::new());
     s.filename.set(String::new());
 }
 
@@ -486,6 +496,9 @@ fn ConfirmForm(state: UploadState, on_submit: EventHandler<FormEvent>) -> Elemen
     let mut series = state.series;
     let mut series_index = state.series_index;
     let busy = state.busy;
+    // The form under-reported what it was about to save when a file named
+    // several creators (#2355): name the rest, and say what editing does.
+    let also_credited = (state.more_creators)().join(", ");
     rsx! {
         form {
             id: "add-books-form",
@@ -510,6 +523,13 @@ fn ConfirmForm(state: UploadState, on_submit: EventHandler<FormEvent>) -> Elemen
                     value: "{author}",
                     disabled: busy(),
                     oninput: move |e| author.set(e.value()),
+                }
+                if !also_credited.is_empty() {
+                    p {
+                        class: "settings-hint",
+                        "data-testid": "add-books-more-creators",
+                        "Also credited: {also_credited}. Kept as additional creators — editing Author replaces only the first name."
+                    }
                 }
             }
             div { class: "settings-field",
@@ -564,6 +584,7 @@ mod render_tests {
                 audio_files: use_signal(Vec::new),
                 title: use_signal(String::new),
                 author: use_signal(String::new),
+                more_creators: use_signal(Vec::new),
                 series: use_signal(String::new),
                 series_index: use_signal(String::new),
                 inspected: use_signal(|| true),
@@ -579,6 +600,41 @@ mod render_tests {
             assert!(html.contains("id=\"add-books-series\""));
             assert!(html.contains("id=\"add-books-series-index\""));
         }
+    }
+
+    /// A file naming several creators must not be shown as one (#2355): the
+    /// creators after the first are listed under the Author field, and the
+    /// line is absent when there are none.
+    #[test]
+    fn confirm_form_lists_the_creators_after_the_first_under_author() {
+        #[component]
+        fn Harness(more: Vec<String>) -> Element {
+            let state = UploadState {
+                mode: use_signal(|| UploadMode::Ebook),
+                filename: use_signal(String::new),
+                file_bytes: use_signal(|| None),
+                audio_files: use_signal(Vec::new),
+                title: use_signal(String::new),
+                author: use_signal(|| "Grace Hopper".to_string()),
+                more_creators: use_signal(move || more.clone()),
+                series: use_signal(String::new),
+                series_index: use_signal(String::new),
+                inspected: use_signal(|| true),
+                busy: use_signal(|| false),
+                status: use_signal(|| None),
+                status_is_error: use_signal(|| false),
+            };
+            rsx! { ConfirmForm { state, on_submit: EventHandler::new(|_| {}) } }
+        }
+
+        let two = dioxus::ssr::render_element(rsx! {
+            Harness { more: vec!["Margaret Hamilton".to_string(), "Joan Clarke".to_string()] }
+        });
+        assert!(two.contains("data-testid=\"add-books-more-creators\""));
+        assert!(two.contains("Also credited: Margaret Hamilton, Joan Clarke."));
+
+        let one = dioxus::ssr::render_element(rsx! { Harness { more: Vec::<String>::new() } });
+        assert!(!one.contains("add-books-more-creators"));
     }
 
     /// A user without `can_upload` sees the not-authorized state, not the

@@ -5214,6 +5214,9 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-weight: 500;
   color: var(--ink-2);
 }
+/* Helper text under a field. `--ink-3` is the muted tier; the margin is
+   zeroed because `.settings-field`'s gap already spaces it from the input. */
+.settings-hint { font-size: 0.8rem; color: var(--ink-3); margin: 0; }
 .settings-field input[type="text"],
 .settings-field input[type="password"],
 .settings-field input[type="email"],

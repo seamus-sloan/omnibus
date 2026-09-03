@@ -17,8 +17,8 @@ use omnibus_db::{
     worker::{Task, TaskOutcome},
 };
 use omnibus_shared::{
-    detect_audiobook_format, AudiobookInspection, Contributor, MetadataOverrides,
-    UploadCommitResult, AUDIOBOOK_MAGIC_LEN,
+    detect_audiobook_format, AudiobookInspection, MetadataOverrides, UploadCommitResult,
+    AUDIOBOOK_MAGIC_LEN,
 };
 use tokio::io::AsyncWriteExt as _;
 
@@ -262,6 +262,7 @@ pub(in crate::backend) async fn post_inspect_audiobook(
 
     Ok(Json(AudiobookInspection {
         title: inspected.title,
+        creators: inspected.author.iter().cloned().collect(),
         author: inspected.author,
         has_cover: inspected.has_cover,
         format,
@@ -490,12 +491,7 @@ async fn apply_audiobook_edits(
     }
     let embedded = book.creators.first().map(|c| c.name.as_str());
     if embedded != Some(author.as_str()) {
-        overrides.creators = Some(vec![Contributor {
-            name: author.clone(),
-            role: None,
-            file_as: None,
-            id: None,
-        }]);
+        overrides.creators = Some(super::edited_creators(author.clone(), &book.creators));
         changed = true;
     }
     if let Some(series) = series {

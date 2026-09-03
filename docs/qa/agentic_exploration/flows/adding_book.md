@@ -59,9 +59,12 @@ goes in through the front door* in [start.md](../start.md).
    required-field guard will otherwise block the save — with the book's *real*
    title and author, read off the filename or folder, never a placeholder like
    `Untitled` or `Test Audiobook`. The book stays in the shared library after
-   you leave. The **audiobook form has no Series fields**, unlike the ebook one. And the form offers a single Author
-   field even when the file names several creators — check the detail page
-   afterwards to see whether the others survived, and journal the answer.
+   you leave. Both forms offer **Series** fields; the audiobook parser rarely
+   fills them, so this is the only place a series can be supplied. And when
+   the file names several creators, the form shows the first in Author and
+   lists the rest beneath it — they are imported as additional creators, and
+   editing Author replaces only the first. Journal every name the form showed,
+   then confirm them on the detail page.
 5. Click **Add to library**.
 6. Wait for the book to appear in the library. Indexing is asynchronous — give
    it time and re-check rather than reporting it missing straight away.

@@ -33,7 +33,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from .client import ApiError
-from .expectations import Claims, Expectation, normalise_text
+from .expectations import UNPARSED, Claims, Expectation, normalise_text, parse_colour
 from .state import ActorState
 
 MISSING = "missing"
@@ -170,9 +170,15 @@ def _annotation_matches(row: dict[str, Any], keys: dict[str, Any]) -> bool:
         wanted = keys.get(key)
         if wanted and normalise_text(str(wanted)) not in normalise_text(str(row.get(row_field) or "")):
             return False
+    # Palette token against palette token: the fold already reduced the
+    # journalled value to one, and the row holds one, so prose around either
+    # side is not a mismatch (#2362). A value that names no token is not
+    # compared — it is not evidence about the stored colour either way.
     colour = keys.get("colour")
-    if colour and str(colour).strip().lower() != str(row.get("color") or "").strip().lower():
-        return False
+    if colour:
+        wanted = parse_colour(str(colour))
+        if wanted is not UNPARSED and wanted != parse_colour(str(row.get("color") or "")):
+            return False
     # A position is comparable only when it is a machine location — prose
     # ("Prologue, first page") never equals the stored CFI, and comparing it
     # would fail every honestly-journalled bookmark.

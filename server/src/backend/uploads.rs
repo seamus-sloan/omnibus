@@ -362,6 +362,12 @@ fn inspect_ebook_tempfile(tmp: &tempfile::NamedTempFile) -> Result<UploadInspect
     Ok(UploadInspection {
         title: book.metadata.title,
         author: book.metadata.creators.first().map(|c| c.name.clone()),
+        creators: book
+            .metadata
+            .creators
+            .iter()
+            .map(|c| c.name.clone())
+            .collect(),
         series: book.metadata.series,
         series_index: book.metadata.series_index,
         language: book.metadata.language,
@@ -381,6 +387,21 @@ struct CommitForm {
     author: Option<String>,
     series: Option<String>,
     series_index: Option<String>,
+}
+
+/// The creators to save when the review form's Author differs from the file's
+/// first creator. The form edits the first name only (#2355): the others the
+/// file declared ride along unchanged, so correcting a garbled lead author
+/// never drops a co-author.
+pub(super) fn edited_creators(first: String, embedded: &[Contributor]) -> Vec<Contributor> {
+    std::iter::once(Contributor {
+        name: first,
+        role: None,
+        file_as: None,
+        id: None,
+    })
+    .chain(embedded.iter().skip(1).cloned())
+    .collect()
 }
 
 /// File the uploaded EPUB into the canonical library folder using the user's
@@ -551,12 +572,7 @@ async fn apply_user_edits(
     if let Some(author) = norm(&form.author) {
         let embedded = book.creators.first().map(|c| c.name.as_str());
         if embedded != Some(author.as_str()) {
-            overrides.creators = Some(vec![Contributor {
-                name: author,
-                role: None,
-                file_as: None,
-                id: None,
-            }]);
+            overrides.creators = Some(edited_creators(author, &book.creators));
             changed = true;
         }
     }

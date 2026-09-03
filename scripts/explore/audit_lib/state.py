@@ -104,14 +104,33 @@ class ActorState:
         """Every book uuid in the library — shared, not per-user."""
         return self._memo("library", "", lambda: _uuids_in(self.client.get_json("/api/ebooks", {})))
 
+    def library_titles(self) -> dict[str, list[str]]:
+        """Normalised title → the uuids of every library book carrying it."""
+        return self._memo("library_titles", "", lambda: _titles_in(self.client.get_json("/api/ebooks", {})))
 
-def _uuids_in(payload: Any) -> list[str]:
-    """Pull book uuids out of a library or shelf-page response.
+    def resolve_title(self, title: str) -> tuple[str | None, str]:
+        """The one uuid a title names, or `(None, why)` when it names none.
 
-    The listing wraps its rows in `{path, books, error, total}` and names the
-    uuid `unique_identifier`; a shelf page has its own envelope. Reading both
-    shapes here keeps that spelling in one place.
-    """
+        No screen in the native app shows a book uuid (#2365), so the iOS
+        lane's entries name the book by its title instead. Exactly one match
+        resolves; none or several does not, and the reason travels with the
+        entry so the audit can say so rather than guess.
+        """
+        matches = self.library_titles().get(normalise_title(title), [])
+        if len(matches) == 1:
+            return matches[0], ""
+        if not matches:
+            return None, f"title {title!r} matches no library book"
+        return None, f"title {title!r} matches {len(matches)} library books"
+
+
+def normalise_title(title: str) -> str:
+    """Case and whitespace are display choices, not identity."""
+    return " ".join(title.split()).casefold()
+
+
+def _rows_in(payload: Any) -> list[Any]:
+    """The row list inside a library or shelf-page response envelope."""
     if payload is None:
         return []
     rows = payload
@@ -122,10 +141,31 @@ def _uuids_in(payload: Any) -> list[str]:
                 break
         else:
             rows = []
-    if not isinstance(rows, list):
-        return []
+    return rows if isinstance(rows, list) else []
+
+
+def _titles_in(payload: Any) -> dict[str, list[str]]:
+    """Normalised title → uuids, from a library listing."""
+    out: dict[str, list[str]] = {}
+    for row in _rows_in(payload):
+        if not isinstance(row, dict):
+            continue
+        uuid = row.get("unique_identifier") or row.get("uuid") or row.get("book_uuid")
+        title = row.get("title")
+        if uuid and isinstance(title, str) and title.strip():
+            out.setdefault(normalise_title(title), []).append(str(uuid))
+    return out
+
+
+def _uuids_in(payload: Any) -> list[str]:
+    """Pull book uuids out of a library or shelf-page response.
+
+    The listing wraps its rows in `{path, books, error, total}` and names the
+    uuid `unique_identifier`; a shelf page has its own envelope. Reading both
+    shapes here keeps that spelling in one place.
+    """
     out = []
-    for row in rows:
+    for row in _rows_in(payload):
         if isinstance(row, str):
             out.append(row)
         elif isinstance(row, dict):

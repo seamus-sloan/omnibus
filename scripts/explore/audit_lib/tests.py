@@ -591,6 +591,109 @@ class FoldEditTests(unittest.TestCase):
         self.assertEqual(kinds, [None, compare.MISMATCH])
 
 
+class ColourTests(unittest.TestCase):
+    """#2362: the audit reported recoloured and prose-coloured highlights as lost."""
+
+    def test_a_recolour_supersedes_the_colour_the_create_journalled(self) -> None:
+        # adding_highlight.md requires the recolour, and names it
+        # `highlight.recolour` — an action the audit never listed, so the
+        # create's green was compared against the server's violet.
+        entries = [
+            entry("highlight.create", seq=1, target=BOOK, params={"quote": "the passage", "colour": "green"}),
+            entry("highlight.recolour", seq=2, target=BOOK, params={"quote": "the passage", "from": "green", "to": "violet"}),
+        ]
+        exps, unver, _, _ = expectations.expectations_for("agent-1", entries)
+        self.assertEqual(unver, [])
+        self.assertEqual([e.value["colour"] for e in exps], ["violet"])
+        state = FakeState(highlights={BOOK: [{"text": "the passage", "note": None, "color": "violet"}]})
+        self.assertIsNone(compare.check(exps[0], state))
+
+    def test_a_recolour_finds_its_prior_by_the_old_colour(self) -> None:
+        entries = [
+            entry("highlight.create", seq=1, target=BOOK, params={"note_text": "first", "colour": "green"}),
+            entry("highlight.create", seq=2, target=BOOK, params={"note_text": "second", "colour": "blue"}),
+            entry("highlight.recolor", seq=3, target=BOOK, params={"old_colour": "green", "new_colour": "rose"}),
+        ]
+        exps, unver, _, _ = expectations.expectations_for("agent-1", entries)
+        self.assertEqual(unver, [])
+        self.assertEqual({e.value["note"]: e.value["colour"] for e in exps}, {"first": "rose", "second": "blue"})
+
+    def test_colour_prose_is_matched_on_its_token(self) -> None:
+        exp = expectations.Expectation(
+            "agent-1", 2, "highlight", "highlight", BOOK, "x",
+            {"note": "keep", "colour": "amber (the reader's default)"},
+        )
+        right = FakeState(highlights={BOOK: [{"note": "keep", "text": None, "color": "amber"}]})
+        self.assertIsNone(compare.check(exp, right))
+        wrong = FakeState(highlights={BOOK: [{"note": "keep", "text": None, "color": "green"}]})
+        self.assertEqual(compare.check(exp, wrong).kind, compare.MISMATCH)
+
+    def test_parse_colour_reads_synonyms_and_takes_the_last_named(self) -> None:
+        self.assertEqual(expectations.parse_colour("yellow"), "amber")
+        self.assertEqual(expectations.parse_colour("changed from green to violet"), "violet")
+        self.assertIs(expectations.parse_colour("a bright one"), expectations.UNPARSED)
+
+    def test_a_text_divergence_still_mismatches_when_the_colour_agrees(self) -> None:
+        # AC3: matching colours must not paper over a lost note.
+        exp = expectations.Expectation(
+            "agent-1", 2, "highlight", "highlight", BOOK, "x", {"note": "keep", "colour": "amber"}
+        )
+        state = FakeState(highlights={BOOK: [{"note": "something else", "text": None, "color": "amber"}]})
+        self.assertEqual(compare.check(exp, state).kind, compare.MISMATCH)
+
+
+OTHER = "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b"
+
+
+class TitleResolutionTests(unittest.TestCase):
+    """#2365: the iOS lane cannot see a uuid, so its entries name the book by title."""
+
+    @staticmethod
+    def _resolve(title: str) -> tuple[str | None, str]:
+        library = {"the lighthouse": [BOOK], "twice shelved": [BOOK, OTHER]}
+        matches = library.get(title.casefold(), [])
+        if len(matches) == 1:
+            return matches[0], ""
+        return None, f"title {title!r} matches {len(matches)} library books"
+
+    def test_an_ios_entry_gets_its_uuid_from_an_unambiguous_title(self) -> None:
+        e = entry("rating.set", surface="ios", target=None, params={"title": "The Lighthouse", "new": 4.0})
+        resolved = expectations.resolve_targets([e], self._resolve)
+        self.assertEqual(resolved[0].target, BOOK)
+        exps, unver, _, _ = expectations.expectations_for("agent-1", resolved)
+        self.assertEqual(unver, [])
+        self.assertEqual((exps[0].target, exps[0].value), (BOOK, 4.0))
+
+    def test_an_ambiguous_title_is_declined_with_the_reason(self) -> None:
+        e = entry("rating.set", surface="ios", target=None, params={"title": "Twice Shelved", "new": 4.0})
+        exps, unver, _, _ = expectations.expectations_for(
+            "agent-1", expectations.resolve_targets([e], self._resolve)
+        )
+        self.assertEqual(exps, [])
+        self.assertEqual(len(unver), 1)
+        self.assertIn("matches 2 library books", unver[0].why)
+
+    def test_a_web_entry_is_never_resolved_by_title(self) -> None:
+        # The web agent has the uuid on the page; resolving for it would hide
+        # a journal that broke the contract.
+        e = entry("rating.set", surface="web", target=None, params={"title": "The Lighthouse", "new": 4.0})
+        resolved = expectations.resolve_targets([e], self._resolve)
+        self.assertIsNone(resolved[0].target)
+        self.assertIsNone(resolved[0].target_note)
+
+    def test_an_entry_with_a_uuid_keeps_it(self) -> None:
+        e = entry("rating.set", surface="ios", target=OTHER, params={"title": "The Lighthouse", "new": 4.0})
+        self.assertEqual(expectations.resolve_targets([e], self._resolve)[0].target, OTHER)
+
+    def test_library_titles_index_the_listing_by_normalised_title(self) -> None:
+        listing = {"books": [
+            {"unique_identifier": BOOK, "title": "The  Lighthouse"},
+            {"unique_identifier": OTHER, "title": "the lighthouse"},
+        ]}
+        from .state import _titles_in
+        self.assertEqual(_titles_in(listing), {"the lighthouse": [BOOK, OTHER]})
+
+
 class ContainmentTests(unittest.TestCase):
     """PY-4: one bad uuid or one dead login must not destroy the report."""
 
