@@ -1270,6 +1270,7 @@ struct StopHighlights: View {
     /// The flow (Option B) has no fixed screenful to fit, so it lists every
     /// kept line inline instead of capping at `stopCount` behind a sheet.
     var uncapped = false
+    var onQuote: (Highlight) -> Void
     var onAll: () -> Void
 
     /// Passages shown on the stop before the sheet takes over.
@@ -1307,14 +1308,14 @@ struct StopHighlights: View {
                     // already stores highlights newest-first.
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(all) { highlight in
-                            HighlightRow(highlight: highlight)
+                            HighlightRow(highlight: highlight) { onQuote(highlight) }
                         }
                     }
                     .padding(.top, 6)
                 } else {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Self.preview(of: all)) { highlight in
-                            HighlightRow(highlight: highlight)
+                            HighlightRow(highlight: highlight) { onQuote(highlight) }
                         }
                     }
                     .padding(.top, 6)
@@ -1330,14 +1331,39 @@ struct StopHighlights: View {
 }
 
 /// One kept line: the passage in the italic display cut, its color as a
-/// slim tick, and when it was kept.
+/// slim tick, and when it was kept. A tap opens the passage in the quote-card
+/// sheet — the same one the reader's passage menu opens — so a line can be
+/// styled and shared without reopening the book.
 struct HighlightRow: View {
     let highlight: Highlight
     var large = false
+    var onQuote: (() -> Void)? = nil
 
     @Environment(\.palette) private var palette
 
+    /// The passage a card can be made from, or `nil` when the row carries
+    /// none — Kobo-origin rows can arrive without text, and a card of nothing
+    /// is not worth a sheet, so those rows stay inert.
+    static func quotable(_ highlight: Highlight) -> String? {
+        highlight.text?.nilIfBlank
+    }
+
     var body: some View {
+        if let onQuote, Self.quotable(highlight) != nil {
+            Button {
+                Haptics.tap()
+                onQuote()
+            } label: {
+                row.contentShape(Rectangle())
+            }
+            .buttonStyle(PressableStyle())
+            .accessibilityHint("Makes a quote card")
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 if let text = highlight.text?.nilIfBlank {
@@ -1346,6 +1372,7 @@ struct HighlightRow: View {
                         .foregroundStyle(palette.ink1Color)
                         .lineSpacing(4)
                         .lineLimit(large ? nil : 3)
+                        .multilineTextAlignment(.leading)
                 }
                 if let note = highlight.note?.nilIfBlank {
                     Text(note)
@@ -1920,9 +1947,12 @@ struct DescriptionDrawer: View {
 }
 
 /// Every kept line, newest first — where the Highlights stop overflows to.
+/// Tapping a line hands it back to the page, which opens the quote-card sheet
+/// once this one is down — two sheets can't be up at once.
 struct AllHighlightsSheet: View {
     let book: Book
     let highlights: [Highlight]
+    var onQuote: (Highlight) -> Void
 
     @Environment(\.palette) private var palette
 
@@ -1942,7 +1972,7 @@ struct AllHighlightsSheet: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(highlights.sorted { $0.createdAt > $1.createdAt }) { highlight in
-                        HighlightRow(highlight: highlight, large: true)
+                        HighlightRow(highlight: highlight, large: true) { onQuote(highlight) }
                     }
                 }
                 .padding(.horizontal, 18)

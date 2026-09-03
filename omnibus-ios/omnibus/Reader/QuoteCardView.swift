@@ -24,6 +24,13 @@ extension String {
     }
 }
 
+/// A passage on its way to the quote-card sheet. Identity is per request, so
+/// making a card of the same passage twice reopens the sheet.
+struct QuoteRequest: Identifiable {
+    let id = UUID()
+    let text: String
+}
+
 /// A card background: a ground tone plus whether its ink is light or dark.
 struct QuoteStyle: Identifiable {
     var id: String

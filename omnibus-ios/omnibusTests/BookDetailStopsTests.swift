@@ -225,6 +225,20 @@ private func sitting(
     #expect(StopHighlights.preview(of: highlights).count == 1)
 }
 
+@Test func highlightRowQuotesOnlyRowsThatCarryAPassage() {
+    func row(text: String?) -> Highlight {
+        Highlight(
+            id: 1, bookUUID: "b", epubCFIRange: nil, color: .amber,
+            note: "a note", text: text, clientID: nil, createdAt: 5
+        )
+    }
+
+    #expect(HighlightRow.quotable(row(text: "A kept line")) == "A kept line")
+    // A Kobo-origin row can list with no passage; a note alone is no card.
+    #expect(HighlightRow.quotable(row(text: nil)) == nil)
+    #expect(HighlightRow.quotable(row(text: "  \n ")) == nil)
+}
+
 @Test func journalRowPreviewStripsMarkdownFromTheOpeningLine() {
     let preview = JournalRow.preview("**Kvothe** is an *unreliable* narrator\n\nSecond para")
     #expect(preview == "Kvothe is an unreliable narrator")

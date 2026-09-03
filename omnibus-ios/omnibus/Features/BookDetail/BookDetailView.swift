@@ -311,6 +311,11 @@ struct BookDetailView: View {
     /// An entry picked inside the all-entries sheet; opened in the drawer
     /// once that sheet has dismissed — two sheets can't be up at once.
     @State private var pendingJournal: JournalEntry?
+    /// The passage being turned into a card, driving the quote sheet.
+    @State private var quoteTarget: QuoteRequest?
+    /// A line picked inside the all-highlights sheet; made into a card once
+    /// that sheet has dismissed, for the same reason as `pendingJournal`.
+    @State private var pendingQuote: Highlight?
     /// The file chosen in the picker, opened from the sheet's `onDismiss` —
     /// presenting the full-screen player while the sheet is still up would
     /// be refused.
@@ -432,9 +437,21 @@ struct BookDetailView: View {
                 DescriptionDrawer(book: book)
             }
         }
-        .sheet(isPresented: $showAllHighlights) {
+        .sheet(isPresented: $showAllHighlights, onDismiss: {
+            guard let pending = pendingQuote else { return }
+            pendingQuote = nil
+            quote(pending)
+        }) {
             if let book = model.book {
-                AllHighlightsSheet(book: book, highlights: model.highlights)
+                AllHighlightsSheet(book: book, highlights: model.highlights) { highlight in
+                    pendingQuote = highlight
+                    showAllHighlights = false
+                }
+            }
+        }
+        .sheet(item: $quoteTarget) { request in
+            if let book = model.book {
+                QuoteCardSheet(quote: request.text, book: book)
             }
         }
         .sheet(isPresented: $showAllJournals, onDismiss: {
@@ -476,6 +493,12 @@ struct BookDetailView: View {
     private var bookPalette: Palette {
         guard let book = model.book else { return palette }
         return palette.accented(by: CoverIdentity(book).tone)
+    }
+
+    /// Open the quote-card sheet on a kept line's passage.
+    private func quote(_ highlight: Highlight) {
+        guard let text = HighlightRow.quotable(highlight) else { return }
+        quoteTarget = QuoteRequest(text: text)
     }
 
     /// Open the player on the file the picker chose, once its sheet is gone.
@@ -752,9 +775,13 @@ struct BookDetailView: View {
         case .stats:
             StopStats(book: book, model: model)
         case .highlights:
-            StopHighlights(book: book, model: model, uncapped: uncapped) {
-                showAllHighlights = true
-            }
+            StopHighlights(
+                book: book,
+                model: model,
+                uncapped: uncapped,
+                onQuote: { quote($0) },
+                onAll: { showAllHighlights = true }
+            )
         case .journals:
             StopJournals(
                 book: book,
