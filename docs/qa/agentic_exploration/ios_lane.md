@@ -28,6 +28,17 @@ still holds: **you navigate by tapping**, never by deep link. The only URL you
 may send the app is the offline switch below, and that is a device control,
 not a destination.
 
+## Naming the book
+
+No screen in the native app shows a book's uuid, so you cannot fill the
+journal's `target` field the way a web agent does. Leave `target` null and put
+the book's **exact title**, as the app displays it, in `params.title` on every
+entry about that book. The audit resolves the title against the library and
+fills the uuid in for you — provided exactly one book carries it. When two do
+(two editions of one title), say so in the entry's `note` and expect the audit
+to decline that entry rather than guess. Ownership is unaffected: it comes from
+`book.add`, and this surface never runs `adding_book`.
+
 ## The offline switch
 
 `scripts/explore/ios.sh offline on|off`. It is DEBUG-only and exists in no
@@ -143,10 +154,14 @@ Use these actions, and no near-variants — the audit matches on them:
 | `probe.refused` | each refusal | `what`, `observed` |
 
 **Give every write a value nothing else could have produced** — a highlight
-note, a journal body, a shelf name carrying the run id and your `seq`. That
-string is what lets the audit tell "landed once" from "landed twice": a
-duplicate is two server rows with identical content, and without a unique
-value it is indistinguishable from a write another agent happened to make.
+note, a journal body, a shelf name — and write it the way `start.md`'s *What
+you type into the app* says: a memorable phrase, never the run id, your actor
+id or your `seq`. That rule holds on this surface exactly as on the web. An
+earlier version of this file asked for the run id in shelf names, and the two
+shelves it produced are still in the shared library for every reader to see
+(#2364); do not add to them. A phrase you would recognise on sight is unique
+enough: the audit tells "landed once" from "landed twice" by matching that
+content, and a duplicate is two server rows carrying it.
 
 ### Pass
 

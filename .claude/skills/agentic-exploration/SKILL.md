@@ -127,9 +127,10 @@ scripts/explore/ios.sh up            # `--ios` only: boot, build, install, launc
 **One browser per agent, and at most one iOS agent.** Sharing either collapses
 several users into one cookie jar, which is how run `r-20260828-01` died. Guard
 every agent before any of them starts, with uuids read from the journals rather
-than supplied by the agent. [drivers.md](drivers.md) carries the rest: what the
-guard buys, how an agent drives its browser, the iOS agent's extra account and
-scenario, and teardown.
+than supplied by the agent. A browser that dies mid-run is replaced with
+`driver.sh restart <n>` and guarded again. [drivers.md](drivers.md) carries the
+rest: what the guard buys, how an agent drives its browser, what a dead driver
+looks like, the iOS agent's extra account and scenario, and teardown.
 
 ## 8. Fan out
 

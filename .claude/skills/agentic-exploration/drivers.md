@@ -33,6 +33,23 @@ After the run, `driver.sh refusals <n>` lists what each agent was stopped from
 doing. **A non-empty list is a finding about the agent or the flow document,
 not about the app.**
 
+The guard is a `fetch` wrapper inside the page, not DevTools interception.
+Routing every request through CDP made Chromium copy each upload body into one
+event, and a large audiobook killed the browser before the upload reached the
+app (#2361); the wrapper never touches a body it is not about to inspect, so an
+upload of any size passes through.
+
+## When a browser dies
+
+`driver.sh run` answers `{"driver": "dead"}` when the agent's server went down
+under a command, and `{"driver": "up"}` when the server is fine and the command
+never returned — an app hang, or a locator that never matched. The first is the
+harness: the agent journals an `issue`, runs `driver.sh restart <n>`, and the
+guard is reinstalled — it lives in the old process and does not come back on
+its own. `restart` re-registers the server, so `status` still knows it and
+`down` still stops it; `down` sweeps the whole port window regardless (#2363),
+and `status` names any driver it finds there unregistered.
+
 ## The iOS agent
 
 ```bash

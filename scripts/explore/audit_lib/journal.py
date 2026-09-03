@@ -54,6 +54,9 @@ class Entry:
     note: str | None
     params: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
+    # Why a null `target` could not be filled from the title the entry names —
+    # set by `expectations.resolve_targets`, never read from the file.
+    target_note: str | None = None
 
     @classmethod
     def from_obj(cls, obj: dict[str, Any]) -> "Entry":

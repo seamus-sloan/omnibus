@@ -13,7 +13,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UploadInspection {
     pub title: Option<String>,
+    /// The first creator the file declares — what the Author field holds.
     pub author: Option<String>,
+    /// Every creator the file declares, in file order, `author` first. The
+    /// review form shows the rest so it never under-reports what the commit
+    /// will save. Defaulted so an older server's reply still decodes.
+    #[serde(default)]
+    pub creators: Vec<String>,
     pub series: Option<String>,
     pub series_index: Option<String>,
     pub language: Option<String>,
@@ -28,6 +34,12 @@ pub struct UploadInspection {
 pub struct AudiobookInspection {
     pub title: Option<String>,
     pub author: Option<String>,
+    /// Every creator the indexer would record from the tags, `author` first —
+    /// the sibling of [`UploadInspection::creators`]. Audio containers carry
+    /// one artist tag, so this holds at most that one name today; it is a
+    /// list so the form reads both inspections the same way.
+    #[serde(default)]
+    pub creators: Vec<String>,
     /// Whether any uploaded part carried embedded cover art.
     pub has_cover: bool,
     /// Lowercased format the server settled on (`"m4b"`, `"m4a"`, `"mp3"`).

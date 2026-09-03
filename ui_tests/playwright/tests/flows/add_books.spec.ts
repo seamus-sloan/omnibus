@@ -58,6 +58,13 @@ test("auto-fills the editable form from an uploaded EPUB", async ({ page }) => {
   await expect(page.getByTestId("add-books-submit")).toBeVisible();
   // The title field is populated from the embedded metadata (non-empty).
   await expect(page.getByLabel("Title")).not.toHaveValue("");
+  // beta.epub declares two creators: the first fills Author and the rest are
+  // listed beneath it, so the form never under-reports what it will save
+  // (#2355).
+  await expect(page.getByLabel("Author")).toHaveValue("Grace Hopper");
+  await expect(page.getByTestId("add-books-more-creators")).toContainText(
+    "Margaret Hamilton",
+  );
 });
 
 test("surfaces an error when inspect fails", async ({ page }) => {

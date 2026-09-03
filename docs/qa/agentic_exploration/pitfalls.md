@@ -43,7 +43,14 @@ rather than pressing on with unreliable evidence.
 - **A file input cannot be clicked.** Clicking one opens a native dialog nothing
   can see. Upload with
   `page.getByTestId("add-books-file-input").setInputFiles("/abs/path.epub")`
-  and then read the review form's fields.
+  and then read the review form's fields. A file of any size is fine — a
+  multi-part audiobook included.
+- **A `"driver": "dead"` answer from `driver.sh run` is your harness, not the
+  app.** Your browser server died under the command and the app never saw it.
+  Journal an anomaly of kind `issue`, run `driver.sh restart <n>`, have the
+  guard reinstalled, and repeat the step. `"driver": "up"` on a timeout is the
+  opposite case: the server is fine and the command itself never returned —
+  an app hang, or a locator that never matched.
 - **A `403` with `"error": "ownership_guard"` is your own harness**, not the
   app refusing you. It means a destructive call named a book you did not add.
   Journal it `refused` and move on; retrying or routing around it is the one

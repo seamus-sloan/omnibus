@@ -18,10 +18,19 @@ use crate::backend::test_support::*;
 
 /// Read a small committed EPUB fixture (shared with the Playwright suite).
 fn fixture_epub() -> Vec<u8> {
+    fixture_epub_named("standalone-desert.epub")
+}
+
+/// Read one of the committed generated EPUBs by file name.
+fn fixture_epub_named(name: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../test_data/epubs/generated/standalone-desert.epub");
+        .join("../test_data/epubs/generated")
+        .join(name);
     std::fs::read(&path).unwrap_or_else(|e| panic!("read fixture {}: {e}", path.display()))
 }
+
+/// `beta.epub` declares two `dc:creator`s — the multi-creator case (#2355).
+const TWO_CREATOR_EPUB: &str = "beta.epub";
 
 /// Build a `multipart/form-data` body. Each part is
 /// `(field_name, optional_filename, content)`; a filename marks a file part.
@@ -268,6 +277,110 @@ async fn commit_files_book_and_applies_edited_metadata() {
         book.creators.first().map(|c| c.name.as_str()),
         Some("Edited Author")
     );
+}
+
+#[tokio::test]
+async fn inspect_returns_every_creator_the_file_declares() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let (ct, body) = multipart_body(&[(
+        "file",
+        Some("book.epub"),
+        &fixture_epub_named(TWO_CREATOR_EPUB),
+    )]);
+    let res = app
+        .oneshot(post_multipart(
+            "/api/uploads/ebooks/inspect",
+            &token,
+            &ct,
+            body,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let inspection: UploadInspection = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(inspection.author.as_deref(), Some("Grace Hopper"));
+    assert_eq!(
+        inspection.creators,
+        vec!["Grace Hopper".to_string(), "Margaret Hamilton".to_string()]
+    );
+}
+
+/// The renamed lead creator keeps its refinements and loses only its author
+/// row; the co-author rides along untouched (#2355).
+#[test]
+fn edited_creators_keeps_the_first_creators_refinements() {
+    let embedded = vec![
+        Contributor {
+            name: "Hopper, G.".to_string(),
+            role: Some("aut".to_string()),
+            file_as: Some("Hopper, Grace".to_string()),
+            id: Some(7),
+        },
+        Contributor {
+            name: "Margaret Hamilton".to_string(),
+            role: None,
+            file_as: None,
+            id: Some(8),
+        },
+    ];
+    let out = edited_creators("Grace Hopper".to_string(), &embedded);
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].name, "Grace Hopper");
+    assert_eq!(out[0].role.as_deref(), Some("aut"));
+    assert_eq!(out[0].file_as.as_deref(), Some("Hopper, Grace"));
+    assert_eq!(out[0].id, None);
+    assert_eq!(out[1], embedded[1]);
+}
+
+/// Editing the Author field replaces the first creator only; the co-author
+/// the file declared survives the commit (#2355).
+#[tokio::test]
+async fn commit_keeps_additional_creators_when_the_author_is_edited() {
+    let (app, _state, pool) = fixture().await;
+    let _covers = CoversDirGuard::new("upload_commit_creators");
+    let library = tempfile::tempdir().expect("temp library dir");
+    db::set_settings(
+        &pool,
+        &Settings {
+            ebook_library_path: Some(library.path().to_string_lossy().to_string()),
+            audiobook_library_path: None,
+            scan_interval_hours: None,
+        },
+    )
+    .await
+    .expect("set library path");
+
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let (ct, body) = multipart_body(&[
+        ("title", None, b"Beta in the Series"),
+        ("author", None, b"Grace B. Hopper"),
+        (
+            "file",
+            Some("book.epub"),
+            &fixture_epub_named(TWO_CREATOR_EPUB),
+        ),
+    ]);
+    let res = app
+        .oneshot(post_multipart("/api/uploads/ebooks", &token, &ct, body))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let commit: UploadCommitResult = serde_json::from_slice(&bytes).unwrap();
+    let book = db::get_book_by_uuid(&pool, &commit.uuid)
+        .await
+        .unwrap()
+        .expect("uploaded book should be indexed");
+    let names: Vec<&str> = book.creators.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["Grace B. Hopper", "Margaret Hamilton"]);
 }
 
 #[tokio::test]

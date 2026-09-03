@@ -108,18 +108,22 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     for actor in seen_actors:
         mine = journal.actor_entries(entries, actor)
+        account = accounts.get(actor)
+        reader, login_error = (None, None) if account is None else actor_reader(url, account)
+        if reader is not None:
+            # The iOS lane names books by title (#2365); the library is what
+            # turns those into uuids, so it happens before the fold.
+            mine = expectations.resolve_targets(mine, reader.resolve_title)
         exps, unver, tally, claims = expectations.expectations_for(actor, mine)
         unverifiable.extend(unver)
         for kind, count in tally.items():
             tallies[kind] = tallies.get(kind, 0) + count
-        account = accounts.get(actor)
         if account is None:
             unverifiable.extend(
                 expectations.Unverifiable(actor, e.seq, f"no credential for {actor} — state not readable")
                 for e in exps
             )
             continue
-        reader, login_error = actor_reader(url, account)
         if reader is None:
             unverifiable.extend(expectations.Unverifiable(actor, e.seq, login_error or "") for e in exps)
             continue
@@ -180,11 +184,12 @@ def cmd_replay(args: argparse.Namespace) -> int:
         if account is None:
             raise SystemExit(f"no credential for {actor} in --accounts")
         mine = [e for e in journal.actor_entries(entries, actor) if (e.seq or 0) >= args.start]
-        exps, _, _, _ = expectations.expectations_for(actor, mine)
         if args.dry_run:
             reader = None
         else:
             reader = state.open_actor(url, account)
+            mine = expectations.resolve_targets(mine, reader.resolve_title)
+        exps, _, _, _ = expectations.expectations_for(actor, mine)
         for exp in exps:
             if reader is None:
                 steps.append(replay.Step(actor, exp.seq, exp.family, exp.target, "would replay", None, exp.expected))
