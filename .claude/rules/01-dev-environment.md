@@ -119,7 +119,7 @@ Optional storage overrides:
 - `OMNIBUS_COVERS_DIR` — where cover image files are stored (default `./covers`). Set to an absolute path on real deployments so covers don't land next to the binary and disappear on redeploy.
 - `OMNIBUS_THUMBS_DIR` — where WebP thumbnails are cached (default `./thumbs`)
 - `OMNIBUS_THUMBS_CAP_BYTES` — eviction cap in bytes (default 1 GiB; thumbnails are lossy WebP, so a 1,600-book library caches ~50 MB)
-- `OMNIBUS_JOURNAL_IMAGES_DIR` — where images embedded in journal entries are stored, used verbatim when set; otherwise `$OMNIBUS_DATA_DIR/journal-images`. Durable user data (not a regenerable cache) — same absolute-path guidance as covers.
+- `OMNIBUS_JOURNAL_IMAGES_DIR` — where images embedded in journal entries are stored, used verbatim when set; otherwise `$OMNIBUS_DATA_DIR/journal-images`. Durable user data (not a regenerable cache) — same absolute-path guidance as covers, which is why the Docker image points it at `/config/journal-images` rather than letting it fall into the regenerable `/cache` volume. `journal_images::relocate_legacy_journal_images` moves anything left in the `$OMNIBUS_DATA_DIR` default here once at boot, so an instance predating that default doesn't lose its images to a `/cache` wipe.
 - `OMNIBUS_MAX_UPLOAD_BYTES` — max accepted size for an "add your own books" upload, as both the upload routes' body limit and a per-file check (default 1 GiB)
 
 HLS audiobook transcode cache (read by `db::hls`):

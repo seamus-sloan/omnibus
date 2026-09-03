@@ -7,7 +7,8 @@
 #   4. Open the app and register — the FIRST account created becomes admin.
 #
 # Volume model (Jellyfin-style):
-#   /config      durable state — SQLite DB + cover images (back this up)
+#   /config      durable state — SQLite DB + cover images + journal images
+#                (back this up)
 #   /cache       regenerable — WebP thumbnails + HLS transcode segments
 #   /books       your ebook library      (read-write for uploads)
 #   /audiobooks  your audiobook library  (read-only)

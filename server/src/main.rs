@@ -44,6 +44,16 @@ mod server {
     pub(crate) async fn launch() -> anyhow::Result<Router> {
         init_boot_metadata();
         log_startup_warnings();
+        // Docker instances predating OMNIBUS_JOURNAL_IMAGES_DIR's image default
+        // put these in the regenerable /cache volume operators are told they may
+        // delete (#2382). Sync std::fs, so spawn_blocking like every other
+        // journal_images caller; best-effort, and a no-op once caught up.
+        if let Err(e) =
+            tokio::task::spawn_blocking(omnibus_db::journal_images::relocate_legacy_journal_images)
+                .await
+        {
+            tracing::warn!(error = %e, "journal image relocation did not complete");
+        }
 
         let pool = init_database().await?;
         let state = backend::AppState::new(pool.clone());

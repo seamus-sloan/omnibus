@@ -96,10 +96,13 @@ ARG OMNIBUS_VERSION
 # Bind on all interfaces (Dioxus defaults to 127.0.0.1, unreachable from
 # outside the container) and default the persistent paths into the /config
 # and /cache volumes. Everything here is overridable in docker-compose.yml.
+# The split is what a delete of /cache costs: only paths the server can
+# rebuild belong there, so journal images sit in /config beside the covers.
 ENV IP=0.0.0.0 \
     PORT=3000 \
     DATABASE_URL="sqlite:///config/omnibus.db?mode=rwc" \
     OMNIBUS_COVERS_DIR=/config/covers \
+    OMNIBUS_JOURNAL_IMAGES_DIR=/config/journal-images \
     OMNIBUS_THUMBS_DIR=/cache/thumbs \
     OMNIBUS_DATA_DIR=/cache/data \
     OMNIBUS_VERSION=${OMNIBUS_VERSION}
