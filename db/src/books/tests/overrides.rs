@@ -244,9 +244,10 @@ async fn get_book_backfills_creator_ids_case_insensitively() {
 }
 
 #[tokio::test]
-async fn get_book_leaves_creator_id_none_when_override_author_unknown() {
-    // If the override sets an author name that doesn't exist in the
-    // `authors` table, backfill must leave the id None.
+async fn get_book_resolves_creator_id_for_an_override_author_the_scan_never_saw() {
+    // An override naming an author no file carries materializes its own
+    // `authors` row (#2235), so the creator resolves to an id — and only a
+    // row that is genuinely gone leaves the id None.
     let (pool, _guard) = seed_discovery_fixture().await;
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
         .await
@@ -274,7 +275,21 @@ async fn get_book_leaves_creator_id_none_when_override_author_unknown() {
     let merged = get_book(&pool, book_id).await.unwrap().unwrap();
     assert_eq!(merged.creators.len(), 1);
     assert_eq!(merged.creators[0].name, "Nobody Indexed");
-    assert_eq!(merged.creators[0].id, None);
+    let row_id: i64 = sqlx::query_scalar("SELECT id FROM authors WHERE name = 'Nobody Indexed'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(merged.creators[0].id, Some(row_id));
+
+    sqlx::query("DELETE FROM authors WHERE name = 'Nobody Indexed'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let merged = get_book(&pool, book_id).await.unwrap().unwrap();
+    assert_eq!(
+        merged.creators[0].id, None,
+        "backfill must not invent an id for a row that no longer exists"
+    );
 }
 
 #[tokio::test]

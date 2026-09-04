@@ -13,11 +13,33 @@ final class LibraryModel {
     var isLoadingMore = false
     var error: String?
 
-    var sort: SortKey = .newestAdded {
-        didSet { if sort != oldValue { Task { await reload() } } }
+    /// Restored from `defaults` at init and written back on every change, so
+    /// the menu's checkmark and the grid order survive a relaunch (#2347).
+    var sort: SortKey {
+        didSet {
+            guard sort != oldValue else { return }
+            persistSort()
+            Task { await reload() }
+        }
     }
-    var direction: SortDirection = .desc {
-        didSet { if direction != oldValue { Task { await reload() } } }
+    var direction: SortDirection {
+        didSet {
+            guard direction != oldValue else { return }
+            persistSort()
+            Task { await reload() }
+        }
+    }
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let pref = LibrarySortPreference.load(from: defaults)
+        sort = pref.sort
+        direction = pref.direction
+    }
+
+    private func persistSort() {
+        LibrarySortPreference(sort: sort, direction: direction).save(to: defaults)
     }
     var formatFilter: Set<String> = [] {
         didSet { if formatFilter != oldValue { Task { await reload() } } }

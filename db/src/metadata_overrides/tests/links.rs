@@ -454,3 +454,194 @@ async fn upsert_metadata_overrides_materializes_each_tag_and_genre_once_when_nam
     assert_eq!(tag_row_count(&pool, "Space Opera").await, 1);
     assert_eq!(genre_row_names(&pool).await, vec!["Horror", "Noir"]);
 }
+
+// -----------------------------------------------------------------
+// Authors — override creators get a row, reaped when nothing names them
+// -----------------------------------------------------------------
+
+async fn author_row_count(pool: &sqlx::SqlitePool, name: &str) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM authors WHERE name = ?")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Seed one scanned book whose file carries a file-as style creator name,
+/// the shape the upload review form corrects into an override (#2343).
+async fn seed_one_book_by(pool: &sqlx::SqlitePool, scanned_author: &str) -> (String, i64) {
+    replace_books(
+        pool,
+        "/lib",
+        vec![indexed(
+            "book.epub",
+            Some("Six of Crows"),
+            &[scanned_author],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    let books = list_books(pool, "/lib").await.unwrap();
+    (books[0].unique_identifier.clone().unwrap(), books[0].id)
+}
+
+fn with_creators(names: &[&str]) -> MetadataOverrides {
+    MetadataOverrides {
+        creators: Some(
+            names
+                .iter()
+                .map(|n| omnibus_shared::Contributor {
+                    name: (*n).to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+        ),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn upsert_metadata_overrides_materializes_an_author_row_the_reads_resolve_by_name() {
+    let _covers = CoversTempDir::new("materialize_author");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let (uuid, id) = seed_one_book_by(&pool, "Bardugo, Leigh").await;
+
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &with_creators(&["Leigh Bardugo"]),
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(author_row_count(&pool, "Leigh Bardugo").await, 1);
+    let book = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(book.creators[0].name, "Leigh Bardugo");
+    assert!(
+        book.creators[0].id.is_some(),
+        "the override creator must resolve to an authors.id, not an inert byline"
+    );
+
+    let authors = crate::browse::list_authors(&pool, &["/lib"]).await.unwrap();
+    let names: Vec<(&str, usize)> = authors
+        .iter()
+        .map(|a| (a.name.as_str(), a.book_count))
+        .collect();
+    assert_eq!(
+        names,
+        vec![("Leigh Bardugo", 1)],
+        "the index lists the effective author once and the shadowed scanned name not at all"
+    );
+}
+
+#[tokio::test]
+async fn delete_orphan_taxonomy_keeps_an_author_row_a_live_override_still_names() {
+    let _covers = CoversTempDir::new("keep_override_author");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let (uuid, _) = seed_one_book_by(&pool, "Bardugo, Leigh").await;
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &with_creators(&["Leigh Bardugo"]),
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    crate::taxonomy::delete_orphan_taxonomy(&mut tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(
+        author_row_count(&pool, "Leigh Bardugo").await,
+        1,
+        "the sweep must count override memberships, not just link rows"
+    );
+    assert_eq!(
+        author_row_count(&pool, "Bardugo, Leigh").await,
+        1,
+        "the scanned row keeps its canonical link and survives too"
+    );
+}
+
+#[tokio::test]
+async fn delete_metadata_overrides_reaps_an_author_that_existed_only_through_the_override() {
+    let _covers = CoversTempDir::new("reap_override_author");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let (uuid, id) = seed_one_book_by(&pool, "Bardugo, Leigh").await;
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &with_creators(&["Leigh Bardugo"]),
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(author_row_count(&pool, "Leigh Bardugo").await, 1);
+
+    delete_metadata_overrides(&pool, &uuid).await.unwrap();
+
+    assert_eq!(
+        author_row_count(&pool, "Leigh Bardugo").await,
+        0,
+        "reverting to scanned must reap the override-only author"
+    );
+    let book = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(book.creators[0].name, "Bardugo, Leigh");
+    assert!(
+        book.creators[0].id.is_some(),
+        "the scanned creator resolves again"
+    );
+}
+
+#[tokio::test]
+async fn merge_metadata_overrides_reaps_an_author_dropped_by_the_replacing_creators_list() {
+    let _covers = CoversTempDir::new("reap_replaced_author");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let (uuid, _) = seed_one_book_by(&pool, "Bardugo, Leigh").await;
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &with_creators(&["Leigh Bardugo"]),
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    merge_metadata_overrides(&pool, &uuid, &with_creators(&["L. Bardugo"]), user_id)
+        .await
+        .unwrap();
+
+    assert_eq!(author_row_count(&pool, "L. Bardugo").await, 1);
+    assert_eq!(
+        author_row_count(&pool, "Leigh Bardugo").await,
+        0,
+        "a creators replacement drops the previous override-only author"
+    );
+}

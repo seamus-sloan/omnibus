@@ -11,7 +11,9 @@ use sqlx::SqlitePool;
 use crate::books::{get_books_by_ids, resolve_book_ids_bulk};
 
 use super::super::fts::{rebuild_fts_for_book, rebuild_fts_for_books_batch};
-use super::super::links::{materialize_genre_rows, materialize_series_link, materialize_tag_rows};
+use super::super::links::{
+    materialize_author_rows, materialize_genre_rows, materialize_series_link, materialize_tag_rows,
+};
 use super::{
     invalidate_composition_cache, touch_book_last_modified, upsert_overrides_row,
     MetadataOverridesError,
@@ -44,6 +46,7 @@ pub async fn merge_metadata_overrides(
     // fields replace wholesale when `Some`) — reap orphans before commit.
     crate::taxonomy::delete_orphan_tags(&mut tx).await?;
     crate::taxonomy::delete_orphan_genres(&mut tx).await?;
+    crate::taxonomy::delete_orphan_authors(&mut tx).await?;
     tx.commit().await?;
 
     invalidate_composition_cache();
@@ -91,6 +94,7 @@ async fn merge_one_in_tx(
     materialize_series_link(tx, book_uuid, &merged).await?;
     materialize_tag_rows(tx, &merged).await?;
     materialize_genre_rows(tx, &merged).await?;
+    materialize_author_rows(tx, &merged).await?;
     touch_book_last_modified(tx, book_uuid).await?;
     Ok(())
 }
@@ -167,6 +171,7 @@ pub async fn bulk_merge_metadata_overrides(
     // drop a tag's last membership anywhere in the set.
     crate::taxonomy::delete_orphan_tags(&mut tx).await?;
     crate::taxonomy::delete_orphan_genres(&mut tx).await?;
+    crate::taxonomy::delete_orphan_authors(&mut tx).await?;
     tx.commit().await?;
 
     invalidate_composition_cache();
