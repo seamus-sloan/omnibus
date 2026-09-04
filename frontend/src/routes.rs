@@ -48,8 +48,6 @@ pub enum Route {
     SeriesIndex {},
     #[route("/series/:id")]
     SeriesDetail { id: i64 },
-    #[route("/tags")]
-    TagCloud {},
     #[route("/stats")]
     Stats {},
     #[route("/stats/chart")]
@@ -389,15 +387,6 @@ pub fn SeriesIndex() -> Element {
     use_page_title(|| Some("Series".into()));
     rsx! {
         ScreenLayout { SeriesIndexPage {} }
-    }
-}
-
-/// Route target for `/tags` — tag cloud discovery page.
-#[component]
-pub fn TagCloud() -> Element {
-    use_page_title(|| Some("Tags".into()));
-    rsx! {
-        ScreenLayout { TagCloudPage {} }
     }
 }
 

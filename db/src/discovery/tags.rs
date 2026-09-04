@@ -15,7 +15,8 @@ use super::DiscoveryError;
 const TAG_CLOUD_LIMIT: i64 = 500;
 
 /// Return up to [`TAG_CLOUD_LIMIT`] tags with their book counts, ordered
-/// by count descending then name ascending. Used by the tag cloud page.
+/// by count descending then name ascending. Serves `/api/tags` and the
+/// tag autocomplete pools.
 ///
 /// Currently returns results across all users (single-tenant); scoping to a
 /// per-user `user_id` is a future extension, not yet needed.

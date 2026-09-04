@@ -1,6 +1,6 @@
 //! Mobile-only discovery "back" affordance — a single `←` icon button in the
 //! top-left of a detail page's header, linking to its parent index. Shared by
-//! the series, author, and tag-cloud detail headers.
+//! the series and author detail headers.
 //!
 //! Emitted on the mobile shell alone. The web shell reaches its indexes
 //! through the top nav, and a link the CSS hides at every viewport is an

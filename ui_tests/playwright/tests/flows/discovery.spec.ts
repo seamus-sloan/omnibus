@@ -203,30 +203,3 @@ test("clicking a non-linked area of a series book card navigates to the book", a
 
   await expect(page).toHaveURL(/\/books\/[^/]+$/);
 });
-
-// ---------------------------------------------------------------------------
-// Tag cloud page
-// ---------------------------------------------------------------------------
-
-test("renders the tag cloud layout", async ({ page }) => {
-  await gotoReady(page, "/tags");
-
-  // Page header
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("tag");
-  await expect(page.getByText("unique tags")).toBeVisible();
-
-  // At least one tag cloud item rendered
-  const tagItems = page.locator(".tag-cloud-item");
-  const count = await tagItems.count();
-  expect(count).toBeGreaterThan(0);
-});
-
-test("tag cloud items show counts", async ({ page }) => {
-  await gotoReady(page, "/tags");
-
-  // Each tag should have a visible count span
-  const counts = page.locator(".tag-cloud-count");
-  const firstCount = await counts.first().textContent();
-  expect(firstCount).toBeTruthy();
-  expect(Number(firstCount)).toBeGreaterThan(0);
-});

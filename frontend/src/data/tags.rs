@@ -1,5 +1,5 @@
-//! Tag-cloud fetcher used by the discovery surface and the metadata
-//! editor's tag-chip autocomplete pool.
+//! Tag-cloud fetcher behind the tag-chip autocomplete pools — the metadata
+//! editor, the landing table's inline Tags cell, and book detail's chips.
 
 use omnibus_shared::TagWeight;
 
@@ -9,7 +9,7 @@ use super::DataError;
 #[cfg(feature = "mobile")]
 use super::{drain_error, http_client, note_status, with_bearer};
 
-/// GET `/api/tags` — fetch the weighted tag cloud for the discovery page.
+/// GET `/api/tags` — fetch the weighted tag cloud for an autocomplete pool.
 #[cfg(feature = "mobile")]
 pub async fn get_tag_cloud(server_url: &str) -> Result<Vec<TagWeight>, DataError> {
     let url = server_url.to_string();

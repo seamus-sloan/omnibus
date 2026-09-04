@@ -1,7 +1,8 @@
 //! `GET /api/tags` handler.
 //!
 //! Cookie-gated read returning the tag cloud (tag name + weight) for the
-//! configured library. Powers the tag-cloud discovery page on mobile.
+//! configured library. Powers the native iOS tag browser and the tag
+//! autocomplete pools.
 
 use axum::{
     extract::State,

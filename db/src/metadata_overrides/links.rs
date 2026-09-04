@@ -68,9 +68,9 @@ pub(super) async fn materialize_series_link(
 }
 
 /// When an override sets a subjects list, ensure a `tags` row exists for
-/// every tag in it, so `get_tag_cloud` — which feeds the `/tags` cloud and
-/// the inline-edit autocomplete pool — has a canonical row to surface a
-/// tag created through the override path.
+/// every tag in it, so `get_tag_cloud` — which feeds `/api/tags` and the
+/// inline-edit autocomplete pool — has a canonical row to surface a tag
+/// created through the override path.
 ///
 /// Deliberately rows-only, **not** `books_tags_link` rows: the canonical
 /// link table is the sole record of a book's *scanned* tags, so writing
