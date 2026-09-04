@@ -1,12 +1,14 @@
-//! Resume-card read path: [`recent_progress`] plus book/duration/chapter
-//! enrichment into [`resume_points`], and the audio-file/chapter-position
-//! helpers behind it.
+//! Resume-card read path: [`recent_progress`] plus the book/duration/part
+//! enrichment into [`resume_points`].
+//!
+//! The audio-file resolution and mark arithmetic live in
+//! [`super::detail`], shared with the per-book progress read so the two
+//! cannot drift apart.
 
-use omnibus_shared::{ChapterInfo, ProgressFormat, ProgressRecord, ResumePoint};
+use omnibus_shared::{ProgressFormat, ProgressRecord, ResumePoint};
 use sqlx::{Row, SqlitePool};
 
-use crate::hls;
-
+use super::detail::{audio_totals, round2};
 use super::{parse_format, ProgressError};
 
 /// The user's most recent progress rows across both formats, newest first
@@ -88,7 +90,7 @@ pub async fn resume_points(
             ProgressFormat::Audio => audio_totals(pool, &record.book_uuid, &record).await?,
             ProgressFormat::Epub => None,
         };
-        let (total_duration_seconds, chapter_number, chapter_count) = match audio {
+        let (total_duration_seconds, audio_part, audio_part_count) = match audio {
             Some(totals) => {
                 // Overwrite rather than trust the stored id: it may name a
                 // `book_files` row the reindex has since replaced, and the
@@ -97,8 +99,8 @@ pub async fn resume_points(
                 record.book_file_id = Some(totals.book_file_id);
                 (
                     Some(totals.total_duration_seconds),
-                    totals.chapter_number,
-                    totals.chapter_count,
+                    totals.audio_part,
+                    totals.audio_part_count,
                 )
             }
             None => {
@@ -126,7 +128,10 @@ pub async fn resume_points(
             .fetch_optional(pool)
             .await?
             .map(|row| row.try_get::<f64, _>("playback_rate"))
-            .transpose()?,
+            .transpose()?
+            // Rounded on the way out: the stored value is whatever float the
+            // client sent, so a two-tap rate serializes as 2.3000000000000003.
+            .map(round2),
             None => None,
         };
         points.push(ResumePoint {
@@ -135,8 +140,8 @@ pub async fn resume_points(
             linked: false,
             cross_format: None,
             total_duration_seconds,
-            chapter_number,
-            chapter_count,
+            audio_part,
+            audio_part_count,
             playback_rate,
         });
     }
@@ -161,7 +166,7 @@ async fn collapse_linked_points(
     for uuid in uuids {
         if crate::cross_format::get_link(pool, user_id, &uuid)
             .await
-            .map_err(sqlx_of)?
+            .map_err(cross_format_error)?
             .is_none()
         {
             continue;
@@ -209,7 +214,7 @@ async fn collapse_linked_points(
                     crate::cross_format::CrossFormatError::BookNotFound
                     | crate::cross_format::CrossFormatError::AudioSetMismatch,
                 ) => continue,
-                Err(e) => return Err(sqlx_of(e)),
+                Err(e) => return Err(cross_format_error(e)),
             };
         p.cross_format = resume.candidate;
     }
@@ -219,7 +224,7 @@ async fn collapse_linked_points(
 /// Narrow a `CrossFormatError` into this module's error space — the two
 /// crates share the same failure modes, and a vanished book mid-pass is
 /// routine (treated as no link by the caller).
-fn sqlx_of(e: crate::cross_format::CrossFormatError) -> ProgressError {
+pub(super) fn cross_format_error(e: crate::cross_format::CrossFormatError) -> ProgressError {
     match e {
         crate::cross_format::CrossFormatError::BookNotFound
         | crate::cross_format::CrossFormatError::AudioSetMismatch
@@ -229,67 +234,4 @@ fn sqlx_of(e: crate::cross_format::CrossFormatError) -> ProgressError {
         | crate::cross_format::CrossFormatError::CounterpartMissing => ProgressError::BookNotFound,
         crate::cross_format::CrossFormatError::Sqlx(inner) => ProgressError::Sqlx(inner),
     }
-}
-
-/// Which audio file a resume point plays, plus the duration and chapter
-/// position measured against **that** file.
-struct AudioTotals {
-    book_file_id: i64,
-    total_duration_seconds: f64,
-    chapter_number: Option<i64>,
-    chapter_count: Option<i64>,
-}
-
-/// Resolve the audio file for a progress row and measure duration + chapter
-/// position against it. `None` when the book has no resolvable audio file
-/// (e.g. every file was removed after the position was saved).
-///
-/// The row's stored `book_file_id` picks the file for a book carrying more
-/// than one audiobook, so the resume card reads out the narration the user
-/// was actually in. It is a soft reference (rule 06) — a stale id, or one
-/// belonging to another book, falls back to the first audio file by ordinal,
-/// which is what the whole feature did before the id was recorded.
-async fn audio_totals(
-    pool: &SqlitePool,
-    uuid: &str,
-    record: &ProgressRecord,
-) -> Result<Option<AudioTotals>, ProgressError> {
-    let stored = match record.book_file_id {
-        Some(id) => hls::resolve_audiobook_file(pool, uuid, Some(id)).await?,
-        None => None,
-    };
-    let resolved = match stored {
-        Some(resolved) => resolved,
-        None => match hls::resolve_audiobook(pool, uuid).await? {
-            Some(resolved) => resolved,
-            None => return Ok(None),
-        },
-    };
-    let parts = hls::get_parts(pool, resolved.book_file_id).await?;
-    let total: f64 = parts.iter().map(|p| p.duration_seconds).sum();
-    let mut chapters = hls::get_chapters(pool, resolved.book_file_id).await?;
-    chapters.sort_by(|a, b| a.start_seconds.total_cmp(&b.start_seconds));
-    let position = record.audio_position_seconds.unwrap_or(0.0);
-    Ok(Some(AudioTotals {
-        book_file_id: resolved.book_file_id,
-        total_duration_seconds: total,
-        chapter_number: chapter_number_at(&chapters, position),
-        chapter_count: (!chapters.is_empty()).then_some(chapters.len() as i64),
-    }))
-}
-
-/// 1-based chapter number at `elapsed` seconds, mirroring the player's
-/// index-plus-one display (not the stored `file_chapters.ordinal`, which is
-/// container-supplied and not guaranteed dense).
-///
-/// `pub(super)` rather than private: exercised directly by a boundary test
-/// in `progress::tests` alongside the rest of the resume-card coverage.
-pub(super) fn chapter_number_at(chapters: &[ChapterInfo], elapsed: f64) -> Option<i64> {
-    if chapters.is_empty() {
-        return None;
-    }
-    let idx = chapters
-        .partition_point(|c| c.start_seconds <= elapsed)
-        .saturating_sub(1);
-    Some(idx as i64 + 1)
 }

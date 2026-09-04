@@ -6,6 +6,7 @@
 
 use omnibus_shared::ProgressFormat;
 
+mod detail;
 mod ledger;
 mod resume;
 mod session;
@@ -15,6 +16,7 @@ mod upsert;
 #[cfg(test)]
 mod tests;
 
+pub use detail::{book_progress, enrich, round2};
 pub use ledger::{pages_ledger_epoch, SLOT_SECS};
 pub use resume::{recent_progress, resume_points};
 pub use session::{insert_session_tx, record_session, record_session_tx};
@@ -38,6 +40,14 @@ impl From<crate::hls::HlsError> for ProgressError {
     fn from(e: crate::hls::HlsError) -> Self {
         match e {
             crate::hls::HlsError::Db(inner) => ProgressError::Sqlx(inner),
+        }
+    }
+}
+
+impl From<crate::epub_structure::EpubStructureError> for ProgressError {
+    fn from(e: crate::epub_structure::EpubStructureError) -> Self {
+        match e {
+            crate::epub_structure::EpubStructureError::Sqlx(inner) => ProgressError::Sqlx(inner),
         }
     }
 }

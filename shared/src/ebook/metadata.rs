@@ -181,6 +181,7 @@ impl EbookMetadata {
 
 /// One `book_files` row — a single physical file on disk. Exposed to the
 /// frontend so the format switcher can offer a file picker when N > 1.
+///
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct BookFileInfo {
@@ -209,4 +210,18 @@ pub struct BookFileInfo {
     /// backfill of those columns never reads as a content change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub etag: Option<String>,
+    /// Runtime of this file in whole seconds, summed over its
+    /// `book_file_parts`. `None` for every non-audio format and for an audio
+    /// file the scanner has not split into parts yet.
+    ///
+    /// Carried so no caller ever has to source an audiobook's length out of
+    /// band — guessing it from training data is how a 21h47m book gets
+    /// reported as 21h12m, and every percent derived from that guess is
+    /// wrong by the same margin.
+    ///
+    /// Integer, unlike the `f64` the progress records carry: this one is a
+    /// runtime to display, where sub-second precision means nothing, and an
+    /// integer keeps this type `Eq` for the many containers that hold it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<i64>,
 }

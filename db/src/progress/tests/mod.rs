@@ -63,7 +63,7 @@ async fn seed(pool: &SqlitePool, library: &str, title: &str) -> (i64, String) {
     (book.id, book.unique_identifier.clone().unwrap())
 }
 
-async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
+pub(super) async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
     sqlx::query_scalar::<_, i64>(
         "INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
          VALUES (?, '!x', 0, 0, 0, 1) RETURNING id",
@@ -134,7 +134,7 @@ async fn seed_null_client_updated_at(pool: &SqlitePool, user_id: i64, uuid: &str
 
 /// Seed an audiobook (books + book_files + parts + chapters) with two 600 s
 /// parts and three chapters, returning its uuid.
-async fn seed_audiobook(pool: &SqlitePool, uuid: &str) -> i64 {
+pub(super) async fn seed_audiobook(pool: &SqlitePool, uuid: &str) -> i64 {
     let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/ab', 'ab')")
         .execute(pool)
         .await

@@ -9,8 +9,14 @@ use serde::{Deserialize, Serialize};
 use crate::highlight::CreateHighlight;
 use crate::EbookMetadata;
 
+mod resolved;
+
 #[cfg(test)]
 mod tests;
+
+pub use resolved::{
+    BookProgress, PositionConfidence, ProgressDetail, ResolvedPosition,
+};
 
 /// Maximum number of `SessionReport`s accepted per session-batch upload.
 ///
@@ -220,12 +226,18 @@ pub struct ResumePoint {
     /// Whole-book audio duration (sum of parts). `None` for epub rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_duration_seconds: Option<f64>,
-    /// 1-based chapter number at the saved position. `None` for epub rows.
+    /// 1-based **audio part** at the saved position: a container mark read
+    /// from `file_chapters` for the resolved audiobook file, not a book
+    /// chapter. A 65-chapter book stored as a 4-part M4B reports `4`, which
+    /// is why the field may not be named `chapter_*` — read that way it says
+    /// "at the end of the final chapter". Book chapters live on
+    /// [`ResolvedPosition`]. `None` for epub rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chapter_number: Option<i64>,
-    /// Total chapter count, for a "Ch. 3 of 12" readout. `None` for epub rows.
+    pub audio_part: Option<i64>,
+    /// How many audio parts that file carries, for a "part 3 of 12"
+    /// readout. `None` for epub rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chapter_count: Option<i64>,
+    pub audio_part_count: Option<i64>,
     /// The user's saved playback rate for this book, so resume surfaces can
     /// rate-adjust their "left" readouts. `None` for epub rows and when no
     /// preference has been saved (treat as 1x).

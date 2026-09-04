@@ -561,10 +561,18 @@ where
             i64,
             Option<String>,
             i64,
+            Option<i64>,
         ),
     >(
-        "SELECT id, format, filename, ordinal, label, size_bytes, scan_key, mtime_epoch \
-         FROM book_files WHERE book_id = ? ORDER BY format, ordinal",
+        // The runtime is summed in the same pass rather than fetched per
+        // file: a book detail read already costs one query here, and an
+        // audiobook's length is what every percent a caller computes for it
+        // divides by.
+        "SELECT bf.id, bf.format, bf.filename, bf.ordinal, bf.label, bf.size_bytes, \
+                bf.scan_key, bf.mtime_epoch, \
+                (SELECT CAST(ROUND(SUM(p.duration_seconds)) AS INTEGER) \
+                   FROM book_file_parts p WHERE p.book_file_id = bf.id) AS duration_seconds \
+         FROM book_files bf WHERE bf.book_id = ? ORDER BY bf.format, bf.ordinal",
     )
     .bind(book_id)
     .fetch_all(executor)
@@ -572,7 +580,17 @@ where
     Ok(rows
         .into_iter()
         .map(
-            |(id, format, filename, ordinal, label, size_bytes, path, mtime_epoch)| {
+            |(
+                id,
+                format,
+                filename,
+                ordinal,
+                label,
+                size_bytes,
+                path,
+                mtime_epoch,
+                duration_seconds,
+            )| {
                 omnibus_shared::BookFileInfo {
                     id,
                     format,
@@ -585,6 +603,10 @@ where
                     // keys on, so a file the indexer classified Changed is
                     // exactly a file whose validator moved.
                     etag: omnibus_shared::file_etag(size_bytes, mtime_epoch),
+                    // A file with no parts rows sums to NULL, which is the
+                    // honest "not measured" answer rather than a zero-length
+                    // book.
+                    duration_seconds: duration_seconds.filter(|d| *d > 0),
                 }
             },
         )

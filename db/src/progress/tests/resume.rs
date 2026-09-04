@@ -7,7 +7,6 @@ use sqlx::SqlitePool;
 
 use crate::init_db;
 
-use super::super::resume::chapter_number_at;
 use super::super::*;
 use super::{
     seed, seed_audiobook, seed_epub_position, seed_null_client_updated_at,
@@ -286,8 +285,8 @@ async fn resume_points_enrich_audio_rows_with_duration_and_chapter() {
     let p = &points[0];
     assert_eq!(p.book.title.as_deref(), Some("A"));
     assert_eq!(p.total_duration_seconds, Some(1200.0));
-    assert_eq!(p.chapter_number, Some(2));
-    assert_eq!(p.chapter_count, Some(3));
+    assert_eq!(p.audio_part, Some(2));
+    assert_eq!(p.audio_part_count, Some(3));
     // No saved preference: the resume surfaces treat this as 1x.
     assert_eq!(p.playback_rate, None);
 }
@@ -360,8 +359,8 @@ async fn resume_points_return_the_audio_file_the_position_was_taken_in() {
     let points = resume_points(&pool, user, 5).await.unwrap();
     assert_eq!(points[0].record.book_file_id, Some(second));
     assert_eq!(points[0].total_duration_seconds, Some(3000.0));
-    assert_eq!(points[0].chapter_number, Some(2));
-    assert_eq!(points[0].chapter_count, Some(2));
+    assert_eq!(points[0].audio_part, Some(2));
+    assert_eq!(points[0].audio_part_count, Some(2));
 }
 
 #[tokio::test]
@@ -408,8 +407,8 @@ async fn resume_points_fall_back_to_the_first_audio_file_for_an_unresolvable_fil
         "a dead file id must not reach the Continue CTA's ?file_id="
     );
     assert_eq!(points[0].total_duration_seconds, Some(1200.0));
-    assert_eq!(points[0].chapter_number, Some(2));
-    assert_eq!(points[0].chapter_count, Some(3));
+    assert_eq!(points[0].audio_part, Some(2));
+    assert_eq!(points[0].audio_part_count, Some(3));
 }
 
 #[tokio::test]
@@ -516,22 +515,6 @@ async fn resume_points_skip_rows_whose_book_is_gone_and_leave_epub_totals_empty(
     let p = &points[0];
     assert_eq!(p.record.book_uuid, kept_uuid);
     assert_eq!(p.total_duration_seconds, None);
-    assert_eq!(p.chapter_number, None);
-    assert_eq!(p.chapter_count, None);
-}
-
-#[test]
-fn chapter_number_at_tracks_boundaries_and_empty_list() {
-    let ch = |start: f64, dur: f64| ChapterInfo {
-        ordinal: 1,
-        title: "x".into(),
-        start_seconds: start,
-        duration_seconds: dur,
-    };
-    assert_eq!(chapter_number_at(&[], 10.0), None);
-    let chs = vec![ch(0.0, 400.0), ch(400.0, 400.0)];
-    assert_eq!(chapter_number_at(&chs, 0.0), Some(1));
-    assert_eq!(chapter_number_at(&chs, 399.9), Some(1));
-    assert_eq!(chapter_number_at(&chs, 400.0), Some(2));
-    assert_eq!(chapter_number_at(&chs, 9000.0), Some(2));
+    assert_eq!(p.audio_part, None);
+    assert_eq!(p.audio_part_count, None);
 }
