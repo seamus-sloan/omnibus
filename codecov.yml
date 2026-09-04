@@ -18,14 +18,26 @@ coverage:
 # `unit` carries the Rust suite's upload; `ios` carries the omnibus-ios
 # unit suite (ios-tests.yml). Leaves room for an `e2e` flag later without
 # reshaping the project number.
+#
+# Both set `carryforward` because both producing jobs are path-gated: rust.yml
+# gates on `needs.changes.outputs.rust`, ios-tests.yml on
+# `needs.changes.outputs.ios`, and a skipped job counts as a pass. So a flag
+# legitimately uploads nothing on most PRs — a Rust-only PR sends no `ios`
+# report — and without carryforward Codecov drops that flag's whole line count
+# from the PR's report rather than reusing the last one it saw. The project
+# figure then swings by more than ten points on the language a PR happens to
+# touch, which reads as a coverage regression that never happened.
 flags:
   unit:
+    carryforward: true
     paths:
       - db/
       - server/
       - shared/
       - frontend/
+      - mcp/
   ios:
+    carryforward: true
     paths:
       - omnibus-ios/
 
