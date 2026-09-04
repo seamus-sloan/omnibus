@@ -389,3 +389,55 @@ pub(crate) fn put_photo_url(uri: &str, token: &str, url: &str) -> Request<Body> 
         .body(Body::from(serde_json::json!({ "url": url }).to_string()))
         .unwrap()
 }
+
+/// Seed an audiobook with N custom parts. Shared by the audiobook manifest
+/// tests (direct, hls, per-ordinal lookup) and the request-log capture
+/// test. `library_path` becomes the prefix that `get_audiobook_part` joins
+/// to each part's filename.
+pub(crate) async fn seed_audiobook_with_parts(
+    pool: &sqlx::SqlitePool,
+    library_path: &str,
+    format: &str,
+    parts: &[(i64, &str, f64)],
+) -> String {
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(library_path)
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = format!("uuid-{}-{}", format.to_lowercase(), parts.len());
+    let book_id =
+        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, 'T')")
+            .bind(&uuid)
+            .bind(lib_id)
+            .bind(library_path)
+            .execute(pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+    let file_id = sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, ?, 'book', 0)",
+    )
+    .bind(book_id)
+    .bind(format)
+    .execute(pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    for (ordinal, filename, duration) in parts {
+        sqlx::query(
+            "INSERT INTO book_file_parts (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) \
+             VALUES (?, ?, ?, 0, 0, ?)",
+        )
+        .bind(file_id)
+        .bind(*ordinal)
+        .bind(*filename)
+        .bind(*duration)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    uuid
+}
