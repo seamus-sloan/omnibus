@@ -333,7 +333,19 @@ Design/             — Theme (Atrium tokens + the type scale), Fonts/ (static
                       otherwise system-black screen.
 Features/           — one directory per surface: Account, AddBooks, Auth,
                       BookDetail, CheckIn, Discovery, Library, Player, Search,
-                      Settings, Shelves, Stats. Account's identity card opens
+                      Settings, Shelves, Stats. Player carries `PlaybackHealth`
+                      — the pure decision half of "is this item playing,
+                      starved, or dead", kept free of AVFoundation so it is
+                      testable without a live player: `AudioPlayer` translates
+                      `AVPlayerItem.status`, `AVPlayer.timeControlStatus` and
+                      the stall/failed notifications into its signals and acts
+                      on the returned action (buffer, rebuild at the last
+                      position within a budget, or surrender to a visible error
+                      with a working play button). It also owns the rule
+                      deciding when `load` may reuse the item it already holds
+                      — a failed item never counts as loaded, which is what
+                      made a force-quit the only recovery before #2408.
+                      Account's identity card opens
                       `ProfileEditSheet` (display name + picture): a profile is
                       account configuration, so it writes straight through
                       `AuthService` and never queues (rule 08), Save is disabled
@@ -532,7 +544,15 @@ Widgets/            — WidgetSnapshotWriter: builds the App Group snapshot the
                       `recent_progress` plus the library mirror, and
                       pre-renders each cover into the group container. Reads
                       only — a snapshot write must never block on the network,
-                      since most of them happen on the way to suspension
+                      since most of them happen on the way to suspension.
+                      Refreshed by `LifecycleSync` on the phase changes, and
+                      **also on a one-minute throttle out of
+                      `AudioPlayer.persistPosition`**: audio keeps playing
+                      after the app is backgrounded, so the lifecycle passes
+                      alone left the widget frozen at whatever position the app
+                      was suspended on while the transport ran on for hours
+                      (#2421). Always refreshed *after* the replica write it
+                      reports, never before
 ```
 
 Two more directories sit beside `omnibus/` rather than inside it, because they

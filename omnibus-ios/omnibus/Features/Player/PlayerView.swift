@@ -46,7 +46,19 @@ struct PlayerView: View {
                     .background(palette.bg0Color.opacity(0.6))
             }
 
-            if let offer = player.syncOffer {
+            // Starved but armed: AVFoundation re-arms the item itself, so this
+            // is a spinner over a live player, not a failure.
+            if player.isBuffering {
+                LoadingView(label: "Buffering")
+                    .background(palette.bg0Color.opacity(0.4))
+            }
+
+            if let message = player.error {
+                // Takes the banner slot ahead of the offers: an offer to jump
+                // somewhere is noise while nothing is playing.
+                PlaybackErrorBanner(message: message) { player.play() }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let offer = player.syncOffer {
                 SyncOfferBanner(
                     title: "Listened further elsewhere",
                     detail: "Another device left off at \(Format.duration(offer)).",

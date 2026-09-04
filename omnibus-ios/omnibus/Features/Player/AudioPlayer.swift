@@ -88,6 +88,21 @@ final class AudioPlayer {
     private var player: AVPlayer?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
+    /// Item-scoped health observers. Rebuilt with every item — including the
+    /// replacements `recoverFromFailure` installs — so they always describe
+    /// the item actually loaded rather than the one that failed.
+    private var itemStatusObservation: NSKeyValueObservation?
+    private var stallObserver: NSObjectProtocol?
+    private var failedToEndObserver: NSObjectProtocol?
+    /// Player-scoped, so it survives an item swap.
+    private var timeControlObservation: NSKeyValueObservation?
+    private var health = PlaybackHealth()
+    private var recoveryTask: Task<Void, Never>?
+
+    /// Whether the item is alive but starved. Distinct from `isPlaying`,
+    /// which stays true across a buffering stall — the listener has not
+    /// paused anything, the data just hasn't arrived.
+    private(set) var isBuffering = false
     private var sleepTask: Task<Void, Never>?
     private var sessionStart: Date?
     private var listenedSeconds: Double = 0
@@ -96,6 +111,18 @@ final class AudioPlayer {
     /// restore position to suppress here — ticks begin only once real
     /// playback has resumed — so it opts out of `suppressFirst`.
     private var pushThrottle = PositionPushThrottle(interval: 5, suppressFirst: false)
+
+    /// Governs how often listening also rebuilds the Home Screen snapshot.
+    ///
+    /// The widget is the one surface that keeps rendering a position after the
+    /// app stops running — `LifecycleSync.didEnterBackground` refreshes it once
+    /// on the way out, and playback then carries on behind the lock screen for
+    /// however long the listener keeps going, with nothing rewriting the
+    /// snapshot. That is the drift between the in-app player and the Home
+    /// Screen (#2421). A minute is coarse enough that the replica read and the
+    /// rail pull behind `refresh()` stay off the playback path, and fine enough
+    /// that a glance at the Home Screen agrees with the transport.
+    private var widgetThrottle = PositionPushThrottle(interval: 60, suppressFirst: false)
 
     /// Whether the opening position has been settled against the server.
     ///
@@ -195,9 +222,16 @@ final class AudioPlayer {
         // Re-opening the book that's already loaded should not restart it —
         // unless a different file of it was explicitly asked for. A `nil`
         // request means "whatever is right", and what's already playing is.
-        if self.book?.uuid == book.uuid, player != nil,
-           requestedFileID == nil || requestedFileID == fileID
-        {
+        // A failed item is not "already loaded". Returning early here and
+        // calling `play()` set a rate on a dead player, which is what made a
+        // force-quit the only way back (#2408) — so a re-open of the book
+        // whose item has failed falls through and rebuilds it.
+        if PlaybackHealth.canReuseLoadedItem(
+            sameBook: self.book?.uuid == book.uuid,
+            hasPlayer: player != nil,
+            itemFailed: player?.currentItem?.status == .failed,
+            sameFileRequested: requestedFileID == nil || requestedFileID == fileID
+        ) {
             if autoplay, !isPlaying { play() }
             return
         }
@@ -579,6 +613,16 @@ final class AudioPlayer {
 
     func play() {
         guard let player else { return }
+        // Setting a rate on a failed item does nothing at all — the silent
+        // dead end #2408 is named for. A manual tap is also the listener
+        // telling us to try again, so it refills the budget an automatic run
+        // may have spent before giving up.
+        if player.currentItem?.status == .failed {
+            health.reset()
+            error = nil
+            recoverFromFailure(attempt: 1)
+            return
+        }
         player.rate = Float(rate)
         isPlaying = true
         if sessionStart == nil { sessionStart = Date() }
@@ -797,8 +841,14 @@ final class AudioPlayer {
         LifecycleSync.shared.unregister(self)
         if let timeObserver { player?.removeTimeObserver(timeObserver) }
         timeObserver = nil
-        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
-        endObserver = nil
+        teardownItemObservers()
+        timeControlObservation = nil
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        // Failures on the book being closed must not spend the next book's
+        // rebuild budget.
+        health.reset()
+        isBuffering = false
         player?.pause()
         player = nil
         isPlaying = false
@@ -868,6 +918,27 @@ final class AudioPlayer {
             }
         }
 
+        // Player-scoped, so an item swap doesn't lose it. `timeControlStatus`
+        // is the only signal that distinguishes "paused" from "trying to play
+        // and getting nothing", which is exactly the state the old
+        // unconditional `isPlaying` flag rendered as healthy playback.
+        timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) {
+            [weak self] player, _ in
+            Task { @MainActor in self?.observedTimeControl(of: player) }
+        }
+
+        observeItem(player.currentItem)
+
+        try? AVAudioSession.sharedInstance().setActive(true)
+    }
+
+    /// Arm the item-scoped health observers. Called for the item `load` built
+    /// and again for every replacement `recoverFromFailure` installs, so the
+    /// observers never describe an item that is no longer loaded.
+    private func observeItem(_ item: AVPlayerItem?) {
+        teardownItemObservers()
+        guard let item else { return }
+
         // Bound to this load, like the observer itself: reading
         // `self.autoStatus` from inside the task would resolve it after a
         // teardown or a book switch had already replaced it, and mark a book
@@ -875,7 +946,7 @@ final class AudioPlayer {
         // Continue rail.
         let tracker = autoStatus
         endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.isPlaying = false
@@ -896,7 +967,112 @@ final class AudioPlayer {
             }
         }
 
-        try? AVAudioSession.sharedInstance().setActive(true)
+
+        itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            Task { @MainActor in
+                switch item.status {
+                case .failed: self?.handle(.failed)
+                case .readyToPlay: self?.handle(.playing)
+                default: break
+                }
+            }
+        }
+
+        // Alive but out of data. AVFoundation re-arms the item itself, so this
+        // is a display state — rebuilding here would discard a recovery
+        // already underway.
+        stallObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled, object: item, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handle(.starved) }
+        }
+
+        // Terminal: AVFoundation has stopped trying.
+        failedToEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime, object: item, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handle(.failed) }
+        }
+    }
+
+    private func teardownItemObservers() {
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        endObserver = nil
+        if let stallObserver { NotificationCenter.default.removeObserver(stallObserver) }
+        stallObserver = nil
+        if let failedToEndObserver {
+            NotificationCenter.default.removeObserver(failedToEndObserver)
+        }
+        failedToEndObserver = nil
+        itemStatusObservation = nil
+    }
+
+    /// Translate `AVPlayer.timeControlStatus` into a health signal.
+    ///
+    /// `waitingToPlayAtSpecifiedRate` is only a stall when the player is
+    /// actually trying to play — the same status covers a player that is
+    /// simply paused, and treating that as starvation would show a buffering
+    /// spinner over a book the listener paused on purpose.
+    private func observedTimeControl(of player: AVPlayer) {
+        switch player.timeControlStatus {
+        case .playing:
+            handle(.playing)
+        case .waitingToPlayAtSpecifiedRate where isPlaying:
+            handle(.starved)
+        default:
+            break
+        }
+    }
+
+    /// Fold a signal into `health` and apply whatever it asks for.
+    private func handle(_ signal: PlaybackSignal) {
+        switch health.observed(signal) {
+        case .healthy:
+            isBuffering = false
+            error = nil
+        case .buffering:
+            isBuffering = true
+        case .rebuild(let attempt):
+            isBuffering = false
+            isPlaying = false
+            updateNowPlaying()
+            recoverFromFailure(attempt: attempt)
+        case .surrender:
+            isBuffering = false
+            isPlaying = false
+            error = "Playback stopped and could not be resumed. Tap play to try again."
+            updateNowPlaying()
+        }
+    }
+
+    /// Rebuild the current item at the position already reached and resume.
+    ///
+    /// Backs off by the attempt number so a server that is restarting is not
+    /// hammered, and leaves the player paused-with-error if the rebuild itself
+    /// throws — a working play button is the floor, since `load`'s same-book
+    /// short circuit now falls through for a failed item.
+    private func recoverFromFailure(attempt: Int) {
+        guard let book, let manifest else { return }
+        recoveryTask?.cancel()
+        let resume = position
+        let generation = loadGeneration
+        recoveryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Double(attempt)))
+            guard let self, !Task.isCancelled, generation == self.loadGeneration else { return }
+            do {
+                let item = try await self.makeItem(for: manifest, uuid: book.uuid)
+                guard generation == self.loadGeneration else { return }
+                self.player?.replaceCurrentItem(with: item)
+                self.observeItem(item)
+                await self.seek(to: resume)
+                self.error = nil
+                self.play()
+            } catch {
+                self.error = (error as? APIError)?.errorDescription
+                    ?? error.localizedDescription
+                self.updateNowPlaying()
+            }
+        }
     }
 
     // MARK: - Persistence
@@ -921,6 +1097,12 @@ final class AudioPlayer {
             ),
             push: push
         )
+        // After the replica write, never before: the snapshot is composed from
+        // the replica, so refreshing first would republish the position this
+        // call was about to replace.
+        if widgetThrottle.shouldPush(force: force) {
+            Task { await WidgetSnapshotWriter.shared.refresh() }
+        }
     }
 
     private func persistRate() async {
