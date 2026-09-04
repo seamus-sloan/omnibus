@@ -63,8 +63,17 @@ fn resume_readout(point: &ResumePoint) -> Option<String> {
     if let Some(pct) = point.record.progress_percent {
         return Some(format!("{pct}%"));
     }
-    match (point.chapter_number, point.chapter_count) {
-        (Some(n), Some(total)) => Some(format!("Ch {n} of {total}")),
+    // Chapter vocabulary is reserved for real chapter marks; a synthetic
+    // per-part fallback says "Part", because "Ch 4 of 4" on a 65-chapter
+    // book reads as finished.
+    if let (Some(n), Some(total)) = (
+        point.resolved.chapter_ordinal,
+        point.resolved.chapters_total,
+    ) {
+        return Some(format!("Ch {n} of {total}"));
+    }
+    match (point.audio_part, point.audio_part_count) {
+        (Some(n), Some(total)) => Some(format!("Part {n} of {total}")),
         _ => None,
     }
 }

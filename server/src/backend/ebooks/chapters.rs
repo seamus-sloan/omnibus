@@ -28,6 +28,11 @@ use crate::backend::{internal, AppState};
 pub(crate) struct ChapterTextQuery {
     offset: Option<usize>,
     limit: Option<usize>,
+    /// Cut the slice off at the caller's own furthest recorded position in
+    /// this book, so a reader mid-book cannot be handed text they have not
+    /// reached.
+    #[serde(default)]
+    stop_at_progress: bool,
 }
 
 /// The `has_text: false` answer both endpoints share for a book with no
@@ -124,7 +129,7 @@ pub(crate) async fn get_ebook_chapters(
 /// [`CHAPTER_TEXT_MAX_CHARS`], with `truncated` / `next_offset` reporting
 /// the boundary.
 pub(crate) async fn get_ebook_chapter_text(
-    _user: AuthUser,
+    user: AuthUser,
     State(state): State<AppState>,
     Path((uuid, spine_index)): Path<(String, usize)>,
     Query(q): Query<ChapterTextQuery>,
@@ -146,6 +151,7 @@ pub(crate) async fn get_ebook_chapter_text(
                 total_chars: 0,
                 truncated: false,
                 next_offset: None,
+                truncated_by_progress: false,
             })
             .into_response()
         }
@@ -161,7 +167,63 @@ pub(crate) async fn get_ebook_chapter_text(
         Err(e) => return internal("extract_chapter_text", e),
     };
 
-    Json(slice_text(uuid, spine_index, &text, q)).into_response()
+    let stop_at = if q.stop_at_progress {
+        match progress_cutoff(&state, user.id, &uuid, id, spine_index, text.chars().count()).await {
+            Ok(cutoff) => cutoff,
+            Err(e) => return internal("progress_cutoff", e),
+        }
+    } else {
+        None
+    };
+
+    Json(slice_text(uuid, spine_index, &text, q, stop_at)).into_response()
+}
+
+/// How far into this chapter the caller has read, in chars — the ceiling
+/// `?stop_at_progress=true` slices at. `None` means no ceiling applies.
+///
+/// Three outcomes, and the difference matters:
+/// - the reader is **past** this chapter → no ceiling (`None`),
+/// - the reader is **inside** it → the char offset they reached,
+/// - the reader is **before** it, or their position cannot be placed at all
+///   → `Some(0)`, i.e. withhold the whole chapter.
+///
+/// That last case is the conservative one on purpose: a caller asking not to
+/// be shown text past the reader must not be handed a whole chapter because
+/// the server could not work out where they were.
+async fn progress_cutoff(
+    state: &AppState,
+    user_id: i64,
+    uuid: &str,
+    book_id: i64,
+    spine_index: usize,
+    chapter_chars: usize,
+) -> Result<Option<usize>, anyhow::Error> {
+    let progress = db::progress::book_progress(&state.pool, user_id, uuid, None).await?;
+    let Some(percent) = progress
+        .records
+        .iter()
+        .filter_map(|d| d.resolved.percent_through_book)
+        .max_by(f64::total_cmp)
+    else {
+        // No placeable position anywhere in the book: withhold everything.
+        return Ok(Some(0));
+    };
+    let Some((file_id, _)) = db::book_file_with_id(&state.pool, book_id, "EPUB").await? else {
+        return Ok(Some(0));
+    };
+    let stats = epub_structure::get_spine_stats(&state.pool, file_id).await?;
+    let Some((reader_spine, reader_offset)) =
+        epub_structure::position_at_fraction(&stats, percent / 100.0)
+    else {
+        return Ok(Some(0));
+    };
+    let spine_index = spine_index as i64;
+    Ok(match reader_spine.cmp(&spine_index) {
+        std::cmp::Ordering::Greater => None,
+        std::cmp::Ordering::Equal => Some((reader_offset as usize).min(chapter_chars)),
+        std::cmp::Ordering::Less => Some(0),
+    })
 }
 
 /// Cut the requested char window out of the full extracted text and report
@@ -173,6 +235,7 @@ fn slice_text(
     spine_index: usize,
     text: &str,
     q: ChapterTextQuery,
+    stop_at: Option<usize>,
 ) -> ChapterTextResponse {
     let total_chars = text.chars().count();
     let offset = q.offset.unwrap_or(0).min(total_chars);
@@ -180,9 +243,15 @@ fn slice_text(
         .limit
         .unwrap_or(CHAPTER_TEXT_MAX_CHARS)
         .clamp(1, CHAPTER_TEXT_MAX_CHARS);
-    let slice: String = text.chars().skip(offset).take(limit).collect();
+    let ceiling = stop_at.unwrap_or(total_chars).min(total_chars);
+    let take = limit.min(ceiling.saturating_sub(offset));
+    let slice: String = text.chars().skip(offset).take(take).collect();
     let end = offset + slice.chars().count();
-    let truncated = end < total_chars;
+    // A slice stopped at the reader's position is not "truncated": that flag
+    // invites a caller to page onward, which is the one thing this must not
+    // let it do. The separate flag says the cut was deliberate and final.
+    let truncated_by_progress = ceiling < total_chars && end >= ceiling;
+    let truncated = end < total_chars && !truncated_by_progress;
     ChapterTextResponse {
         book_uuid,
         has_text: true,
@@ -192,5 +261,6 @@ fn slice_text(
         total_chars: total_chars as i64,
         truncated,
         next_offset: truncated.then_some(end as i64),
+        truncated_by_progress,
     }
 }

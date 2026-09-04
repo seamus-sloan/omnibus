@@ -86,7 +86,12 @@ pub(crate) async fn get_progress_online(
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    Ok(response.json::<Option<ProgressRecord>>().await?)
+    // The endpoint answers an envelope carrying every format's position; the
+    // `?format=` above narrows it to one, so at most one record comes back.
+    // The reconcile only wants the stored position — the enrichment
+    // alongside it is for callers asking *where* the reader is.
+    let progress = response.json::<omnibus_shared::BookProgress>().await?;
+    Ok(progress.records.into_iter().next().map(|d| d.record))
 }
 
 /// PUT `/api/audiobooks/{uuid}/playback-rate` — persist a per-book rate.

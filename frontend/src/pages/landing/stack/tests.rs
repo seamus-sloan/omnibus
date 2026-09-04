@@ -43,8 +43,9 @@ fn point(uuid: &str, format: ProgressFormat, pct: Option<i64>) -> ResumePoint {
         linked: false,
         cross_format: None,
         total_duration_seconds: Some(3600.0),
-        chapter_number: None,
-        chapter_count: None,
+        resolved: omnibus_shared::ResolvedPosition::unknown(),
+        audio_part: None,
+        audio_part_count: None,
         playback_rate: None,
     }
 }

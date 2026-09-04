@@ -18,12 +18,10 @@ use crate::auth::AuthUser;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ProgressQuery {
-    #[serde(default = "default_format")]
-    format: ProgressFormat,
-}
-
-fn default_format() -> ProgressFormat {
-    ProgressFormat::Epub
+    /// Narrow the answer to one format. Omitted returns every format the
+    /// user has a position in — the EPUB default this replaced silently
+    /// hid a further-along audiobook position.
+    format: Option<ProgressFormat>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,18 +63,26 @@ pub(super) async fn post_progress(
     }
 }
 
-/// Fetch the current position for `(user, uuid, format)`. `format` defaults
-/// to `epub` when omitted. Returns `200 { … }` with an `Option<ProgressRecord>`
-/// body (`null` when the user has not yet opened the book in that format).
+/// Fetch the user's position(s) in one book, enriched with where each one
+/// actually sits: chapter, percent through it, percent through the book,
+/// the audio runtime, and which format is furthest.
+///
+/// Answers a [`BookProgress`] envelope. `?format=` narrows `records` to one
+/// format; omitting it returns every format the user has opened. An
+/// unopened book (and an unknown uuid) answers `200` with empty `records`
+/// rather than `null`, so a caller reads one shape either way.
 pub(super) async fn get_progress(
     user: AuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
     Query(q): Query<ProgressQuery>,
 ) -> Response {
-    match db::progress::get_progress(&state.pool, user.id, &uuid, q.format).await {
-        Ok(rec) => Json(rec).into_response(),
-        Err(e) => internal("get_progress", e),
+    match db::progress::book_progress(&state.pool, user.id, &uuid, q.format).await {
+        Ok(progress) => Json(progress).into_response(),
+        Err(ProgressError::BookNotFound) => {
+            (axum::http::StatusCode::NOT_FOUND, "book not found").into_response()
+        }
+        Err(ProgressError::Sqlx(e)) => internal("book_progress", e),
     }
 }
 

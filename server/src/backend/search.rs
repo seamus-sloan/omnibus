@@ -13,7 +13,7 @@ use axum::{
     Json,
 };
 use omnibus_db::{self as db};
-use omnibus_shared::search_query_too_long;
+use omnibus_shared::{search_query_too_long, SpoilerFilter};
 #[cfg(test)]
 use omnibus_shared::SEARCH_QUERY_MAX_LEN as MAX_SEARCH_QUERY_LEN;
 use serde::Deserialize;
@@ -24,6 +24,44 @@ use crate::auth::AuthUser;
 #[derive(Deserialize)]
 pub(super) struct SearchQuery {
     q: String,
+}
+
+/// `GET /api/search/content` params. Everything past `q` is optional, so a
+/// caller that only knows the old shape still works.
+#[derive(Deserialize)]
+pub(super) struct ContentSearchQuery {
+    q: String,
+    /// Scope to one book. Repeatable via the comma-separated `book_uuids`.
+    book_uuid: Option<String>,
+    /// Comma-separated book uuids, for scoping to a series.
+    book_uuids: Option<String>,
+    /// Hit ceiling; server-clamped.
+    limit: Option<i64>,
+    /// What to do about hits past the reader's own position.
+    #[serde(default)]
+    spoiler_filter: SpoilerFilter,
+}
+
+impl ContentSearchQuery {
+    /// The uuids this request scopes to, from either spelling.
+    fn scope_uuids(&self) -> Vec<String> {
+        let mut uuids: Vec<String> = Vec::new();
+        if let Some(one) = self.book_uuid.as_deref() {
+            uuids.push(one.trim().to_string());
+        }
+        if let Some(many) = self.book_uuids.as_deref() {
+            uuids.extend(
+                many.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+            );
+        }
+        uuids.retain(|u| !u.is_empty());
+        uuids.sort();
+        uuids.dedup();
+        uuids
+    }
 }
 
 /// Reject an over-length query with 400 so oversized input is never forwarded
@@ -80,13 +118,18 @@ pub(super) async fn get_search(
 }
 
 /// `GET /api/search/content` — full-text search over indexed EPUB chapter
-/// text (`book_content_fts`, #2282). Hits cite `(book_uuid, spine_index)`
-/// plus an FTS5 `snippet()` excerpt; an unconfigured library or an empty
-/// query yields an empty hit list rather than an error.
+/// text (`book_content_fts`). Hits cite `(book_uuid, spine_index)` plus the
+/// chapter title and an FTS5 `snippet()` excerpt; an unconfigured library or
+/// an empty query yields an empty hit list rather than an error.
+///
+/// `book_uuid` / `book_uuids` scope the search, `limit` caps it, and
+/// `spoiler_filter` places each hit against the caller's own position —
+/// annotating by default, excluding on request. An empty result carries a
+/// `hint` when the query *form* is the likely cause.
 pub(super) async fn get_search_content(
-    _user: AuthUser,
+    user: AuthUser,
     State(state): State<AppState>,
-    Query(params): Query<SearchQuery>,
+    Query(params): Query<ContentSearchQuery>,
 ) -> Response {
     if let Some(rejection) = reject_if_over_length(&params.q) {
         return rejection;
@@ -102,10 +145,36 @@ pub(super) async fn get_search_content(
     if paths.is_empty() {
         return Json(omnibus_shared::ContentSearchResults::default()).into_response();
     }
-    match db::search_content_for_paths(&state.pool, &paths, &params.q).await {
-        Ok(hits) => Json(omnibus_shared::ContentSearchResults { hits }).into_response(),
-        Err(error) => internal("search content", error),
-    }
+    let scope = db::ContentSearchScope {
+        book_uuids: params.scope_uuids(),
+        limit: params.limit,
+    };
+    let mut hits = match db::search_content_for_paths(&state.pool, &paths, &params.q, &scope).await
+    {
+        Ok(hits) => hits,
+        Err(error) => return internal("search content", error),
+    };
+    let withheld =
+        match db::annotate_spoilers(&state.pool, user.id, &mut hits, params.spoiler_filter).await {
+            Ok(withheld) => withheld,
+            Err(error) => return internal("annotate spoilers", error),
+        };
+    // Only worth explaining when there is nothing to show: a hint alongside
+    // results would be noise, and the per-term counts cost a query each.
+    let hint = if hits.is_empty() && withheld.unwrap_or(0) == 0 {
+        match db::explain_empty_content_search(&state.pool, &paths, &params.q, &scope).await {
+            Ok(hint) => hint,
+            Err(error) => return internal("explain content search", error),
+        }
+    } else {
+        None
+    };
+    Json(omnibus_shared::ContentSearchResults {
+        hits,
+        withheld_ahead: withheld,
+        hint,
+    })
+    .into_response()
 }
 
 pub(super) async fn get_search_palette(

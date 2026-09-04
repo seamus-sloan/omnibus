@@ -31,9 +31,14 @@ pub(super) fn resume_meta(point: &ResumePoint) -> (String, Option<i64>) {
                 (total - pos).max(0.0),
                 point.playback_rate.unwrap_or(1.0),
             ));
+            // "Ch." only when the container named its chapters; the
+            // synthetic per-part fallback resolves to no chapter, and
+            // calling part 4 of 4 "Ch. 4" reads as the end of the book.
             let ch = point
-                .chapter_number
+                .resolved
+                .chapter_ordinal
                 .map(|n| format!("Ch. {n} \u{00b7} "))
+                .or_else(|| point.audio_part.map(|n| format!("Part {n} \u{00b7} ")))
                 .unwrap_or_default();
             (format!("{ch}{pct}% \u{00b7} {left} left"), Some(pct))
         }
@@ -97,22 +102,45 @@ mod tests {
             linked: false,
             cross_format: None,
             total_duration_seconds: total,
-            chapter_number: Some(3),
-            chapter_count: Some(10),
+            resolved: omnibus_shared::ResolvedPosition::unknown(),
+            audio_part: Some(3),
+            audio_part_count: Some(10),
             playback_rate: None,
         }
     }
 
+    /// A point whose container named its chapters, so chapter vocabulary is
+    /// earned.
+    fn chaptered(pos: Option<f64>, total: Option<f64>) -> ResumePoint {
+        let mut p = point(ProgressFormat::Audio, pos, total);
+        p.resolved = omnibus_shared::ResolvedPosition {
+            chapter_ordinal: Some(3),
+            chapters_total: Some(10),
+            confidence: omnibus_shared::PositionConfidence::Exact,
+            ..omnibus_shared::ResolvedPosition::unknown()
+        };
+        p
+    }
+
     #[test]
     fn resume_meta_reports_percent_and_time_left_for_audio_with_total() {
-        let (meta, pct) = resume_meta(&point(ProgressFormat::Audio, Some(3600.0), Some(7200.0)));
+        let (meta, pct) = resume_meta(&chaptered(Some(3600.0), Some(7200.0)));
         assert_eq!(pct, Some(50));
         assert_eq!(meta, "Ch. 3 \u{00b7} 50% \u{00b7} 1h 00m left");
     }
 
     #[test]
+    fn resume_meta_says_part_when_the_marks_are_the_synthetic_per_part_fallback() {
+        // Unresolved marks are parts, not chapters: a 4-part M4B of a
+        // 65-chapter book must not read as "Ch. 4".
+        let (meta, pct) = resume_meta(&point(ProgressFormat::Audio, Some(3600.0), Some(7200.0)));
+        assert_eq!(pct, Some(50));
+        assert_eq!(meta, "Part 3 \u{00b7} 50% \u{00b7} 1h 00m left");
+    }
+
+    #[test]
     fn resume_meta_scales_time_left_by_the_saved_playback_rate() {
-        let mut p = point(ProgressFormat::Audio, Some(3600.0), Some(7200.0));
+        let mut p = chaptered(Some(3600.0), Some(7200.0));
         p.playback_rate = Some(2.0);
         let (meta, pct) = resume_meta(&p);
         // Percent stays in book time; only the wall-clock wait scales.

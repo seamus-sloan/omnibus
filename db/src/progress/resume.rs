@@ -5,10 +5,10 @@
 //! [`super::detail`], shared with the per-book progress read so the two
 //! cannot drift apart.
 
-use omnibus_shared::{ProgressFormat, ProgressRecord, ResumePoint};
+use omnibus_shared::{ProgressFormat, ProgressRecord, ResolvedPosition, ResumePoint};
 use sqlx::{Row, SqlitePool};
 
-use super::detail::{audio_totals, round2};
+use super::detail::{audio_totals, resolve_audio_position, round2};
 use super::{parse_format, ProgressError};
 
 /// The user's most recent progress rows across both formats, newest first
@@ -90,17 +90,20 @@ pub async fn resume_points(
             ProgressFormat::Audio => audio_totals(pool, &record.book_uuid, &record).await?,
             ProgressFormat::Epub => None,
         };
-        let (total_duration_seconds, audio_part, audio_part_count) = match audio {
+        let (total_duration_seconds, audio_part, audio_part_count, resolved) = match audio {
             Some(totals) => {
                 // Overwrite rather than trust the stored id: it may name a
                 // `book_files` row the reindex has since replaced, and the
                 // Continue CTA links straight at `?file_id=` — a dead id
                 // would open the player on a manifest that 404s.
                 record.book_file_id = Some(totals.book_file_id);
+                let resolved =
+                    resolve_audio_position(&totals, record.audio_position_seconds.unwrap_or(0.0));
                 (
                     Some(totals.total_duration_seconds),
                     totals.audio_part,
                     totals.audio_part_count,
+                    resolved,
                 )
             }
             None => {
@@ -108,7 +111,7 @@ pub async fn resume_points(
                 // epub row): drop the stored id rather than hand a CTA an
                 // id that resolves to nothing.
                 record.book_file_id = None;
-                (None, None, None)
+                (None, None, None, ResolvedPosition::unknown())
             }
         };
         // Only rows that will render a listening card need the preference —
@@ -140,6 +143,7 @@ pub async fn resume_points(
             linked: false,
             cross_format: None,
             total_duration_seconds,
+            resolved,
             audio_part,
             audio_part_count,
             playback_rate,

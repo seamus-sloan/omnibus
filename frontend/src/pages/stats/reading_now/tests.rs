@@ -36,8 +36,9 @@ fn point(percent: Option<i64>, chapter: Option<(i64, i64)>) -> ResumePoint {
         linked: false,
         cross_format: None,
         total_duration_seconds: None,
-        chapter_number: chapter.map(|(n, _)| n),
-        chapter_count: chapter.map(|(_, total)| total),
+        resolved: omnibus_shared::ResolvedPosition::unknown(),
+        audio_part: chapter.map(|(n, _)| n),
+        audio_part_count: chapter.map(|(_, total)| total),
         playback_rate: None,
     }
 }
@@ -89,12 +90,26 @@ fn resume_readout_answers_in_whatever_unit_the_book_can_report() {
     );
     // An audiobook's position is a time offset, not a percent — it answers in
     // chapters instead of inventing one.
-    assert_eq!(
-        resume_readout(&point(None, Some((3, 12)))).as_deref(),
-        Some("Ch 3 of 12")
-    );
+    let mut chaptered = point(None, None);
+    chaptered.resolved = omnibus_shared::ResolvedPosition {
+        chapter_ordinal: Some(3),
+        chapters_total: Some(12),
+        confidence: omnibus_shared::PositionConfidence::Exact,
+        ..omnibus_shared::ResolvedPosition::unknown()
+    };
+    assert_eq!(resume_readout(&chaptered).as_deref(), Some("Ch 3 of 12"));
     // Neither available: silence, not a zero the book never reported.
     assert_eq!(resume_readout(&point(None, None)), None);
+}
+
+#[test]
+fn resume_readout_says_part_when_the_marks_are_the_synthetic_per_part_fallback() {
+    // The marks resolve to no chapter, so they are parts — reporting
+    // "Ch 4 of 4" for a 65-chapter book would read as finished.
+    assert_eq!(
+        resume_readout(&point(None, Some((4, 4)))).as_deref(),
+        Some("Part 4 of 4")
+    );
 }
 
 #[test]

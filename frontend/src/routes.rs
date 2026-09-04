@@ -572,8 +572,9 @@ mod tests {
             linked: false,
             cross_format: None,
             total_duration_seconds: None,
-            chapter_number: None,
-            chapter_count: None,
+            resolved: omnibus_shared::ResolvedPosition::unknown(),
+            audio_part: None,
+            audio_part_count: None,
             playback_rate: None,
         }
     }

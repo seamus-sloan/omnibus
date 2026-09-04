@@ -3,7 +3,7 @@ use axum::{
     body::{to_bytes, Body},
     http::{header::AUTHORIZATION, Request, StatusCode},
 };
-use omnibus_shared::ProgressRecord;
+use omnibus_shared::BookProgress;
 use tower::ServiceExt;
 
 use super::*;
@@ -202,10 +202,90 @@ async fn api_progress_round_trip_last_write_wins() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-    let rec: Option<ProgressRecord> = serde_json::from_slice(&bytes).unwrap();
-    let rec = rec.unwrap();
+    let progress: BookProgress = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(progress.records.len(), 1, "?format= narrows to one record");
+    let rec = &progress.records[0].record;
     assert_eq!(rec.epub_cfi.as_deref(), Some("epubcfi(/6/12!/4/8/3:7)"));
     assert_eq!(rec.format, ProgressFormat::Epub);
+    assert_eq!(progress.furthest, Some(ProgressFormat::Epub));
+}
+
+#[tokio::test]
+async fn api_progress_without_a_format_returns_every_format_the_user_has_opened() {
+    let (app, _state, pool) = fixture().await;
+    let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/progress")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(
+                    serde_json::json!({
+                        "book_uuid": uuid,
+                        "format": "epub",
+                        "epub_cfi": "epubcfi(/6/2!/4/2/1:0)",
+                        "progress_percent": 47,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/progress/{uuid}"))
+                .method("GET")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let progress: BookProgress = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(progress.records.len(), 1, "only epub has a position");
+    assert_eq!(progress.furthest, Some(ProgressFormat::Epub));
+    // The stored percent is all this book can answer with, and the block
+    // says so rather than dressing it up as a chapter.
+    let resolved = &progress.records[0].resolved;
+    assert_eq!(resolved.percent_through_book, Some(47.0));
+    assert!(resolved.chapter_title.is_none());
+}
+
+#[tokio::test]
+async fn api_progress_answers_an_empty_envelope_for_an_unopened_book() {
+    let (app, _state, pool) = fixture().await;
+    let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/progress/{uuid}"))
+                .method("GET")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let progress: BookProgress = serde_json::from_slice(&bytes).unwrap();
+    assert!(progress.records.is_empty());
+    assert!(progress.furthest.is_none());
 }
 
 #[tokio::test]

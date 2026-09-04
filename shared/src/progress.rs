@@ -226,6 +226,17 @@ pub struct ResumePoint {
     /// Whole-book audio duration (sum of parts). `None` for epub rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_duration_seconds: Option<f64>,
+    /// Where the position sits, when the card can say so cheaply — audio
+    /// rows only. A reading row would need its EPUB opened to resolve a
+    /// CFI, which is not a cost a list of up to twenty cards should pay, so
+    /// it reports [`PositionConfidence::Unknown`]; the per-book read
+    /// (`GET /api/progress/{uuid}`) resolves it properly.
+    ///
+    /// This is what lets a surface tell a real chapter from the synthetic
+    /// per-part fallback: chapter vocabulary is present here only when the
+    /// container actually named its chapters.
+    #[serde(default = "ResolvedPosition::unknown")]
+    pub resolved: ResolvedPosition,
     /// 1-based **audio part** at the saved position: a container mark read
     /// from `file_chapters` for the resolved audiobook file, not a book
     /// chapter. A 65-chapter book stored as a 4-part M4B reports `4`, which

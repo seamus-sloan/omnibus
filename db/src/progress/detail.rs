@@ -479,7 +479,7 @@ fn is_synthetic(chapters: &[ChapterInfo], part_count: usize) -> bool {
 /// Chapter vocabulary is used only when the marks are real; a synthetic
 /// per-part fallback reports the percent and nothing else, because there is
 /// no chapter to name (see [`is_synthetic`]).
-fn resolve_audio_position(totals: &AudioTotals, position: f64) -> ResolvedPosition {
+pub(super) fn resolve_audio_position(totals: &AudioTotals, position: f64) -> ResolvedPosition {
     let percent_through_book = (totals.total_duration_seconds > 0.0)
         .then(|| (position / totals.total_duration_seconds * 100.0).clamp(0.0, 100.0));
 
