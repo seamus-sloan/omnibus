@@ -8,6 +8,7 @@ use sqlx::{SqlitePool, Transaction};
 use crate::covers::{find_cover_file, write_cover_file};
 use crate::sync::delete_fts;
 
+use super::curation;
 use super::snapshot::{build_snapshot, SourceSnapshot};
 use super::{MergeError, MergeOutcome};
 
@@ -29,7 +30,7 @@ pub async fn merge_books(
     }
     let mut tx = pool.begin().await?;
 
-    let (source_id, target_id, snapshot) =
+    let (source_id, target_id, mut snapshot) =
         snapshot_source_book(&mut tx, source_uuid, target_uuid).await?;
 
     migrate_book_files(&mut tx, source_id, target_id, &snapshot).await?;
@@ -37,7 +38,10 @@ pub async fn merge_books(
     crate::physical::promote_filed_physical_book(&mut tx, target_id).await?;
     move_links(&mut tx, source_id, target_id).await?;
     move_progress_and_history(&mut tx, source_id, target_id).await?;
-    move_identifiers(&mut tx, source_id, target_id).await?;
+    // Both of these record what the preceding step *did*, so they run after
+    // it and before `finalize_merge` serializes the snapshot.
+    curation::capture_post(&mut tx, target_uuid, &mut snapshot.curation).await?;
+    snapshot.identifiers_added_to_target = move_identifiers(&mut tx, source_id, target_id).await?;
     merge_overrides(&mut tx, source_uuid, target_uuid, merged_by).await?;
     let adopt_cover = adopt_cover_flag(&mut tx, source_id, target_id).await?;
 
@@ -141,7 +145,7 @@ async fn snapshot_source_book(
     if source_id == target_id {
         return Err(MergeError::SameBook);
     }
-    let snapshot = build_snapshot(tx, source_id).await?;
+    let snapshot = build_snapshot(tx, source_id, target_uuid).await?;
     Ok((source_id, target_id, snapshot))
 }
 
@@ -424,6 +428,13 @@ const RETARGET_TABLES: [&str; 13] = [
 /// collide on, with the extra key column beyond `(user_id, book_uuid)` where
 /// there is one. Resolved latest-wins by [`dedupe_latest_wins`] before the
 /// retarget runs.
+///
+/// **A dedupe is destructive, so it is only reversible if the merge wrote both
+/// sides down first.** `book_read_status` and `user_ratings` are recorded in
+/// [`super::curation`] and restored by undo. The three progress-shaped entries
+/// are not, and undo leaves them on the target — the same documented asymmetry
+/// as sessions and annotations, and the reason a new entry here needs a
+/// deliberate answer rather than just a line in this list.
 const DEDUPE_TABLES: [(&str, Option<&str>); 5] = [
     ("reading_progress", Some("format")),
     // The forward-progress mark is a snapshot of a position, exactly like the
@@ -655,11 +666,32 @@ async fn dedupe_latest_wins(
 
 /// Union identifiers; the target's value wins per `(book_id, scheme)`.
 /// The source's own rows cascade with the source delete.
+///
+/// Returns the `(scheme, value)` tuples the union actually **added** to the
+/// target, so undo can take exactly those back off it. Tuples the target
+/// already carried are excluded — they did not come from the merge, so they
+/// are not the merge's to remove. Without this an undone merge left the
+/// absorbed book's ISBN stamped on the survivor permanently, where the
+/// check-in exact-identifier rung then resolved it to the wrong book.
 async fn move_identifiers(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     source_id: i64,
     target_id: i64,
-) -> Result<(), sqlx::Error> {
+) -> Result<Vec<(String, String)>, sqlx::Error> {
+    // Same `(scheme, value)` comparison the `OR IGNORE` below resolves against
+    // — both columns are `COLLATE NOCASE`, so this matches the PK's own notion
+    // of a duplicate rather than a stricter one.
+    let added: Vec<(String, String)> = sqlx::query_as(
+        "SELECT s.scheme, s.value FROM book_identifiers s
+          WHERE s.book_id = ?2
+            AND NOT EXISTS (SELECT 1 FROM book_identifiers t
+                             WHERE t.book_id = ?1 AND t.scheme = s.scheme AND t.value = s.value)",
+    )
+    .bind(target_id)
+    .bind(source_id)
+    .fetch_all(&mut **tx)
+    .await?;
+
     sqlx::query(
         "INSERT OR IGNORE INTO book_identifiers (book_id, scheme, value)
          SELECT ?1, scheme, value FROM book_identifiers WHERE book_id = ?2",
@@ -668,7 +700,7 @@ async fn move_identifiers(
     .bind(source_id)
     .execute(&mut **tx)
     .await?;
-    Ok(())
+    Ok(added)
 }
 
 /// Shallow-merge the source's `metadata_overrides` into the target's

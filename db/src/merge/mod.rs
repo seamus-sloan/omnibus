@@ -2,8 +2,11 @@
 //! row (the **source**) into another (the **target**) so a work
 //! indexed as two format-siblings becomes one book with multiple
 //! `book_files`. `merge_books` runs in one transaction and snapshots
-//! the source into `merge_log` for [`undo_merge`].
+//! into `merge_log` for [`undo_merge`] — the source book, and for the
+//! per-reader state whose collision the merge resolves destructively,
+//! *both* books (see `curation`).
 
+mod curation;
 mod snapshot;
 mod transaction;
 mod undo;
@@ -26,6 +29,11 @@ pub enum MergeError {
     LogNotFound,
     #[error("merge was already undone")]
     AlreadyUndone,
+    /// Undo would have to choose between a reader's pre-merge curation and a
+    /// change they made to the survivor afterwards. Both are real, so undo
+    /// refuses and says which field and which reader to look at.
+    #[error("cannot undo this merge: {0}")]
+    UndoConflict(String),
     #[error(transparent)]
     Db(#[from] sqlx::Error),
     #[error("merge snapshot encode/decode failed: {0}")]

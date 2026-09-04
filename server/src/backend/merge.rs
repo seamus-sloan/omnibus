@@ -70,7 +70,9 @@ pub(super) async fn post_undo_merge(
         Err(e @ db::MergeError::LogNotFound) => {
             (StatusCode::NOT_FOUND, e.to_string()).into_response()
         }
-        Err(e @ db::MergeError::AlreadyUndone) => {
+        // Both are "the state moved on since the merge", which is a conflict
+        // the caller can act on rather than an internal failure.
+        Err(e @ (db::MergeError::AlreadyUndone | db::MergeError::UndoConflict(_))) => {
             (StatusCode::CONFLICT, e.to_string()).into_response()
         }
         Err(e) => internal("undo merge", e),

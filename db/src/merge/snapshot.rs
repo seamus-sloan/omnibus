@@ -4,6 +4,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::Transaction;
 
+use super::curation::{capture_pre, CurationSnapshot};
+
 /// Deserialize `timestamp` from either the current INTEGER unix-seconds or the
 /// TEXT form persisted by pre-0038 snapshots. A numeric string parses to its
 /// epoch; a non-numeric ISO string (`'YYYY-MM-DD HH:MM:SS'`) can't be converted
@@ -85,6 +87,18 @@ pub(super) struct SourceSnapshot {
     /// `(uuid, format, library_path)`. Re-pointed to the target by the
     /// merge; pointed back at the recreated source by undo.
     pub merged_uuid_rows: Vec<(String, String, String)>,
+    /// `(scheme, value)` identifier tuples the merge's union actually *added*
+    /// to the target — undo takes exactly these back off it. Tuples the target
+    /// already carried are excluded: they are not the merge's to remove.
+    /// `#[serde(default)]` keeps pre-fix `merge_log` JSON replaying, where
+    /// undo leaves the target's identifiers alone as it always did.
+    #[serde(default)]
+    pub identifiers_added_to_target: Vec<(String, String)>,
+    /// Both books' read-status and rating rows either side of the merge. The
+    /// merge deletes the losing row of a per-reader collision, so this is the
+    /// only record undo has of where each row started.
+    #[serde(default)]
+    pub curation: CurationSnapshot,
 }
 
 /// The flat `books` + `scan_roots` row that seeds a [`SourceSnapshot`].
@@ -130,9 +144,15 @@ struct LinkRows {
 }
 
 /// Load the full snapshot for `book_id` inside the merge transaction.
+///
+/// `target_uuid` is needed because the curation half of the snapshot spans
+/// **both** books: the merge settles a per-reader collision by deleting one
+/// side's row, so recording only the source's would leave undo unable to give
+/// the survivor its own value back.
 pub(super) async fn build_snapshot(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
+    target_uuid: &str,
 ) -> Result<SourceSnapshot, sqlx::Error> {
     let row: BookSnapshot = sqlx::query_as(
         "SELECT b.uuid, l.path AS library_path, b.scan_key, b.path, b.title, b.sort, b.author_sort,
@@ -147,6 +167,7 @@ pub(super) async fn build_snapshot(
 
     let files = load_file_rows(tx, book_id).await?;
     let links = load_link_rows(tx, book_id).await?;
+    let curation = capture_pre(tx, &row.uuid, target_uuid).await?;
 
     Ok(SourceSnapshot {
         uuid: row.uuid,
@@ -175,6 +196,10 @@ pub(super) async fn build_snapshot(
         languages: links.languages,
         identifiers: links.identifiers,
         merged_uuid_rows: files.merged_uuid_rows,
+        // Both filled in by `merge_books` once the moves they describe have
+        // actually run; the snapshot is only serialized at the end.
+        identifiers_added_to_target: Vec::new(),
+        curation,
     })
 }
 
