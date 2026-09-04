@@ -5,6 +5,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::ChapterInfo;
 
+use super::super::helpers::range_fill_pct;
 use super::state::{format_countdown, sleep_remaining, SleepState, SLEEP_PRESETS};
 use super::view::format_ms;
 
@@ -164,6 +165,7 @@ pub(super) fn SpeedSheet(
 ) -> Element {
     let rate_big = format!("{rate:.2}\u{00d7}");
     let stepper_label = format!("{rate:.2}\u{00d7}");
+    let speed_fill = range_fill_pct(rate, SPEED_MIN, SPEED_MAX);
     let on_input = move |evt: Event<FormData>| {
         if let Ok(v) = evt.value().parse::<f64>() {
             on_set.call(snap_rate(v));
@@ -202,6 +204,9 @@ pub(super) fn SpeedSheet(
                         max: "{SPEED_MAX}",
                         step: "{SPEED_STEP}",
                         value: "{rate}",
+                        // Shares `.m-player-range`, so it needs the same stop
+                        // WebKit can't derive — off the rate bounds, not zero.
+                        style: "--fill: {speed_fill:.2}%;",
                         oninput: on_input,
                     }
                 }

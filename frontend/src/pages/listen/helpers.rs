@@ -51,6 +51,28 @@ pub(super) fn effective_scrub_position(
     (effective, eff_current, eff_remaining)
 }
 
+/// Where a native `<input type=range>` sits in its own bounds, 0–100, for the
+/// `--fill` custom property its CSS paints the filled span from.
+///
+/// WebKit has no `::-webkit-range-progress`: its track is one element and the
+/// filled part has to be a gradient stop the markup supplies, which is why the
+/// value comes from here rather than the stylesheet. Firefox's
+/// `::-moz-range-progress` does it natively and ignores this.
+///
+/// Returns 0 on degenerate bounds or a non-finite input, so the track renders
+/// empty rather than dropping the whole gradient on a NaN stop.
+///
+/// Mobile-only: the desktop player's bar is `.lp-chapter-seg-row`, a row of
+/// divs that paints its own fill on every engine.
+#[cfg(any(feature = "mobile", test))]
+pub(super) fn range_fill_pct(value: f64, min: f64, max: f64) -> f64 {
+    let span = max - min;
+    if !span.is_finite() || span <= 0.0 || !value.is_finite() {
+        return 0.0;
+    }
+    (((value - min) / span) * 100.0).clamp(0.0, 100.0)
+}
+
 /// Vendored hls.js for the HLS fallback path.
 #[cfg(feature = "web")]
 pub(super) const HLS_JS: Asset = asset!("/assets/vendor/hls.min.js");

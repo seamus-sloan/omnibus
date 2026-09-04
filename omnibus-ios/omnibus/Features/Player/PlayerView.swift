@@ -13,8 +13,17 @@ struct PlayerView: View {
     }
 
     @Environment(AudioPlayer.self) private var player
-    @Environment(\.palette) private var palette
+    @Environment(\.palette) private var theme
     @Environment(\.dismiss) private var dismiss
+
+    /// The screen's palette, book-toned like `BookDetailView`'s — the backdrop
+    /// bloom already came from this book, and every control over it reading the
+    /// theme's accent instead is what made one screen disagree with itself.
+    ///
+    /// Shadows the environment value the theme supplies, so `palette` means the
+    /// toned one everywhere below and a later accent can't pick up the wrong
+    /// source by spelling.
+    private var palette: Palette { theme.accented(byCoverOf: book) }
 
     /// Offset inside the scrubbed span while a drag is in flight.
     @State private var scrubOffset: Double?
@@ -92,6 +101,11 @@ struct PlayerView: View {
         .fullScreenCover(isPresented: $showCarMode) { CarModeView(book: book) }
         .sheet(isPresented: $showSpeed) { SpeedSheet() }
         .sheet(isPresented: $showSleepTimer) { SleepSheet() }
+        // Outermost, so the chapter, speed, sleep and bookmark sheets above —
+        // and Car Mode — are drawn in the book's tone rather than staying amber
+        // over a player that isn't. Same placement as `BookDetailView`.
+        .environment(\.palette, palette)
+        .tint(palette.accentColor)
     }
 
     /// A blurred, saturated wash of the cover behind the controls.
@@ -557,7 +571,15 @@ private struct ChapterSheet: View {
 /// visibly through it.
 struct MiniPlayerBar: View {
     @Environment(AudioPlayer.self) private var player
-    @Environment(\.palette) private var palette
+    @Environment(\.palette) private var theme
+
+    /// Toned from the book that is *playing*, not the screen the bar is docked
+    /// on — the bar outlives any one screen, and a rail in the library's accent
+    /// would disagree with the player it expands into.
+    private var palette: Palette {
+        guard let book = player.book else { return theme }
+        return theme.accented(byCoverOf: book)
+    }
 
     /// Overrides what tapping the bar body does. The default expands into the
     /// app-global full-screen player; the reader passes its own handler so the

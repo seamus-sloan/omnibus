@@ -10,7 +10,7 @@ use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
 use omnibus_shared::{EbookMetadata, ProgressFormat, ProgressUpdate};
 
-use super::helpers::{effective_scrub_position, remaining_at_rate};
+use super::helpers::{effective_scrub_position, range_fill_pct, remaining_at_rate};
 use crate::components::atrium::Cover;
 use crate::contexts::use_server_url;
 use crate::data;
@@ -501,6 +501,8 @@ fn render_player_scrubber(
     on_seek_input: impl FnMut(Event<FormData>) + 'static,
     on_seek_commit: impl FnMut(Event<FormData>) + 'static,
 ) -> Element {
+    // The played span, for the track gradient WebKit can't derive itself.
+    let fill = range_fill_pct(derived.effective, 0.0, derived.scrub_max);
     rsx! {
         div { class: "m-player-scrub",
             input {
@@ -512,6 +514,7 @@ fn render_player_scrubber(
                 max: "{derived.scrub_max}",
                 step: "1",
                 value: "{derived.effective}",
+                style: "--fill: {fill:.2}%;",
                 oninput: on_seek_input,
                 onchange: on_seek_commit,
             }

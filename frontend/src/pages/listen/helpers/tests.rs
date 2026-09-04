@@ -1,6 +1,6 @@
 use omnibus_shared::ChapterInfo;
 
-use super::{effective_scrub_position, format_hms, remaining_at_rate};
+use super::{effective_scrub_position, format_hms, range_fill_pct, remaining_at_rate};
 
 fn ch(ordinal: i64, title: &str, start: f64, dur: f64) -> ChapterInfo {
     ChapterInfo {
@@ -149,4 +149,30 @@ fn only_the_time_left_is_rate_adjusted_now() {
         format_hms(remaining_at_rate(duration - elapsed, 2.0)),
         "25:00"
     );
+}
+
+#[test]
+fn range_fill_pct_maps_a_position_onto_its_own_bounds() {
+    // The seek bar starts at zero; the speed slider does not, and reading its
+    // fill off zero would leave 0.5x looking a sixth played.
+    assert!((range_fill_pct(30.0, 0.0, 120.0) - 25.0).abs() < 1e-9);
+    assert!((range_fill_pct(0.5, 0.5, 3.0) - 0.0).abs() < 1e-9);
+    assert!((range_fill_pct(1.75, 0.5, 3.0) - 50.0).abs() < 1e-9);
+    assert!((range_fill_pct(3.0, 0.5, 3.0) - 100.0).abs() < 1e-9);
+}
+
+#[test]
+fn range_fill_pct_clamps_outside_the_bounds() {
+    assert_eq!(range_fill_pct(-10.0, 0.0, 120.0), 0.0);
+    assert_eq!(range_fill_pct(500.0, 0.0, 120.0), 100.0);
+}
+
+#[test]
+fn range_fill_pct_is_zero_when_the_stop_would_be_nan() {
+    // A gradient stop of `NaN%` drops the whole declaration, so a book whose
+    // duration hasn't resolved renders an empty track rather than no track.
+    assert_eq!(range_fill_pct(10.0, 0.0, 0.0), 0.0);
+    assert_eq!(range_fill_pct(10.0, 5.0, 1.0), 0.0);
+    assert_eq!(range_fill_pct(f64::NAN, 0.0, 120.0), 0.0);
+    assert_eq!(range_fill_pct(10.0, 0.0, f64::INFINITY), 0.0);
 }

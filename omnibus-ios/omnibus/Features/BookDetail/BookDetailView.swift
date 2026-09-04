@@ -475,7 +475,7 @@ struct BookDetailView: View {
     /// book's controls match the plate it is showing.
     private var bookPalette: Palette {
         guard let book = model.book else { return palette }
-        return palette.accented(by: CoverIdentity(book).tone)
+        return palette.accented(byCoverOf: book)
     }
 
     /// Open the player on the file the picker chose, once its sheet is gone.
