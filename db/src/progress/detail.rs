@@ -351,10 +351,9 @@ fn chapter_at(
     let found = chapters
         .iter()
         .filter(|c| c.start_chars <= absolute)
-        .max_by_key(|c| (c.start_chars, std::cmp::Reverse(c.ordinal)))
-        // A position before the first TOC entry (front matter) still sits in
-        // the book; name nothing rather than the first chapter.
-        .or(None);
+        // A position before every TOC entry (front matter) matches nothing
+        // here, which is the intent: name no chapter rather than the first.
+        .max_by_key(|c| (c.start_chars, std::cmp::Reverse(c.ordinal)));
     let confidence = if sharing_spine > 1 {
         PositionConfidence::Approximate
     } else {

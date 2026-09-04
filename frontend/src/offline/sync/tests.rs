@@ -219,10 +219,6 @@ async fn mock_server() -> String {
                         status: input.status,
                         client_id: input.client_id,
                         created_at: 444,
-                        created_at_iso: None,
-                        spine_index: None,
-                        chapter_title: None,
-                        percent_through_book: None,
                         updated_at: 444,
                     })
                 },
@@ -245,10 +241,6 @@ async fn mock_server() -> String {
                         status: input.status.unwrap_or_default(),
                         client_id: None,
                         created_at: 444,
-                        created_at_iso: None,
-                        spine_index: None,
-                        chapter_title: None,
-                        percent_through_book: None,
                         updated_at: 555,
                     })
                 },
@@ -354,8 +346,6 @@ fn progress_op(uuid: &str) -> Op {
             kobo_location: None,
             book_file_id: None,
             client_updated_at: None,
-            updated_at_iso: None,
-            client_updated_at_iso: None,
         },
         captured_at: 100,
     }
@@ -873,10 +863,6 @@ async fn drain_remaps_temp_journal_id_after_create() {
             status: omnibus_shared::JournalStatus::Published,
             client_id: None,
             created_at: 100,
-            created_at_iso: None,
-            spine_index: None,
-            chapter_title: None,
-            percent_through_book: None,
             updated_at: 100,
         }],
     );

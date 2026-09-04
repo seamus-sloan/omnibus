@@ -94,7 +94,11 @@ pub async fn search_content_for_paths(
                               AND bf.format = 'EPUB' COLLATE NOCASE
                             ORDER BY bf.ordinal LIMIT 1)
                    AND ec.spine_index <= c.spine_index
-                 ORDER BY ec.spine_index DESC, ec.ordinal DESC
+                 -- Highest spine index at or before the hit, then the FIRST
+                 -- chapter at it: several TOC entries can share one spine
+                 -- document, and naming the one it opens with is the only
+                 -- claim the data supports. Matches `detail::chapter_at`.
+                 ORDER BY ec.spine_index DESC, ec.ordinal ASC
                  LIMIT 1)                            AS chapter_title
         FROM book_content_fts
         JOIN book_content_chapters c ON c.id = book_content_fts.rowid
@@ -243,28 +247,68 @@ pub async fn annotate_spoilers(
 }
 
 /// The reader's furthest recorded position in a book, as a whole-book
-/// percent. `None` when they have no position there, or when none of their
-/// positions can be placed.
+/// percent. `None` when they have no position there, or when no position
+/// they do have can be placed.
+///
+/// Deliberately **not** `progress::book_progress`: that resolves an EPUB
+/// position by opening the book and walking a spine document, and this runs
+/// once per distinct book in a hit list of up to 50 — on the default search
+/// path. Sub-percent precision buys nothing against a hit placed at its
+/// chapter's start, so the cheap figures are the right ones: the stored
+/// percent for reading, seconds over runtime for listening.
+///
+/// A reading row with no stored percent yields `None` rather than a guess.
+/// `progress::spawn_epub_percent_derivation` fills that column off the
+/// request path, so it is normally present; when it is not, "can't tell" is
+/// the honest answer and `Exclude` withholds on it.
 async fn reader_position_percent(
     pool: &SqlitePool,
     user_id: i64,
     book_uuid: &str,
 ) -> Result<Option<f64>, ContentFtsError> {
-    let progress = crate::progress::book_progress(pool, user_id, book_uuid, None)
+    let Some(canonical) = crate::resolve_canonical_book_uuid(pool, book_uuid)
         .await
-        .map_err(|e| match e {
-            crate::progress::ProgressError::Sqlx(inner) => ContentFtsError::Db(inner),
-            // The uuid came out of a hit row, so the book exists; fold the
-            // unreachable variant rather than panicking.
-            crate::progress::ProgressError::BookNotFound => {
-                ContentFtsError::Db(sqlx::Error::RowNotFound)
+        .map_err(books_error)?
+    else {
+        return Ok(None);
+    };
+    let rows = sqlx::query(
+        "SELECT format, progress_percent, audio_position_seconds
+         FROM reading_progress WHERE user_id = ? AND book_uuid = ?",
+    )
+    .bind(user_id)
+    .bind(&canonical)
+    .fetch_all(pool)
+    .await?;
+
+    let mut furthest: Option<f64> = None;
+    for row in rows {
+        let format: String = row.try_get("format")?;
+        let percent = if format == "audio" {
+            let seconds: Option<f64> = row.try_get("audio_position_seconds")?;
+            match (
+                seconds,
+                crate::hls::book_runtime_seconds(pool, &canonical)
+                    .await
+                    .map_err(|e| match e {
+                        crate::hls::HlsError::Db(inner) => ContentFtsError::Db(inner),
+                    })?,
+            ) {
+                (Some(seconds), Some(total)) if total > 0.0 => {
+                    Some((seconds / total * 100.0).clamp(0.0, 100.0))
+                }
+                _ => None,
             }
-        })?;
-    Ok(progress
-        .records
-        .iter()
-        .filter_map(|d| d.resolved.percent_through_book)
-        .max_by(f64::total_cmp))
+        } else {
+            row.try_get::<Option<i64>, _>("progress_percent")?
+                .filter(|p| (0..=100).contains(p))
+                .map(|p| p as f64)
+        };
+        if let Some(percent) = percent {
+            furthest = Some(furthest.map_or(percent, |f: f64| f.max(percent)));
+        }
+    }
+    Ok(furthest)
 }
 
 /// Each spine document's start as a whole-book percent, from the stored

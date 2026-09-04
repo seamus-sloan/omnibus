@@ -55,6 +55,27 @@ fn locate_places_a_point_cfi_by_its_spine_step() {
 }
 
 #[test]
+fn locate_names_the_chapter_a_shared_spine_document_opens_with() {
+    // Two TOC entries in one spine document: only the first is defensible,
+    // and every surface that places an anchor must agree on which.
+    let mut index = index();
+    index.chapters.push(EbookChapterRow {
+        ordinal: 2,
+        title: "Two-and-a-half".into(),
+        href: "b.xhtml".into(),
+        spine_index: 1,
+        start_chars: 100,
+    });
+    assert_eq!(
+        index
+            .locate("epubcfi(/6/4!/4/2/1:0)")
+            .chapter_title
+            .as_deref(),
+        Some("Two")
+    );
+}
+
+#[test]
 fn locate_places_a_range_cfi_the_same_way_a_highlight_carries_one() {
     let placed = index().locate("epubcfi(/6/6!/4,/2/1:0,/2/1:9)");
     assert_eq!(placed.spine_index, Some(2));

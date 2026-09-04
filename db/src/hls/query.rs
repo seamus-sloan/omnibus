@@ -106,6 +106,21 @@ pub async fn get_parts(pool: &SqlitePool, book_file_id: i64) -> Result<Vec<HlsPa
         .collect())
 }
 
+/// Whole-book runtime in seconds, summed over the first audio file's parts.
+/// `None` for a book with no audio, and for one whose parts sum to nothing —
+/// both mean "no runtime to divide by", which every caller treats alike.
+pub async fn book_runtime_seconds(
+    pool: &SqlitePool,
+    book_uuid: &str,
+) -> Result<Option<f64>, HlsError> {
+    let Some(resolved) = resolve_audiobook(pool, book_uuid).await? else {
+        return Ok(None);
+    };
+    let parts = get_parts(pool, resolved.book_file_id).await?;
+    let total: f64 = parts.iter().map(|p| p.duration_seconds).sum();
+    Ok((total > 0.0).then_some(total))
+}
+
 /// Fetch chapter markers for a `book_file_id`. Always returns at least one
 /// row because the sync layer writes synthetic chapters when none are
 /// extracted from the container.

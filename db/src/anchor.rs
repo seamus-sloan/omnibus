@@ -102,7 +102,11 @@ impl AnchorIndex {
         else {
             return Ok(index);
         };
-        index.audio_seconds = audio_runtime(pool, &canonical).await?;
+        index.audio_seconds = crate::hls::book_runtime_seconds(pool, &canonical)
+            .await
+            .map_err(|e| match e {
+                crate::hls::HlsError::Db(inner) => AnchorError::Sqlx(inner),
+            })?;
 
         let Some(book_id) = crate::resolve_book_id_by_uuid(pool, &canonical)
             .await
@@ -160,11 +164,16 @@ impl AnchorIndex {
         });
         AnchorPlacement {
             spine_index: Some(spine_index),
+            // Highest spine index at or before the anchor, then the FIRST
+            // chapter at it — several TOC entries can share one spine
+            // document, and only the one it opens with is defensible.
+            // Matches `progress::detail::chapter_at` and the content-search
+            // citation, so all three name the same chapter.
             chapter_title: self
                 .chapters
                 .iter()
                 .filter(|c| c.spine_index <= spine_index)
-                .max_by_key(|c| (c.spine_index, c.ordinal))
+                .max_by_key(|c| (c.spine_index, std::cmp::Reverse(c.ordinal)))
                 .map(|c| c.title.clone()),
             percent_through_book: percent,
         }
@@ -178,26 +187,6 @@ fn spine_index_of(anchor: &str) -> Option<i64> {
         .map(|c| c.spine_index)
         .or_else(|| crate::kobo_position::cfi::parse_range_cfi(anchor).map(|r| r.spine_index))
         .and_then(|idx| i64::try_from(idx).ok())
-}
-
-/// Whole-book audio runtime for a book, summed over the first audio file's
-/// parts. `None` when the book has no audio.
-async fn audio_runtime(pool: &SqlitePool, book_uuid: &str) -> Result<Option<f64>, AnchorError> {
-    let Some(resolved) = crate::hls::resolve_audiobook(pool, book_uuid)
-        .await
-        .map_err(|e| match e {
-            crate::hls::HlsError::Db(inner) => AnchorError::Sqlx(inner),
-        })?
-    else {
-        return Ok(None);
-    };
-    let parts = crate::hls::get_parts(pool, resolved.book_file_id)
-        .await
-        .map_err(|e| match e {
-            crate::hls::HlsError::Db(inner) => AnchorError::Sqlx(inner),
-        })?;
-    let total: f64 = parts.iter().map(|p| p.duration_seconds).sum();
-    Ok((total > 0.0).then_some(total))
 }
 
 /// Narrow a `BooksError` into this module's error space.

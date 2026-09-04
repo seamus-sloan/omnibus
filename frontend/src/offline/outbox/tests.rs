@@ -712,10 +712,6 @@ async fn journal_remapped_replaces_the_temp_record_with_the_server_copy() {
         progress: None,
         status: omnibus_shared::JournalStatus::Published,
         created_at: 1,
-        created_at_iso: None,
-        spine_index: None,
-        chapter_title: None,
-        percent_through_book: None,
         updated_at: 1,
         client_id: None,
     };
