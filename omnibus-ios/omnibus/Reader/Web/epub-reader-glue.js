@@ -122,6 +122,8 @@
   // otherwise leave the last line of prose clipped behind stale pagination.
   var stageResizeObserver = null;
   var stageResizeTimer = null;
+  // Backstop timer for scheduleAnnotationRepaint(); see repaintAnnotations.
+  var annotationRepaintTimer = null;
   // Live host-drawn selection, or null. See the selection engine below.
   var sel = null;
   var selEmitRaf = 0;
@@ -147,6 +149,10 @@
     if (stageResizeTimer) {
       clearTimeout(stageResizeTimer);
       stageResizeTimer = null;
+    }
+    if (annotationRepaintTimer) {
+      clearTimeout(annotationRepaintTimer);
+      annotationRepaintTimer = null;
     }
     if (resizeCorrectionTimer) {
       clearTimeout(resizeCorrectionTimer);
@@ -306,6 +312,9 @@
         } catch (e) {
           /* ignore resize races during teardown */
         }
+        // A height-only change (the audio dock) can keep the column count,
+        // which is exactly the reflow epub.js does not reframe marks for.
+        scheduleAnnotationRepaint();
       }, 120);
     });
     stageResizeObserver.observe(el);
@@ -895,6 +904,14 @@
       }
 
       applyThemeColors(doc);
+
+      // Webfont activation reflows the prose without changing the section's
+      // quantized width, so epub.js never reframes — repaint the marks once
+      // the section's fonts settle or highlights sit where the fallback-font
+      // text used to be.
+      if (doc.fonts && doc.fonts.ready && doc.fonts.ready.then) {
+        doc.fonts.ready.then(scheduleAnnotationRepaint, function () {});
+      }
 
       // Reader baseline / override layer. The split mirrors Apple Books and
       // Kindle: the reading system owns colour (and font, size, spacing,
@@ -1891,6 +1908,7 @@
     rendition.themes.fontSize(px + "px");
     currentFontSize = px;
     applyMarkStyles();
+    scheduleAnnotationRepaint();
   }
 
   // Paint the *host* document the same ground as the page.
@@ -1925,6 +1943,7 @@
   function setFont(family) {
     if (!rendition) return;
     rendition.themes.font(family);
+    scheduleAnnotationRepaint();
   }
 
   function setLineHeight(value) {
@@ -1932,17 +1951,20 @@
     rendition.themes.override("line-height", value);
     currentLineHeight = Number(value) || currentLineHeight;
     applyMarkStyles();
+    scheduleAnnotationRepaint();
   }
 
   function setMargins(maxWidth) {
     if (!rendition) return;
     rendition.themes.override("max-width", maxWidth);
     rendition.themes.override("margin", "0 auto");
+    scheduleAnnotationRepaint();
   }
 
   function setJustify(on) {
     if (!rendition) return;
     rendition.themes.override("text-align", on ? "justify" : "start");
+    scheduleAnnotationRepaint();
   }
 
   // Single vs two-page spread. "none" forces one column; "auto" lets epub.js
@@ -1954,6 +1976,43 @@
     } catch (e) {
       /* older epub.js builds may not expose spread() */
     }
+    scheduleAnnotationRepaint();
+  }
+
+  // Re-render every attached view's marks pane from live range rects.
+  // epub.js only repaints marks inside a view reframe, and expand() skips
+  // the reframe whenever a reflow lands on the same quantized column count —
+  // so a font-size step (or webfont swap) that keeps the page count leaves
+  // every highlight frozen at the previous layout's pixel rects. Ported from
+  // the web fork (frontend/assets/vendor/epub-reader-glue.js); `applyMarkStyles`
+  // restyles marks but never re-measures them, so it is not a substitute.
+  function repaintAnnotations() {
+    if (!rendition || !rendition.manager || !rendition.manager.views) return;
+    var views = rendition.manager.views;
+    var all = typeof views.all === "function" ? views.all() : [];
+    for (var i = 0; i < all.length; i++) {
+      var pane = all[i] && all[i].pane;
+      if (!pane) continue;
+      try {
+        pane.render();
+      } catch (e) {
+        /* view mid-teardown */
+      }
+    }
+  }
+
+  // Repaint once the pending reflow has settled: after the next paint
+  // (double rAF), plus a timer backstop for settles the frame pass runs
+  // ahead of (webfont activation, epub.js's own debounced expand).
+  function scheduleAnnotationRepaint() {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(repaintAnnotations);
+    });
+    if (annotationRepaintTimer) clearTimeout(annotationRepaintTimer);
+    annotationRepaintTimer = setTimeout(function () {
+      annotationRepaintTimer = null;
+      repaintAnnotations();
+    }, 450);
   }
 
   // How a mark is drawn, as one host-document rule.

@@ -1,8 +1,7 @@
 //! Materialize the side tables an override touches so downstream reads still
 //! resolve: a series-name override gets a canonical row plus link, while
-//! subjects (tags) and genres get a vocabulary row only — their memberships
-//! stay override-JSON-side (see [`materialize_tag_rows`]). The author override
-//! path replaces its m2m list at read time and needs no helper here.
+//! subjects (tags), genres and creators (authors) get a vocabulary row only —
+//! their memberships stay override-JSON-side (see [`materialize_tag_rows`]).
 
 use std::collections::HashSet;
 
@@ -110,6 +109,51 @@ pub(super) async fn materialize_genre_rows(
         return Ok(());
     };
     insert_vocabulary_rows(conn, VocabularyTable::Genres, genres).await
+}
+
+/// When an override sets a creators list, ensure an `authors` row exists for
+/// every name in it. Every read resolves override creators **by name** —
+/// `backfill_creator_ids`, `list_authors`' override arm, the effective-author
+/// CTE — so a name that lived only in override JSON had no id, no author page
+/// and no `/api/authors` entry: an inert, link-coloured byline (#2235, #2343).
+///
+/// Rows-only, like [`materialize_tag_rows`] and for the same reason: the
+/// `books_authors_link` table is the sole record of a book's *scanned*
+/// creators, which revert-to-scanned depends on. `delete_orphan_authors`
+/// counts override memberships too, so the row lives exactly as long as a
+/// canonical link or a live book's override still names it. The override's
+/// `file_as` seeds `sort` when the row is new; an existing row keeps its own.
+pub(super) async fn materialize_author_rows(
+    conn: &mut SqliteConnection,
+    overrides: &MetadataOverrides,
+) -> Result<(), sqlx::Error> {
+    let Some(creators) = overrides.creators.as_ref() else {
+        return Ok(());
+    };
+    let mut seen: HashSet<String> = HashSet::new();
+    let rows: Vec<(&str, Option<&str>)> = creators
+        .iter()
+        .map(|c| {
+            let sort = c
+                .file_as
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            (c.name.trim(), sort)
+        })
+        .filter(|(name, _)| !name.is_empty())
+        .filter(|(name, _)| seen.insert(name.to_ascii_lowercase()))
+        .collect();
+
+    for chunk in rows.chunks(INSERT_CHUNK) {
+        let mut qb = QueryBuilder::new("INSERT OR IGNORE INTO authors (name, sort) ");
+        qb.push_values(chunk, |mut b, (name, sort)| {
+            b.push_bind(*name);
+            b.push_bind(*sort);
+        });
+        qb.build().execute(&mut *conn).await?;
+    }
+    Ok(())
 }
 
 /// `INSERT OR IGNORE` every name in `names` into a single-column vocabulary

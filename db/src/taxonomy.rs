@@ -120,7 +120,6 @@ pub(crate) async fn delete_orphan_taxonomy(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
 ) -> Result<(), sqlx::Error> {
     for (table, link, col) in [
-        ("authors", "books_authors_link", "author"),
         ("series", "books_series_link", "series"),
         ("publishers", "books_publishers_link", "publisher"),
         ("languages", "books_languages_link", "language"),
@@ -131,8 +130,37 @@ pub(crate) async fn delete_orphan_taxonomy(
         );
         sqlx::query(&sql).execute(&mut **tx).await?;
     }
+    delete_orphan_authors(tx).await?;
     delete_orphan_tags(tx).await?;
     delete_orphan_genres(tx).await
+}
+
+/// Delete `authors` rows with no book left to justify them: no canonical
+/// `books_authors_link` row **and** no creators-override membership on a live
+/// book. The second clause is the authors twin of [`delete_orphan_tags`]'s:
+/// `materialize_author_rows` creates rows-only for override creators, so a
+/// link-only check would reap the row every read resolves those creators by
+/// name (#2235). Called from [`delete_orphan_taxonomy`] and directly from the
+/// override write paths, which can orphan an override-only author without
+/// touching a link row (a creators replacement, or an override delete).
+pub(crate) async fn delete_orphan_authors(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM authors
+          WHERE NOT EXISTS (SELECT 1 FROM books_authors_link WHERE author = authors.id)
+            AND NOT EXISTS (
+              SELECT 1
+                FROM books b
+                JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+                JOIN json_each(mo.overrides, '$.creators') je
+               WHERE json_type(mo.overrides, '$.creators') IS NOT NULL
+                 AND json_extract(je.value, '$.name') = authors.name COLLATE NOCASE
+            )",
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// Delete `tags` rows with no book left to justify them: no canonical

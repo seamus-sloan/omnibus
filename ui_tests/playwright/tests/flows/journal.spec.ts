@@ -1,3 +1,4 @@
+import type { Locator } from "@playwright/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
@@ -583,6 +584,52 @@ test("hides markdown markers on lines away from the caret", async ({
   await expect(editorMarkdown(page)).toHaveValue(
     "# Heading line\n**bold line**",
   );
+
+  await cancelComposerDiscardingDraft(page);
+});
+
+// A faded list marker leaves nothing behind, so the wrapper paints a
+// substitute bullet over it on every line but the caret's (#2367).
+const bulletOf = (line: Locator) =>
+  line
+    .locator(".cm-list, .cm-task")
+    .first()
+    .evaluate((el) => getComputedStyle(el, "::before").content);
+
+test("keeps a list bullet visible on lines away from the caret", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  await page.getByTestId("journal-open-composer").click();
+  const ed = editor(page);
+  await ed.click();
+  await ed.pressSequentially("- bulleted line");
+  await ed.press("Enter");
+  await ed.pressSequentially("- [x] done line");
+  await ed.press("Enter");
+  await ed.pressSequentially("plain line");
+
+  const lines = editor(page).locator(".cm-line");
+  await expect(lines).toHaveCount(3);
+
+  // Caret on the plain line: both list lines show their substitute, while the
+  // raw markers stay in the text (the mirrored markdown is untouched).
+  await lines.nth(2).click();
+  await expect(lines.nth(2)).toHaveClass(/cm-active/);
+  await expect.poll(() => bulletOf(lines.nth(0))).toBe('"•"');
+  await expect.poll(() => bulletOf(lines.nth(1))).toBe('"☑"');
+  await expect(editorMarkdown(page)).toHaveValue(
+    "- bulleted line\n- [x] done line\nplain line",
+  );
+
+  // On the caret's own line the overlay yields to the raw marker.
+  await lines.nth(0).click();
+  await expect(lines.nth(0)).toHaveClass(/cm-active/);
+  await expect.poll(() => bulletOf(lines.nth(0))).toBe("none");
+  await expect.poll(() => bulletOf(lines.nth(1))).toBe('"☑"');
 
   await cancelComposerDiscardingDraft(page);
 });

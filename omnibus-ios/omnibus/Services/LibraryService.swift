@@ -37,6 +37,36 @@ enum SortDirection: String, Codable, Sendable {
     var toggled: SortDirection { self == .asc ? .desc : .asc }
 }
 
+/// The library's chosen sort, kept in `UserDefaults` so it survives a relaunch
+/// rather than living only as long as the `LibraryModel` that holds it (#2347).
+///
+/// Stored as two raw strings rather than one blob, and decoded per field, so a
+/// key a later build renames costs the reader that one choice, not both.
+struct LibrarySortPreference: Equatable, Sendable {
+    var sort: SortKey = .newestAdded
+    var direction: SortDirection = .desc
+
+    static let sortKey = "omnibus.library.sort"
+    static let directionKey = "omnibus.library.sortDirection"
+
+    static func load(from defaults: UserDefaults = .standard) -> LibrarySortPreference {
+        var pref = LibrarySortPreference()
+        if let raw = defaults.string(forKey: sortKey), let sort = SortKey(rawValue: raw) {
+            pref.sort = sort
+        }
+        if let raw = defaults.string(forKey: directionKey),
+           let direction = SortDirection(rawValue: raw) {
+            pref.direction = direction
+        }
+        return pref
+    }
+
+    func save(to defaults: UserDefaults = .standard) {
+        defaults.set(sort.rawValue, forKey: Self.sortKey)
+        defaults.set(direction.rawValue, forKey: Self.directionKey)
+    }
+}
+
 /// `Codable` because the first page is cached verbatim — the cursor included,
 /// so a replayed page can still scroll forward before the server answers.
 struct LibraryPageResult: Codable, Sendable {

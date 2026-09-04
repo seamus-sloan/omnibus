@@ -1363,6 +1363,24 @@ html, body { overscroll-behavior: none; }
 .cm-task .cm-mark { color: var(--accent); }
 .cm-line.cm-active .cm-list .cm-mark,
 .cm-line.cm-active .cm-task .cm-mark { opacity: 0.7; }
+/* A faded list marker leaves nothing behind (a faded `#` still leaves a
+   heading), so the wrapper paints a substitute — `data-bullet`, set by
+   `journal_editor.js` — over the marker's box. Overlaid, never in flow: the
+   raw characters keep their geometry for the caret-by-offset math, and the
+   overlay yields to the caret's line so the marker is editable there. */
+.cm-list,
+.cm-task { position: relative; }
+.cm-list::before,
+.cm-task::before {
+  content: attr(data-bullet);
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--accent);
+  pointer-events: none;
+}
+.cm-line.cm-active .cm-list::before,
+.cm-line.cm-active .cm-task::before { content: none; }
 .cm-link { color: var(--accent); }
 .cm-spoiler {
   background: color-mix(in oklch, var(--accent) 14%, transparent);

@@ -14,7 +14,9 @@ use crate::normalize::{normalize_author, normalize_title};
 use crate::sync::upsert_fts;
 
 use super::fts::rebuild_fts_for_book;
-use super::links::{materialize_genre_rows, materialize_series_link, materialize_tag_rows};
+use super::links::{
+    materialize_author_rows, materialize_genre_rows, materialize_series_link, materialize_tag_rows,
+};
 
 mod cover;
 mod merge;
@@ -307,11 +309,13 @@ pub(crate) async fn upsert_one_in_tx(
     materialize_series_link(tx, book_uuid, overrides).await?;
     materialize_tag_rows(tx, overrides).await?;
     materialize_genre_rows(tx, overrides).await?;
+    materialize_author_rows(tx, overrides).await?;
     touch_book_last_modified(tx, book_uuid).await?;
     // A subjects replacement may have dropped a tag's last membership — reap
     // orphans in the same tx so no surface ever serves a bookless tag.
     crate::taxonomy::delete_orphan_tags(tx).await?;
     crate::taxonomy::delete_orphan_genres(tx).await?;
+    crate::taxonomy::delete_orphan_authors(tx).await?;
     Ok(())
 }
 
@@ -411,6 +415,7 @@ pub(crate) async fn delete_one_in_tx(
     // tags that existed only through it are now orphans.
     crate::taxonomy::delete_orphan_tags(tx).await?;
     crate::taxonomy::delete_orphan_genres(tx).await?;
+    crate::taxonomy::delete_orphan_authors(tx).await?;
     Ok(book_id)
 }
 

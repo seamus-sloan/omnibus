@@ -138,11 +138,17 @@ if (!window.OmnibusJournalEditor) {
       if ((m = /^>\s/.exec(line))) {
         return `<span class="cm-quote">${mark(m[0])}${inline(line.slice(m[0].length))}</span>`;
       }
-      if ((m = /^- \[[ xX]\]\s/.exec(line))) {
-        return `<span class="cm-task">${mark(m[0])}${inline(line.slice(m[0].length))}</span>`;
+      // List markers have no visual substitute once faded (a hidden `#` still
+      // leaves a heading), so the wrapper carries the glyph CSS paints over the
+      // marker's box via `data-bullet` — an attribute, never extra text, so
+      // textContent stays equal to the source.
+      if ((m = /^- \[([ xX])\]\s/.exec(line))) {
+        const bullet = m[1] === " " ? "☐" : "☑";
+        return `<span class="cm-task" data-bullet="${bullet}">${mark(m[0])}${inline(line.slice(m[0].length))}</span>`;
       }
       if ((m = /^(\s*)([-*]|\d+\.)\s/.exec(line))) {
-        return `${esc(m[1])}<span class="cm-list">${mark(m[2] + " ")}</span>${inline(line.slice(m[0].length))}`;
+        const bullet = /^\d/.test(m[2]) ? m[2] : "•";
+        return `${esc(m[1])}<span class="cm-list" data-bullet="${esc(bullet)}">${mark(m[2] + " ")}</span>${inline(line.slice(m[0].length))}`;
       }
       return inline(line);
     }
