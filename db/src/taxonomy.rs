@@ -140,7 +140,7 @@ pub(crate) async fn delete_orphan_taxonomy(
 /// book. The second clause is the authors twin of [`delete_orphan_tags`]'s:
 /// `materialize_author_rows` creates rows-only for override creators, so a
 /// link-only check would reap the row every read resolves those creators by
-/// (#2235). Called from [`delete_orphan_taxonomy`] and directly from the
+/// name (#2235). Called from [`delete_orphan_taxonomy`] and directly from the
 /// override write paths, which can orphan an override-only author without
 /// touching a link row (a creators replacement, or an override delete).
 pub(crate) async fn delete_orphan_authors(
