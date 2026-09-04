@@ -203,19 +203,3 @@ test("clicking a non-linked area of a series book card navigates to the book", a
 
   await expect(page).toHaveURL(/\/books\/[^/]+$/);
 });
-
-// ---------------------------------------------------------------------------
-// Retired tag cloud page (#2157)
-// ---------------------------------------------------------------------------
-
-// `/tags` was a real route long enough for a reader to have bookmarked it, so
-// the catch-all — not a router diagnostic — is what it has to land on now.
-test("the retired tag cloud route falls through to not-found", async ({
-  page,
-}) => {
-  await gotoReady(page, "/tags");
-
-  const body = page.getByTestId("not-found-page");
-  await expect(body).toBeVisible();
-  await expect(body).toContainText("/tags");
-});

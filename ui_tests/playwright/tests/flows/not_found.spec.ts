@@ -17,6 +17,18 @@ test("renders the not-found layout for an unmatched path", async ({ page }) => {
   await expect(body).toContainText("/add");
 });
 
+// `/tags` (the tag cloud, #2157) was a real route long enough for a reader to
+// have bookmarked it. Probed by name rather than left to the `/add` case above:
+// only a retired route catches a later `#[route("/tags")]` re-declared above the
+// catch-all, which an arbitrary unmatched path would still pass through.
+test("a retired route falls through to not-found", async ({ page }) => {
+  await gotoReady(page, "/tags");
+
+  const body = page.getByTestId("not-found-page");
+  await expect(body).toBeVisible();
+  await expect(body).toContainText("/tags");
+});
+
 test("never publishes the internal route table to a mistyped URL", async ({
   page,
 }) => {
