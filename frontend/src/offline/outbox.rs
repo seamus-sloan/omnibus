@@ -302,6 +302,8 @@ pub(crate) async fn queue_save_progress(update: &ProgressUpdate) -> Option<Progr
         // #1362) — the update's own client event time when it sent one,
         // else "now".
         client_updated_at,
+        updated_at_iso: None,
+        client_updated_at_iso: None,
     };
     let queued = enqueue(Op::SaveProgress {
         update: update.clone(),
@@ -631,10 +633,6 @@ pub(crate) async fn queue_create_journal(input: &CreateJournalEntry) -> Option<J
         status: input.status,
         client_id: None,
         created_at: now,
-        created_at_iso: None,
-        spine_index: None,
-        chapter_title: None,
-        percent_through_book: None,
         updated_at: now,
     };
     let queued = enqueue(Op::CreateJournal {

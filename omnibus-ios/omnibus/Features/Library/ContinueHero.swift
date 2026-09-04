@@ -296,8 +296,16 @@ private struct HeroCard: View {
 
     private var positionLabel: String {
         if isAudio {
-            if let chapter = point.chapterNumber, let count = point.chapterCount {
+            // Chapter vocabulary only when the container named its chapters.
+            // The audio part figures are container marks — a 65-chapter book
+            // stored as a 4-part M4B reports "4 of 4", which reads as
+            // finished — so those get "Part" instead.
+            if let chapter = point.resolved?.chapterOrdinal,
+               let count = point.resolved?.chaptersTotal {
                 return "Chapter \(chapter) of \(count)"
+            }
+            if let part = point.audioPart, let count = point.audioPartCount {
+                return "Part \(part) of \(count)"
             }
             if let total = point.totalDurationSeconds,
                let position = point.record.audioPositionSeconds {

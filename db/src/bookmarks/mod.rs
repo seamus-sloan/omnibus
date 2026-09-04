@@ -127,10 +127,8 @@ pub async fn list_bookmarks(
     .fetch_all(pool)
     .await?;
 
-    let mut bookmarks: Vec<Bookmark> = rows
-        .iter()
-        .map(row_to_bookmark)
-        .collect::<Result<_, _>>()?;
+    let mut bookmarks: Vec<Bookmark> =
+        rows.iter().map(row_to_bookmark).collect::<Result<_, _>>()?;
     let index = AnchorIndex::load(pool, &canonical).await?;
     for b in &mut bookmarks {
         let placed = index.locate(&b.position);
@@ -145,7 +143,7 @@ pub async fn list_bookmarks(
         // fallback for a CFI in a book whose stats were never extracted, and
         // the two cases are mutually exclusive — both figures come from the
         // same stored stats.
-        bookmarks.sort_by(|a, b| bookmark_order_key(a).cmp(&bookmark_order_key(b)));
+        bookmarks.sort_by_key(bookmark_order_key);
     }
     Ok(bookmarks)
 }

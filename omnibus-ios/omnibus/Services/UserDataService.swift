@@ -28,10 +28,12 @@ enum UserDataService {
         uuid: String, format: ProgressFormat
     ) -> AsyncThrowingStream<CacheRead<ProgressRecord?>, Error> {
         Cache.live(CacheKey.progress(uuid, format)) {
-            let record: ProgressRecord? = try await APIClient.shared.get(
+            // The endpoint answers an envelope carrying every format's
+            // position; `format` narrows it to the one this call asked for.
+            let progress: BookProgress = try await APIClient.shared.get(
                 "/api/progress/\(uuid)", query: ["format": format.rawValue]
             )
-            return record
+            return progress.record(for: format)
         }
     }
 
@@ -183,7 +185,7 @@ enum UserDataService {
             guard let book else { return nil }
             point = ResumePoint(
                 record: record, book: book, totalDurationSeconds: nil,
-                chapterNumber: nil, chapterCount: nil
+                audioPart: nil, audioPartCount: nil, resolved: nil
             )
         }
         points.insert(point, at: 0)

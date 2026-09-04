@@ -694,7 +694,9 @@ async fn api_get_search_content_hints_when_a_multi_term_query_matches_nothing() 
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let results: omnibus_shared::ContentSearchResults = serde_json::from_slice(&bytes).unwrap();
     assert!(results.hits.is_empty());
-    let hint = results.hint.expect("an empty multi-term search explains itself");
+    let hint = results
+        .hint
+        .expect("an empty multi-term search explains itself");
     assert!(
         hint.contains("lighthouse") && hint.contains("whiskey"),
         "the hint names the terms that matched on their own: {hint}"
@@ -709,10 +711,7 @@ async fn api_get_search_content_gives_no_hint_for_a_single_term_that_is_simply_a
     seed_content_chapter(&pool, "The lighthouse keeper counted the waves.").await;
 
     let response = app
-        .oneshot(get_with_bearer(
-            "/api/search/content?q=pangolin",
-            &token,
-        ))
+        .oneshot(get_with_bearer("/api/search/content?q=pangolin", &token))
         .await
         .expect("request should succeed");
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();

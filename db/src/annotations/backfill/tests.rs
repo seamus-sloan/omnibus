@@ -111,7 +111,9 @@ async fn backfill_kobo_annotation_cfis_derives_ranges_for_rows_missing_them() {
             unresolved: 0
         }
     );
-    let rows = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let rows = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(
         rows[0].epub_cfi_range.as_deref(),
         Some("epubcfi(/6/2!/4/2,/1:21,/1:45)")
@@ -138,7 +140,9 @@ async fn backfill_kobo_annotation_cfis_leaves_rows_unresolved_without_a_kepub_ca
             unresolved: 1
         }
     );
-    let rows = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let rows = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(rows[0].epub_cfi_range, None);
 }
 

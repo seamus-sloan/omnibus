@@ -84,7 +84,9 @@ async fn list_bookmarks_returns_empty_when_none_exist() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
     let (_, uuid) = seed(&pool, "/lib", "Book A").await;
-    let list = list_bookmarks(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let list = list_bookmarks(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert!(list.is_empty());
 }
 
@@ -107,18 +109,32 @@ async fn list_bookmarks_isolates_by_user_and_book() {
         .unwrap();
 
     assert_eq!(
-        list_bookmarks(&pool, alice, &uuid_a, AnnotationOrder::Chronological).await.unwrap().len(),
+        list_bookmarks(&pool, alice, &uuid_a, AnnotationOrder::Chronological)
+            .await
+            .unwrap()
+            .len(),
         1
     );
     assert_eq!(
-        list_bookmarks(&pool, alice, &uuid_b, AnnotationOrder::Chronological).await.unwrap().len(),
+        list_bookmarks(&pool, alice, &uuid_b, AnnotationOrder::Chronological)
+            .await
+            .unwrap()
+            .len(),
         1
     );
-    assert_eq!(list_bookmarks(&pool, bob, &uuid_a, AnnotationOrder::Chronological).await.unwrap().len(), 1);
-    assert!(list_bookmarks(&pool, bob, &uuid_b, AnnotationOrder::Chronological)
-        .await
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        list_bookmarks(&pool, bob, &uuid_a, AnnotationOrder::Chronological)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        list_bookmarks(&pool, bob, &uuid_b, AnnotationOrder::Chronological)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -134,11 +150,15 @@ async fn update_bookmark_sets_and_clears_title() {
     update_bookmark(&pool, user, b.id, Some("come back here"))
         .await
         .unwrap();
-    let list = list_bookmarks(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let list = list_bookmarks(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(list[0].title.as_deref(), Some("come back here"));
 
     update_bookmark(&pool, user, b.id, None).await.unwrap();
-    let list = list_bookmarks(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let list = list_bookmarks(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert!(list[0].title.is_none());
 }
 
@@ -166,7 +186,12 @@ async fn delete_bookmark_removes_row() {
         .await
         .unwrap();
     delete_bookmark(&pool, user, b.id).await.unwrap();
-    assert!(list_bookmarks(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap().is_empty());
+    assert!(
+        list_bookmarks(&pool, user, &uuid, AnnotationOrder::Chronological)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -212,7 +237,9 @@ async fn list_bookmarks_caps_response_at_hard_limit() {
     let over_cap = LIST_BOOKMARKS_LIMIT + 500;
     seed_bookmarks_raw(&pool, user, &uuid, over_cap).await;
 
-    let list = list_bookmarks(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let list = list_bookmarks(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(
         list.len() as i64,
         LIST_BOOKMARKS_LIMIT,
@@ -304,7 +331,13 @@ async fn create_bookmark_is_idempotent_on_client_id() {
     let second = create_bookmark(&pool, user, &payload).await.unwrap();
 
     assert_eq!(first.id, second.id);
-    assert_eq!(list_bookmarks(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap().len(), 1);
+    assert_eq!(
+        list_bookmarks(&pool, user, &uuid, AnnotationOrder::Chronological)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]

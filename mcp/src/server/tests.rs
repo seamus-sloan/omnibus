@@ -13,7 +13,7 @@ use omnibus_shared::{
 use super::*;
 use crate::config::Config;
 use crate::tools::read::{
-    BookInclude, BookRef, GetBookParams, ListBooksParams, RecentProgressParams, Verbosity,
+    BookInclude, GetBookParams, ListBooksParams, RecentProgressParams, Verbosity,
 };
 use crate::tools::shelves::{
     AddBooksParams, CreateShelfParams, DeleteShelfParams, PreviewRuleParams, RemoveBookParams,

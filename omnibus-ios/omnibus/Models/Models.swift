@@ -551,12 +551,84 @@ extension ProgressUpdate {
     }
 }
 
+/// Where a stored position sits in the book, as the server resolved it.
+///
+/// Every field is optional and ``confidence`` says how much to trust them:
+/// `unknown` means nothing was derivable, and must not be read as position
+/// zero.
+struct ResolvedPosition: Codable, Sendable, Equatable {
+    var spineIndex: Int64?
+    var chapterTitle: String?
+    var chapterOrdinal: Int64?
+    var chaptersTotal: Int64?
+    var percentThroughChapter: Double?
+    var percentThroughBook: Double?
+    var confidence: String?
+
+    enum CodingKeys: String, CodingKey {
+        case spineIndex = "spine_index"
+        case chapterTitle = "chapter_title"
+        case chapterOrdinal = "chapter_ordinal"
+        case chaptersTotal = "chapters_total"
+        case percentThroughChapter = "percent_through_chapter"
+        case percentThroughBook = "percent_through_book"
+        case confidence
+    }
+}
+
+/// One format's position plus everything the server derived from it —
+/// an entry of ``BookProgress``.
+struct ProgressDetail: Codable, Sendable {
+    var record: ProgressRecord
+    var resolved: ResolvedPosition?
+    var totalDurationSeconds: Double?
+    var playbackRate: Double?
+    var audioPart: Int64?
+    var audioPartCount: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case record, resolved
+        case totalDurationSeconds = "total_duration_seconds"
+        case playbackRate = "playback_rate"
+        case audioPart = "audio_part"
+        case audioPartCount = "audio_part_count"
+    }
+}
+
+/// `GET /api/progress/{uuid}` — every format the reader has a position in,
+/// and which one is furthest through the book.
+struct BookProgress: Codable, Sendable {
+    var bookUUID: String
+    var records: [ProgressDetail]
+    var furthest: ProgressFormat?
+    var linked: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case bookUUID = "book_uuid"
+        case records, furthest, linked
+    }
+
+    /// The record for one format, or `nil` when the reader has never opened
+    /// the book that way.
+    func record(for format: ProgressFormat) -> ProgressRecord? {
+        records.first { $0.record.format == format }?.record
+    }
+}
+
 struct ResumePoint: Codable, Sendable, Identifiable {
     var record: ProgressRecord
     var book: Book
     var totalDurationSeconds: Double?
-    var chapterNumber: Int64?
-    var chapterCount: Int64?
+    /// 1-based **audio part** at the saved position — a container mark in the
+    /// resolved audiobook file, not a book chapter. A 65-chapter book stored
+    /// as a 4-part M4B reports 4, which read as a chapter number says "at the
+    /// end of the book". Book chapters live on ``resolved``.
+    var audioPart: Int64?
+    var audioPartCount: Int64?
+    /// Where the position sits, when the server could say cheaply — audio
+    /// rows only. Chapter vocabulary appears here only when the container
+    /// actually named its chapters.
+    var resolved: ResolvedPosition?
     /// The saved playback rate for this book's audio, so the hero's "left"
     /// readout can show the wall-clock wait. `nil` for epub rows, when no
     /// preference is saved (1x), and against older servers.
@@ -582,8 +654,9 @@ struct ResumePoint: Codable, Sendable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case record, book
         case totalDurationSeconds = "total_duration_seconds"
-        case chapterNumber = "chapter_number"
-        case chapterCount = "chapter_count"
+        case audioPart = "audio_part"
+        case audioPartCount = "audio_part_count"
+        case resolved
         case playbackRate = "playback_rate"
     }
 

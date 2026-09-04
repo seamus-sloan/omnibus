@@ -58,8 +58,10 @@ async function recentPoint(
       },
       book,
       total_duration_seconds: null,
-      chapter_number: null,
-      chapter_count: null,
+      // Container part marks, not book chapters — a 65-chapter book stored
+      // as a 4-part M4B reports 4 of 4 here.
+      audio_part: null,
+      audio_part_count: null,
     },
   };
 }

@@ -91,7 +91,9 @@ async fn list_highlights_returns_empty_when_none_exist() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
     let (_, uuid) = seed(&pool, "/lib", "Book A").await;
-    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert!(list.is_empty());
 }
 
@@ -121,13 +123,21 @@ async fn list_highlights_isolates_by_user_and_book() {
     create_highlight(&pool, alice, &input_b).await.unwrap();
     create_highlight(&pool, bob, &input_a).await.unwrap();
 
-    let alice_a = list_highlights(&pool, alice, &uuid_a, AnnotationOrder::Chronological).await.unwrap();
+    let alice_a = list_highlights(&pool, alice, &uuid_a, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(alice_a.len(), 1);
-    let alice_b = list_highlights(&pool, alice, &uuid_b, AnnotationOrder::Chronological).await.unwrap();
+    let alice_b = list_highlights(&pool, alice, &uuid_b, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(alice_b.len(), 1);
-    let bob_a = list_highlights(&pool, bob, &uuid_a, AnnotationOrder::Chronological).await.unwrap();
+    let bob_a = list_highlights(&pool, bob, &uuid_a, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(bob_a.len(), 1);
-    let bob_b = list_highlights(&pool, bob, &uuid_b, AnnotationOrder::Chronological).await.unwrap();
+    let bob_b = list_highlights(&pool, bob, &uuid_b, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert!(bob_b.is_empty());
 }
 
@@ -153,7 +163,9 @@ async fn update_highlight_color_changes_color() {
     update_highlight_color(&pool, user, h.id, HighlightColor::Violet)
         .await
         .unwrap();
-    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(list[0].color, HighlightColor::Violet);
 }
 
@@ -206,13 +218,17 @@ async fn update_highlight_note_sets_and_clears() {
     update_highlight_note(&pool, user, h.id, Some("important passage"))
         .await
         .unwrap();
-    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(list[0].note.as_deref(), Some("important passage"));
 
     update_highlight_note(&pool, user, h.id, None)
         .await
         .unwrap();
-    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert!(list[0].note.is_none());
 }
 
@@ -236,7 +252,9 @@ async fn delete_highlight_removes_row() {
     .unwrap();
 
     delete_highlight(&pool, user, h.id).await.unwrap();
-    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert!(list.is_empty());
 }
 
@@ -294,7 +312,9 @@ async fn list_highlights_caps_response_at_hard_limit() {
     let over_cap = LIST_HIGHLIGHTS_LIMIT + 500;
     seed_highlights_raw(&pool, user, &uuid, over_cap).await;
 
-    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(
         list.len() as i64,
         LIST_HIGHLIGHTS_LIMIT,
@@ -394,7 +414,9 @@ async fn create_highlight_is_idempotent_on_client_id() {
         first.client_id.as_deref(),
         Some(input.client_id.as_deref().unwrap())
     );
-    let all = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let all = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(all.len(), 1, "replayed create must not duplicate");
 }
 
@@ -474,7 +496,13 @@ async fn create_highlight_without_client_id_still_allows_duplicates() {
     create_highlight(&pool, user, &input).await.unwrap();
     create_highlight(&pool, user, &input).await.unwrap();
 
-    assert_eq!(list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap().len(), 2);
+    assert_eq!(
+        list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -522,7 +550,9 @@ async fn ingest_kobo_annotations_creates_anchorless_rows_the_web_list_still_retu
     .await
     .unwrap();
 
-    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(
         listed[0].epub_cfi_range, None,
@@ -553,7 +583,13 @@ async fn ingest_kobo_annotations_replay_of_the_same_upload_creates_no_duplicates
         .await
         .unwrap();
 
-    assert_eq!(list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap().len(), 1);
+    assert_eq!(
+        list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -580,7 +616,9 @@ async fn ingest_kobo_annotations_updates_color_note_and_text_for_an_existing_id(
         .await
         .unwrap();
 
-    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].color, HighlightColor::Violet);
     assert_eq!(listed[0].note.as_deref(), Some("second thoughts"));
@@ -599,7 +637,9 @@ async fn ingest_kobo_annotations_stores_a_derived_cfi_alongside_the_kobo_anchor(
         .await
         .unwrap();
 
-    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(
         listed[0].epub_cfi_range.as_deref(),
         Some("epubcfi(/6/2!/4/4,/1:0,/1:20)")
@@ -627,7 +667,9 @@ async fn ingest_kobo_annotations_keeps_an_existing_cfi_when_the_anchor_is_unchan
         .await
         .unwrap();
 
-    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(listed[0].color, HighlightColor::Blue);
     assert_eq!(
         listed[0].epub_cfi_range.as_deref(),
@@ -654,7 +696,9 @@ async fn ingest_kobo_annotations_drops_a_stale_cfi_when_the_anchor_moves_underiv
         .await
         .unwrap();
 
-    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(listed[0].epub_cfi_range, None);
 }
 
@@ -725,7 +769,9 @@ async fn ingest_kobo_annotations_applies_a_multi_row_batch_conflict_insert_and_d
     .await
     .unwrap();
 
-    let mut listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological).await.unwrap();
+    let mut listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     listed.sort_by(|a, b| a.client_id.cmp(&b.client_id));
     assert_eq!(listed.len(), 2, "kobo-3 deleted, kobo-1 and kobo-2 remain");
     assert_eq!(listed[0].client_id.as_deref(), Some("kobo-1"));

@@ -48,7 +48,14 @@ pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
 /// the uuid is unknown or has no highlights yet.
 #[post("/api/rpc/highlights/list", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_list_highlights(book_uuid: String) -> Result<Vec<Highlight>> {
-    match db::annotations::list_highlights(&pool.0, user.id, &book_uuid, db::AnnotationOrder::Position).await {
+    match db::annotations::list_highlights(
+        &pool.0,
+        user.id,
+        &book_uuid,
+        db::AnnotationOrder::Position,
+    )
+    .await
+    {
         Ok(list) => Ok(list),
         Err(db::annotations::HighlightError::Sqlx(e)) => {
             Err(internal_rpc_error("list highlights", e).into())

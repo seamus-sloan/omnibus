@@ -343,20 +343,22 @@ pub async fn get_progress(
     else {
         return Ok(None);
     };
-    Ok(Some(ProgressRecord {
-        book_uuid: canonical,
-        format: parse_format(row.try_get::<String, _>("format")?.as_str()),
-        epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
-        audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
-        progress_percent: row.try_get::<Option<i64>, _>("progress_percent")?,
-        kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
-        book_file_id: row.try_get::<Option<i64>, _>("book_file_id")?,
-        updated_at: row.try_get::<i64, _>("updated_at")?,
-        client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
-        updated_at_iso: None,
-        client_updated_at_iso: None,
-    }
-    .with_iso()))
+    Ok(Some(
+        ProgressRecord {
+            book_uuid: canonical,
+            format: parse_format(row.try_get::<String, _>("format")?.as_str()),
+            epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
+            audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
+            progress_percent: row.try_get::<Option<i64>, _>("progress_percent")?,
+            kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
+            book_file_id: row.try_get::<Option<i64>, _>("book_file_id")?,
+            updated_at: row.try_get::<i64, _>("updated_at")?,
+            client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
+            updated_at_iso: None,
+            client_updated_at_iso: None,
+        }
+        .with_iso(),
+    ))
 }
 
 /// Upsert the playback rate for `(user, book)` and return the saved preference.

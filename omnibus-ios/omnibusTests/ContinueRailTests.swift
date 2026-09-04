@@ -34,7 +34,7 @@ private func point(
 ) -> ResumePoint {
     ResumePoint(
         record: record, book: book, totalDurationSeconds: duration,
-        chapterNumber: chapter, chapterCount: chapters
+        audioPart: chapter, audioPartCount: chapters, resolved: nil
     )
 }
 
@@ -149,7 +149,7 @@ struct ResumeSpliceTests {
         )
 
         #expect(spliced?.first?.totalDurationSeconds == 3_600)
-        #expect(spliced?.first?.chapterCount == 12)
+        #expect(spliced?.first?.audioPartCount == 12)
         #expect(spliced?.first?.fraction == 0.5)
     }
 

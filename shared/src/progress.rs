@@ -14,9 +14,7 @@ mod resolved;
 #[cfg(test)]
 mod tests;
 
-pub use resolved::{
-    BookProgress, PositionConfidence, ProgressDetail, ResolvedPosition,
-};
+pub use resolved::{BookProgress, PositionConfidence, ProgressDetail, ResolvedPosition};
 
 /// Maximum number of `SessionReport`s accepted per session-batch upload.
 ///

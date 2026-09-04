@@ -168,7 +168,16 @@ pub(crate) async fn get_ebook_chapter_text(
     };
 
     let stop_at = if q.stop_at_progress {
-        match progress_cutoff(&state, user.id, &uuid, id, spine_index, text.chars().count()).await {
+        match progress_cutoff(
+            &state,
+            user.id,
+            &uuid,
+            id,
+            spine_index,
+            text.chars().count(),
+        )
+        .await
+        {
             Ok(cutoff) => cutoff,
             Err(e) => return internal("progress_cutoff", e),
         }

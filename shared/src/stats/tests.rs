@@ -785,6 +785,8 @@ fn session_log_entry_cursor_names_its_own_start_and_book() {
         started_at: 42,
         ended_at: 100,
         seconds: 58,
+        started_at_iso: None,
+        ended_at_iso: None,
     };
     assert_eq!(entry.cursor().encode(), "42:uuid-1");
 }

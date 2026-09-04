@@ -12,6 +12,8 @@ fn record(format: ProgressFormat) -> ProgressRecord {
         book_file_id: None,
         updated_at: 100,
         client_updated_at: 100,
+        updated_at_iso: None,
+        client_updated_at_iso: None,
     }
 }
 

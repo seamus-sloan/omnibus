@@ -66,7 +66,10 @@ pub async fn search_content_for_paths(
     let Some(match_expr) = sanitize_fts_query(&capped) else {
         return Ok(Vec::new());
     };
-    let limit = scope.limit.unwrap_or(MAX_CONTENT_HITS).clamp(1, MAX_CONTENT_HITS);
+    let limit = scope
+        .limit
+        .unwrap_or(MAX_CONTENT_HITS)
+        .clamp(1, MAX_CONTENT_HITS);
     let books: Vec<&String> = scope.book_uuids.iter().take(MAX_SCOPE_BOOKS).collect();
     // Scoping is expressed as a uuid `IN (…)` rather than a title filter so
     // it survives a merge: the caller holds the uuid the listing gave it.
@@ -311,7 +314,9 @@ fn books_error(e: crate::books::BooksError) -> ContentFtsError {
         crate::books::BooksError::OverridesJson(inner) => {
             ContentFtsError::Db(sqlx::Error::Decode(Box::new(inner)))
         }
-        crate::books::BooksError::Other(msg) => ContentFtsError::Db(sqlx::Error::Decode(msg.into())),
+        crate::books::BooksError::Other(msg) => {
+            ContentFtsError::Db(sqlx::Error::Decode(msg.into()))
+        }
     }
 }
 

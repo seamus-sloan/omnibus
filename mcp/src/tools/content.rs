@@ -160,7 +160,8 @@ impl OmnibusMcp {
                 .to_string(),
             ));
         }
-        let hits: ContentSearchResults = self.client.get_json("/api/search/content", &query).await?;
+        let hits: ContentSearchResults =
+            self.client.get_json("/api/search/content", &query).await?;
         Ok(Json(hits))
     }
 }

@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use omnibus_shared::{
     cross_format::CrossFormatCandidate, AuthorDetail, AuthorSummary, BookProgress, Bookmark,
-    Contributor, EbookLibrary, EbookMetadata, GenreWeight, Highlight, JournalEntry, LibraryContents,
-    PhysicalCopy, ProgressFormat, ProgressRecord, ReadStatusRecord, ResolvedPosition, ResumePoint,
-    SeriesDetail, SeriesSummary, SessionLogPage, Shelf, ShelfSummary, SortDir, SortKey, StatsRange,
-    StatsSummary, TagWeight,
+    Contributor, EbookLibrary, EbookMetadata, GenreWeight, Highlight, JournalEntry,
+    LibraryContents, PhysicalCopy, ProgressFormat, ProgressRecord, ReadStatusRecord,
+    ResolvedPosition, ResumePoint, SeriesDetail, SeriesSummary, SessionLogPage, Shelf,
+    ShelfSummary, SortDir, SortKey, StatsRange, StatsSummary, TagWeight,
 };
 
 use crate::server::OmnibusMcp;
@@ -504,8 +504,7 @@ impl OmnibusMcp {
         if let Some(limit) = p.limit {
             query.push(("limit", limit.to_string()));
         }
-        let points: Vec<ResumePoint> =
-            self.client.get_json("/api/progress/recent", &query).await?;
+        let points: Vec<ResumePoint> = self.client.get_json("/api/progress/recent", &query).await?;
         Ok(Json(match p.verbosity.unwrap_or_default() {
             Verbosity::Full => RecentProgress::Full(points),
             Verbosity::Stub => {

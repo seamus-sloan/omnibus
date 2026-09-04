@@ -13,9 +13,9 @@ use axum::{
     Json,
 };
 use omnibus_db::{self as db};
-use omnibus_shared::{search_query_too_long, SpoilerFilter};
 #[cfg(test)]
 use omnibus_shared::SEARCH_QUERY_MAX_LEN as MAX_SEARCH_QUERY_LEN;
+use omnibus_shared::{search_query_too_long, SpoilerFilter};
 use serde::Deserialize;
 
 use super::{internal, with_pagination_headers, AppState};

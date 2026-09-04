@@ -135,7 +135,10 @@ fn percent_through_chapter_measures_against_the_next_chapters_start() {
         chapter(2, "Three", 2, 300),
     ];
     let pct = percent_through_chapter(&chapters, &stats, &chapters[1], 200).unwrap();
-    assert!((pct - 50.0).abs() < 0.001, "half of a 100..300 chapter, got {pct}");
+    assert!(
+        (pct - 50.0).abs() < 0.001,
+        "half of a 100..300 chapter, got {pct}"
+    );
 }
 
 #[test]

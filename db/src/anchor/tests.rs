@@ -105,9 +105,15 @@ fn annotation_order_parses_the_wire_tokens_and_defaults_to_position() {
         AnnotationOrder::parse("chronological"),
         AnnotationOrder::Chronological
     );
-    assert_eq!(AnnotationOrder::parse("position"), AnnotationOrder::Position);
+    assert_eq!(
+        AnnotationOrder::parse("position"),
+        AnnotationOrder::Position
+    );
     // An unrecognised value yields the useful order rather than an error.
-    assert_eq!(AnnotationOrder::parse("sideways"), AnnotationOrder::Position);
+    assert_eq!(
+        AnnotationOrder::parse("sideways"),
+        AnnotationOrder::Position
+    );
     assert_eq!(AnnotationOrder::default(), AnnotationOrder::Position);
 }
 
@@ -115,5 +121,8 @@ fn annotation_order_parses_the_wire_tokens_and_defaults_to_position() {
 fn position_key_sorts_unplaceable_anchors_last() {
     let placed = position_key(Some(3), 100, 1);
     let unplaced = position_key(None, 1, 2);
-    assert!(placed < unplaced, "an unplaced anchor must not open the list");
+    assert!(
+        placed < unplaced,
+        "an unplaced anchor must not open the list"
+    );
 }
