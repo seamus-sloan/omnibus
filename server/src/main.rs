@@ -31,7 +31,7 @@ mod server {
 
     use axum::Router;
     use dioxus::server::axum::Extension;
-    use omnibus::{auth, backend, metrics, rate_limit, security_headers};
+    use omnibus::{auth, backend, metrics, rate_limit, request_log, security_headers};
     use omnibus_db::{
         indexer,
         worker::{Task, Worker},
@@ -412,78 +412,10 @@ mod server {
         if let Some(layer) = security_headers::hsts_layer(secure_cookies) {
             router = router.layer(layer);
         }
-        // TraceLayer last so it is the outermost layer and observes every
+        // The request trace layer last so it is outermost and observes every
         // response — including 408/413 short-circuits from the timeout and
-        // body-limit guards above. Span logs only the path, never the query
-        // string: media reads carry the session as `?token=`, and the default
-        // span records the full URI — which would leak live tokens into logs.
-        // The span and the on-response event sit at INFO so the default
-        // filter yields one line per request (method, path, status, latency).
-        router.layer(
-            tower_http::trace::TraceLayer::new_for_http()
-                .make_span_with(|req: &axum::http::Request<_>| {
-                    // `user_agent` is what separates MCP traffic
-                    // (`omnibus-mcp/<ver>`) from web and iOS requests in the
-                    // log; headers never carry credentials, unlike the query
-                    // string this span deliberately drops.
-                    tracing::info_span!(
-                        "request",
-                        method = %req.method(),
-                        path = %redact_path(req.uri().path()),
-                        version = ?req.version(),
-                        user_agent = req
-                            .headers()
-                            .get(axum::http::header::USER_AGENT)
-                            .and_then(|v| v.to_str().ok())
-                            .unwrap_or(""),
-                    )
-                })
-                .on_response(
-                    tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
-                ),
-        )
-    }
-
-    /// Redact the `<TOKEN>` segment of a `/kobo/<TOKEN>/…` path before it
-    /// reaches the trace span. Kobo devices carry a long-lived (90-day)
-    /// session token directly in the URL path (see
-    /// `backend::kobo::extractor::kobo_path_token`), so logging the raw path
-    /// would leak a durable credential to stderr and the on-disk JSON sink.
-    /// Every other path is returned unchanged, borrowed rather than
-    /// allocated — this runs on every request, and only the Kobo case needs
-    /// to build a new string.
-    fn redact_path(path: &str) -> std::borrow::Cow<'_, str> {
-        let mut segs = path.split('/');
-        match (segs.next(), segs.next(), segs.next()) {
-            (Some(""), Some("kobo"), Some(_token)) => {
-                let rest: String = segs.map(|s| format!("/{s}")).collect();
-                std::borrow::Cow::Owned(format!("/kobo/[REDACTED]{rest}"))
-            }
-            _ => std::borrow::Cow::Borrowed(path),
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::redact_path;
-
-        #[test]
-        fn redact_path_replaces_the_token_segment_of_a_kobo_path() {
-            assert_eq!(
-                redact_path("/kobo/abc123/v1/library/sync"),
-                "/kobo/[REDACTED]/v1/library/sync"
-            );
-            assert_eq!(
-                redact_path("/kobo/abc123/v1/download/some-uuid"),
-                "/kobo/[REDACTED]/v1/download/some-uuid"
-            );
-        }
-
-        #[test]
-        fn redact_path_leaves_non_kobo_paths_unchanged() {
-            assert_eq!(redact_path("/api/ebooks"), "/api/ebooks");
-            assert_eq!(redact_path("/"), "/");
-            assert_eq!(redact_path("/kobo"), "/kobo");
-        }
+        // body-limit guards above. What it records, and what it deliberately
+        // never does (the query string), is `request_log`'s contract.
+        router.layer(request_log::layer())
     }
 }

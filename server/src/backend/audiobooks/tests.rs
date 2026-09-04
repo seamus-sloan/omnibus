@@ -375,58 +375,6 @@ async fn api_get_audiobook_status_returns_failed_when_failed_marker_present() {
     assert_eq!(json["state"], "failed");
 }
 
-/// Seed an audiobook with N custom parts. Used by the manifest tests
-/// to exercise direct, hls, and per-ordinal-lookup code paths from a
-/// single helper. `library_path` becomes the prefix that
-/// `get_audiobook_part` joins to each part's filename.
-async fn seed_audiobook_with_parts(
-    pool: &sqlx::SqlitePool,
-    library_path: &str,
-    format: &str,
-    parts: &[(i64, &str, f64)],
-) -> String {
-    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
-        .bind(library_path)
-        .execute(pool)
-        .await
-        .unwrap()
-        .last_insert_rowid();
-    let uuid = format!("uuid-{}-{}", format.to_lowercase(), parts.len());
-    let book_id =
-        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, 'T')")
-            .bind(&uuid)
-            .bind(lib_id)
-            .bind(library_path)
-            .execute(pool)
-            .await
-            .unwrap()
-            .last_insert_rowid();
-    let file_id = sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
-         VALUES (?, ?, 'book', 0)",
-    )
-    .bind(book_id)
-    .bind(format)
-    .execute(pool)
-    .await
-    .unwrap()
-    .last_insert_rowid();
-    for (ordinal, filename, duration) in parts {
-        sqlx::query(
-            "INSERT INTO book_file_parts (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) \
-             VALUES (?, ?, ?, 0, 0, ?)",
-        )
-        .bind(file_id)
-        .bind(*ordinal)
-        .bind(*filename)
-        .bind(*duration)
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-    uuid
-}
-
 #[tokio::test]
 async fn api_get_audiobook_manifest_returns_401_when_anonymous() {
     let (app, _, _) = fixture().await;

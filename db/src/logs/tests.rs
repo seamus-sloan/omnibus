@@ -61,6 +61,56 @@ fn parse_record_extracts_core_fields_and_folds_extras() {
 }
 
 #[test]
+fn parse_record_folds_the_request_log_span_and_response_fields_into_extra() {
+    // The shape `server::request_log` emits: client_ip / range on the span,
+    // content_length / content_range on the headers-out event, and a second
+    // end-of-body event carrying stream_duration_ms. None are core columns,
+    // so all must land in the detail blob for the admin viewer to render.
+    let done = serde_json::json!({
+        "timestamp": "2026-09-04T03:19:14.000000Z",
+        "level": "INFO",
+        "target": "omnibus::request_log",
+        "fields": {
+            "message": "finished processing request",
+            "latency": "2 ms",
+            "status": 206,
+            "content_length": "1048576",
+            "content_range": "bytes 0-1048575/734003200",
+        },
+        "span": {
+            "method": "GET",
+            "path": "/api/audiobooks/uuid/parts/0",
+            "client_ip": "203.0.113.9",
+            "range": "bytes=0-1048575",
+            "user_agent": "omnibus/90",
+            "name": "request",
+        },
+    })
+    .to_string();
+    let r = parse_record(&done).unwrap();
+    assert_eq!(r.message, "finished processing request");
+    let fields: serde_json::Value = serde_json::from_str(&r.fields.unwrap()).unwrap();
+    assert_eq!(fields["content_length"], "1048576");
+    assert_eq!(fields["content_range"], "bytes 0-1048575/734003200");
+    assert_eq!(fields["span"]["client_ip"], "203.0.113.9");
+    assert_eq!(fields["span"]["range"], "bytes=0-1048575");
+
+    let eos = serde_json::json!({
+        "timestamp": "2026-09-04T03:19:16.000000Z",
+        "level": "INFO",
+        "target": "omnibus::request_log",
+        "fields": { "message": "response body finished", "stream_duration_ms": 7200123 },
+        "span": { "method": "GET", "path": "/api/audiobooks/uuid/parts/0", "name": "request" },
+    })
+    .to_string();
+    let r = parse_record(&eos).unwrap();
+    assert_eq!(r.message, "response body finished");
+    let fields: serde_json::Value = serde_json::from_str(&r.fields.unwrap()).unwrap();
+    assert_eq!(fields["stream_duration_ms"], 7200123);
+    assert_eq!(fields["span"]["path"], "/api/audiobooks/uuid/parts/0");
+}
+
+#[test]
 fn parse_record_rejects_blank_and_malformed_lines() {
     assert!(parse_record("").is_none());
     assert!(parse_record("{not json").is_none());
