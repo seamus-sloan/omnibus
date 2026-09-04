@@ -38,6 +38,8 @@ fn point(uuid: &str, format: ProgressFormat, pct: Option<i64>) -> ResumePoint {
             book_file_id: None,
             updated_at: 0,
             client_updated_at: 0,
+            updated_at_iso: None,
+            client_updated_at_iso: None,
         },
         book: book(uuid, "Piranesi", Some("oklch(0.7 0.1 200)"), &["epub"]),
         linked: false,

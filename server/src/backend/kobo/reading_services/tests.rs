@@ -4,6 +4,8 @@
 //! reconcile-by-omission — is replayed at the HTTP layer, including the AC5
 //! first-sync guard for pre-wireless backlogs.
 
+use omnibus_db::AnnotationOrder;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -284,7 +286,7 @@ async fn patch_replay_of_the_same_body_creates_no_duplicate_rows() {
         assert_eq!(res.status(), StatusCode::NO_CONTENT);
     }
 
-    let listed = db::annotations::list_highlights(&pool, user, &uuid)
+    let listed = db::annotations::list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
         .await
         .unwrap();
     assert_eq!(listed.len(), 1);
@@ -320,7 +322,7 @@ async fn patch_tolerates_garbage_and_variant_delete_shapes_without_500() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
 
-    let listed = db::annotations::list_highlights(&pool, user, &uuid)
+    let listed = db::annotations::list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
         .await
         .unwrap();
     assert_eq!(listed.len(), 1, "kobo-drop deleted, garbage skipped");
@@ -343,7 +345,7 @@ async fn patch_for_an_unknown_book_answers_204_without_ingesting() {
         .unwrap();
     // Device noise (sideloaded book) must not error-loop the sync.
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
-    assert!(db::annotations::list_highlights(&pool, user, &uuid)
+    assert!(db::annotations::list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
         .await
         .unwrap()
         .is_empty());
@@ -420,7 +422,7 @@ async fn patch_stores_a_derived_range_cfi_when_kepub_and_source_are_on_disk() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
 
-    let listed = db::annotations::list_highlights(&pool, user, &uuid)
+    let listed = db::annotations::list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
         .await
         .unwrap();
     assert_eq!(listed.len(), 1);

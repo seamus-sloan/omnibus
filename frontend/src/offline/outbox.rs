@@ -394,6 +394,10 @@ pub(crate) async fn queue_create_highlight(input: &CreateHighlight) -> Option<Hi
         // `client_id` is the mobile outbox's handle, not this one's.
         client_id: None,
         created_at: store::now_secs(),
+        created_at_iso: None,
+        spine_index: None,
+        chapter_title: None,
+        percent_through_book: None,
     };
     let queued = enqueue(Op::CreateHighlight {
         temp_id: temp,
@@ -466,6 +470,10 @@ pub(crate) async fn queue_create_bookmark(input: &CreateBookmark) -> Option<Book
         title: input.title.clone(),
         client_id: None,
         created_at: store::now_secs(),
+        created_at_iso: None,
+        spine_index: None,
+        chapter_title: None,
+        percent_through_book: None,
     };
     let queued = enqueue(Op::CreateBookmark {
         temp_id: temp,
@@ -623,6 +631,10 @@ pub(crate) async fn queue_create_journal(input: &CreateJournalEntry) -> Option<J
         status: input.status,
         client_id: None,
         created_at: now,
+        created_at_iso: None,
+        spine_index: None,
+        chapter_title: None,
+        percent_through_book: None,
         updated_at: now,
     };
     let queued = enqueue(Op::CreateJournal {

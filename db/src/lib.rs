@@ -17,6 +17,7 @@ pub mod books;
 pub mod browse;
 pub mod cleanup;
 pub mod comic;
+pub mod anchor;
 pub mod content_fts;
 pub mod convert;
 pub mod covers;
@@ -88,6 +89,7 @@ pub use books::{
     search_books_for_paths_with_total, search_books_with_total, BookPage, BooksError, CursorError,
     IndexedRow, PageCursor, MAX_BOOKS_RETURNED,
 };
+pub use anchor::{AnchorError, AnchorIndex, AnchorPlacement, AnnotationOrder};
 pub use browse::*;
 pub use cleanup::*;
 pub use content_fts::{

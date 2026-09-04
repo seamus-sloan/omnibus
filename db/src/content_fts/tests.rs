@@ -173,7 +173,7 @@ async fn backfill_content_fts_indexes_fixture_epub_and_content_search_finds_body
 
     // alpha.epub's body phrase (AC1): found by the content search, with a
     // chapter citation (AC2)…
-    let hits = search_content_for_paths(&pool, &[&lib], "Synthetic test content")
+    let hits = search_content_for_paths(&pool, &[&lib], "Synthetic test content", &ContentSearchScope::default())
         .await
         .unwrap();
     assert_eq!(hits.len(), 1);
@@ -343,11 +343,11 @@ async fn backfill_content_fts_prunes_rows_for_books_that_no_longer_exist() {
 #[tokio::test]
 async fn search_content_for_paths_returns_empty_for_empty_query_and_no_paths() {
     let pool = init_db("sqlite::memory:").await.unwrap();
-    assert!(search_content_for_paths(&pool, &["/lib"], "   ")
+    assert!(search_content_for_paths(&pool, &["/lib"], "   ", &ContentSearchScope::default())
         .await
         .unwrap()
         .is_empty());
-    assert!(search_content_for_paths(&pool, &[], "moon")
+    assert!(search_content_for_paths(&pool, &[], "moon", &ContentSearchScope::default())
         .await
         .unwrap()
         .is_empty());
@@ -357,7 +357,7 @@ async fn search_content_for_paths_returns_empty_for_empty_query_and_no_paths() {
 async fn search_content_for_paths_propagates_db_error_when_pool_is_closed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     pool.close().await;
-    let err = search_content_for_paths(&pool, &["/lib"], "moon")
+    let err = search_content_for_paths(&pool, &["/lib"], "moon", &ContentSearchScope::default())
         .await
         .expect_err("closed pool must surface as ContentFtsError::Db");
     assert!(matches!(err, ContentFtsError::Db(_)));

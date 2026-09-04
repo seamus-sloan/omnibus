@@ -52,7 +52,10 @@ async fn read_progress_row(
         book_file_id: row.try_get::<Option<i64>, _>("book_file_id")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
         client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
-    })
+        updated_at_iso: None,
+        client_updated_at_iso: None,
+    }
+    .with_iso())
 }
 
 /// Upsert a position row for `(user, book, format)` and return the

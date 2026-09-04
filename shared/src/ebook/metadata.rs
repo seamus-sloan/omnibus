@@ -121,6 +121,16 @@ pub struct EbookMetadata {
     /// library, edited its metadata or cover, or checked in a physical copy.
     /// Fixed-width ISO, so it sorts lexicographically. Drives the "Recently
     /// Interacted" sort; `None` only for a book carrying no signal at all.
+    ///
+    /// **Reading position is not one of those signals.** The field is
+    /// library-wide and derived at read time from the six above, so it can
+    /// jump by a day between two calls minutes apart while the reader's
+    /// position moved by seconds — a read-status auto-transition (which every
+    /// reading surface writes on open) is enough to move it, and so is
+    /// another user acting on the same book. That is the field working, not a
+    /// clock or timezone fault; the epochs it folds have been INTEGER unix
+    /// seconds since migration `0038`, so the `MAX` is chronological. For
+    /// "when did *this reader* last read this", read the progress records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_interacted_at: Option<String>,
 

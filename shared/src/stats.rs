@@ -1216,9 +1216,33 @@ pub struct SessionLogEntry {
     pub ended_at: i64,
     /// Seconds recorded across the sitting.
     pub seconds: i64,
+    /// [`Self::started_at`] rendered as ISO 8601 UTC. When the sitting began.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and
+    /// sort on, the string is what a reader of the API can act on without
+    /// doing calendar arithmetic by hand. Populated by the server's read
+    /// paths; `None` on a payload a client built itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_iso: Option<String>,
+    /// [`Self::ended_at`] rendered as ISO 8601 UTC. When it ended.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and
+    /// sort on, the string is what a reader of the API can act on without
+    /// doing calendar arithmetic by hand. Populated by the server's read
+    /// paths; `None` on a payload a client built itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_iso: Option<String>,
 }
 
 impl SessionLogEntry {
+    /// Fill the ISO siblings from the epochs already on the entry.
+    #[must_use]
+    pub fn with_iso(mut self) -> Self {
+        self.started_at_iso = Some(crate::to_iso8601(self.started_at));
+        self.ended_at_iso = Some(crate::to_iso8601(self.ended_at));
+        self
+    }
+
     /// This entry's cursor — what a caller passes as `before` to fetch the
     /// page that continues after it.
     pub fn cursor(&self) -> SessionCursor {

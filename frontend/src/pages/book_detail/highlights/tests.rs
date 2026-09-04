@@ -187,6 +187,10 @@ mod render_tests {
             text: text.map(str::to_string),
             client_id: None,
             created_at: 1_779_019_200,
+            created_at_iso: None,
+            spine_index: None,
+            chapter_title: None,
+            percent_through_book: None,
         }
     }
 

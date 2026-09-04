@@ -53,7 +53,7 @@ pub async fn rpc_create_bookmark(input: CreateBookmark) -> Result<Bookmark> {
 /// uuid is unknown or has no bookmarks yet.
 #[post("/api/rpc/bookmarks/list", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_list_bookmarks(book_uuid: String) -> Result<Vec<Bookmark>> {
-    match db::bookmarks::list_bookmarks(&pool.0, user.id, &book_uuid).await {
+    match db::bookmarks::list_bookmarks(&pool.0, user.id, &book_uuid, db::AnnotationOrder::Position).await {
         Ok(list) => Ok(list),
         Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(bookmark_db_error("list", e)),
         Err(e) => Err(bookmark_db_error("list", e)),

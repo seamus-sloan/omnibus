@@ -567,6 +567,8 @@ mod tests {
                 kobo_location: None,
                 updated_at: 0,
                 client_updated_at: 0,
+                updated_at_iso: None,
+                client_updated_at_iso: None,
             },
             book: Default::default(),
             linked: false,

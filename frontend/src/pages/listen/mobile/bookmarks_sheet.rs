@@ -291,6 +291,10 @@ mod tests {
             position: position.into(),
             title: None,
             created_at: 0,
+            created_at_iso: None,
+            spine_index: None,
+            chapter_title: None,
+            percent_through_book: None,
             client_id: None,
         }
     }

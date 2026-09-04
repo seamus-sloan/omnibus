@@ -8,7 +8,9 @@ use rmcp::{tool, tool_router, ErrorData, Json};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use omnibus_shared::{ChapterListResponse, ChapterTextResponse, ContentSearchResults};
+use omnibus_shared::{
+    ChapterListResponse, ChapterTextResponse, ContentSearchResults, SpoilerFilter,
+};
 
 use crate::server::OmnibusMcp;
 
@@ -35,6 +37,10 @@ pub struct ChapterTextParams {
     pub offset: Option<i64>,
     /// Slice size in chars; server-clamped to at most 100000.
     pub limit: Option<i64>,
+    /// Stop the text at the reader's own furthest recorded position in this
+    /// book. Use it whenever the reader is mid-book and the conversation
+    /// must not run ahead of them.
+    pub stop_at_progress: Option<bool>,
 }
 
 /// Reject a negative value before it is formatted into a URL the server's
@@ -52,8 +58,24 @@ fn non_negative(value: i64, what: &str) -> Result<i64, ErrorData> {
 /// Parameters for the content search.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ContentSearchParams {
-    /// Full-text query over book content (FTS5 syntax; a plain phrase works).
+    /// Words that must ALL appear in the same chapter. A natural-language
+    /// phrase of several words usually matches nothing — search one
+    /// distinctive term first, then narrow. Wrap in double quotes for an
+    /// exact phrase; the final word is prefix-matched.
     pub query: String,
+    /// Scope to one book's text. Strongly preferred when the question is
+    /// about a specific book — without it a term from a series returns
+    /// interleaved hits from every volume.
+    pub book_uuid: Option<String>,
+    /// Scope to several books (a series), as uuids.
+    pub book_uuids: Option<Vec<String>>,
+    /// Maximum hits to return; server-capped at 50.
+    pub limit: Option<i64>,
+    /// What to do about hits past the reader's own position: "annotate"
+    /// (default) tags each hit with `ahead_of_reader` and
+    /// `position_delta_percent`; "exclude" withholds them and reports
+    /// `withheld_ahead`; "none" disables the check.
+    pub spoiler_filter: Option<SpoilerFilter>,
 }
 
 #[tool_router(router = content_tools, vis = "pub(crate)")]
@@ -74,7 +96,7 @@ impl OmnibusMcp {
     }
 
     #[tool(
-        description = "Read one chapter of a book as plain text, in bounded slices (at most 100000 chars per call). Address the chapter by the spine_index from list_chapters. When truncated is true the slice ended before the chapter did — page through by re-calling with offset set to the returned next_offset until truncated is false. has_text: false means the book has no extractable text. Errors if the uuid is unknown or spine_index is out of range."
+        description = "Read one chapter of a book as plain text, in bounded slices (at most 100000 chars per call). Address the chapter by the spine_index from list_chapters. When truncated is true the slice ended before the chapter did — page through by re-calling with offset set to the returned next_offset until truncated is false. has_text: false means the book has no extractable text. Errors if the uuid is unknown or spine_index is out of range.\n\nSet stop_at_progress: true when the reader is partway through the book and must not be spoiled: the text is cut at their furthest recorded position and truncated_by_progress comes back true. That cut is deliberate and final — unlike truncated, it carries no next_offset, because paging past it is the thing the flag exists to prevent. A reader whose position cannot be placed gets no text at all rather than the whole chapter."
     )]
     pub async fn read_chapter_text(
         &self,
@@ -90,6 +112,9 @@ impl OmnibusMcp {
         if let Some(limit) = p.limit {
             query.push(("limit", non_negative(limit, "limit")?.to_string()));
         }
+        if p.stop_at_progress.unwrap_or(false) {
+            query.push(("stop_at_progress", "true".to_string()));
+        }
         let text: Option<ChapterTextResponse> = self.client.get_json_opt(&path, &query).await?;
         text.map(Json).ok_or_else(|| {
             ErrorData::invalid_params(
@@ -103,16 +128,39 @@ impl OmnibusMcp {
     }
 
     #[tool(
-        description = "Full-text search over the TEXT of the library's books — distinct from search_books, which matches metadata (title, author, series, tags) only. Use this for \"find the passage where …\" questions. Each hit cites the book (book_uuid, title) and the chapter it came from (spine_index) plus a snippet with the matched terms bracketed; follow up with read_chapter_text on the hit's book_uuid + spine_index to read the surrounding text. Only books with extractable text are indexed, so an empty result does not prove the phrase is absent from unindexed formats."
+        description = "Full-text search over the TEXT of the library's books — distinct from search_books, which matches metadata (title, author, series, tags) only. Use this for \"find the passage where …\" questions. Each hit cites the book (book_uuid, title), the chapter it came from (spine_index and chapter_title) and a snippet with the matched terms bracketed; follow up with read_chapter_text on the hit's book_uuid + spine_index to read the surrounding text.\n\nQUERY SYNTAX: every term must appear in the SAME chapter. A multi-word natural-language phrase therefore usually returns nothing even when each word is common — search one distinctive term, then narrow. Double quotes make an exact phrase; the last word is prefix-matched. An empty result carries a `hint` when the query form is the likely cause.\n\nPass book_uuid (or book_uuids) to scope to one book or a series — without it a term from a series returns interleaved hits from every volume. spoiler_filter places each hit against the reader's own position: \"annotate\" (the default) tags hits with ahead_of_reader and position_delta_percent, \"exclude\" withholds them and reports withheld_ahead so you can say an answer exists without seeing it. A hit whose position cannot be determined is withheld by \"exclude\" rather than assumed safe, and ahead_of_reader: null means unknown, NOT safe. Only books with extractable text are indexed, so an empty result does not prove the phrase is absent from unindexed formats."
     )]
     pub async fn search_book_content(
         &self,
         Parameters(p): Parameters<ContentSearchParams>,
     ) -> Result<Json<ContentSearchResults>, ErrorData> {
-        let hits: ContentSearchResults = self
-            .client
-            .get_json("/api/search/content", &[("q", p.query)])
-            .await?;
+        let mut query: Vec<(&str, String)> = vec![("q", p.query)];
+        if let Some(uuid) = p.book_uuid {
+            query.push((
+                "book_uuid",
+                crate::tools::path_segment(&uuid, "book_uuid")?.to_string(),
+            ));
+        }
+        if let Some(uuids) = p.book_uuids {
+            if !uuids.is_empty() {
+                query.push(("book_uuids", uuids.join(",")));
+            }
+        }
+        if let Some(limit) = p.limit {
+            query.push(("limit", non_negative(limit, "limit")?.to_string()));
+        }
+        if let Some(filter) = p.spoiler_filter {
+            query.push((
+                "spoiler_filter",
+                match filter {
+                    SpoilerFilter::None => "none",
+                    SpoilerFilter::Annotate => "annotate",
+                    SpoilerFilter::Exclude => "exclude",
+                }
+                .to_string(),
+            ));
+        }
+        let hits: ContentSearchResults = self.client.get_json("/api/search/content", &query).await?;
         Ok(Json(hits))
     }
 }

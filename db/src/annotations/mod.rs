@@ -7,6 +7,7 @@
 use omnibus_shared::{CreateHighlight, Highlight, HighlightColor};
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
+use crate::anchor::{position_key, AnchorIndex, AnnotationOrder};
 use crate::resolve_canonical_book_uuid;
 
 mod backfill;
@@ -34,6 +35,14 @@ pub enum HighlightError {
     NotFound,
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
+}
+
+impl From<crate::anchor::AnchorError> for HighlightError {
+    fn from(e: crate::anchor::AnchorError) -> Self {
+        match e {
+            crate::anchor::AnchorError::Sqlx(inner) => Self::Sqlx(inner),
+        }
+    }
 }
 
 impl From<crate::books::BooksError> for HighlightError {
@@ -104,11 +113,21 @@ pub async fn highlight_id_for_client_id(
     .await?)
 }
 
-/// List all highlights for a user + book, ordered by creation time.
+/// List a user's highlights in a book, each placed in the book and ordered
+/// by that position.
+///
+/// Position order is the default because a highlight list is read as a pass
+/// through the book, not as a diary — and because the reader's own order
+/// through the text is the one that makes a run of highlights legible.
+/// `chronological` restores creation order for a caller that wants it.
+///
+/// The placement costs three queries for the whole list ([`AnchorIndex`]),
+/// not three per highlight.
 pub async fn list_highlights(
     pool: &SqlitePool,
     user_id: i64,
     book_uuid: &str,
+    order: AnnotationOrder,
 ) -> Result<Vec<Highlight>, HighlightError> {
     let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
         return Ok(vec![]);
@@ -127,7 +146,24 @@ pub async fn list_highlights(
     .fetch_all(pool)
     .await?;
 
-    rows.iter().map(row_to_highlight).collect()
+    let mut highlights: Vec<Highlight> = rows
+        .iter()
+        .map(row_to_highlight)
+        .collect::<Result<_, _>>()?;
+    let index = AnchorIndex::load(pool, &canonical).await?;
+    for h in &mut highlights {
+        let Some(anchor) = h.epub_cfi_range.as_deref() else {
+            continue;
+        };
+        let placed = index.locate(anchor);
+        h.spine_index = placed.spine_index;
+        h.chapter_title = placed.chapter_title;
+        h.percent_through_book = placed.percent_through_book;
+    }
+    if matches!(order, AnnotationOrder::Position) {
+        highlights.sort_by_key(|h| position_key(h.spine_index, h.created_at, h.id));
+    }
+    Ok(highlights)
 }
 
 /// Change the color of an existing highlight.
@@ -483,7 +519,15 @@ fn row_to_highlight(row: &sqlx::sqlite::SqliteRow) -> Result<Highlight, Highligh
         text: row.try_get("text")?,
         client_id: row.try_get("client_id")?,
         created_at: row.try_get("created_at")?,
-    })
+        // Filled by `list_highlights`, which loads the book's structure
+        // once for the whole list; a single-row read leaves them unplaced
+        // rather than paying three queries to place one anchor.
+        created_at_iso: None,
+        spine_index: None,
+        chapter_title: None,
+        percent_through_book: None,
+    }
+    .with_iso())
 }
 
 #[cfg(test)]

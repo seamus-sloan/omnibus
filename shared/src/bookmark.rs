@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::highlight::CreateHighlight;
 
 /// A persisted bookmark.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// `PartialEq` but not `Eq`: `percent_through_book` is a float.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Bookmark {
     pub id: i64,
@@ -20,6 +22,36 @@ pub struct Bookmark {
     #[serde(default)]
     pub client_id: Option<String>,
     pub created_at: i64,
+    /// [`Self::created_at`] rendered as ISO 8601 UTC. When the bookmark was made.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and
+    /// sort on, the string is what a reader of the API can act on without
+    /// doing calendar arithmetic by hand. Populated by the server's read
+    /// paths; `None` on a payload a client built itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at_iso: Option<String>,
+    /// Spine document this anchor sits in, resolved from its CFI. `None`
+    /// for a Kobo-origin anchor and anything else unparseable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spine_index: Option<i64>,
+    /// TOC title of the chapter it sits in, when the book's structure has
+    /// been extracted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_title: Option<String>,
+    /// How far through the book it sits, 0..=100. Spine-granular — it
+    /// measures to the start of the containing spine document, which is what
+    /// the stored structure records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent_through_book: Option<f64>,
+}
+
+impl Bookmark {
+    /// Fill [`Self::created_at_iso`] from the epoch already on the row.
+    #[must_use]
+    pub fn with_iso(mut self) -> Self {
+        self.created_at_iso = Some(crate::to_iso8601(self.created_at));
+        self
+    }
 }
 
 /// Payload for creating a new bookmark.

@@ -9,8 +9,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use omnibus_shared::{
-    AuthorDetail, AuthorSummary, Bookmark, EbookLibrary, EbookMetadata, GenreWeight, Highlight,
-    JournalEntry, LibraryContents, ProgressFormat, ProgressRecord, ReadStatusRecord, ResumePoint,
+    cross_format::CrossFormatCandidate, AuthorDetail, AuthorSummary, BookProgress, Bookmark,
+    Contributor, EbookLibrary, EbookMetadata, GenreWeight, Highlight, JournalEntry, LibraryContents,
+    PhysicalCopy, ProgressFormat, ProgressRecord, ReadStatusRecord, ResolvedPosition, ResumePoint,
     SeriesDetail, SeriesSummary, SessionLogPage, Shelf, ShelfSummary, SortDir, SortKey, StatsRange,
     StatsSummary, TagWeight,
 };
@@ -75,11 +76,144 @@ pub struct SessionLogParams {
     pub before: Option<String>,
 }
 
+/// How much of each book's metadata a resume entry carries.
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Verbosity {
+    /// Just enough to name and render the book. The default: the full
+    /// record inlines the description, every identifier and every file row
+    /// per entry, so a three-book feed costs a large slice of context to
+    /// answer "what am I reading".
+    #[default]
+    Stub,
+    /// The whole `EbookMetadata` record, as `get_book` returns it.
+    Full,
+}
+
 /// Parameters for the recent-progress feed.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct RecentProgressParams {
     /// How many resume points to return (default 1, server-capped).
     pub limit: Option<i64>,
+    /// How much book metadata to inline per entry; defaults to `stub`.
+    pub verbosity: Option<Verbosity>,
+}
+
+/// The stub projection of a book: what a resume card needs, and nothing
+/// else. Fetch `get_book` for the rest.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct BookStub {
+    pub uuid: Option<String>,
+    pub title: Option<String>,
+    pub creators: Vec<Contributor>,
+    pub series: Option<String>,
+    pub series_index: Option<String>,
+    pub formats: Vec<String>,
+    pub cover_url: Option<String>,
+}
+
+impl From<&EbookMetadata> for BookStub {
+    fn from(book: &EbookMetadata) -> Self {
+        Self {
+            uuid: book.unique_identifier.clone(),
+            title: book.title.clone(),
+            creators: book.creators.clone(),
+            series: book.series.clone(),
+            series_index: book.series_index.clone(),
+            formats: book.formats.clone(),
+            cover_url: book.cover_url.clone(),
+        }
+    }
+}
+
+/// One entry of the resume feed under `verbosity: "stub"` — the position
+/// and its enrichment in full, the book projected down.
+///
+/// Written out field by field rather than `#[serde(flatten)]`-ing a
+/// `ResumePoint`: flattening emits that struct's own `book` alongside this
+/// one, so the payload carried both the full record and the stub under a
+/// duplicated key — the whole saving, silently lost.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ResumePointStub {
+    pub record: ProgressRecord,
+    pub book: BookStub,
+    pub linked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cross_format: Option<CrossFormatCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_duration_seconds: Option<f64>,
+    pub resolved: ResolvedPosition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_part: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_part_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playback_rate: Option<f64>,
+}
+
+impl From<ResumePoint> for ResumePointStub {
+    fn from(p: ResumePoint) -> Self {
+        Self {
+            book: BookStub::from(&p.book),
+            record: p.record,
+            linked: p.linked,
+            cross_format: p.cross_format,
+            total_duration_seconds: p.total_duration_seconds,
+            resolved: p.resolved,
+            audio_part: p.audio_part,
+            audio_part_count: p.audio_part_count,
+            playback_rate: p.playback_rate,
+        }
+    }
+}
+
+/// Either shape of the resume feed, chosen by `verbosity`.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum RecentProgress {
+    Stub(Vec<ResumePointStub>),
+    Full(Vec<ResumePoint>),
+}
+
+/// Per-user state `get_book` can fold into one answer.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BookInclude {
+    Progress,
+    ReadStatus,
+    Highlights,
+    Bookmarks,
+    Sessions,
+    Copies,
+}
+
+/// Parameters for the per-book read.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetBookParams {
+    /// The book's uuid (the `unique_identifier` field on book records).
+    pub uuid: String,
+    /// Per-user state to fold in alongside the metadata, so "tell me about
+    /// this book for this reader" is one call rather than five.
+    pub include: Option<Vec<BookInclude>>,
+}
+
+/// `get_book`'s answer: the metadata, plus whatever `include` asked for.
+/// Every extra block is absent unless requested.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct BookDetail {
+    pub book: EbookMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<BookProgress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_status: Option<Option<ReadStatusRecord>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub highlights: Option<Vec<Highlight>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bookmarks: Option<Vec<Bookmark>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sessions: Option<SessionLogPage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copies: Option<Vec<PhysicalCopy>>,
 }
 
 /// Parameters for a single book's progress read.
@@ -87,7 +221,9 @@ pub struct RecentProgressParams {
 pub struct BookProgressParams {
     /// The book's uuid.
     pub uuid: String,
-    /// Which format's position to read; defaults to `epub`.
+    /// Narrow the answer to one format. Omit it — the default returns
+    /// every format the reader has a position in, which is what makes
+    /// `furthest` meaningful.
     pub format: Option<ProgressFormat>,
 }
 
@@ -118,7 +254,7 @@ impl OmnibusMcp {
     }
 
     #[tool(
-        description = "List the books in the library with full metadata (title, creators, series, subjects, genres, identifiers, formats). With no parameters returns the whole (capped) library; pass sort+dir+limit to paginate and feed next_cursor back for the following page. Book records carry the uuid handle (unique_identifier) the per-book tools take."
+        description = "List the books in the library with full metadata (title, creators, series, subjects, genres, identifiers, formats). With no parameters returns the whole (capped) library; pass sort+dir+limit to paginate and feed next_cursor back for the following page. Book records carry the uuid handle (unique_identifier) the per-book tools take.\n\nlast_interacted_at is LIBRARY-WIDE and is not a reading timestamp: it is the most recent moment anyone rated the book, published a journal entry on it, changed its read status, edited its metadata or cover, added it to the library, or checked in a physical copy. Reading position is NOT one of those signals, so this field can jump while a reader's position barely moves — and moves for one reader when another acts. For \"when did this reader last read this\", use recent_progress or book_progress."
     )]
     pub async fn list_books(
         &self,
@@ -152,15 +288,75 @@ impl OmnibusMcp {
     }
 
     #[tool(
-        description = "Fetch one book's full metadata by uuid, including its on-disk files (book_files) with per-file formats and sizes."
+        description = "Fetch one book's full metadata by uuid, including its on-disk files (book_files) with per-file formats, sizes, and — for audio — duration_seconds, so an audiobook's runtime never has to be sourced out of band.\n\nPass `include` to fold this reader's own state into the same answer instead of making five more calls: \"progress\" (every format's position, enriched), \"read_status\", \"highlights\", \"bookmarks\", \"sessions\", \"copies\". Each requested block appears as a top-level field alongside `book`; unrequested blocks are absent. Use it for \"tell me about this book for this reader\"."
     )]
     pub async fn get_book(
         &self,
-        Parameters(p): Parameters<BookRef>,
-    ) -> Result<Json<EbookMetadata>, ErrorData> {
-        let path = format!("/api/ebooks/{}", p.uuid);
+        Parameters(p): Parameters<GetBookParams>,
+    ) -> Result<Json<BookDetail>, ErrorData> {
+        let uuid = crate::tools::path_segment(&p.uuid, "uuid")?;
+        let path = format!("/api/ebooks/{uuid}");
         let book: Option<EbookMetadata> = self.client.get_json_opt(&path, &[]).await?;
-        book.map(Json).ok_or_else(|| not_found("book"))
+        let book = book.ok_or_else(|| not_found("book"))?;
+
+        let include = p.include.unwrap_or_default();
+        let wants = |what: BookInclude| include.contains(&what);
+        let mut detail = BookDetail {
+            book,
+            progress: None,
+            read_status: None,
+            highlights: None,
+            bookmarks: None,
+            sessions: None,
+            copies: None,
+        };
+        // Sequential rather than concurrent: the client serializes on one
+        // token anyway, and a handful of small reads is not worth the
+        // machinery — the win here is the caller making one tool call, not
+        // the wall clock.
+        if wants(BookInclude::Progress) {
+            detail.progress = Some(
+                self.client
+                    .get_json(&format!("/api/progress/{uuid}"), &[])
+                    .await?,
+            );
+        }
+        if wants(BookInclude::ReadStatus) {
+            detail.read_status = Some(
+                self.client
+                    .get_json(&format!("/api/read-status/{uuid}"), &[])
+                    .await?,
+            );
+        }
+        if wants(BookInclude::Highlights) {
+            detail.highlights = Some(
+                self.client
+                    .get_json(&format!("/api/highlights/book/{uuid}"), &[])
+                    .await?,
+            );
+        }
+        if wants(BookInclude::Bookmarks) {
+            detail.bookmarks = Some(
+                self.client
+                    .get_json(&format!("/api/bookmarks/book/{uuid}"), &[])
+                    .await?,
+            );
+        }
+        if wants(BookInclude::Sessions) {
+            detail.sessions = Some(
+                self.client
+                    .get_json("/api/stats/sessions", &[("book", uuid.to_string())])
+                    .await?,
+            );
+        }
+        if wants(BookInclude::Copies) {
+            detail.copies = Some(
+                self.client
+                    .get_json(&format!("/api/physical/{uuid}/copies"), &[])
+                    .await?,
+            );
+        }
+        Ok(Json(detail))
     }
 
     #[tool(
@@ -276,7 +472,7 @@ impl OmnibusMcp {
     }
 
     #[tool(
-        description = "The signed-in user's reading-session log, newest first — one entry per recorded sitting with book, format, and duration. Paginate by echoing next_before back as before; optionally scope to one book uuid."
+        description = "The signed-in user's reading-session log, newest first — one entry per recorded sitting with book, format, and duration. Paginate by echoing next_before back as before; optionally scope to one book uuid.\n\nFORMAT VOCABULARY: a session's format is \"reading\" | \"listening\" | \"mixed\", because one sitting can span both. Progress records use \"epub\" | \"audio\" instead, for the single format a position belongs to. The mapping is reading=epub, listening=audio; \"mixed\" has no progress-record equivalent. Every timestamp carries an ISO 8601 sibling (started_at_iso, ended_at_iso) alongside the unix seconds, so no epoch arithmetic is needed."
     )]
     pub async fn reading_sessions(
         &self,
@@ -298,40 +494,49 @@ impl OmnibusMcp {
     }
 
     #[tool(
-        description = "The signed-in user's most recent in-progress books — the 'pick up where you left off' feed, with per-book position and format."
+        description = "The signed-in user's most recent in-progress books — the 'pick up where you left off' feed, with per-book position and format.\n\nBy default each entry carries a stub of the book (uuid, title, creators, series, formats, cover_url); pass verbosity: \"full\" for the whole metadata record, which inlines the description, every identifier and every file row per entry. Audio entries carry total_duration_seconds and audio_part/audio_part_count — those are CONTAINER PART marks, not book chapters, so a 65-chapter book stored as a 4-part M4B reports part 4 of 4. Book chapters, when known, are on each entry's `resolved` block; call book_progress for a fully resolved position."
     )]
     pub async fn recent_progress(
         &self,
         Parameters(p): Parameters<RecentProgressParams>,
-    ) -> Result<Json<Vec<ResumePoint>>, ErrorData> {
+    ) -> Result<Json<RecentProgress>, ErrorData> {
         let mut query: Vec<(&str, String)> = Vec::new();
         if let Some(limit) = p.limit {
             query.push(("limit", limit.to_string()));
         }
-        Ok(Json(
-            self.client.get_json("/api/progress/recent", &query).await?,
-        ))
+        let points: Vec<ResumePoint> =
+            self.client.get_json("/api/progress/recent", &query).await?;
+        Ok(Json(match p.verbosity.unwrap_or_default() {
+            Verbosity::Full => RecentProgress::Full(points),
+            Verbosity::Stub => {
+                RecentProgress::Stub(points.into_iter().map(ResumePointStub::from).collect())
+            }
+        }))
     }
 
     #[tool(
-        description = "The signed-in user's saved position in one book — EPUB CFI or audio seconds depending on format. Returns null when the user has not opened the book in that format."
+        description = "Where the signed-in user is in one book. Returns EVERY format they have a position in (not just the ebook), each with the stored position and a `resolved` block naming the chapter, the percent through that chapter, and the percent through the whole book.\n\nRead `furthest` first: it names which format represents the reader's true place, so a reader 87% through the audiobook and 47% through the EPUB reads as 87%, not 47%. Audio records carry total_duration_seconds and a derived progress_percent, so an audiobook's runtime never has to be guessed. `resolved.confidence` is \"exact\", \"approximate\" (derived through a lossy step), or \"unknown\" (nothing was derivable — the other fields are then absent, and MUST NOT be treated as position zero).\n\naudio_part/audio_part_count are container part marks, NOT book chapters; book chapters live on `resolved`. Pass `format` only to narrow deliberately — the default is what makes `furthest` meaningful. `records` is empty when the user has never opened the book."
     )]
     pub async fn book_progress(
         &self,
         Parameters(p): Parameters<BookProgressParams>,
-    ) -> Result<Json<Option<ProgressRecord>>, ErrorData> {
+    ) -> Result<Json<BookProgress>, ErrorData> {
+        let uuid = crate::tools::path_segment(&p.uuid, "uuid")?;
+        let path = format!("/api/progress/{uuid}");
+        let mut query: Vec<(&str, String)> = Vec::new();
         // Exhaustive match rather than a serde round-trip: a new variant
-        // fails the build here instead of silently querying the default.
-        let format = match p.format.unwrap_or(ProgressFormat::Epub) {
-            ProgressFormat::Epub => "epub",
-            ProgressFormat::Audio => "audio",
-        };
-        let path = format!("/api/progress/{}", p.uuid);
-        Ok(Json(
-            self.client
-                .get_json(&path, &[("format", format.to_string())])
-                .await?,
-        ))
+        // fails the build here instead of silently querying the wrong one.
+        if let Some(format) = p.format {
+            query.push((
+                "format",
+                match format {
+                    ProgressFormat::Epub => "epub",
+                    ProgressFormat::Audio => "audio",
+                }
+                .to_string(),
+            ));
+        }
+        Ok(Json(self.client.get_json(&path, &query).await?))
     }
 
     #[tool(
@@ -346,7 +551,7 @@ impl OmnibusMcp {
     }
 
     #[tool(
-        description = "The signed-in user's highlights in one book: highlighted text with color, optional note, and EPUB CFI location."
+        description = "The signed-in user's highlights in one book: highlighted text with color, optional note, and EPUB CFI location. Each is placed in the book — spine_index, chapter_title, percent_through_book — and the list is ordered by that position, so a run of highlights reads as a pass through the text. Anchors that cannot be placed (Kobo-origin highlights carry no CFI) report null and sort last. created_at carries an ISO 8601 sibling."
     )]
     pub async fn book_highlights(
         &self,
@@ -357,7 +562,7 @@ impl OmnibusMcp {
     }
 
     #[tool(
-        description = "The signed-in user's bookmarks in one book — reader positions (EPUB CFI) or audiobook timestamps (seconds)."
+        description = "The signed-in user's bookmarks in one book — reader positions (EPUB CFI) or audiobook timestamps (seconds). Each is placed in the book (spine_index, chapter_title, percent_through_book) and the list is ordered by that position; an audiobook bookmark has no spine_index but is placed by percent all the same. created_at carries an ISO 8601 sibling."
     )]
     pub async fn book_bookmarks(
         &self,

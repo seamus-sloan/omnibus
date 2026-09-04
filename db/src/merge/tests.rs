@@ -1,6 +1,8 @@
 //! Unit tests for `merge_books`: file/link/log relocation to the target
 //! book, taxonomy and user-data transfer, and the same-book rejection.
 
+use crate::anchor::AnnotationOrder;
+
 use omnibus_shared::MetadataOverrides;
 
 use super::*;
@@ -868,7 +870,7 @@ async fn merge_moves_highlights_to_target() {
         .await
         .unwrap();
 
-    let on_target = crate::annotations::list_highlights(&pool, user, &target)
+    let on_target = crate::annotations::list_highlights(&pool, user, &target, AnnotationOrder::Chronological)
         .await
         .unwrap();
     assert_eq!(

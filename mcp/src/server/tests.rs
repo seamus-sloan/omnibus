@@ -12,7 +12,9 @@ use omnibus_shared::{
 
 use super::*;
 use crate::config::Config;
-use crate::tools::read::{BookRef, ListBooksParams};
+use crate::tools::read::{
+    BookInclude, BookRef, GetBookParams, ListBooksParams, RecentProgressParams, Verbosity,
+};
 use crate::tools::shelves::{
     AddBooksParams, CreateShelfParams, DeleteShelfParams, PreviewRuleParams, RemoveBookParams,
     UpdateShelfParams,
@@ -140,10 +142,53 @@ async fn stub_service() -> OmnibusMcp {
         };
         (headers, AxumJson(library))
     }
+    async fn progress() -> AxumJson<serde_json::Value> {
+        AxumJson(serde_json::json!({
+            "book_uuid": "uuid-frank",
+            "records": [],
+            "furthest": null,
+            "linked": false,
+        }))
+    }
+    async fn read_status() -> AxumJson<serde_json::Value> {
+        AxumJson(serde_json::json!(null))
+    }
+    async fn recent() -> AxumJson<serde_json::Value> {
+        AxumJson(serde_json::json!([{
+            "record": {
+                "book_uuid": "uuid-frank",
+                "format": "epub",
+                "epub_cfi": "epubcfi(/6/4!/4/2/1:0)",
+                "audio_position_seconds": null,
+                "progress_percent": 30,
+                "kobo_location": null,
+                "book_file_id": null,
+                "updated_at": 1_700_000_000,
+                "client_updated_at": 1_700_000_000,
+            },
+            "book": {
+                "id": 7,
+                "filename": "frankenstein.epub",
+                "title": "Frankenstein",
+                "description": "A very long description that a stub feed should not inline.",
+                "unique_identifier": "uuid-frank",
+                "creators": [],
+                "subjects": [],
+                "identifiers": [],
+                "formats": ["EPUB"],
+                "book_files": [],
+                "error": null,
+            },
+            "linked": false,
+        }]))
+    }
     let app = Router::new()
         .route("/api/auth/login", post(login))
         .route("/api/ebooks", get(ebooks))
-        .route("/api/ebooks/uuid-frank", get(book));
+        .route("/api/ebooks/uuid-frank", get(book))
+        .route("/api/progress/uuid-frank", get(progress))
+        .route("/api/progress/recent", get(recent))
+        .route("/api/read-status/uuid-frank", get(read_status));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -162,21 +207,23 @@ async fn stub_service() -> OmnibusMcp {
 async fn get_book_tool_returns_the_shared_typed_book() {
     let service = stub_service().await;
     let book = service
-        .get_book(Parameters(BookRef {
+        .get_book(Parameters(GetBookParams {
             uuid: "uuid-frank".into(),
+            include: None,
         }))
         .await
         .unwrap();
-    assert_eq!(book.0.title.as_deref(), Some("Frankenstein"));
-    assert_eq!(book.0.unique_identifier.as_deref(), Some("uuid-frank"));
+    assert_eq!(book.0.book.title.as_deref(), Some("Frankenstein"));
+    assert_eq!(book.0.book.unique_identifier.as_deref(), Some("uuid-frank"));
 }
 
 #[tokio::test]
 async fn get_book_tool_reports_not_found_for_an_unknown_uuid() {
     let service = stub_service().await;
     let err = match service
-        .get_book(Parameters(BookRef {
+        .get_book(Parameters(GetBookParams {
             uuid: "uuid-missing".into(),
+            include: None,
         }))
         .await
     {
@@ -1099,5 +1146,73 @@ async fn create_shelf_rejects_invalid_kind_combinations_locally() {
         err.message.contains("match mode"),
         "message: {}",
         err.message
+    );
+}
+
+#[tokio::test]
+async fn get_book_include_folds_per_user_state_into_one_answer() {
+    let service = stub_service().await;
+    let detail = service
+        .get_book(Parameters(GetBookParams {
+            uuid: "uuid-frank".into(),
+            include: Some(vec![BookInclude::Progress, BookInclude::ReadStatus]),
+        }))
+        .await
+        .expect("get_book should succeed");
+    assert_eq!(detail.0.book.title.as_deref(), Some("Frankenstein"));
+    let progress = detail.0.progress.expect("progress was requested");
+    assert_eq!(progress.book_uuid, "uuid-frank");
+    assert!(detail.0.read_status.is_some(), "read_status was requested");
+    // Unrequested blocks stay absent rather than coming back empty, so a
+    // caller can tell "not asked for" from "nothing there".
+    assert!(detail.0.highlights.is_none());
+    assert!(detail.0.bookmarks.is_none());
+}
+
+#[tokio::test]
+async fn get_book_without_include_returns_metadata_alone() {
+    let service = stub_service().await;
+    let detail = service
+        .get_book(Parameters(GetBookParams {
+            uuid: "uuid-frank".into(),
+            include: None,
+        }))
+        .await
+        .expect("get_book should succeed");
+    assert!(detail.0.progress.is_none());
+    assert!(detail.0.read_status.is_none());
+    assert!(detail.0.copies.is_none());
+}
+
+#[tokio::test]
+async fn recent_progress_defaults_to_a_stub_book_projection() {
+    let service = stub_service().await;
+    let feed = service
+        .recent_progress(Parameters(RecentProgressParams::default()))
+        .await
+        .expect("recent_progress should succeed");
+    let json = serde_json::to_string(&feed.0).unwrap();
+    assert!(
+        !json.contains("A very long description"),
+        "the stub projection must not inline the full record: {json}"
+    );
+    assert!(json.contains("Frankenstein"), "it still names the book");
+    assert!(json.contains("uuid-frank"), "and carries the uuid handle");
+}
+
+#[tokio::test]
+async fn recent_progress_full_verbosity_returns_the_whole_record() {
+    let service = stub_service().await;
+    let feed = service
+        .recent_progress(Parameters(RecentProgressParams {
+            limit: None,
+            verbosity: Some(Verbosity::Full),
+        }))
+        .await
+        .expect("recent_progress should succeed");
+    let json = serde_json::to_string(&feed.0).unwrap();
+    assert!(
+        json.contains("A very long description"),
+        "full verbosity keeps everything: {json}"
     );
 }

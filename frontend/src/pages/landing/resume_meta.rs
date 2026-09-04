@@ -97,6 +97,8 @@ mod tests {
                 book_file_id: None,
                 updated_at: 0,
                 client_updated_at: 0,
+                updated_at_iso: None,
+                client_updated_at_iso: None,
             },
             book: EbookMetadata::default(),
             linked: false,

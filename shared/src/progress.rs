@@ -207,6 +207,36 @@ pub struct ProgressRecord {
     pub book_file_id: Option<i64>,
     pub updated_at: i64,
     pub client_updated_at: i64,
+    /// [`Self::updated_at`] rendered as ISO 8601 UTC. Server receipt time.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and
+    /// sort on, the string is what a reader of the API can act on without
+    /// doing calendar arithmetic by hand. Populated by the server's read
+    /// paths; `None` on a payload a client built itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at_iso: Option<String>,
+    /// [`Self::client_updated_at`] rendered as ISO 8601 UTC. Client event time — the clock most-recent-wins resolves on.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and
+    /// sort on, the string is what a reader of the API can act on without
+    /// doing calendar arithmetic by hand. Populated by the server's read
+    /// paths; `None` on a payload a client built itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_updated_at_iso: Option<String>,
+}
+
+impl ProgressRecord {
+    /// Fill the ISO siblings from the epochs already on the record.
+    ///
+    /// Derived rather than stored, and applied at the read boundary, so the
+    /// two forms of one timestamp cannot disagree — the failure a second
+    /// stored column invites.
+    #[must_use]
+    pub fn with_iso(mut self) -> Self {
+        self.updated_at_iso = Some(crate::to_iso8601(self.updated_at));
+        self.client_updated_at_iso = Some(crate::to_iso8601(self.client_updated_at));
+        self
+    }
 }
 
 /// "Pick up where you left off" entry returned by `GET /api/progress/recent` and `rpc_recent_progress`.
