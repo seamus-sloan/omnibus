@@ -56,10 +56,17 @@ struct PlayerView: View {
                     .background(palette.bg0Color.opacity(0.6))
             }
 
+            // Starved but armed: AVFoundation re-arms the item itself, so this
+            // is a spinner over a live player, not a failure.
+            if player.isBuffering {
+                LoadingView(label: "Buffering")
+                    .background(palette.bg0Color.opacity(0.4))
+            }
+
             // The state that was invisible during #2409: this book's download
             // is in flight over the same link the stream is buffering on, so
             // say so rather than leaving the listener to infer it from the
-            // rebuffering.
+            // rebuffering. Top overlay, so it sits clear of the banner slot.
             if let record = activeDownload {
                 VStack {
                     DownloadProgressView(
@@ -73,7 +80,12 @@ struct PlayerView: View {
                 }
             }
 
-            if let offer = player.syncOffer {
+            if let message = player.error {
+                // Takes the banner slot ahead of the offers: an offer to jump
+                // somewhere is noise while nothing is playing.
+                PlaybackErrorBanner(message: message) { player.play() }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let offer = player.syncOffer {
                 SyncOfferBanner(
                     title: "Listened further elsewhere",
                     detail: "Another device left off at \(Format.duration(offer)).",
