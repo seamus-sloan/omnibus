@@ -104,7 +104,7 @@ final class DownloadManager: NSObject {
         let mayRun = DownloadPolicy.mayTransfer(
             isStreaming: isStreaming,
             wifiOnly: wifiOnly,
-            pathIsExpensive: await Connectivity.shared.pathIsExpensive
+            pathIsExpensive: Connectivity.shared.pathIsExpensive
         )
         // Suspend/resume rather than reconfiguring: the metered-path flags live
         // on `URLRequest`, and a background session's configuration is fixed
@@ -173,6 +173,9 @@ final class DownloadManager: NSObject {
             Task { await applyTransferGate() }
         }
     }
+
+    /// Whether a `resumeInterrupted` pass is already running. See there.
+    private var isResuming = false
 
     /// Whether the audio player is streaming rather than playing local files.
     /// Set by `AudioPlayer`; downloads stand down while it is true.
@@ -779,8 +782,23 @@ final class DownloadManager: NSObject {
               let record = records[key],
               let index = record.index(ofOrdinal: ordinal)
         else {
+            // The body of a non-2xx is an error page, not content.
             Self.discard(staged)
-            await abandon(key: key, message: "Download failed (\(status))")
+            // A server having a bad moment — a restart mid-transfer is the
+            // common one on a self-hosted box — must not cost the reader the
+            // parts that already landed. No resume data exists here (the task
+            // completed, it just completed with a refusal), so this part
+            // refetches from zero on reconnect while its siblings keep theirs.
+            if DownloadFailure.classify(status: status) == .transient {
+                await holdForResume(
+                    key: key, ordinal: ordinal, resumeData: nil,
+                    message: "Server returned \(status)"
+                )
+            } else {
+                await abandon(
+                    key: key, message: Self.describe("Download failed (\(status))", ordinal: ordinal)
+                )
+            }
             return
         }
 
@@ -799,6 +817,13 @@ final class DownloadManager: NSObject {
                 await abandon(key: key, message: "The download failed its integrity check.")
                 return
             }
+        }
+
+        // This part came back, so whatever parked it is no longer true. Left
+        // standing, `activity(of:)` reads a running record with an error as
+        // `.retrying` and the book shows "Retrying — …" all the way to 100%.
+        if record.error != nil {
+            await update(key: key) { $0.error = nil }
         }
 
         let incoming = OfflineStore.downloadsDirectory
@@ -951,7 +976,13 @@ final class DownloadManager: NSObject {
         if let resumeData {
             let url = OfflineStore.downloadsDirectory
                 .appendingPathComponent(record.files[index].resumeName)
-            try? resumeData.write(to: url, options: .atomic)
+            // Off the main actor: a blocking write at the exact moment a
+            // transfer fails, which on a bad link happens repeatedly. Awaited
+            // rather than fired and forgotten — a reconnect that raced ahead
+            // of it would find no resume data and refetch from zero.
+            await Task.detached(priority: .utility) {
+                try? resumeData.write(to: url, options: .atomic)
+            }.value
         }
         await update(key: key) { record in
             record.state = .running
@@ -985,6 +1016,15 @@ final class DownloadManager: NSObject {
     /// out as a `Range` and comes back 206 — and re-requests from zero only
     /// where the resume data never reached disk.
     func resumeInterrupted() async {
+        // Re-entrancy guard. This method suspends on `session.allTasks` and
+        // again on each resume-data read, and it has two callers that can fire
+        // together — a reconnect and `hydrate` on the same relaunch. Without
+        // this, both pass the liveness check for the same part and start it
+        // twice, and the two transfers stage over each other.
+        guard !isResuming else { return }
+        isResuming = true
+        defer { isResuming = false }
+
         let live = await session.allTasks.compactMap(\.taskDescription)
         for (key, record) in records where record.state == .running {
             for file in record.files where !file.done {
@@ -993,10 +1033,16 @@ final class DownloadManager: NSObject {
                 guard !live.contains(taskKey) else { continue }
                 let resumeURL = OfflineStore.downloadsDirectory
                     .appendingPathComponent(file.resumeName)
+                // Off the main actor: one blocking read per parked part, on a
+                // background-recovery path with nobody waiting on it.
+                let resumeData = await Task.detached(priority: .utility) {
+                    let data = try? Data(contentsOf: resumeURL)
+                    if data != nil { try? FileManager.default.removeItem(at: resumeURL) }
+                    return data
+                }.value
                 let task: URLSessionDownloadTask
-                if let data = try? Data(contentsOf: resumeURL) {
-                    task = session.downloadTask(withResumeData: data)
-                    try? FileManager.default.removeItem(at: resumeURL)
+                if let resumeData {
+                    task = session.downloadTask(withResumeData: resumeData)
                 } else if let request = await authorizedRequest(path: file.urlPath) {
                     task = session.downloadTask(with: request)
                 } else {

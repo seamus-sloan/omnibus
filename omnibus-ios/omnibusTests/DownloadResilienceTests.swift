@@ -101,6 +101,19 @@ struct DownloadFailureTests {
         #expect(DownloadFailure.classify(status: 403) == .terminal)
     }
 
+    /// The gap Copilot caught on #2424: `classify(status:)` was written and
+    /// tested but never called, so `finish` abandoned every part of a book on
+    /// any non-2xx — including the 5xx a self-hosted server throws while it
+    /// restarts. These pin the statuses that must survive as resumable.
+    @Test func aRestartingServerDoesNotCostTheReaderTheWholeBook() {
+        for status in [500, 502, 503, 504, 408, 429] {
+            #expect(
+                DownloadFailure.classify(status: status) == .transient,
+                "status \(status) must park the part, not abandon the record"
+            )
+        }
+    }
+
     @Test func aSuccessIsNotAFailure() {
         #expect(DownloadFailure.classify(status: 200) == nil)
         #expect(DownloadFailure.classify(status: 206) == nil)
