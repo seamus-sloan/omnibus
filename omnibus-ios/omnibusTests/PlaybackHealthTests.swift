@@ -56,6 +56,19 @@ struct PlaybackHealthTests {
         #expect(health.observed(.failed) == .rebuild(attempt: 2))
     }
 
+    /// The loop Copilot caught on #2423: automatic recovery must not refill
+    /// its own budget, or a rebuild that keeps failing retries forever.
+    @Test func repeatedAutomaticRecoveryStillExhaustsTheBudget() {
+        var health = PlaybackHealth()
+        var actions: [PlaybackHealthAction] = []
+        // Every rebuild fails again the moment it is armed.
+        for _ in 0..<(PlaybackHealth.rebuildBudget + 2) {
+            actions.append(health.observed(.failed))
+        }
+        #expect(actions.last == .surrender)
+        #expect(actions.filter { $0 == .surrender }.count == 2)
+    }
+
     @Test func resetClearsTheBudgetForTheNextBook() {
         var health = PlaybackHealth()
         _ = health.observed(.failed)

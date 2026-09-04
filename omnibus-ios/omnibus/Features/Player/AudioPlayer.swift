@@ -99,6 +99,14 @@ final class AudioPlayer {
     private var health = PlaybackHealth()
     private var recoveryTask: Task<Void, Never>?
 
+    /// Whether a recovery in flight should start playing when it lands.
+    ///
+    /// A rebuild backs off for a second or more before it resumes, and the
+    /// listener may well press pause inside that window — having given up on a
+    /// book that just went silent. Without this, the recovery landed and
+    /// started playing anyway, overriding a deliberate pause.
+    private var resumeAfterRecovery = false
+
     /// Whether the item is alive but starved. Distinct from `isPlaying`,
     /// which stays true across a buffering stall — the listener has not
     /// paused anything, the data just hasn't arrived.
@@ -620,9 +628,23 @@ final class AudioPlayer {
         if player.currentItem?.status == .failed {
             health.reset()
             error = nil
+            resumeAfterRecovery = true
             recoverFromFailure(attempt: 1)
             return
         }
+        startPlayback(on: player)
+    }
+
+    /// Start the transport on an item believed good.
+    ///
+    /// Split from `play()` so the automatic recovery path can reach it without
+    /// passing through that method's failed-item branch. Going through `play()`
+    /// there was an unbounded loop: `recoverFromFailure` awaits a seek, during
+    /// which the rebuilt item can itself reach `.failed`, and `play()` would
+    /// then reset the budget and start recovery over at attempt 1 forever.
+    /// Automatic retries must stay inside `PlaybackHealth`'s budget; only a
+    /// listener's own tap refills it.
+    private func startPlayback(on player: AVPlayer) {
         player.rate = Float(rate)
         isPlaying = true
         if sessionStart == nil { sessionStart = Date() }
@@ -644,6 +666,11 @@ final class AudioPlayer {
     func pause() {
         player?.pause()
         isPlaying = false
+        // Cleared here as well as from `timeControlStatus`: the observer is
+        // asynchronous, and the overlay should go the moment the tap does.
+        isBuffering = false
+        // A pause during a rebuild's back-off is the listener overruling it.
+        resumeAfterRecovery = false
         updateNowPlaying()
         Task {
             await persistPosition(force: true)
@@ -1019,6 +1046,11 @@ final class AudioPlayer {
             handle(.playing)
         case .waitingToPlayAtSpecifiedRate where isPlaying:
             handle(.starved)
+        case .paused:
+            // A stall that the listener then pauses is no longer buffering —
+            // without this the overlay outlived the transport state that
+            // raised it.
+            isBuffering = false
         default:
             break
         }
@@ -1034,6 +1066,9 @@ final class AudioPlayer {
             isBuffering = true
         case .rebuild(let attempt):
             isBuffering = false
+            // The failure interrupted playback that was under way, so the
+            // rebuild should resume it — unless the listener pauses first.
+            resumeAfterRecovery = isPlaying
             isPlaying = false
             updateNowPlaying()
             recoverFromFailure(attempt: attempt)
@@ -1066,7 +1101,11 @@ final class AudioPlayer {
                 self.observeItem(item)
                 await self.seek(to: resume)
                 self.error = nil
-                self.play()
+                // Not `play()`: see `startPlayback`. A rebuild that fails
+                // again must spend the next attempt, not reset the count.
+                if self.resumeAfterRecovery, let player = self.player {
+                    self.startPlayback(on: player)
+                }
             } catch {
                 self.error = (error as? APIError)?.errorDescription
                     ?? error.localizedDescription
