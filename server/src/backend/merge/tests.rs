@@ -30,6 +30,26 @@ async fn body_json<T: serde::de::DeserializeOwned>(res: axum::response::Response
     serde_json::from_slice(&bytes).unwrap()
 }
 
+/// Set one reader's read status on a book through the real writer, so the
+/// stored row carries whatever `finished_at` / `updated_at` the app would.
+async fn set_status(
+    pool: &sqlx::SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+    status: omnibus_shared::ReadStatus,
+) {
+    db::read_status::set_read_status(
+        pool,
+        user_id,
+        &omnibus_shared::SetReadStatus {
+            book_uuid: book_uuid.to_string(),
+            status,
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// Seed two distinct books (separate seed libraries so the second
 /// `replace_books` doesn't sweep the first) and return their uuids.
 async fn seed_source_and_target(pool: &sqlx::SqlitePool) -> (String, String) {
@@ -274,4 +294,53 @@ async fn api_undo_merge_409s_when_the_merge_was_already_undone() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn api_undo_merge_409s_when_the_survivor_was_recurated_after_the_merge() {
+    // `UndoConflict` is a state-moved-on answer the caller can act on, like
+    // `AlreadyUndone` — not a 500. The reader marks the merged book finished
+    // between the merge and the undo, which is what makes it unresolvable.
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "root").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+    let (source_uuid, target_uuid) = seed_source_and_target(&pool).await;
+
+    set_status(
+        &pool,
+        admin.id,
+        &source_uuid,
+        omnibus_shared::ReadStatus::Reading,
+    )
+    .await;
+    let body = serde_json::json!({ "source_uuid": source_uuid, "target_uuid": target_uuid });
+    let res = app
+        .clone()
+        .oneshot(post_json("/api/books/merge", &token, body))
+        .await
+        .unwrap();
+    let merged: MergeBooksResult = body_json(res).await;
+
+    set_status(
+        &pool,
+        admin.id,
+        &target_uuid,
+        omnibus_shared::ReadStatus::Finished,
+    )
+    .await;
+
+    let body = serde_json::json!({ "merge_log_id": merged.merge_log_id });
+    let res = app
+        .oneshot(post_json("/api/books/merge/undo", &token, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let msg = String::from_utf8(
+        to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(msg.contains("read status"), "got {msg}");
 }

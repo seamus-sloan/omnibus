@@ -1,6 +1,8 @@
 //! Undo for [`super::merge_books`]: recreate the absorbed source book
 //! from its `merge_log` snapshot and move its file rows back.
 
+use std::collections::HashSet;
+
 use sqlx::{SqlitePool, Transaction};
 
 use crate::settings::upsert_library;
@@ -23,7 +25,9 @@ use super::MergeError;
 /// Fails with [`MergeError::UndoConflict`] when a reader has re-curated the
 /// survivor since the merge — that value and the pre-merge one are both real,
 /// and quietly keeping either is how undo used to hand one book's curation to
-/// the other.
+/// the other — or when a **later, still-open merge into the same book** also
+/// moved that reader's row, which this undo cannot see past. Undoing several
+/// merges into one book is therefore last-in-first-out wherever they overlap.
 ///
 /// Deliberate asymmetries: reading progress, sessions, annotations and journal
 /// entries stay on the target; links unioned into the target stay there;
@@ -57,9 +61,19 @@ pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, 
         &snap.moved_formats,
     )
     .await?;
+    // Anything a still-open later merge into this same target is also holding
+    // there is not this undo's to take back.
+    let later = load_later_merge_claims(&mut tx, merge_log_id, target_id).await?;
+
     restore_links(&mut tx, new_id, &snap).await?;
     restore_identifiers(&mut tx, new_id, &snap).await?;
-    strip_merged_identifiers(&mut tx, target_id, &snap.identifiers_added_to_target).await?;
+    strip_merged_identifiers(
+        &mut tx,
+        target_id,
+        &snap.identifiers_added_to_target,
+        &later.identifiers,
+    )
+    .await?;
     restore_attach_ledger(&mut tx, new_id, &source_uuid, &snap.merged_uuid_rows).await?;
 
     // Per-reader curation keys on the durable uuid, not the row id, so the
@@ -68,7 +82,14 @@ pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, 
         .bind(target_id)
         .fetch_one(&mut *tx)
         .await?;
-    restore_curation(&mut tx, &source_uuid, &target_uuid, &snap.curation).await?;
+    restore_curation(
+        &mut tx,
+        &source_uuid,
+        &target_uuid,
+        &snap.curation,
+        &later.readers,
+    )
+    .await?;
 
     // The restored `books` row + links + identifiers are all written by
     // now, so the code reconstructs the FTS row from them directly.
@@ -432,15 +453,66 @@ async fn restore_links(
     Ok(())
 }
 
+/// What a still-open merge into the same target, recorded *after* the one
+/// being undone, is holding on the survivor. Both fields exist because this
+/// undo cannot see what that later merge's own dedupe deleted.
+struct LaterMergeClaims {
+    /// Readers it moved a curation row for.
+    readers: HashSet<i64>,
+    /// `(scheme, value)` its absorbed book carries, lowercased to match the
+    /// `COLLATE NOCASE` columns. Not `identifiers_added_to_target`: a tuple
+    /// the target already had from an earlier merge is recorded as *added* by
+    /// neither, yet the later-merged book still supplies it.
+    identifiers: HashSet<(String, String)>,
+}
+
+/// Collect [`LaterMergeClaims`] from every un-undone `merge_log` row filed
+/// against this target after `merge_log_id`.
+async fn load_later_merge_claims(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    merge_log_id: i64,
+    target_id: i64,
+) -> Result<LaterMergeClaims, MergeError> {
+    let snapshots: Vec<String> = sqlx::query_scalar(
+        "SELECT source_metadata FROM merge_log
+          WHERE target_book_id = ? AND id > ? AND undone_at IS NULL",
+    )
+    .bind(target_id)
+    .bind(merge_log_id)
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let mut claims = LaterMergeClaims {
+        readers: HashSet::new(),
+        identifiers: HashSet::new(),
+    };
+    for json in &snapshots {
+        let snap: SourceSnapshot = serde_json::from_str(json)?;
+        claims.readers.extend(snap.curation.moved_readers());
+        claims.identifiers.extend(
+            snap.identifiers
+                .iter()
+                .map(|(s, v)| (s.to_lowercase(), v.to_lowercase())),
+        );
+    }
+    Ok(claims)
+}
+
 /// Take back off the target exactly the identifier tuples the merge's union
-/// added to it. A tuple the target already carried is left alone — the merge
-/// did not put it there, so undo has no claim on it.
+/// added to it. Two exclusions, and both matter: a tuple the target already
+/// carried is not the merge's to remove, and one a still-open later merge's
+/// book *also* supplies must stay, or undoing the first merge silently strips
+/// an identifier the survivor is still entitled to.
 async fn strip_merged_identifiers(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     target_id: i64,
     added: &[(String, String)],
+    still_claimed: &HashSet<(String, String)>,
 ) -> Result<(), sqlx::Error> {
     for (scheme, value) in added {
+        if still_claimed.contains(&(scheme.to_lowercase(), value.to_lowercase())) {
+            continue;
+        }
         sqlx::query("DELETE FROM book_identifiers WHERE book_id = ? AND scheme = ? AND value = ?")
             .bind(target_id)
             .bind(scheme)

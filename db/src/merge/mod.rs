@@ -2,7 +2,9 @@
 //! row (the **source**) into another (the **target**) so a work
 //! indexed as two format-siblings becomes one book with multiple
 //! `book_files`. `merge_books` runs in one transaction and snapshots
-//! the source into `merge_log` for [`undo_merge`].
+//! into `merge_log` for [`undo_merge`] — the source book, and for the
+//! per-reader state whose collision the merge resolves destructively,
+//! *both* books (see `curation`).
 
 mod curation;
 mod snapshot;
