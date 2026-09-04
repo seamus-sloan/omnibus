@@ -71,8 +71,8 @@ pub use cover_tile::{CoverTile, CoverTileKind};
 // key cards, the SMTP relay card, and the account Kindle-email card.
 pub mod credential_card;
 
-// The mobile-only `←` "back to index" link shared by the series/author/
-// tag-cloud detail headers.
+// The mobile-only `←` "back to index" link shared by the series/author
+// detail headers.
 pub mod back_link;
 pub use back_link::disc_back_link;
 

@@ -179,7 +179,7 @@ fn SearchResults(results: PaletteResults, query: String) -> Element {
                     }
                 }
             }
-            {on_this_page(&order, &r, tag_match, &q)}
+            {on_this_page(&order, &r)}
         }
     }
 }
@@ -445,9 +445,8 @@ fn genre_chip(genre: &PaletteGenreHit, q: &str, q_lower: &str) -> Element {
     }
 }
 
-/// Right-rail "On this page" jump list plus a context card. A tag-name match
-/// offers the tag cloud; everything else just lists the sections.
-fn on_this_page(order: &[Section], r: &PaletteResults, tag_match: bool, q: &str) -> Element {
+/// Right-rail "On this page" jump list over the rendered sections.
+fn on_this_page(order: &[Section], r: &PaletteResults) -> Element {
     rsx! {
         aside { class: "search-rail",
             div { class: "label search-rail-head", "On this page" }
@@ -459,20 +458,6 @@ fn on_this_page(order: &[Section], r: &PaletteResults, tag_match: bool, q: &str)
                         class: if i == 0 { "search-rail-item search-rail-item-active" } else { "search-rail-item" },
                         span { "{sec.label()}" }
                         span { class: "search-rail-count mono", "{sec.count(r)}" }
-                    }
-                }
-            }
-            if tag_match {
-                div { class: "divider" }
-                div { class: "search-refine",
-                    div { class: "search-refine-title", "Browse by tag instead?" }
-                    div { class: "search-refine-body",
-                        "See the whole tag cloud and how \u{201c}{q}\u{201d} overlaps with neighbouring tags."
-                    }
-                    Link {
-                        to: Route::TagCloud {},
-                        class: "btn sm search-refine-btn",
-                        "Open tag cloud \u{2192}"
                     }
                 }
             }

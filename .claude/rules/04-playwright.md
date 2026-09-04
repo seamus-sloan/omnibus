@@ -51,10 +51,10 @@ points a user has (a bookmark, the nav, a deep link the app itself hands out) â€
 not for a route with no affordance pointing at it, which tests a surface no user
 can reach and hides the fact that it is unreachable.
 
-**The discovery back arrow is mobile-only markup.** `series-back`,
-`author-back` and `tags-back` are emitted by the mobile shell alone
+**The discovery back arrow is mobile-only markup.** `series-back` and
+`author-back` are emitted by the mobile shell alone
 (`components/back_link.rs`, #2291); on web the top nav is the way back and
-those testids do not exist.
+those testids do not exist. `tags-back` went with the tag cloud page (#2157).
 
 **`/shelves` and `/shelves/:id` are mobile-only.** On web the landing shelf
 gallery filters the book list in place and never navigates; the only `Link`s to

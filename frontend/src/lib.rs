@@ -43,7 +43,7 @@ pub use contexts::*;
 pub use pages::{
     AccountPage, AuthorPage, AuthorsIndexPage, BookDetailPage, BookListenPage, BookReadPage,
     LandingPage, LoginPage, MetadataEditPage, RegisterPage, SearchPage, SeriesIndexPage,
-    SeriesPage, SettingsPage, TagCloudPage,
+    SeriesPage, SettingsPage,
 };
 pub use routes::*;
 

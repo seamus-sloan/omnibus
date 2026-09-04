@@ -38,7 +38,6 @@ mod settings;
 mod shelf_detail;
 mod shelves_index;
 mod stats;
-mod tag_cloud;
 
 pub use account::AccountPage;
 pub use add_books::AddBooksPage;
@@ -79,4 +78,3 @@ pub use settings::SettingsPage;
 pub use shelf_detail::ShelfDetailPage;
 pub use shelves_index::ShelvesIndexPage;
 pub use stats::StatsPage;
-pub use tag_cloud::TagCloudPage;
