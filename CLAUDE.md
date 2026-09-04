@@ -87,18 +87,20 @@ dx serve --platform web -p omnibus
 cargo run -p omnibus                                        # start at http://0.0.0.0:3000
 
 # Tests & lint — aggregate targets cover the full crate matrix in one go
-just test                                                   # db + server + frontend(server + mobile features) + shared
-just lint                                                   # cargo fmt --check + clippy -D warnings (incl. mobile + frontend-server + frontend-web wasm32) + stylelint
+just test                                                   # db + server + frontend(server + mobile features) + shared + mcp
+just lint                                                   # cargo fmt --check + clippy -D warnings (incl. mobile + mcp + frontend-server + frontend-web wasm32) + stylelint
 just lint-css                                               # structural CSS lint only (stylelint; catches unclosed rules in frontend/assets)
 just lint-ts                                                # Playwright TS: biome check + tsc --noEmit (TypeScript 7), in .#e2e
 just check                                                  # lint then test
-# …or per-crate (note: `cargo test --workspace` SKIPS frontend rpc/page tests
-#  and mobile — the rpc/page tests need --features server to compile the
-#  server-function bodies; mobile is out of default-members and has no tests):
+# …or per-crate (note: `cargo test --workspace` SKIPS frontend rpc/page tests,
+#  mobile, and mcp — the rpc/page tests need --features server to compile the
+#  server-function bodies; mobile and mcp are out of default-members, and of
+#  those two only mcp has tests, so name it explicitly):
 cargo test -p omnibus                                       # /api/* REST integration tests
 cargo test -p omnibus-db                                    # db + scanner + sync tests
 cargo test -p omnibus-frontend --features server            # rpc + page tests (server feature required)
 cargo test -p omnibus-shared                                # shared serde / ebook / progress tests
+cargo test -p omnibus-mcp                                   # MCP tool-layer tests (crate is out of default-members)
 cargo clippy                                                # lint default-members (server, shared, frontend)
 cargo fmt                                                   # format all crates
 
@@ -116,7 +118,8 @@ just ios-test-ui                                            # omnibusUITests
 just ios-release-guard                                      # DEBUG-only hooks absent from a Release build
 just ios-sim                                                # boot newest iPhone sim, build, install, launch
 
-# MCP stdio server (mcp/ crate — out of default-members, build explicitly)
+# MCP stdio server (mcp/ crate — out of default-members, build explicitly).
+# `just test` / `just lint` / CI name it explicitly, so its suite gates a merge.
 cargo build -p omnibus-mcp
 cargo test -p omnibus-mcp
 
