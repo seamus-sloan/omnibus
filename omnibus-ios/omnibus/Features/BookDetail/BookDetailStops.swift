@@ -1567,6 +1567,17 @@ struct StopFiles: View {
     var onAlignment: () -> Void
 
     @Environment(\.palette) private var palette
+    // Not `private`: a private stored property makes the memberwise
+    // initializer private too, and this view is constructed from BookDetailView.
+    var downloads = DownloadManager.shared
+
+    /// Every transfer for this book that is still moving — one per format, and
+    /// both at once when a reader downloads the ebook and the audiobook.
+    private var activeDownloads: [DownloadRecord] {
+        [DownloadKind.ebook, .audio]
+            .compactMap { downloads.record(for: book.uuid, kind: $0) }
+            .filter { $0.state == .running || $0.state == .queued }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1611,6 +1622,18 @@ struct StopFiles: View {
                 }
             }
             .padding(.top, 4)
+
+            // Full width, below the rows rather than inside one: the badge in
+            // the row is a tap target with no room to say anything, and a
+            // stalled transfer that only shows a still circle is what left a
+            // reader unable to tell a starved download from a broken one
+            // (#2409).
+            ForEach(activeDownloads, id: \.id) { record in
+                DownloadProgressView(
+                    record: record, activity: downloads.activity(of: record)
+                )
+                .padding(.top, 12)
+            }
 
             if book.hasEbook, book.hasAudiobook {
                 Button {

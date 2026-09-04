@@ -79,10 +79,18 @@ struct DownloadFile: Codable, Sendable, Equatable {
     /// exactly as it was.
     var supersededName: String { "superseded.\(name)" }
 
+    /// Where this file's `URLSessionDownloadTask` resume data is parked
+    /// between a transient failure and the retry that consumes it.
+    ///
+    /// On disk rather than in the record: resume data is an opaque blob of a
+    /// few KB that only URLSession reads, and round-tripping it through the
+    /// record's JSON would put it in every row read that never needs it.
+    var resumeName: String { "resume.\(name)" }
+
     /// Every name this file may occupy on disk. What a removal has to sweep:
-    /// a crash mid-install can leave any of the three behind, and only the
-    /// record knows they exist.
-    var onDiskNames: [String] { [name, incomingName, supersededName] }
+    /// a crash mid-install can leave any of them behind, and only the record
+    /// knows they exist.
+    var onDiskNames: [String] { [name, incomingName, supersededName, resumeName] }
 
     /// How far along this one file is. Monotonic: it only ever rises, and a
     /// file whose size the server hasn't stated yet reads 0 rather than 1.
@@ -574,16 +582,39 @@ actor OfflineStore {
     /// the server in a way retrying cannot fix, so it is held for the UI rather
     /// than tried again — and excluded here so one bad op can neither wedge the
     /// queue nor keep the replica from ever revalidating.
-    func listOps(limit: Int = 200) -> [PendingOp] {
+    /// The highest op id in the queue, or 0 when it is empty.
+    ///
+    /// A drain bounds itself to the ops at or below this, captured when the
+    /// pass starts. Coalescing enqueues DELETE and re-INSERT, so a replaced op
+    /// always lands with a *higher* rowid — which is what makes an id ceiling
+    /// a sound bound rather than an approximation.
+    func maxOpId() -> Int64 {
+        guard isOpen else { return 0 }
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        let sql = "SELECT COALESCE(MAX(id), 0) FROM ops"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        return sqlite3_column_int64(stmt, 0)
+    }
+
+    /// Queued ops in replay order, up to `ceiling`.
+    ///
+    /// The bound is what stops a drain from chasing its own tail: the player
+    /// enqueues a coalesced position every 0.5 s, so an unbounded pass on a
+    /// link slower than that never observes an empty queue and posts one
+    /// `/api/progress` per round trip forever (#2411).
+    func listOps(limit: Int = 200, upTo ceiling: Int64 = Int64.max) -> [PendingOp] {
         guard isOpen else { return [] }
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
         let sql = """
             SELECT id, kind, path, method, body, created_at, attempts, last_error
-            FROM ops WHERE last_error IS NULL ORDER BY id ASC LIMIT ?
+            FROM ops WHERE last_error IS NULL AND id <= ? ORDER BY id ASC LIMIT ?
             """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
-        sqlite3_bind_int(stmt, 1, Int32(limit))
+        sqlite3_bind_int64(stmt, 1, ceiling)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
         var results: [PendingOp] = []
         while sqlite3_step(stmt) == SQLITE_ROW { results.append(readOp(stmt)) }
         return results

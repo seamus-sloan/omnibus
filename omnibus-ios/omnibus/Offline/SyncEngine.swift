@@ -57,7 +57,17 @@ actor SyncEngine {
     /// already empty — `Cache.revalidationIsSafe` asks whether the outbox has
     /// cleared, and a no-op answer would let a read clobber the very rows the
     /// running drain is pushing.
-    private var current: Task<Void, Never>?
+    /// A pass, and the op id ceiling it covers. The ceiling is what a joining
+    /// caller checks: joining a pass that started before your op was queued
+    /// would answer about a drain that is never going to look at it.
+    private var current: (task: Task<Void, Never>, bound: DrainBound, id: Int)?
+    private var nextPassID = 0
+
+    /// Ops replayed by the most recent pass. Surfaced in the You tab's
+    /// diagnostics: a livelock is invisible in aggregate counters but obvious
+    /// here, where a steady playback drain should read 1 and #2411 read in the
+    /// hundreds.
+    private(set) var lastPassReplayCount = 0
 
     /// How many times an op may fail against a *reachable* server before it is
     /// held aside rather than retried.
@@ -168,42 +178,83 @@ actor SyncEngine {
     /// Replay every queued op. Safe to call repeatedly — a second call while
     /// one is in flight joins it rather than starting another.
     func drain() async {
-        if let current {
-            await current.value
+        // Captured before anything is joined or started, so this pass's
+        // promise is exactly "everything queued as of now".
+        let bound = DrainBound(ceiling: await OfflineStore.shared.maxOpId())
+
+        // Only join a pass that will actually reach our op.
+        if let current, bound.satisfied(by: current.bound) {
+            await current.task.value
             return
         }
+
+        nextPassID += 1
+        let passID = nextPassID
+        // Chained rather than run alongside: two concurrent passes would both
+        // read the same rows and replay them twice.
+        let previous = current?.task
         let task = Task {
-            await performDrain()
+            await previous?.value
+            await performDrain(within: bound)
             // Released here rather than after the `await` below, so the slot is
             // free the instant the pass ends. Clearing it in the creator's
             // frame left a window in which a caller that had just queued an op
             // joined an already-finished drain and returned as though it had
             // been pushed — the op then waited for whatever triggered the next
             // drain.
-            releaseCurrent()
+            releaseCurrent(passID)
         }
-        current = task
+        current = (task, bound, passID)
         await task.value
     }
 
-    private func releaseCurrent() { current = nil }
+    /// Clear the slot only if it still holds *this* pass — a later drain may
+    /// have chained itself on and installed its own.
+    private func releaseCurrent(_ passID: Int) {
+        if current?.id == passID { current = nil }
+    }
 
-    /// Sweep until nothing more can be retired.
+    /// Sweep until nothing at or below `ceiling` can be retired.
     ///
     /// More than one sweep because a caller that queues while a drain is
     /// running *joins* it rather than starting another, and would otherwise be
     /// told its op had been pushed by a pass that had already read the queue
-    /// without it. Each sweep strictly shrinks the queue, so this terminates.
-    private func performDrain() async {
-        while await sweep() {}
+    /// without it.
+    ///
+    /// The ceiling is what makes that terminate. Sweeping the *live* queue
+    /// does not strictly shrink it, however obvious that reading looks: the
+    /// player enqueues a coalesced position every 0.5 s, so on any link whose
+    /// round trip is slower than that, each sweep found the newly-queued
+    /// replacement, retired it, and reported progress — a drain that never
+    /// ended and posted one `/api/progress` per round trip for as long as
+    /// playback lasted (#2411). Bounded to ids that existed when the pass
+    /// began, the set really is finite and really does shrink.
+    private func performDrain(within bound: DrainBound) async {
+        var replayed = 0
+        while true {
+            let result = await sweep(within: bound)
+            replayed += result.retired
+            guard result.mayContinue else { break }
+        }
+        lastPassReplayCount = replayed
         await MainActor.run { Connectivity.shared.notePendingChanged() }
     }
 
-    /// One pass over the queue. Answers whether anything left it, which is the
-    /// only condition under which another pass could find more to do.
-    private func sweep() async -> Bool {
-        let ops = await OfflineStore.shared.listOps()
-        guard !ops.isEmpty else { return false }
+    /// What one sweep achieved, and whether another could achieve more.
+    ///
+    /// Two facts rather than one: a sweep that retired ops and then hit a wall
+    /// must report the work *and* stop, which a bare count cannot say.
+    private struct SweepResult {
+        var retired: Int
+        var mayContinue: Bool
+
+        static let exhausted = SweepResult(retired: 0, mayContinue: false)
+    }
+
+    /// One pass over the queue up to `ceiling`.
+    private func sweep(within bound: DrainBound) async -> SweepResult {
+        let ops = await OfflineStore.shared.listOps(upTo: bound.ceiling)
+        guard !ops.isEmpty else { return .exhausted }
 
         var retired = 0
         // Order *within* a kind is load-bearing: a note PATCH addresses the
@@ -229,10 +280,10 @@ actor SyncEngine {
             } catch APIError.unauthorized {
                 // Nothing will replay until the user signs in again; keep the
                 // queue intact and stop.
-                return false
+                return SweepResult(retired: retired, mayContinue: false)
             } catch let error as APIError where error.isRecoverableOffline {
                 // Still offline — stop and retry on the next reconnect.
-                return false
+                return SweepResult(retired: retired, mayContinue: false)
             } catch let APIError.http(status, message)
                 where Self.isTerminalRejection(status)
             {
@@ -259,7 +310,7 @@ actor SyncEngine {
             } catch is CancellationError {
                 // The caller that started this drain went away. Nothing is
                 // known about the op either way, so leave it queued.
-                return false
+                return SweepResult(retired: retired, mayContinue: false)
             } catch {
                 // The server answered, but not with something this op can be
                 // retired on — a 5xx, most likely. Worth retrying, but not
@@ -270,7 +321,7 @@ actor SyncEngine {
             }
         }
 
-        return retired > 0
+        return SweepResult(retired: retired, mayContinue: retired > 0)
     }
 
     /// Fold a replayed op's answer back into the replica.

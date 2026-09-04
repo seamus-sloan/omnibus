@@ -15,6 +15,16 @@ struct PlayerView: View {
     @Environment(AudioPlayer.self) private var player
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
+    private let downloads = DownloadManager.shared
+
+    /// The in-flight download of the book currently loaded, if any — the only
+    /// one worth naming here, since it is the one sharing this stream's link.
+    private var activeDownload: DownloadRecord? {
+        guard let uuid = player.book?.uuid else { return nil }
+        return [DownloadKind.audio, .ebook]
+            .compactMap { downloads.record(for: uuid, kind: $0) }
+            .first { $0.state == .running || $0.state == .queued }
+    }
 
     /// Offset inside the scrubbed span while a drag is in flight.
     @State private var scrubOffset: Double?
@@ -44,6 +54,23 @@ struct PlayerView: View {
             if player.isLoading {
                 LoadingView(label: "Preparing audio")
                     .background(palette.bg0Color.opacity(0.6))
+            }
+
+            // The state that was invisible during #2409: this book's download
+            // is in flight over the same link the stream is buffering on, so
+            // say so rather than leaving the listener to infer it from the
+            // rebuffering.
+            if let record = activeDownload {
+                VStack {
+                    DownloadProgressView(
+                        record: record,
+                        activity: downloads.activity(of: record),
+                        showsParts: false
+                    )
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.top, Spacing.sm)
+                    Spacer(minLength: 0)
+                }
             }
 
             if let offer = player.syncOffer {
