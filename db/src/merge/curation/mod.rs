@@ -88,14 +88,20 @@ pub(super) struct CurationSnapshot {
 }
 
 impl CurationSnapshot {
-    /// Every reader this snapshot moved a row for. Undo of an *earlier* merge
-    /// into the same book consults this to find out whose rows it must not
-    /// touch — see [`PlanContext::claimed_by_later_merges`].
-    pub(in crate::merge) fn moved_readers(&self) -> impl Iterator<Item = i64> + '_ {
-        self.source_status
-            .iter()
-            .map(CurationRow::user_id)
-            .chain(self.source_ratings.iter().map(CurationRow::user_id))
+    /// Readers this snapshot moved a **read status** row for. Undo of an
+    /// *earlier* merge into the same book consults this to find out whose rows
+    /// it must not touch — see [`PlanContext::claimed_by_later_merges`].
+    pub(in crate::merge) fn moved_status_readers(&self) -> impl Iterator<Item = i64> + '_ {
+        self.source_status.iter().map(CurationRow::user_id)
+    }
+
+    /// Readers this snapshot moved a **rating** row for. Kept apart from
+    /// [`Self::moved_status_readers`] because the two tables collide
+    /// independently: a later merge that moved only a reader's rating says
+    /// nothing about their read status, and folding them together refuses an
+    /// undo that was never ambiguous.
+    pub(in crate::merge) fn moved_rating_readers(&self) -> impl Iterator<Item = i64> + '_ {
+        self.source_ratings.iter().map(CurationRow::user_id)
     }
 }
 
@@ -130,36 +136,43 @@ pub(super) async fn capture_post(
 /// Reverse the merge's per-reader curation move: each book ends up with
 /// exactly the read status and rating it carried before.
 ///
-/// `claimed_by_later_merges` comes from the caller because only it knows which
-/// `merge_log` rows are still open against this target.
+/// The two claimed-reader sets come from the caller because only it knows
+/// which `merge_log` rows are still open against this target, and they are
+/// **per table** — the two collide independently.
 pub(super) async fn restore_curation(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     source_uuid: &str,
     target_uuid: &str,
     snap: &CurationSnapshot,
-    claimed_by_later_merges: &HashSet<i64>,
+    claimed_status: &HashSet<i64>,
+    claimed_ratings: &HashSet<i64>,
 ) -> Result<(), MergeError> {
-    let ctx = PlanContext {
-        live_users: load_live_users(tx).await?,
-        claimed_by_later_merges: claimed_by_later_merges.clone(),
+    let live_users = load_live_users(tx).await?;
+    let status_ctx = PlanContext {
+        live_users: &live_users,
+        claimed_by_later_merges: claimed_status,
     };
-    restore_status(tx, source_uuid, target_uuid, snap, &ctx).await?;
-    restore_ratings(tx, source_uuid, target_uuid, snap, &ctx).await
+    restore_status(tx, source_uuid, target_uuid, snap, &status_ctx).await?;
+    let rating_ctx = PlanContext {
+        live_users: &live_users,
+        claimed_by_later_merges: claimed_ratings,
+    };
+    restore_ratings(tx, source_uuid, target_uuid, snap, &rating_ctx).await
 }
 
 /// The facts outside one table's four row-sets that decide whether a reader's
 /// row can be settled at all.
-struct PlanContext {
+struct PlanContext<'a> {
     /// `users.id`s that still exist. Both tables cascade on `users(id)`, so a
     /// deleted account took its curation off *both* books — there is nothing
     /// to restore and nothing to conflict about, and re-inserting the snapshot
     /// row would violate the foreign key.
-    live_users: HashSet<i64>,
+    live_users: &'a HashSet<i64>,
     /// Readers a later, still-open merge into the same target also moved a row
-    /// for. That merge's own dedupe may have deleted a row this one cannot
-    /// see, so rewriting the survivor here would destroy it — and leave the
-    /// later merge's undo permanently unable to put it back.
-    claimed_by_later_merges: HashSet<i64>,
+    /// **of this table** for. That merge's own dedupe may have deleted a row
+    /// this one cannot see, so rewriting the survivor here would destroy it —
+    /// and leave the later merge's undo permanently unable to put it back.
+    claimed_by_later_merges: &'a HashSet<i64>,
 }
 
 /// Why undo cannot settle one reader's row. Carries the reader so the message
@@ -199,7 +212,7 @@ fn plan_restore<'a, T>(
     target_pre: &'a [T],
     merged: &'a [T],
     current: &'a [T],
-    ctx: &PlanContext,
+    ctx: &PlanContext<'_>,
 ) -> Result<RestorePlan<'a, T>, Unresolvable>
 where
     T: CurationRow,
@@ -288,7 +301,7 @@ async fn restore_status(
     source_uuid: &str,
     target_uuid: &str,
     snap: &CurationSnapshot,
-    ctx: &PlanContext,
+    ctx: &PlanContext<'_>,
 ) -> Result<(), MergeError> {
     let current = load_status(tx, target_uuid).await?;
     let plan = plan_restore(
@@ -335,7 +348,7 @@ async fn restore_ratings(
     source_uuid: &str,
     target_uuid: &str,
     snap: &CurationSnapshot,
-    ctx: &PlanContext,
+    ctx: &PlanContext<'_>,
 ) -> Result<(), MergeError> {
     let current = load_ratings(tx, target_uuid).await?;
     let plan = plan_restore(

@@ -26,8 +26,9 @@ use super::MergeError;
 /// survivor since the merge — that value and the pre-merge one are both real,
 /// and quietly keeping either is how undo used to hand one book's curation to
 /// the other — or when a **later, still-open merge into the same book** also
-/// moved that reader's row, which this undo cannot see past. Undoing several
-/// merges into one book is therefore last-in-first-out wherever they overlap.
+/// moved that reader's row, or supplies one of the identifiers this undo would
+/// take back. Neither is something this undo can see past, so undoing several
+/// merges into one book is last-in-first-out wherever they overlap.
 ///
 /// Deliberate asymmetries: reading progress, sessions, annotations and journal
 /// entries stay on the target; links unioned into the target stay there;
@@ -87,7 +88,8 @@ pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, 
         &source_uuid,
         &target_uuid,
         &snap.curation,
-        &later.readers,
+        &later.status_readers,
+        &later.rating_readers,
     )
     .await?;
 
@@ -454,15 +456,22 @@ async fn restore_links(
 }
 
 /// What a still-open merge into the same target, recorded *after* the one
-/// being undone, is holding on the survivor. Both fields exist because this
-/// undo cannot see what that later merge's own dedupe deleted.
+/// being undone, is holding on the survivor. Each field exists because this
+/// undo cannot see what that later merge's own dedupe deleted — and each
+/// makes undoing the two overlapping merges last-in-first-out.
+///
+/// The two reader sets stay apart because `book_read_status` and
+/// `user_ratings` collide independently: a later merge that moved only a
+/// rating says nothing about anyone's read status.
 struct LaterMergeClaims {
-    /// Readers it moved a curation row for.
-    readers: HashSet<i64>,
-    /// `(scheme, value)` its absorbed book carries, lowercased to match the
-    /// `COLLATE NOCASE` columns. Not `identifiers_added_to_target`: a tuple
-    /// the target already had from an earlier merge is recorded as *added* by
-    /// neither, yet the later-merged book still supplies it.
+    status_readers: HashSet<i64>,
+    rating_readers: HashSet<i64>,
+    /// `(scheme, value)` its absorbed book carries, ASCII-lowercased to model
+    /// the columns' `COLLATE NOCASE` — which is ASCII-only, so a full-Unicode
+    /// fold would treat two tuples SQLite considers distinct as one. Taken
+    /// from the later snapshot's own `identifiers` rather than what it *added*
+    /// to the target: a tuple an earlier merge already put there is recorded
+    /// as added by neither, yet the later-merged book still supplies it.
     identifiers: HashSet<(String, String)>,
 }
 
@@ -483,35 +492,50 @@ async fn load_later_merge_claims(
     .await?;
 
     let mut claims = LaterMergeClaims {
-        readers: HashSet::new(),
+        status_readers: HashSet::new(),
+        rating_readers: HashSet::new(),
         identifiers: HashSet::new(),
     };
     for json in &snapshots {
         let snap: SourceSnapshot = serde_json::from_str(json)?;
-        claims.readers.extend(snap.curation.moved_readers());
+        claims
+            .status_readers
+            .extend(snap.curation.moved_status_readers());
+        claims
+            .rating_readers
+            .extend(snap.curation.moved_rating_readers());
         claims.identifiers.extend(
             snap.identifiers
                 .iter()
-                .map(|(s, v)| (s.to_lowercase(), v.to_lowercase())),
+                .map(|(s, v)| (s.to_ascii_lowercase(), v.to_ascii_lowercase())),
         );
     }
     Ok(claims)
 }
 
 /// Take back off the target exactly the identifier tuples the merge's union
-/// added to it. Two exclusions, and both matter: a tuple the target already
-/// carried is not the merge's to remove, and one a still-open later merge's
-/// book *also* supplies must stay, or undoing the first merge silently strips
-/// an identifier the survivor is still entitled to.
+/// added to it. A tuple the target already carried is not the merge's to
+/// remove, so it is never in `added` in the first place.
+///
+/// Refuses when a still-open later merge's book *also* supplies one of them,
+/// because neither answer is available at that point: stripping it takes an
+/// identifier off a survivor still entitled to it, and skipping it leaks the
+/// tuple forever — the later merge recorded the same tuple as added by
+/// nobody, so its own undo would not remove it either. Undoing in reverse
+/// order settles it, which is the same last-in-first-out rule the curation
+/// guard imposes.
 async fn strip_merged_identifiers(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     target_id: i64,
     added: &[(String, String)],
-    still_claimed: &HashSet<(String, String)>,
-) -> Result<(), sqlx::Error> {
+    still_supplied: &HashSet<(String, String)>,
+) -> Result<(), MergeError> {
     for (scheme, value) in added {
-        if still_claimed.contains(&(scheme.to_lowercase(), value.to_lowercase())) {
-            continue;
+        if still_supplied.contains(&(scheme.to_ascii_lowercase(), value.to_ascii_lowercase())) {
+            return Err(MergeError::UndoConflict(format!(
+                "a later merge into the surviving book also supplies the identifier \
+                 {scheme}:{value}; undo that merge first"
+            )));
         }
         sqlx::query("DELETE FROM book_identifiers WHERE book_id = ? AND scheme = ? AND value = ?")
             .bind(target_id)

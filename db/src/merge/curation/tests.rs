@@ -20,12 +20,26 @@ fn rating(user_id: i64, half_stars: i64, updated_at: i64) -> RatingRow {
     }
 }
 
-/// A context that gets in the planner's way as little as possible: `user` is a
-/// live account, and no later merge is holding anything.
-fn plain_ctx(user: i64) -> PlanContext {
-    PlanContext {
-        live_users: HashSet::from([user]),
-        claimed_by_later_merges: HashSet::new(),
+/// Owns the two id sets a [`PlanContext`] borrows, so a test can keep them
+/// alive across the call.
+struct Ctx {
+    live: HashSet<i64>,
+    claimed: HashSet<i64>,
+}
+
+impl Ctx {
+    fn new(live: &[i64], claimed: &[i64]) -> Self {
+        Ctx {
+            live: live.iter().copied().collect(),
+            claimed: claimed.iter().copied().collect(),
+        }
+    }
+
+    fn plan(&self) -> PlanContext<'_> {
+        PlanContext {
+            live_users: &self.live,
+            claimed_by_later_merges: &self.claimed,
+        }
     }
 }
 
@@ -35,7 +49,14 @@ fn plan_restore_sends_each_row_back_to_the_book_it_came_from() {
     let target_pre = vec![rating(1, 8, 1_000)];
     // The source's row was the newer one, so the merge left it on the target.
     let merged = vec![rating(1, 5, 2_000)];
-    let plan = plan_restore(&source_pre, &target_pre, &merged, &merged, &plain_ctx(1)).unwrap();
+    let plan = plan_restore(
+        &source_pre,
+        &target_pre,
+        &merged,
+        &merged,
+        &Ctx::new(&[1], &[]).plan(),
+    )
+    .unwrap();
     assert_eq!(plan.to_source, vec![&source_pre[0]]);
     assert_eq!(plan.to_target, vec![&target_pre[0]]);
     assert!(plan.clear_target.is_empty());
@@ -45,7 +66,14 @@ fn plan_restore_sends_each_row_back_to_the_book_it_came_from() {
 fn plan_restore_clears_the_target_row_when_the_target_had_none() {
     let source_pre = vec![rating(1, 5, 2_000)];
     let merged = vec![rating(1, 5, 2_000)];
-    let plan = plan_restore(&source_pre, &[], &merged, &merged, &plain_ctx(1)).unwrap();
+    let plan = plan_restore(
+        &source_pre,
+        &[],
+        &merged,
+        &merged,
+        &Ctx::new(&[1], &[]).plan(),
+    )
+    .unwrap();
     assert_eq!(plan.to_source, vec![&source_pre[0]]);
     assert!(plan.to_target.is_empty());
     assert_eq!(plan.clear_target, vec![1]);
@@ -58,7 +86,14 @@ fn plan_restore_ignores_readers_the_merge_never_moved_a_row_for() {
     let target_pre = vec![rating(2, 4, 1_000)];
     let merged = vec![rating(2, 4, 1_000)];
     let current = vec![rating(2, 9, 5_000)];
-    let plan = plan_restore(&[], &target_pre, &merged, &current, &plain_ctx(2)).unwrap();
+    let plan = plan_restore(
+        &[],
+        &target_pre,
+        &merged,
+        &current,
+        &Ctx::new(&[2], &[]).plan(),
+    )
+    .unwrap();
     assert!(plan.to_source.is_empty());
     assert!(plan.to_target.is_empty());
     assert!(plan.clear_target.is_empty());
@@ -70,7 +105,14 @@ fn plan_restore_refuses_when_the_survivor_was_recurated_after_the_merge() {
     let merged = vec![rating(1, 5, 2_000)];
     let current = vec![rating(1, 9, 5_000)];
     assert_eq!(
-        plan_restore(&source_pre, &[], &merged, &current, &plain_ctx(1)).unwrap_err(),
+        plan_restore(
+            &source_pre,
+            &[],
+            &merged,
+            &current,
+            &Ctx::new(&[1], &[]).plan()
+        )
+        .unwrap_err(),
         Unresolvable::Recurated(1)
     );
 }
@@ -80,7 +122,7 @@ fn plan_restore_refuses_when_the_survivors_row_was_deleted_after_the_merge() {
     let source_pre = vec![rating(1, 5, 2_000)];
     let merged = vec![rating(1, 5, 2_000)];
     assert_eq!(
-        plan_restore(&source_pre, &[], &merged, &[], &plain_ctx(1)).unwrap_err(),
+        plan_restore(&source_pre, &[], &merged, &[], &Ctx::new(&[1], &[]).plan()).unwrap_err(),
         Unresolvable::Recurated(1)
     );
 }
@@ -93,7 +135,14 @@ fn plan_restore_allows_a_timestamp_only_touch_of_the_same_value() {
     let source_pre = vec![rating(1, 5, 2_000)];
     let merged = vec![rating(1, 5, 2_000)];
     let current = vec![rating(1, 5, 9_000)];
-    let plan = plan_restore(&source_pre, &[], &merged, &current, &plain_ctx(1)).unwrap();
+    let plan = plan_restore(
+        &source_pre,
+        &[],
+        &merged,
+        &current,
+        &Ctx::new(&[1], &[]).plan(),
+    )
+    .unwrap();
     assert_eq!(plan.clear_target, vec![1]);
 }
 
@@ -104,11 +153,8 @@ fn plan_restore_skips_a_reader_whose_account_is_gone() {
     // about — and re-inserting would violate the foreign key.
     let source_pre = vec![rating(1, 5, 2_000)];
     let merged = vec![rating(1, 5, 2_000)];
-    let ctx = PlanContext {
-        live_users: HashSet::new(),
-        claimed_by_later_merges: HashSet::new(),
-    };
-    let plan = plan_restore(&source_pre, &[], &merged, &[], &ctx).unwrap();
+    let ctx = Ctx::new(&[], &[]);
+    let plan = plan_restore(&source_pre, &[], &merged, &[], &ctx.plan()).unwrap();
     assert!(plan.to_source.is_empty());
     assert!(plan.clear_target.is_empty());
 }
@@ -117,12 +163,9 @@ fn plan_restore_skips_a_reader_whose_account_is_gone() {
 fn plan_restore_refuses_a_reader_a_later_open_merge_also_moved() {
     let source_pre = vec![rating(1, 5, 2_000)];
     let merged = vec![rating(1, 5, 2_000)];
-    let ctx = PlanContext {
-        live_users: HashSet::from([1]),
-        claimed_by_later_merges: HashSet::from([1]),
-    };
+    let ctx = Ctx::new(&[1], &[1]);
     assert_eq!(
-        plan_restore(&source_pre, &[], &merged, &merged, &ctx).unwrap_err(),
+        plan_restore(&source_pre, &[], &merged, &merged, &ctx.plan()).unwrap_err(),
         Unresolvable::ClaimedByLaterMerge(1)
     );
 }
@@ -606,11 +649,13 @@ async fn undo_merge_takes_back_only_the_identifiers_the_merge_added() {
 }
 
 #[tokio::test]
-async fn undo_merge_keeps_an_identifier_a_later_open_merge_still_supplies() {
+async fn undo_merge_refuses_out_of_order_when_a_later_merge_supplies_the_same_identifier() {
     // Two copies of one edition merged into a third book, both carrying the
-    // same ISBN. Only the first merge records it as *added*; stripping it on
-    // that undo would leave the survivor with no ISBN despite still holding
-    // the second book, and stop the check-in rung resolving it.
+    // same ISBN. Only the *first* merge records it as added, so out of order
+    // there is no right answer: stripping it leaves the survivor with no ISBN
+    // while it still holds the second book, and skipping leaks the tuple
+    // forever — the second merge's undo has nothing recorded to remove.
+    // Reverse order settles both.
     let pool = init_db("sqlite::memory:").await.unwrap();
     let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
     let first = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
@@ -619,18 +664,89 @@ async fn undo_merge_keeps_an_identifier_a_later_open_merge_still_supplies() {
     seed_identifier(&pool, &second, "isbn", "9780000000001").await;
 
     let one = merge_books(&pool, &first, &target, None).await.unwrap();
-    merge_books(&pool, &second, &target, None).await.unwrap();
+    let two = merge_books(&pool, &second, &target, None).await.unwrap();
+
+    let err = undo_merge(&pool, one.merge_log_id).await.unwrap_err();
+    assert!(matches!(err, MergeError::UndoConflict(_)), "got {err:?}");
+    assert!(err.to_string().contains("identifier"), "got {err}");
+
+    // In reverse the survivor keeps the ISBN while it still holds the first
+    // book, then loses it with that book — and never keeps one it never had.
+    undo_merge(&pool, two.merge_log_id).await.unwrap();
+    assert_eq!(
+        identifiers_of(&pool, &target).await,
+        vec![ident("isbn", "9780000000001")],
+        "the still-absorbed first book keeps supplying the ISBN"
+    );
+    undo_merge(&pool, one.merge_log_id).await.unwrap();
+    assert!(
+        identifiers_of(&pool, &target).await.is_empty(),
+        "with both books restored the survivor keeps nothing it never had"
+    );
+    for book in [&first, &second] {
+        assert_eq!(
+            identifiers_of(&pool, book).await,
+            vec![ident("isbn", "9780000000001")]
+        );
+    }
+}
+
+#[tokio::test]
+async fn undo_merge_allows_it_when_a_later_merge_moved_only_the_other_curation_table() {
+    // The two tables collide independently. A later merge that moved only this
+    // reader's *rating* says nothing about their read status, so folding both
+    // into one claimed-reader set would refuse an undo that was never
+    // ambiguous.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "reader").await;
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let first = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+    let second = seed_ebook(&pool, "C/Dracula rev.epub", "Draculla", "Bram Stoker").await;
+
+    // Read status only on the first book, rating only on the second.
+    sqlx::query(
+        "INSERT INTO book_read_status (user_id, book_uuid, status, updated_at, finished_at)
+         VALUES (?, ?, 'finished', 2000, 2000)",
+    )
+    .bind(user)
+    .bind(&first)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO user_ratings (user_id, book_uuid, half_stars, updated_at)
+         VALUES (?, ?, 7, 2000)",
+    )
+    .bind(user)
+    .bind(&second)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let one = merge_books(&pool, &first, &target, Some(user))
+        .await
+        .unwrap();
+    merge_books(&pool, &second, &target, Some(user))
+        .await
+        .unwrap();
 
     undo_merge(&pool, one.merge_log_id).await.unwrap();
 
     assert_eq!(
-        identifiers_of(&pool, &target).await,
-        vec![ident("isbn", "9780000000001")],
-        "the still-absorbed second book keeps supplying the ISBN"
+        curation_of(&pool, user, &first).await,
+        (
+            Some("finished".to_string()),
+            Some(2_000),
+            Some(2_000),
+            None,
+            None
+        ),
+        "the restored book gets its read status back"
     );
     assert_eq!(
-        identifiers_of(&pool, &first).await,
-        vec![ident("isbn", "9780000000001")]
+        curation_of(&pool, user, &target).await,
+        (None, None, None, Some(7), Some(2_000)),
+        "and the survivor keeps the rating the still-open second merge moved"
     );
 }
 
