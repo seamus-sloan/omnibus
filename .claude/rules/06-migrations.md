@@ -75,7 +75,11 @@ decided by what a row holds, not by which list is nearer**:
 
 - **Snapshot → `DEDUPE_TABLES`.** A position, a rating, a read status: only
   one of the two rows can be true at once, so the shared latest-wins helper
-  keeps the newer and drops the other.
+  keeps the newer and drops the other. **A dedupe deletes, so it is only
+  reversible if the merge writes both sides down first** — `db/src/merge/
+  curation.rs` is that record for read status and ratings, and undo replays it.
+  A table added to `DEDUPE_TABLES` without one has no undo: whichever row lost
+  is gone, and the survivor keeps a value that started on the other book.
 - **Counter → `fold_ledger_counters`.** A per-reader table keyed on a time
   bucket (`reading_progress_daily`, `reading_progress_slots`) counts ground
   covered, and a reader who covered ground in both editions in the same

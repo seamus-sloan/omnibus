@@ -240,9 +240,11 @@ pub async fn rpc_merge_books(source_uuid: String, target_uuid: String) -> Result
 pub async fn rpc_undo_merge(merge_log_id: i64) -> Result<String> {
     match db::undo_merge(&pool.0, merge_log_id).await {
         Ok(uuid) => Ok(uuid),
-        Err(e @ (db::MergeError::LogNotFound | db::MergeError::AlreadyUndone)) => {
-            Err(ServerFnError::new(e.to_string()).into())
-        }
+        Err(
+            e @ (db::MergeError::LogNotFound
+            | db::MergeError::AlreadyUndone
+            | db::MergeError::UndoConflict(_)),
+        ) => Err(ServerFnError::new(e.to_string()).into()),
         Err(e) => Err(internal_rpc_error("undo merge", e).into()),
     }
 }

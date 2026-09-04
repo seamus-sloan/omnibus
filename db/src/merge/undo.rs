@@ -10,19 +10,26 @@ use crate::taxonomy::{
     resolve_or_insert_tag,
 };
 
+use super::curation::restore_curation;
 use super::snapshot::SourceSnapshot;
 use super::MergeError;
 
 /// Reverse a merge: recreate the source `books` row from the snapshot,
 /// move the snapshot's file formats back off the target, restore links
-/// by name, and clear the source-uuid reindex guard. Returns the
-/// restored book's uuid.
+/// by name, hand each book back its own read status and rating, strip the
+/// identifiers the merge copied onto the target, and clear the source-uuid
+/// reindex guard. Returns the restored book's uuid.
 ///
-/// Deliberate asymmetries: progress and history stay on the target;
-/// links unioned into the target stay there; merged override values stay
-/// on the target. If a moved file row was deleted in the meantime (file
-/// removed from disk), the restored source comes back **fileless** — a
-/// legal state — rather than failing.
+/// Fails with [`MergeError::UndoConflict`] when a reader has re-curated the
+/// survivor since the merge — that value and the pre-merge one are both real,
+/// and quietly keeping either is how undo used to hand one book's curation to
+/// the other.
+///
+/// Deliberate asymmetries: reading progress, sessions, annotations and journal
+/// entries stay on the target; links unioned into the target stay there;
+/// merged override values stay on the target. If a moved file row was deleted
+/// in the meantime (file removed from disk), the restored source comes back
+/// **fileless** — a legal state — rather than failing.
 pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, MergeError> {
     let mut tx = pool.begin().await?;
 
@@ -52,7 +59,16 @@ pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, 
     .await?;
     restore_links(&mut tx, new_id, &snap).await?;
     restore_identifiers(&mut tx, new_id, &snap).await?;
+    strip_merged_identifiers(&mut tx, target_id, &snap.identifiers_added_to_target).await?;
     restore_attach_ledger(&mut tx, new_id, &source_uuid, &snap.merged_uuid_rows).await?;
+
+    // Per-reader curation keys on the durable uuid, not the row id, so the
+    // target's has to be read back rather than carried down from above.
+    let target_uuid: String = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(target_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    restore_curation(&mut tx, &source_uuid, &target_uuid, &snap.curation).await?;
 
     // The restored `books` row + links + identifiers are all written by
     // now, so the code reconstructs the FTS row from them directly.
@@ -416,8 +432,27 @@ async fn restore_links(
     Ok(())
 }
 
-/// Restore the source's identifier rows. The target keeps its unioned
-/// copies (per-scheme target-wins from the merge).
+/// Take back off the target exactly the identifier tuples the merge's union
+/// added to it. A tuple the target already carried is left alone — the merge
+/// did not put it there, so undo has no claim on it.
+async fn strip_merged_identifiers(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    target_id: i64,
+    added: &[(String, String)],
+) -> Result<(), sqlx::Error> {
+    for (scheme, value) in added {
+        sqlx::query("DELETE FROM book_identifiers WHERE book_id = ? AND scheme = ? AND value = ?")
+            .bind(target_id)
+            .bind(scheme)
+            .bind(value)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Restore the source's identifier rows onto the recreated book. The tuples
+/// the merge copied to the target come off it in [`strip_merged_identifiers`].
 async fn restore_identifiers(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
