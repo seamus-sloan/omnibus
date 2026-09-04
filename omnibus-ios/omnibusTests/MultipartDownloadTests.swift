@@ -321,7 +321,10 @@ struct MultipartDownloadTests {
         #expect(file.incomingName != file.name)
         #expect(file.supersededName != file.name)
         #expect(file.incomingName != file.supersededName)
-        #expect(Set(file.onDiskNames).count == 3)
+        // Four since #2410: a transiently-failed part parks its resume data
+        // beside the bytes, and a removal has to reclaim that too.
+        #expect(file.resumeName != file.name)
+        #expect(Set(file.onDiskNames).count == 4)
         #expect(file.onDiskNames.allSatisfy { $0.hasSuffix(file.name) })
     }
 

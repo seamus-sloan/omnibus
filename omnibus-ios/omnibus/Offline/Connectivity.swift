@@ -13,6 +13,11 @@ final class Connectivity {
     private(set) var isOnline = true
     private(set) var pendingWrites = 0
 
+    /// Whether the only path available is metered — cellular, a personal
+    /// hotspot, or anything else the system flags as expensive. What the
+    /// "Download over Wi-Fi only" preference is decided against.
+    private(set) var pathIsExpensive = false
+
     /// Writes the server refused outright. They are no longer retried, so
     /// nothing else would ever mention them — and the replica still shows the
     /// change, which makes silence the one answer that misleads.
@@ -43,7 +48,9 @@ final class Connectivity {
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             let online = path.status == .satisfied
+            let expensive = path.isExpensive || path.isConstrained
             Task { @MainActor in
+                self?.notePath(expensive: expensive)
                 self?.apply(online: online)
             }
         }
@@ -53,6 +60,8 @@ final class Connectivity {
         // airplane mode otherwise spent that window believing it was online,
         // which is the window the library screen asks its first question in.
         isOnline = monitor.currentPath.status == .satisfied
+        pathIsExpensive =
+            monitor.currentPath.isExpensive || monitor.currentPath.isConstrained
 
         NotificationCenter.default.addObserver(
             forName: .omnibusConnectivityChanged, object: nil, queue: .main
@@ -72,6 +81,14 @@ final class Connectivity {
     /// back — has to follow from it too, or the simulation is only skin deep.
     func applyForcedOffline(_ on: Bool) { apply(online: !on) }
     #endif
+
+    /// Re-gate transfers when the path's cost changes — walking out of Wi-Fi
+    /// range has to stop a Wi-Fi-only download, not merely stop starting one.
+    private func notePath(expensive: Bool) {
+        guard expensive != pathIsExpensive else { return }
+        pathIsExpensive = expensive
+        Task { await DownloadManager.shared.applyTransferGate() }
+    }
 
     private func apply(online requested: Bool) {
         var online = requested
@@ -94,6 +111,9 @@ final class Connectivity {
                     // was away are invisible to every offline surface until it
                     // catches up.
                     await LibraryIndex.shared.sync()
+                    // A download parked by the drop resumes each stopped part
+                    // from its own byte offset rather than restarting the book.
+                    await DownloadManager.shared.resumeInterrupted()
                 }
             }
         } else {

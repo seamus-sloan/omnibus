@@ -44,6 +44,10 @@ final class AudioPlayer {
     private(set) var isPlaying = false
     private(set) var isLoading = false
     private(set) var duration: Double = 0
+    /// Whether the loaded item reads from the network rather than from
+    /// downloaded files. Downloads stand down while this and `isPlaying` are
+    /// both true — they share the phone's uplink (#2409).
+    private(set) var isStreaming = false
     private(set) var error: String?
     /// Automatic read-status transitions for the loaded book — the same
     /// tracker the readers use, so listening and reading move a book through
@@ -558,9 +562,11 @@ final class AudioPlayer {
         if isDefaultFileSelected {
             let local = DownloadManager.shared.localFiles(for: uuid, kind: .audio)
             if Self.localCovers(manifest: manifest, localFileCount: local.count) {
+                isStreaming = false
                 return try await item(from: local.map { AVURLAsset(url: $0) })
             }
         }
+        isStreaming = true
 
         let headers = await APIClient.shared.authHeaders()
         let options: [String: Any] = headers.isEmpty ? [:] : ["AVURLAssetHTTPHeaderFieldsKey": headers]
@@ -649,6 +655,7 @@ final class AudioPlayer {
         isPlaying = true
         if sessionStart == nil { sessionStart = Date() }
         updateNowPlaying()
+        publishStreamingState()
         // Listening to a book is starting it, the audio counterpart of the
         // readers' mark-on-open. Off the critical path — the fetch behind it
         // may cost a round trip and playback has already begun.
@@ -672,6 +679,7 @@ final class AudioPlayer {
         // A pause during a rebuild's back-off is the listener overruling it.
         resumeAfterRecovery = false
         updateNowPlaying()
+        publishStreamingState()
         Task {
             await persistPosition(force: true)
             // Stopping is the one moment listening time is definitely complete.
@@ -864,6 +872,14 @@ final class AudioPlayer {
         }
     }
 
+    /// Tell `DownloadManager` whether the uplink is carrying a stream right
+    /// now. Only a *streamed* item competes — playing downloaded files touches
+    /// the network not at all.
+    private func publishStreamingState() {
+        let streaming = isStreaming && isPlaying
+        Task { await DownloadManager.shared.setStreaming(streaming) }
+    }
+
     private func teardown() {
         LifecycleSync.shared.unregister(self)
         if let timeObserver { player?.removeTimeObserver(timeObserver) }
@@ -913,6 +929,10 @@ final class AudioPlayer {
         // count permanently elevated and the observer permanently skipped.
         loadGeneration += 1
         pendingSeekCount = 0
+        isStreaming = false
+        // Closing the book releases the gate — a download held back by it must
+        // not stay held back by a player that is no longer playing anything.
+        publishStreamingState()
     }
 
     private func observe(player: AVPlayer) {

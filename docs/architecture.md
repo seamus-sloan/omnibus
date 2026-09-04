@@ -502,8 +502,17 @@ Offline/            — Cache (read-through policies), OfflineStore (SQLite
                       never mix editions, and compares that snapshot against a
                       later metadata refresh to drive "Update available" —
                       three-valued, so "can't tell" never reads as "not
-                      stale"), SyncEngine (the
-                      mutation outbox — see rule 08), Connectivity,
+                      stale"), DownloadFailure (transient vs terminal — a
+                      dropped link parks the one part that stopped and resumes
+                      it from its byte offset, where every error used to
+                      abandon the whole multi-part book), DownloadPolicy
+                      (whether a transfer may move bytes at all: playback wins
+                      the uplink outright, and "Wi-Fi only" is **on** by
+                      default), SyncEngine (the
+                      mutation outbox — see rule 08) with DrainBound (the op-id
+                      ceiling one pass owns — sweeping the *live* queue does
+                      not terminate against a player enqueueing a coalesced
+                      position every 0.5 s), Connectivity,
                       PositionPushThrottle (shared by the reader, the comic
                       pager, and the audio player: every relocate writes the
                       replica and the outbox unconditionally, this throttle

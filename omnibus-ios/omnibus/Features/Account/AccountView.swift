@@ -719,6 +719,22 @@ struct DownloadsView: View {
                             .foregroundStyle(palette.ink3Color)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.top, Spacing.md)
+
+                        Plate {
+                            PlateRow(label: "Download over Wi-Fi only", isFirst: true) {
+                                Toggle("", isOn: wifiOnlyBinding)
+                                    .labelsHidden()
+                                    .tint(palette.accentColor)
+                            }
+                        }
+                        .padding(.top, Spacing.lg)
+
+                        Text(
+                            "On by default, so a download started away from Wi-Fi waits rather than spending cellular data. Downloads also pause while an audiobook is streaming, so the two don't compete for the connection."
+                        )
+                        .font(.ui(12))
+                        .foregroundStyle(palette.ink3Color)
+                        .padding(.top, Spacing.sm)
                     }
                     .screenPadding()
                     .padding(.top, Spacing.sm)
@@ -805,9 +821,11 @@ struct DownloadsView: View {
                             .foregroundStyle(statusTint(record, isStale: isStale(record)))
                     }
 
-                    if record.state == .running {
-                        ProgressBar(fraction: record.fraction, tint: palette.accentColor)
-                            .frame(width: 140)
+                    if record.state == .running || record.state == .queued {
+                        DownloadProgressView(
+                            record: record, activity: downloads.activity(of: record)
+                        )
+                        .frame(maxWidth: 220)
                     }
                 }
 
@@ -820,6 +838,16 @@ struct DownloadsView: View {
             .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
+    }
+
+    /// The Wi-Fi-only preference lives on `DownloadManager` (it gates the
+    /// requests it builds), so the control writes straight through rather than
+    /// mirroring it into a second source of truth that could disagree.
+    private var wifiOnlyBinding: Binding<Bool> {
+        Binding(
+            get: { downloads.wifiOnly },
+            set: { downloads.wifiOnly = $0 }
+        )
     }
 
     /// Whether this row's library file has moved under the downloaded copy.
@@ -836,8 +864,7 @@ struct DownloadsView: View {
             isStale
                 ? "Update available · \(Format.bytes(record.totalBytes))"
                 : Format.bytes(record.totalBytes)
-        case .running: "\(Int(record.fraction * 100))%"
-        case .queued: "Queued"
+        case .running, .queued: "\(Int(record.fraction * 100))%"
         case .failed: record.error ?? "Failed"
         }
     }
