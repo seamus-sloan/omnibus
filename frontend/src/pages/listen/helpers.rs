@@ -62,8 +62,8 @@ pub(super) fn effective_scrub_position(
 /// Returns 0 on degenerate bounds or a non-finite input, so the track renders
 /// empty rather than dropping the whole gradient on a NaN stop.
 ///
-/// Mobile-only: the desktop player's bar is `.lp-chapter-seg-row`, a row of
-/// divs that paints its own fill on every engine.
+/// The desktop player needs none of this: its bar is `.lp-chapter-seg-row`, a
+/// row of divs that paints its own fill on every engine.
 #[cfg(any(feature = "mobile", test))]
 pub(super) fn range_fill_pct(value: f64, min: f64, max: f64) -> f64 {
     let span = max - min;

@@ -18,6 +18,13 @@ const SPEED_PRESETS: &[f64] = &[0.5, 0.8, 1.0, 1.1, 1.2, 1.5, 1.8, 2.0];
 /// Fine-tune slider bounds + step (also the ± stepper increment).
 const SPEED_STEP: f64 = 0.05;
 
+/// The fine-tune slider's `--fill` stop, measured off the *rate bounds* rather
+/// than zero — a slider whose left edge is 0.5× reads 1.0× as a third played
+/// if its fill is taken from 0.
+pub(super) fn speed_fill_pct(rate: f64) -> f64 {
+    range_fill_pct(rate, SPEED_MIN, SPEED_MAX)
+}
+
 /// Clamp + snap a requested rate to the fine-tune grid.
 pub(super) fn snap_rate(rate: f64) -> f64 {
     let clamped = rate.clamp(SPEED_MIN, SPEED_MAX);
@@ -165,7 +172,7 @@ pub(super) fn SpeedSheet(
 ) -> Element {
     let rate_big = format!("{rate:.2}\u{00d7}");
     let stepper_label = format!("{rate:.2}\u{00d7}");
-    let speed_fill = range_fill_pct(rate, SPEED_MIN, SPEED_MAX);
+    let speed_fill = speed_fill_pct(rate);
     let on_input = move |evt: Event<FormData>| {
         if let Ok(v) = evt.value().parse::<f64>() {
             on_set.call(snap_rate(v));
@@ -205,7 +212,7 @@ pub(super) fn SpeedSheet(
                         step: "{SPEED_STEP}",
                         value: "{rate}",
                         // Shares `.m-player-range`, so it needs the same stop
-                        // WebKit can't derive — off the rate bounds, not zero.
+                        // WebKit can't derive.
                         style: "--fill: {speed_fill:.2}%;",
                         oninput: on_input,
                     }

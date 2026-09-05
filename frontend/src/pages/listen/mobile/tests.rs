@@ -55,6 +55,34 @@ fn derive_player_state_reads_book_time_and_scales_only_the_time_left() {
 }
 
 #[test]
+fn derive_player_state_fills_the_scrub_track_from_the_previewed_position() {
+    // At rest the stop is the real position; mid-drag it is the drag target,
+    // so the filled span tracks the thumb rather than sitting where playback
+    // still is. Both are book-time over the book's own duration.
+    let at_rest = derive_player_state(
+        &two_chapter_view(),
+        900.0,
+        3600.0,
+        0,
+        1.0,
+        SleepState::Off,
+        None,
+    );
+    assert!((at_rest.scrub_fill_pct - 25.0).abs() < 1e-9);
+
+    let dragging = derive_player_state(
+        &two_chapter_view(),
+        900.0,
+        3600.0,
+        0,
+        1.0,
+        SleepState::Off,
+        Some(2700.0),
+    );
+    assert!((dragging.scrub_fill_pct - 75.0).abs() < 1e-9);
+}
+
+#[test]
 fn derive_player_state_keeps_book_time_labels_at_1x() {
     let d = derive_player_state(
         &two_chapter_view(),

@@ -51,13 +51,18 @@ private func book(accent: String?, title: String = "Piranesi") -> Book {
 @Test func bookTonedPaletteResolvesThroughTheCoverIdentitysTone() {
     let subject = book(accent: "oklch(0.62 0.13 265)")
     let toned = Palette.atrium.accented(byCoverOf: subject)
+    // The stored cover accent's hue, named outright. Asserting only against a
+    // recomputed `accented(by: CoverIdentity(subject).tone)` would move with
+    // the implementation — a `CoverIdentity` that stopped reading
+    // `book.accent` would fall back to the title hash and still match.
+    #expect(toned.accent.h == 265)
     let expected = Palette.atrium.accented(by: CoverIdentity(subject).tone)
     #expect(toned.accent.h == expected.accent.h)
     #expect(toned.accent.c == expected.accent.c)
     #expect(toned.accent.l == expected.accent.l)
 }
 
-@Test func bookTonedPaletteKeepsTheInkContractForEveryCover() {
+@Test func bookTonedPaletteKeepsTheInkContrastForEveryCover() {
     // A book with no cover art at all, a near-black jacket, and a neon one.
     // The tone reaches the accent in each case, but never the lightness the
     // theme's `accentInk` was chosen against — so the label still reads.
