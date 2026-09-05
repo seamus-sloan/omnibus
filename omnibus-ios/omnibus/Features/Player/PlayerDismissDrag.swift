@@ -37,7 +37,11 @@ enum PlayerDismissDrag {
     /// Whether releasing at `translation` should minimize the player.
     static func shouldDismiss(translation: CGSize, predictedEnd: CGSize) -> Bool {
         guard offset(for: translation) > 0 else { return false }
-        return translation.height >= dismissDistance || predictedEnd.height >= dismissProjection
+        if translation.height >= dismissDistance { return true }
+        // The projection is put through the same direction filter as the drag,
+        // so a swipe that starts down and whips sideways is a sideways swipe
+        // however it began — the flick allowance can't smuggle one past.
+        return offset(for: predictedEnd) >= dismissProjection
     }
 
     /// How far through the dismissal a travel of `offset` is, 0...1. Drives the

@@ -59,24 +59,29 @@ struct PlayerView: View {
     }
 
     var body: some View {
-        surface
-            .offset(y: dismissDrag)
-            .opacity(1 - PlayerDismissDrag.progress(at: dismissDrag) * 0.3)
-            // An opaque floor under the travelling surface. Without it the drag
-            // opens a gap onto whatever the presentation puts behind us, which
-            // is not the same thing from the tab root as from a reader.
-            .background(palette.bg0Color.ignoresSafeArea())
-            .task { await player.load(book: book, fileID: fileID) }
-            .sheet(isPresented: $showChapters) { ChapterSheet() }
-            .sheet(isPresented: $showBookmarks) { BookmarksSheet(book: book, isAudio: true) }
-            .fullScreenCover(isPresented: $showCarMode) { CarModeView(book: book) }
-            .sheet(isPresented: $showSpeed) { SpeedSheet() }
-            .sheet(isPresented: $showSleepTimer) { SleepSheet() }
-            // Outermost, so the chapter, speed, sleep and bookmark sheets above —
-            // and Car Mode — are drawn in the book's tone rather than staying amber
-            // over a player that isn't. Same placement as `BookDetailView`.
-            .environment(\.palette, palette)
-            .tint(palette.accentColor)
+        ZStack {
+            // An opaque floor the drag cannot take with it. The gap the swipe
+            // opens has to stay filled, and what sits behind this view is not
+            // the same thing from the tab root as from either reader. A sibling
+            // rather than a `.background` on the offset surface, so nothing
+            // rests on whether the transform reaches it.
+            palette.bg0Color.ignoresSafeArea()
+
+            surface
+                .offset(y: dismissDrag)
+                .opacity(1 - PlayerDismissDrag.progress(at: dismissDrag) * 0.3)
+        }
+        .task { await player.load(book: book, fileID: fileID) }
+        .sheet(isPresented: $showChapters) { ChapterSheet() }
+        .sheet(isPresented: $showBookmarks) { BookmarksSheet(book: book, isAudio: true) }
+        .fullScreenCover(isPresented: $showCarMode) { CarModeView(book: book) }
+        .sheet(isPresented: $showSpeed) { SpeedSheet() }
+        .sheet(isPresented: $showSleepTimer) { SleepSheet() }
+        // Outermost, so the chapter, speed, sleep and bookmark sheets above —
+        // and Car Mode — are drawn in the book's tone rather than staying amber
+        // over a player that isn't. Same placement as `BookDetailView`.
+        .environment(\.palette, palette)
+        .tint(palette.accentColor)
     }
 
     /// Everything the dismiss drag carries: the wash, the stage, and the two

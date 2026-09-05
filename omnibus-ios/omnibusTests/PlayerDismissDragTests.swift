@@ -52,6 +52,18 @@ import Testing
     )
 }
 
+@Test func dismissDragRefusesAFlickThatWhipsSideways() {
+    // Starts as a clean downward drag, then the finger leaves sideways. The
+    // live translation passes the direction filter and only the projection
+    // gives it away, which is the case the filter on `translation` alone missed.
+    #expect(
+        !PlayerDismissDrag.shouldDismiss(
+            translation: CGSize(width: 10, height: 30),
+            predictedEnd: CGSize(width: 600, height: 350)
+        )
+    )
+}
+
 @Test func dismissDragRefusesAnUpwardFlick() {
     #expect(
         !PlayerDismissDrag.shouldDismiss(
