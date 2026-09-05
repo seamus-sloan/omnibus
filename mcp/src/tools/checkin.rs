@@ -19,6 +19,7 @@ use omnibus_shared::{
 
 use crate::client::ClientError;
 use crate::server::OmnibusMcp;
+use crate::tools::read::views::PhysicalCopyView;
 
 /// A single book handle for the physical-collection tools — the
 /// `unique_identifier` from the listing/search tools, or the `uuid` on a
@@ -348,14 +349,15 @@ impl OmnibusMcp {
     }
 
     #[tool(
-        description = "List a book's physical copies (library-wide, oldest check-in first), each with its id, recorded ISBN, check-in time, and note. An unknown uuid simply has no copies (empty list)."
+        description = "List a book's physical copies (library-wide, oldest check-in first), each with its id, recorded ISBN, check-in time, and note. An unknown uuid simply has no copies (empty list). checked_in_at is ISO 8601, with unix seconds alongside under checked_in_at_epoch."
     )]
     pub async fn list_physical_copies(
         &self,
         Parameters(p): Parameters<BookUuid>,
-    ) -> Result<Json<Vec<PhysicalCopy>>, ErrorData> {
+    ) -> Result<Json<Vec<PhysicalCopyView>>, ErrorData> {
         let path = format!("/api/physical/{}/copies", p.uuid);
-        Ok(Json(self.client.get_json(&path, &[]).await?))
+        let rows: Vec<PhysicalCopy> = self.client.get_json(&path, &[]).await?;
+        Ok(Json(rows.into_iter().map(Into::into).collect()))
     }
 
     #[tool(

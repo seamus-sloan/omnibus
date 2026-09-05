@@ -27,6 +27,10 @@ schemars = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# ISO 8601 stamps beside the raw epochs the API returns. Same major as
+# `server/`'s, so cargo unifies on one build; `formatting` is what the
+# Rfc3339 well-known format needs, and nothing here parses a date back.
+time = { version = "0.3", features = ["formatting"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 tracing = { workspace = true }
 # Stderr-only logging: stdout belongs to the MCP stdio transport.
