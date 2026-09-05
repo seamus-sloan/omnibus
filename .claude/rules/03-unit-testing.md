@@ -12,7 +12,9 @@ for rationale.
   a module's tests to a sibling file whenever they cross "trivial" —
   more than one or two short cases, or any shared helper that would
   otherwise pad the prod file.
-  [db/src/books/tests.rs](../../db/src/books/tests.rs) is the model.
+  [db/src/books/tests/](../../db/src/books/tests/) is the model — a
+  `tests/` directory of topic files once a `tests.rs` crosses the ~800-line
+  cap, with the shared fixtures in its `mod.rs`.
 - **Unit tests (trivial):** inline `#[cfg(test)] mod tests` at the
   bottom of the file is fine for 1–2 cases that need no helpers.
 - **Integration tests:** sibling `<module>/tests.rs` next to the
@@ -84,7 +86,7 @@ tells you what's broken without opening the file.
 ## Shape
 
 ```rust
-// db/src/books/tests.rs
+// db/src/<mod>/tests.rs
 use super::*;
 use crate::test_support::{new_in_memory_pool, seed_minimal_books};
 

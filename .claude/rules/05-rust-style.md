@@ -74,7 +74,9 @@ See [02-error-handling.md](02-error-handling.md) for the underlying rule.
 ## Tests
 
 - **Placement**: sibling file `<mod>/tests.rs` for anything non-trivial
-  ([db/src/books/tests.rs](../../db/src/books/tests.rs) pattern). Inline
+  ([db/src/books/tests/](../../db/src/books/tests/) pattern; the ~800-line
+  file cap applies here too, so an oversized `tests.rs` becomes
+  `tests/{mod,<topic>}.rs` with the shared fixtures in `mod.rs`). Inline
   `#[cfg(test)] mod tests` is allowed only for tiny modules with 1–2
   trivial tests.
 - **Shared helpers**: every crate has a `test_support` module
