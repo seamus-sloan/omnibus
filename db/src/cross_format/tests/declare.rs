@@ -90,6 +90,29 @@ async fn declare_sync_point_keeps_follow_off_on_a_link_that_already_existed() {
 }
 
 #[tokio::test]
+async fn confirming_the_alignment_deliberately_re_arms_follow_the_reader_turned_off() {
+    // The asymmetry with `declare_sync_point` above, pinned so it stays a
+    // decision rather than an accident: a declaration is calibration and
+    // leaves follow alone, but a confirm IS the act of turning sync on —
+    // the button says so — and re-arms it.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, _) = seed_dual_book(&pool, &[1_000.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    assert!(set_follow(&pool, user, &uuid, false).await.unwrap());
+
+    let link = upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    assert!(
+        link.follow,
+        "confirming the alignment is how sync is turned on; it re-arms follow"
+    );
+}
+
+#[tokio::test]
 async fn declare_sync_point_refuses_what_it_cannot_pair() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;

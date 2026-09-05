@@ -11559,6 +11559,10 @@ html {
 }
 .bdmq-followtoggle[aria-checked="true"]::before { background: var(--accent); }
 .bdmq-followtoggle[disabled] { opacity: .55; cursor: default; }
+/* The switch's failure text needs its own rule: it sits *inside* the sync
+   line rather than being it, so the compound `.bdmq-syncline-warn` selector
+   above never matches it and the message would render in body ink. */
+.bdmq-syncerr { color: var(--warn); }
 /* One neutral pill in every state, including the paused-sync warning: --warn
    and --accent are all but the same amber here, so a warn-tinted button would
    read as the hover state rather than as a second colour. */

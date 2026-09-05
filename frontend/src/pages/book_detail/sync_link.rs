@@ -44,14 +44,28 @@ fn linked_audio_at(view: &AlignmentView) -> Option<String> {
 /// why it sits on the sync line rather than in the modal's destructive row.
 ///
 /// Configuration-shaped (rule 08 test 1): a direct call that never queues,
-/// with the failure rendered rather than swallowed. The new state arrives
-/// via the parent's refetch rather than an optimistic flip, so the switch
-/// never shows a setting the server didn't take.
+/// with the failure rendered rather than swallowed, and the control disabled
+/// offline rather than failing after the fact.
 #[component]
 fn BdFollowToggle(uuid: String, follow: bool, on_changed: EventHandler<()>) -> Element {
     let mut busy = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
-    let target = !follow;
+    // The value this switch last wrote and the server acknowledged. It
+    // outranks the `follow` prop, because that prop only moves when the
+    // parent's refetch succeeds — and that refetch keeps the previous view
+    // on failure. Without this the switch would keep reading the pre-flip
+    // value after a dropped refetch, with no error shown, and every later
+    // click would recompute the same target from it: a control the reader
+    // cannot move again without reloading the page.
+    let mut written = use_signal(|| None::<bool>);
+    // Once the refetch agrees, hand authority back to the server. Idempotent
+    // — the render it schedules sees `None` and falls through.
+    if written() == Some(follow) {
+        written.set(None);
+    }
+    let shown = written().unwrap_or(follow);
+    let target = !shown;
+    let online = crate::pages::listen::sync_prompt::browser_online();
 
     let toggle_uuid = uuid.clone();
     let handle_toggle = move |_| {
@@ -61,6 +75,10 @@ fn BdFollowToggle(uuid: String, follow: bool, on_changed: EventHandler<()>) -> E
         spawn(async move {
             match data::set_follow_mode("", &uuid, target).await {
                 Ok(()) => {
+                    // Before releasing `busy`, so the next click computes its
+                    // target from what the server just took rather than from
+                    // a prop the refetch has not caught up to yet.
+                    written.set(Some(target));
                     busy.set(false);
                     on_changed.call(());
                 }
@@ -77,19 +95,19 @@ fn BdFollowToggle(uuid: String, follow: bool, on_changed: EventHandler<()>) -> E
             class: "bdmq-synclink bdmq-followtoggle",
             r#type: "button",
             role: "switch",
-            "aria-checked": if follow { "true" } else { "false" },
+            "aria-checked": if shown { "true" } else { "false" },
             // A stable accessible name while the visible label flips, so a
             // caller can name the control without naming its state.
             "aria-label": "Follow the other format",
             title: "Following jumps to the spot the other format reached. Off keeps the alignment you confirmed and stops the jumps \u{2014} Unlink is what discards it.",
             "data-testid": "sync-follow-toggle",
-            disabled: busy(),
+            disabled: busy() || !online,
             onclick: handle_toggle,
-            if follow { "following" } else { "not following" }
+            if shown { "following" } else { "not following" }
         }
         if let Some(msg) = error() {
             span {
-                class: "bdmq-syncline-warn",
+                class: "bdmq-syncerr",
                 role: "status",
                 "data-testid": "sync-follow-error",
                 "{msg}"

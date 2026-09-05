@@ -136,3 +136,21 @@ struct SyncPromptRuleTests {
         #expect(!SyncPromptStore.fileMatches(selected: nil, defaultID: nil, candidate: nil))
     }
 }
+
+@Suite("Follow switch rules")
+struct FollowSwitchRuleTests {
+    @Test("only a real movement writes, so a server echo cannot loop")
+    func writeGate() {
+        // A movement away from the stored value is the reader's own change.
+        #expect(AlignmentSheet.followWriteNeeded(current: false, next: true))
+        #expect(AlignmentSheet.followWriteNeeded(current: true, next: false))
+        // Re-stating the stored value writes nothing — this is what stops the
+        // switch echoing a value the server just handed back.
+        #expect(!AlignmentSheet.followWriteNeeded(current: true, next: true))
+        #expect(!AlignmentSheet.followWriteNeeded(current: false, next: false))
+        // A link that carries no follow field reads as off, so turning it on
+        // is a write and leaving it alone is not.
+        #expect(AlignmentSheet.followWriteNeeded(current: nil, next: true))
+        #expect(!AlignmentSheet.followWriteNeeded(current: nil, next: false))
+    }
+}

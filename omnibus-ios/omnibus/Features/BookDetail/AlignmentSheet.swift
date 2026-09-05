@@ -20,10 +20,9 @@ struct AlignmentSheet: View {
     @State private var busy = false
     @State private var mode: CrossFormatLinkMode = .sequence
     @State private var primary: Int64?
-    /// The follow switch's own state. `view.link?.follow` stays the server
-    /// truth it is compared against — updated only on a successful write —
-    /// so flipping back after one lands still reads as a change.
-    @State private var follow = false
+    /// In-flight guard for the follow write alone; `busy` belongs to the
+    /// confirm/unlink actions and must not disable those for this one.
+    @State private var followBusy = false
     @State private var followError: String?
 
     init(book: Book, onChanged: @escaping () -> Void) {
@@ -77,11 +76,7 @@ struct AlignmentSheet: View {
             let v = try await UserDataService.alignment(uuid: book.uuid)
             mode = v.link?.mode ?? .sequence
             primary = v.link?.primaryBookFileID ?? v.audioFiles.first?.bookFileID
-            // `view` first: the switch's `onChange` guard reads it as the
-            // server truth, and seeding `follow` from a stale one would fire
-            // a write for a value that came from the server a line earlier.
             view = v
-            follow = v.link?.follow ?? false
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
@@ -364,13 +359,23 @@ struct AlignmentSheet: View {
     /// sync is already paused there, so the switch would govern nothing.
     private var followSwitch: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
-            Toggle(isOn: $follow) {
+            // Reads the loaded link rather than a local mirror, so the switch
+            // shows the server's answer and never a value it only hopes for
+            // (rule 08's corollary bans optimistically applying this write).
+            // The setter is the write trigger — no `onChange`, so a value the
+            // server hands back can't echo into a second request.
+            Toggle(
+                isOn: Binding(
+                    get: { view?.link?.follow ?? false },
+                    set: { setFollow(to: $0) }
+                )
+            ) {
                 Text("Follow the other format")
                     .font(.ui(14.5))
                     .foregroundStyle(palette.ink1Color)
             }
             .tint(palette.accentColor)
-            .disabled(busy || !connectivity.isOnline)
+            .disabled(busy || followBusy || !connectivity.isOnline)
             .accessibilityIdentifier("alignment-follow")
 
             Text(
@@ -381,17 +386,26 @@ struct AlignmentSheet: View {
             .foregroundStyle(followError == nil ? palette.ink3Color : palette.badColor)
         }
         .padding(.top, Spacing.xs)
-        .onChange(of: follow) { previous, next in
-            setFollow(previous: previous, next: next)
-        }
     }
 
-    /// Write a follow flip through, reverting the switch when it fails.
-    /// Configuration-shaped (rule 08 test 1): never queued, and a swallowed
-    /// failure would leave the switch showing a setting that exists nowhere.
-    private func setFollow(previous: Bool, next: Bool) {
-        guard next != (view?.link?.follow ?? false) else { return }
+    /// Whether a switch movement is a real change rather than the echo of the
+    /// value the link already carries. Static and pure so the rule is
+    /// assertable without a view or a server, mirroring
+    /// `SyncPromptStore.shouldOffer`.
+    static func followWriteNeeded(current: Bool?, next: Bool) -> Bool {
+        next != (current ?? false)
+    }
+
+    /// Write a follow flip through. Configuration-shaped (rule 08 test 1):
+    /// never queued, failure surfaced rather than swallowed. The switch is
+    /// held disabled for the round trip — it reads `view.link.follow`, which
+    /// only moves once the server has agreed, so leaving it live would let a
+    /// second tap race the first and settle on the loser's value.
+    private func setFollow(to next: Bool) {
+        guard Self.followWriteNeeded(current: view?.link?.follow, next: next) else { return }
+        followBusy = true
         Task {
+            defer { followBusy = false }
             do {
                 try await UserDataService.setCrossFormatFollow(
                     uuid: book.uuid,
@@ -402,7 +416,7 @@ struct AlignmentSheet: View {
                 onChanged()
                 Haptics.success()
             } catch {
-                follow = previous
+                // Nothing to revert: the switch never left the stored value.
                 followError = (error as? APIError)?.errorDescription
                     ?? error.localizedDescription
                 Haptics.warning()

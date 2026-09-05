@@ -130,7 +130,8 @@ test("a linked book resolves silently on the player — no prompt, mapped seek",
   page,
   request,
 }) => {
-  // Linking turns follow on, and follow-only is the whole surface now:
+  // Confirming the link turns follow on, and follow-only is the whole
+  // surface now:
   // the old "jump ahead?" card is gone, the boot itself seeds the mapped
   // position (resolve_follow_boot). Reading ahead at 50% of the text maps
   // to ~1s of the 2-second fixture — the seek slider must boot past 0
