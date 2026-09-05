@@ -2325,6 +2325,13 @@ struct DeclareSyncPoint: Codable, Sendable {
     }
 }
 
+/// Body of `POST /api/books/{uuid}/cross-format-follow` — whether opening
+/// one format jumps to the spot the other reached. Off keeps the confirmed
+/// alignment; only an unlink discards it.
+struct SetFollowMode: Codable, Sendable {
+    var enabled: Bool
+}
+
 struct AlignmentMatch: Codable, Hashable, Sendable {
     var matched: Int64
     var ebookChapters: Int64

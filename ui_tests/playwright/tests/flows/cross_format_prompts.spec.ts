@@ -6,7 +6,7 @@
 // Serial: the tests build on one linked book and strictly increasing
 // position clocks.
 
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 import { AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
 import {
   AUTO_ATTACHED_PAIRS,
@@ -121,6 +121,11 @@ async function writeAudioSeconds(
   expect(resp.status(), "audio progress write failed").toBe(200);
 }
 
+// Named by its stable aria-label rather than its visible text, which flips
+// between "following" and "not following" with the state.
+const followSwitch = (page: Page) =>
+  page.getByRole("switch", { name: "Follow the other format" });
+
 test("a linked book resolves silently on the player — no prompt, mapped seek", async ({
   page,
   request,
@@ -222,7 +227,7 @@ test("the book detail shows the newest-format progress row above the sync chip",
   await expect(row.getByText("one spot, both formats")).toBeVisible();
 });
 
-test("declaring a sync point turns on follow and the reader auto-applies", async ({
+test("declaring a sync point anchors the mapping and the reader auto-applies", async ({
   page,
   request,
 }) => {
@@ -301,4 +306,73 @@ test("declaring a sync point turns on follow and the reader auto-applies", async
     /(8[6-9]|9\d|100)%/,
     { timeout: 20_000 },
   );
+});
+
+// The two follow tests come last in this serial file on purpose: they flip
+// follow, which every test above depends on being on. Each restores it.
+test("the follow switch turns the jumps off without discarding the alignment", async ({
+  page,
+}) => {
+  await gotoReady(page, `/books/${uuid}`);
+  const toggle = followSwitch(page);
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/cross-format/follow",
+      expectedBody: { uuid, body: { enabled: false } },
+      expectedStatus: 200,
+    },
+    async () => toggle.click(),
+  );
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+
+  // Off is not a disguised unlink (AC2): the confirmed link survives, so
+  // the line still reads linked and still offers Manage rather than the
+  // unlinked "Link Formats" nudge.
+  const row = page.getByTestId("sync-link-row");
+  await expect(row.getByText("one spot, both formats")).toBeVisible();
+  await expect(page.getByTestId("sync-link-manage")).toBeVisible();
+  await expect(page.getByTestId("sync-link-open")).toHaveCount(0);
+
+  // And back on, so the serial file leaves the state it started in.
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/cross-format/follow",
+      expectedBody: { uuid, body: { enabled: true } },
+      expectedStatus: 200,
+    },
+    async () => toggle.click(),
+  );
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+});
+
+test("a failed follow flip surfaces the error and leaves the switch where it was", async ({
+  page,
+}) => {
+  await gotoReady(page, `/books/${uuid}`);
+  const toggle = followSwitch(page);
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+
+  await page.route("**/api/rpc/cross-format/follow", (route) =>
+    route.fulfill({ status: 500, body: "boom" }),
+  );
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/cross-format/follow",
+      expectedBody: { uuid, body: { enabled: false } },
+      expectedStatus: 500,
+    },
+    async () => toggle.click(),
+  );
+
+  await expect(page.getByTestId("sync-follow-error")).toBeVisible();
+  // The write never landed, so the switch must not claim it did.
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
 });

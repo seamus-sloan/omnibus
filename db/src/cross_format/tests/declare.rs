@@ -1,7 +1,8 @@
 //! `declare_sync_point` mechanics apart from CFI precision (covered in
-//! `cfi`): auto-confirming a single-file link and turning follow on, the
-//! three ways a declaration can be refused, and the accumulate-vs-replace
-//! rule for anchors declared close together.
+//! `cfi`): auto-confirming a single-file link with follow on, leaving an
+//! existing link's follow setting alone, the three ways a declaration can
+//! be refused, and the accumulate-vs-replace rule for anchors declared
+//! close together.
 
 use omnibus_shared::cross_format::{CrossFormatLinkMode, DeclareSyncPoint};
 use omnibus_shared::ProgressFormat;
@@ -57,6 +58,35 @@ async fn declare_sync_point_records_the_anchor_and_turns_follow_on() {
         .unwrap();
     assert_eq!(link.user_anchors.len(), 1);
     assert!((link.user_anchors[0].1 - 520.0).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn declare_sync_point_keeps_follow_off_on_a_link_that_already_existed() {
+    // The off-switch would be cosmetic if a later "Sync here" flipped it
+    // back on: a declaration is calibration, not a mode switch (#2155).
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, _) = seed_dual_book(&pool, &[1_000.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    assert!(set_follow(&pool, user, &uuid, false).await.unwrap());
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 40, 1_000))
+        .await
+        .unwrap();
+
+    let link = declare_sync_point(&pool, user, &declare_audio(&uuid, None, 500.0))
+        .await
+        .unwrap();
+    assert!(!link.follow, "a declaration must not re-arm follow");
+    // The anchor still lands — calibration is recorded either way.
+    assert_eq!(link.user_anchors.len(), 1);
+
+    // And the read side agrees, so nothing downstream silently re-follows.
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    assert!(!r.follow);
 }
 
 #[tokio::test]

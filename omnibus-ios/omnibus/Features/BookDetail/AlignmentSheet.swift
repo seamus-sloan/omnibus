@@ -20,6 +20,11 @@ struct AlignmentSheet: View {
     @State private var busy = false
     @State private var mode: CrossFormatLinkMode = .sequence
     @State private var primary: Int64?
+    /// The follow switch's own state. `view.link?.follow` stays the server
+    /// truth it is compared against — updated only on a successful write —
+    /// so flipping back after one lands still reads as a change.
+    @State private var follow = false
+    @State private var followError: String?
 
     init(book: Book, onChanged: @escaping () -> Void) {
         self.book = book
@@ -72,7 +77,11 @@ struct AlignmentSheet: View {
             let v = try await UserDataService.alignment(uuid: book.uuid)
             mode = v.link?.mode ?? .sequence
             primary = v.link?.primaryBookFileID ?? v.audioFiles.first?.bookFileID
+            // `view` first: the switch's `onChange` guard reads it as the
+            // server truth, and seeding `follow` from a stale one would fire
+            // a write for a value that came from the server a line earlier.
             view = v
+            follow = v.link?.follow ?? false
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
@@ -340,9 +349,63 @@ struct AlignmentSheet: View {
                 .accessibilityIdentifier("alignment-not-now")
 
             if view.link != nil {
+                if view.link?.stale != true { followSwitch }
+
                 Button("Unlink", role: .destructive) { unlink() }
                     .disabled(busy || !connectivity.isOnline)
                     .accessibilityIdentifier("alignment-unlink")
+            }
+        }
+    }
+
+    /// The off-switch for the automatic jumps. Distinct from Unlink below
+    /// it, and the caption has to say so: off keeps the alignment the reader
+    /// confirmed, Unlink throws it away. Hidden while the link is stale —
+    /// sync is already paused there, so the switch would govern nothing.
+    private var followSwitch: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Toggle(isOn: $follow) {
+                Text("Follow the other format")
+                    .font(.ui(14.5))
+                    .foregroundStyle(palette.ink1Color)
+            }
+            .tint(palette.accentColor)
+            .disabled(busy || !connectivity.isOnline)
+            .accessibilityIdentifier("alignment-follow")
+
+            Text(
+                followError
+                    ?? "On, opening one format picks up where the other left off. Off keeps this alignment and just stops the jumps — Unlink is what discards it."
+            )
+            .font(.ui(12))
+            .foregroundStyle(followError == nil ? palette.ink3Color : palette.badColor)
+        }
+        .padding(.top, Spacing.xs)
+        .onChange(of: follow) { previous, next in
+            setFollow(previous: previous, next: next)
+        }
+    }
+
+    /// Write a follow flip through, reverting the switch when it fails.
+    /// Configuration-shaped (rule 08 test 1): never queued, and a swallowed
+    /// failure would leave the switch showing a setting that exists nowhere.
+    private func setFollow(previous: Bool, next: Bool) {
+        guard next != (view?.link?.follow ?? false) else { return }
+        Task {
+            do {
+                try await UserDataService.setCrossFormatFollow(
+                    uuid: book.uuid,
+                    enabled: next
+                )
+                view?.link?.follow = next
+                followError = nil
+                onChanged()
+                Haptics.success()
+            } catch {
+                follow = previous
+                followError = (error as? APIError)?.errorDescription
+                    ?? error.localizedDescription
+                Haptics.warning()
             }
         }
     }

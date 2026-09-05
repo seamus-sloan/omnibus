@@ -1027,10 +1027,22 @@ extension UserDataService {
         let _: Empty = try await APIClient.shared.delete("/api/books/\(uuid)/cross-format-link")
     }
 
+    /// Flip follow mode on an existing link — whether opening one format
+    /// jumps to the spot the other reached. Off keeps the alignment the
+    /// reader confirmed and only stops the jumps; `unlinkCrossFormat` is
+    /// what discards it. Same never-queued contract as the confirm (rule 08
+    /// test 1). 409 when there is no link to flip.
+    static func setCrossFormatFollow(uuid: String, enabled: Bool) async throws {
+        let _: Empty = try await APIClient.shared.post(
+            "/api/books/\(uuid)/cross-format-follow",
+            body: SetFollowMode(enabled: enabled)
+        )
+    }
+
     /// A "synced here" declaration: records the declaring surface's own
-    /// position as a user anchor and turns follow mode on. Rule 08: a
-    /// deferred declaration would calibrate positions that no longer
-    /// correspond — direct call only, disabled offline at the control.
+    /// position as a user anchor, leaving an existing link's follow setting
+    /// alone. Rule 08: a deferred declaration would calibrate positions
+    /// that no longer correspond — direct call only, disabled offline.
     static func declareSyncPoint(_ decl: DeclareSyncPoint) async throws {
         let _: Empty = try await APIClient.shared.post(
             "/api/books/\(decl.bookUUID)/sync-point",

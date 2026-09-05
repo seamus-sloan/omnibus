@@ -142,10 +142,11 @@ pub(super) async fn delete_cross_format_link(
 
 /// `POST /api/books/{uuid}/sync-point` — a "synced here" declaration: the
 /// path uuid is authoritative; the body names the declaring surface's own
-/// position and the counterpart comes from its stored row. Turns follow
-/// mode on. 409 when the alignment must be confirmed first (multi-file,
-/// no link), when the audio set went stale, or when the counterpart has
-/// no position to pair with.
+/// position and the counterpart comes from its stored row. An existing
+/// link keeps its follow setting; only a link this declaration creates
+/// starts with follow on. 409 when the alignment must be confirmed first
+/// (multi-file, no link), when the audio set went stale, or when the
+/// counterpart has no position to pair with.
 pub(super) async fn post_sync_point(
     user: AuthUser,
     State(state): State<AppState>,

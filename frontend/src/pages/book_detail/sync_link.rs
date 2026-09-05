@@ -38,9 +38,75 @@ fn linked_audio_at(view: &AlignmentView) -> Option<String> {
     Some(fmt_hm(audio_frac * total))
 }
 
+/// The follow switch on a linked book: whether opening one format jumps to
+/// the spot the other reached, or leaves each format where it was. Off
+/// keeps the confirmed alignment — it is not a disguised unlink, which is
+/// why it sits on the sync line rather than in the modal's destructive row.
+///
+/// Configuration-shaped (rule 08 test 1): a direct call that never queues,
+/// with the failure rendered rather than swallowed. The new state arrives
+/// via the parent's refetch rather than an optimistic flip, so the switch
+/// never shows a setting the server didn't take.
+#[component]
+fn BdFollowToggle(uuid: String, follow: bool, on_changed: EventHandler<()>) -> Element {
+    let mut busy = use_signal(|| false);
+    let mut error = use_signal(|| None::<String>);
+    let target = !follow;
+
+    let toggle_uuid = uuid.clone();
+    let handle_toggle = move |_| {
+        let uuid = toggle_uuid.clone();
+        busy.set(true);
+        error.set(None);
+        spawn(async move {
+            match data::set_follow_mode("", &uuid, target).await {
+                Ok(()) => {
+                    busy.set(false);
+                    on_changed.call(());
+                }
+                Err(e) => {
+                    busy.set(false);
+                    error.set(Some(e.to_string()));
+                }
+            }
+        });
+    };
+
+    rsx! {
+        button {
+            class: "bdmq-synclink bdmq-followtoggle",
+            r#type: "button",
+            role: "switch",
+            "aria-checked": if follow { "true" } else { "false" },
+            // A stable accessible name while the visible label flips, so a
+            // caller can name the control without naming its state.
+            "aria-label": "Follow the other format",
+            title: "Following jumps to the spot the other format reached. Off keeps the alignment you confirmed and stops the jumps \u{2014} Unlink is what discards it.",
+            "data-testid": "sync-follow-toggle",
+            disabled: busy(),
+            onclick: handle_toggle,
+            if follow { "following" } else { "not following" }
+        }
+        if let Some(msg) = error() {
+            span {
+                class: "bdmq-syncline-warn",
+                role: "status",
+                "data-testid": "sync-follow-error",
+                "{msg}"
+            }
+        }
+    }
+}
+
 /// The design's one-line readout for a loaded alignment view, with the
-/// modal-opening affordance for its state.
-fn sync_line(view: &AlignmentView, mut open_modal: Signal<bool>) -> Element {
+/// modal-opening affordance for its state. `on_changed` re-fetches after a
+/// follow flip, so the switch renders the server's answer.
+fn sync_line(
+    uuid: &str,
+    view: &AlignmentView,
+    mut open_modal: Signal<bool>,
+    on_changed: EventHandler<()>,
+) -> Element {
     match &view.link {
         None => rsx! {
             div { class: "mono bdmq-syncline",
@@ -71,10 +137,14 @@ fn sync_line(view: &AlignmentView, mut open_modal: Signal<bool>) -> Element {
                 .map(|at| format!(" \u{2014} audio at {at}"))
                 .unwrap_or_default();
             let when = recency(l.confirmed_at);
-            let follow = if l.follow { " \u{b7} following" } else { "" };
             rsx! {
                 div { class: "mono bdmq-syncline",
-                    "\u{21c4} one spot, both formats{at} \u{b7} confirmed {when}{follow}"
+                    "\u{21c4} one spot, both formats{at} \u{b7} confirmed {when}"
+                    BdFollowToggle {
+                        uuid: uuid.to_string(),
+                        follow: l.follow,
+                        on_changed,
+                    }
                     button {
                         class: "bdmq-synclink",
                         r#type: "button",
@@ -164,7 +234,12 @@ pub(super) fn BdSyncPanel(
                     }
                 },
                 None => rsx! {},
-                Some(v) => sync_line(&v, modal_open),
+                Some(v) => sync_line(
+                    &uuid,
+                    &v,
+                    modal_open,
+                    EventHandler::new(move |_| epoch.set(epoch() + 1)),
+                ),
             }
             AlignmentModal {
                 uuid: uuid.clone(),
