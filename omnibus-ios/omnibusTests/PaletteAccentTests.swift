@@ -34,3 +34,54 @@ import Testing
     #expect(toned.ok.h == Palette.atrium.ok.h)
     #expect(toned.bad.h == Palette.atrium.bad.h)
 }
+
+// MARK: - Toning a whole book
+
+/// `accented(byCoverOf:)` is what the detail page and the player both run on,
+/// so these pin that it resolves the tone through `CoverIdentity` — the same
+/// source the cover plate and the player's backdrop bloom use — and that it
+/// goes through `accented(by:)` rather than taking a cover colour raw.
+private func book(accent: String?, title: String = "Piranesi") -> Book {
+    var book = Book(id: 1, filename: "b.m4b")
+    book.title = title
+    book.accent = accent
+    return book
+}
+
+@Test func bookTonedPaletteResolvesThroughTheCoverIdentitysTone() {
+    let subject = book(accent: "oklch(0.62 0.13 265)")
+    let toned = Palette.atrium.accented(byCoverOf: subject)
+    // The stored cover accent's hue, named outright. Asserting only against a
+    // recomputed `accented(by: CoverIdentity(subject).tone)` would move with
+    // the implementation — a `CoverIdentity` that stopped reading
+    // `book.accent` would fall back to the title hash and still match.
+    #expect(toned.accent.h == 265)
+    let expected = Palette.atrium.accented(by: CoverIdentity(subject).tone)
+    #expect(toned.accent.h == expected.accent.h)
+    #expect(toned.accent.c == expected.accent.c)
+    #expect(toned.accent.l == expected.accent.l)
+}
+
+@Test func bookTonedPaletteKeepsTheInkContrastForEveryCover() {
+    // A book with no cover art at all, a near-black jacket, and a neon one.
+    // The tone reaches the accent in each case, but never the lightness the
+    // theme's `accentInk` was chosen against — so the label still reads.
+    for subject in [
+        book(accent: nil),
+        book(accent: "oklch(0.09 0.01 260)"),
+        book(accent: "oklch(0.78 0.37 140)"),
+    ] {
+        let toned = Palette.atrium.accented(byCoverOf: subject)
+        #expect(toned.accent.l == Palette.atrium.accent.l)
+        #expect(toned.accent.c >= 0.05)
+        #expect(toned.accent.c <= 0.16)
+    }
+}
+
+@Test func bookTonedPaletteGivesACoverlessBookItsTitleHue() {
+    // No accent to parse, so the hue comes off the title — and two different
+    // coverless books are still told apart by their controls.
+    let piranesi = Palette.atrium.accented(byCoverOf: book(accent: nil))
+    let babel = Palette.atrium.accented(byCoverOf: book(accent: nil, title: "Babel"))
+    #expect(piranesi.accent.h != babel.accent.h)
+}

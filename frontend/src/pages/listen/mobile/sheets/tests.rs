@@ -9,6 +9,16 @@ fn snap_rate_clamps_and_snaps_to_five_hundredths() {
 }
 
 #[test]
+fn speed_fill_pct_measures_off_the_rate_bounds_not_zero() {
+    // 0.5x is the slider's left edge, so it fills nothing.
+    assert!(speed_fill_pct(0.5).abs() < 1e-9);
+    assert!((speed_fill_pct(1.75) - 50.0).abs() < 1e-9);
+    assert!((speed_fill_pct(3.0) - 100.0).abs() < 1e-9);
+    // The bug this pins: bounds of 0..3 would paint 1x a third along.
+    assert!((speed_fill_pct(1.0) - 20.0).abs() < 1e-9);
+}
+
+#[test]
 fn sleep_preset_on_matches_off_and_armed_presets() {
     assert!(sleep_preset_on(SleepState::Off, 0));
     assert!(!sleep_preset_on(SleepState::Off, 900));

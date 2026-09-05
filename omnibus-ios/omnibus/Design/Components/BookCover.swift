@@ -49,6 +49,19 @@ struct CoverIdentity {
     }
 }
 
+extension Palette {
+    /// This palette re-keyed to one book's tone — what a screen devoted to a
+    /// single book runs its controls on.
+    ///
+    /// The one derivation every such screen shares, resolved through
+    /// `CoverIdentity` so a coverless book's controls match the plate it is
+    /// showing. Deriving it per screen is what let the detail page be
+    /// book-toned and the player launched from it stay theme-amber.
+    func accented(byCoverOf book: Book) -> Palette {
+        accented(by: CoverIdentity(book).tone)
+    }
+}
+
 struct BookCover: View {
     let identity: CoverIdentity
     var size: ThumbSize = .md

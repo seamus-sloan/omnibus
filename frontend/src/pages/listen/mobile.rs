@@ -10,7 +10,7 @@ use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
 use omnibus_shared::{EbookMetadata, ProgressFormat, ProgressUpdate};
 
-use super::helpers::{effective_scrub_position, remaining_at_rate};
+use super::helpers::{effective_scrub_position, range_fill_pct, remaining_at_rate};
 use crate::components::atrium::Cover;
 use crate::contexts::use_server_url;
 use crate::data;
@@ -264,6 +264,10 @@ struct PlayerDerived {
     chapter_left: f64,
     remaining_left: f64,
     scrub_max: f64,
+    /// The seek track's `--fill` stop. Derived from `effective`, so mid-drag
+    /// the filled span follows the thumb instead of lagging at the playback
+    /// position the readouts have already left.
+    scrub_fill_pct: f64,
     accent_style: String,
     rate_label: String,
     sleep_label: String,
@@ -308,6 +312,7 @@ fn derive_player_state(
         view::remaining_in_chapter(&view.chapters, disp_index, effective),
         rate,
     );
+    let scrub_max = if duration > 0.0 { duration } else { 1.0 };
 
     PlayerDerived {
         effective,
@@ -319,7 +324,8 @@ fn derive_player_state(
         chapter_dur,
         chapter_left,
         remaining_left: remaining_at_rate(eff_remaining, rate),
-        scrub_max: if duration > 0.0 { duration } else { 1.0 },
+        scrub_max,
+        scrub_fill_pct: range_fill_pct(effective, 0.0, scrub_max),
         accent_style: view
             .accent
             .as_deref()
@@ -501,6 +507,8 @@ fn render_player_scrubber(
     on_seek_input: impl FnMut(Event<FormData>) + 'static,
     on_seek_commit: impl FnMut(Event<FormData>) + 'static,
 ) -> Element {
+    // The played span, for the track gradient WebKit can't derive itself.
+    let fill = derived.scrub_fill_pct;
     rsx! {
         div { class: "m-player-scrub",
             input {
@@ -512,6 +520,7 @@ fn render_player_scrubber(
                 max: "{derived.scrub_max}",
                 step: "1",
                 value: "{derived.effective}",
+                style: "--fill: {fill:.2}%;",
                 oninput: on_seek_input,
                 onchange: on_seek_commit,
             }
