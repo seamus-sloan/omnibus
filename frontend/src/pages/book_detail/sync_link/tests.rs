@@ -1,6 +1,7 @@
 //! SSR-rendered coverage of the sync readout line: the unlinked nudge, the
-//! stale warning, and the linked "one spot, both formats" line with its
-//! audio-timeline position (saved, or mapped from the reading percent).
+//! stale warning, the linked "one spot, both formats" line with its
+//! audio-timeline position (saved, or mapped from the reading percent), and
+//! the follow switch that line carries.
 
 use dioxus::prelude::*;
 use omnibus_shared::{
@@ -44,7 +45,7 @@ fn fresh_link() -> AlignmentLink {
 #[component]
 fn SyncLineHost(view: AlignmentView) -> Element {
     let open = use_signal(|| false);
-    sync_line(&view, open)
+    sync_line("book-uuid", &view, 1, open, EventHandler::new(move |_| {}))
 }
 
 fn render(view: &AlignmentView) -> String {
@@ -90,6 +91,56 @@ fn sync_line_names_the_saved_audio_position_when_linked() {
     assert!(html.contains("data-testid=\"sync-link-manage\""), "{html}");
     // The affordance names what it manages rather than reading "manage →".
     assert!(html.contains("Manage Ebook &#38; Audiobook Sync"), "{html}");
+}
+
+#[test]
+fn sync_line_renders_the_follow_switch_unchecked_when_follow_is_off() {
+    let mut view = base_view();
+    view.link = Some(fresh_link());
+    let html = render(&view);
+    assert!(
+        html.contains("data-testid=\"sync-follow-toggle\""),
+        "{html}"
+    );
+    assert!(html.contains("role=\"switch\""), "{html}");
+    assert!(html.contains("aria-checked=\"false\""), "{html}");
+    assert!(html.contains("not following"), "{html}");
+}
+
+#[test]
+fn sync_line_renders_the_follow_switch_checked_when_follow_is_on() {
+    let mut view = base_view();
+    view.link = Some(AlignmentLink {
+        follow: true,
+        ..fresh_link()
+    });
+    let html = render(&view);
+    assert!(html.contains("aria-checked=\"true\""), "{html}");
+    // The off label is a superstring of the on label — assert the switch
+    // isn't merely rendering "not following" and matching on the tail.
+    assert!(!html.contains("not following"), "{html}");
+}
+
+#[test]
+fn sync_line_has_no_follow_switch_without_a_link() {
+    // Nothing to follow until the alignment is confirmed, and the server
+    // would 409 the flip; the unlinked and stale lines offer the modal.
+    let unlinked = render(&base_view());
+    assert!(
+        !unlinked.contains("data-testid=\"sync-follow-toggle\""),
+        "{unlinked}"
+    );
+
+    let mut view = base_view();
+    view.link = Some(AlignmentLink {
+        stale: true,
+        ..fresh_link()
+    });
+    let stale = render(&view);
+    assert!(
+        !stale.contains("data-testid=\"sync-follow-toggle\""),
+        "{stale}"
+    );
 }
 
 #[test]
