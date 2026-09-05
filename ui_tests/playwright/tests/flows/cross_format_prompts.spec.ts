@@ -309,7 +309,7 @@ test("declaring a sync point anchors the mapping and the reader auto-applies", a
   );
 });
 
-// The two follow tests come last in this serial file on purpose: they flip
+// The follow tests come last in this serial file on purpose: they flip
 // follow, which every test above depends on being on. Each restores it.
 test("the follow switch turns the jumps off without discarding the alignment", async ({
   page,
@@ -384,15 +384,16 @@ test("a failed follow flip surfaces the error and leaves the switch where it was
   await expect(toggle).toHaveAttribute("aria-checked", "true");
 });
 
-test("the switch keeps the value the server took when the refetch behind it fails", async ({
+test("the switch holds the value the server took, then yields to a fresher view", async ({
   page,
 }) => {
   // The flip is two round trips: the write, then a re-read of the alignment
-  // that the switch renders from. The re-read keeps the previous view on
-  // failure, so without the acknowledged value standing in, a dropped
-  // refetch would leave the switch showing the PRE-flip state with no error
-  // — and every later click would recompute the same target from it, a
-  // control the reader cannot move again without reloading.
+  // the switch renders from. The re-read keeps the previous view on failure,
+  // so without the acknowledged value standing in, a dropped refetch would
+  // leave the switch showing the PRE-flip state with no error. But the
+  // stand-in has to expire on the next view that LANDS, not on one whose
+  // value happens to agree — otherwise a server move the switch didn't make
+  // latches it on a stale label forever.
   await gotoReady(page, `/books/${uuid}`);
   const toggle = followSwitch(page);
   await expect(toggle).toHaveAttribute("aria-checked", "true");
@@ -413,18 +414,20 @@ test("the switch keeps the value the server took when the refetch behind it fail
   );
   await expect(toggle).toHaveAttribute("aria-checked", "false");
 
-  // And it is still movable: the next click targets `true`, not `false`
-  // again, which is the half a stuck switch gets wrong.
+  // The half that a "hold it until the value agrees" rule gets wrong: the
+  // server moves follow for a reason that is NOT this switch. Confirming
+  // the alignment re-arms it, so once that fresh view lands the switch must
+  // follow the server back to on rather than holding the value it wrote.
   await page.unroute("**/api/rpc/cross-format/alignment");
+  await page.getByTestId("sync-link-manage").click();
   await expectMutation(
     page,
     {
       method: "POST",
-      url: "/api/rpc/cross-format/follow",
-      expectedBody: { uuid, body: { enabled: true } },
+      url: "/api/rpc/cross-format/link",
       expectedStatus: 200,
     },
-    async () => toggle.click(),
+    async () => page.getByTestId("alignment-confirm").click(),
   );
   await expect(toggle).toHaveAttribute("aria-checked", "true");
 });
