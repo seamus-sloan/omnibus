@@ -411,6 +411,29 @@ pill thumb and its own inset chrome, and no amount of tinting gets it to the sli
 track every player of this shape uses. The parent owns the drag position so the
 thumb and the readouts can't disagree; a plain tap on the track seeks there too.
 
+**Swipe down minimizes it, and the gesture is scoped to the stage.** The player
+follows the finger and springs back short of the threshold, or drops into the
+mini bar past it — `PlayerDismissDrag` holds that arithmetic as a value type so
+the thresholds are pinned by the unit suite rather than only by a finger on a
+simulator. Three things it exists to keep straight: the gesture hangs off
+`stage` alone and never over `controls`, because `PlayerScrubber` claims its
+whole band with a `DragGesture(minimumDistance: 0)` and a dismiss gesture
+reaching over it would turn a seek into a dismissal; only downward,
+vertically-dominant drags count, so a sideways swipe leaves the player exactly
+where it was; and a flick released short of the threshold still minimizes when
+`predictedEndTranslation` says it was heading far enough, which is velocity
+without integrating it by hand. Reduce Motion drops the spring back, not the
+drag — following the finger is direct manipulation. The `chevron.down` button
+stays; the gesture is an addition.
+
+The travelling surface sits on an opaque floor of its own, because the drag
+would otherwise open a gap onto whatever the presentation puts behind it. For
+the same reason the player is a `fullScreenCover` from **every** site — the tab
+root, `ReaderView` and `ComicReaderView`. The two readers used to present it as
+a `.sheet`, which meant the player looked like a card there and full-bleed
+everywhere else, and worse, the sheet's own pan-to-dismiss raced this gesture
+for the same finger.
+
 The play disc is intrinsically sized rather than taking an equal fifth of the
 transport, so the four steppers split what's left and it can't be squeezed —
 which is what went wrong when chapter-skip first moved into this row.

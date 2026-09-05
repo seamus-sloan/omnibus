@@ -106,7 +106,10 @@ struct ComicReaderView: View {
             }
             .animation(Motion.glide, value: audio.isActive)
         }
-        .sheet(isPresented: $showPlayer) {
+        // A cover, not a sheet: the player is full-bleed wherever it opens,
+        // and its own swipe-down is the dismissal — a sheet's pan would race
+        // that gesture for the same finger.
+        .fullScreenCover(isPresented: $showPlayer) {
             if let audioBook = audio.book {
                 PlayerView(book: audioBook, fileID: audio.fileID)
                     .preferredColorScheme(appState.theme.colorScheme)

@@ -15,6 +15,7 @@ struct PlayerView: View {
     @Environment(AudioPlayer.self) private var player
     @Environment(\.palette) private var theme
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let downloads = DownloadManager.shared
 
     /// The in-flight download of the book currently loaded, if any — the only
@@ -37,6 +38,8 @@ struct PlayerView: View {
 
     /// Offset inside the scrubbed span while a drag is in flight.
     @State private var scrubOffset: Double?
+    /// How far the swipe-to-minimize drag has carried the surface down.
+    @State private var dismissDrag: CGFloat = 0
     @State private var showChapters = false
     @State private var showSleepTimer = false
     @State private var showSpeed = false
@@ -56,6 +59,29 @@ struct PlayerView: View {
     }
 
     var body: some View {
+        surface
+            .offset(y: dismissDrag)
+            .opacity(1 - PlayerDismissDrag.progress(at: dismissDrag) * 0.3)
+            // An opaque floor under the travelling surface. Without it the drag
+            // opens a gap onto whatever the presentation puts behind us, which
+            // is not the same thing from the tab root as from a reader.
+            .background(palette.bg0Color.ignoresSafeArea())
+            .task { await player.load(book: book, fileID: fileID) }
+            .sheet(isPresented: $showChapters) { ChapterSheet() }
+            .sheet(isPresented: $showBookmarks) { BookmarksSheet(book: book, isAudio: true) }
+            .fullScreenCover(isPresented: $showCarMode) { CarModeView(book: book) }
+            .sheet(isPresented: $showSpeed) { SpeedSheet() }
+            .sheet(isPresented: $showSleepTimer) { SleepSheet() }
+            // Outermost, so the chapter, speed, sleep and bookmark sheets above —
+            // and Car Mode — are drawn in the book's tone rather than staying amber
+            // over a player that isn't. Same placement as `BookDetailView`.
+            .environment(\.palette, palette)
+            .tint(palette.accentColor)
+    }
+
+    /// Everything the dismiss drag carries: the wash, the stage, and the two
+    /// inset rows, so the whole player travels as one sheet would.
+    private var surface: some View {
         ZStack {
             backdrop
             stage
@@ -134,17 +160,6 @@ struct PlayerView: View {
                 .containerRelativeFrame(.horizontal)
         }
         .background(ScreenBackground())
-        .task { await player.load(book: book, fileID: fileID) }
-        .sheet(isPresented: $showChapters) { ChapterSheet() }
-        .sheet(isPresented: $showBookmarks) { BookmarksSheet(book: book, isAudio: true) }
-        .fullScreenCover(isPresented: $showCarMode) { CarModeView(book: book) }
-        .sheet(isPresented: $showSpeed) { SpeedSheet() }
-        .sheet(isPresented: $showSleepTimer) { SleepSheet() }
-        // Outermost, so the chapter, speed, sleep and bookmark sheets above —
-        // and Car Mode — are drawn in the book's tone rather than staying amber
-        // over a player that isn't. Same placement as `BookDetailView`.
-        .environment(\.palette, palette)
-        .tint(palette.accentColor)
     }
 
     /// A blurred, saturated wash of the cover behind the controls.
@@ -218,6 +233,41 @@ struct PlayerView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(.horizontal, Spacing.screen)
+        // The whole band takes the drag, not just the artwork.
+        .contentShape(Rectangle())
+        .gesture(dismissGesture)
+    }
+
+    /// Swipe down to minimize into the mini bar, the gesture the top bar's
+    /// `chevron.down` has always advertised.
+    ///
+    /// Deliberately scoped to `stage`: `controls` carries the scrubber, whose
+    /// own `DragGesture(minimumDistance: 0)` owns every touch in its band, and
+    /// a dismiss gesture reaching over it would turn a seek into a dismissal.
+    private var dismissGesture: some Gesture {
+        DragGesture(minimumDistance: PlayerDismissDrag.minimumDistance)
+            .onChanged { value in
+                dismissDrag = PlayerDismissDrag.offset(for: value.translation)
+            }
+            .onEnded { value in
+                let minimize = PlayerDismissDrag.shouldDismiss(
+                    translation: value.translation,
+                    predictedEnd: value.predictedEndTranslation
+                )
+                if minimize {
+                    // Left where the finger dropped it: the presentation's own
+                    // dismissal carries it the rest of the way, and snapping
+                    // back to zero first would read as a bounce.
+                    dismiss()
+                } else if reduceMotion {
+                    // Following the finger is direct manipulation, so Reduce
+                    // Motion leaves that alone; the spring back is the
+                    // animation it asks us to drop.
+                    dismissDrag = 0
+                } else {
+                    withAnimation(Motion.glide) { dismissDrag = 0 }
+                }
+            }
     }
 
     private var topBar: some View {
