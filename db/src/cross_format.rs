@@ -20,6 +20,9 @@ mod resume;
 mod tests;
 
 pub use alignment::alignment_view;
+// Position resolution has the same question to answer as the anchor matcher:
+// whether a file's marks are real chapters or the indexer's per-part filler.
+pub(crate) use anchors::is_synthetic_title;
 pub use declare::declare_sync_point;
 pub use link::{confirm_link, delete_link, get_link, set_follow, upsert_link, CrossFormatLink};
 pub use mapping::{

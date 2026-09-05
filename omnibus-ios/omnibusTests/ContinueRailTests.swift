@@ -30,12 +30,11 @@ private func record(
 
 private func point(
     _ record: ProgressRecord, book: Book = book(), duration: Double? = nil,
-    chapter: Int64? = nil, chapters: Int64? = nil
+    part: Int64? = nil, parts: Int64? = nil
 ) -> ResumePoint {
-    ResumePoint(
-        record: record, book: book, totalDurationSeconds: duration,
-        chapterNumber: chapter, chapterCount: chapters
-    )
+    var record = record
+    record.totalDurationSeconds = duration
+    return ResumePoint(record: record, book: book, audioPart: part, audioPartCount: parts)
 }
 
 // MARK: - Card identity
@@ -142,14 +141,14 @@ struct ResumeSpliceTests {
         // This device can't derive a duration or a chapter index. Dropping them
         // on each save would blank the card's bar between server reads.
         let rail = [
-            point(record(format: .audio, at: 900), duration: 3_600, chapter: 2, chapters: 12)
+            point(record(format: .audio, at: 900), duration: 3_600, part: 2, parts: 12)
         ]
         let spliced = UserDataService.splice(
             record(format: .audio, at: 1_800), book: nil, into: rail
         )
 
-        #expect(spliced?.first?.totalDurationSeconds == 3_600)
-        #expect(spliced?.first?.chapterCount == 12)
+        #expect(spliced?.first?.record.totalDurationSeconds == 3_600)
+        #expect(spliced?.first?.audioPartCount == 12)
         #expect(spliced?.first?.fraction == 0.5)
     }
 

@@ -174,7 +174,7 @@ actor WidgetSnapshotWriter {
     /// `internal` so the arithmetic is testable.
     static func secondsRemaining(for point: ResumePoint, format: ProgressFormat) -> Double? {
         guard format == .audio, point.isAudio,
-              let total = point.totalDurationSeconds,
+              let total = point.record.totalDurationSeconds,
               let position = point.record.audioPositionSeconds
         else { return nil }
         return Format.atRate(max(0, total - position), rate: point.playbackRate ?? 1.0)

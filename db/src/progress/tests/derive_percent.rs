@@ -2,13 +2,13 @@
 //! percent from a stored CFI against the source EPUB on disk, and the cases
 //! that decline to derive one.
 
-use omnibus_shared::{EbookMetadata, ProgressUpdate};
+use omnibus_shared::ProgressUpdate;
 use sqlx::SqlitePool;
 
-use crate::{init_db, replace_books};
+use crate::init_db;
 
 use super::super::*;
-use super::{seed, seed_user};
+use super::{seed, seed_named_file, seed_user};
 
 // ── derived-percent attachment (#1864) ──────────────────────────────
 
@@ -38,39 +38,6 @@ async fn seed_epub_on_disk(tag: &str) -> (SqlitePool, i64, String) {
     let (_, uuid) = seed_named_file(&pool, dir.to_str().unwrap(), "Book", "book.epub").await;
     let user = seed_user(&pool, "alice").await;
     (pool, user, uuid)
-}
-
-/// Like [`seed`] but with an explicit on-disk filename, so `book_file_path`
-/// resolves to a file the test actually wrote.
-async fn seed_named_file(
-    pool: &SqlitePool,
-    library: &str,
-    title: &str,
-    filename: &str,
-) -> (i64, String) {
-    replace_books(
-        pool,
-        library,
-        vec![crate::ebook::IndexedBook {
-            metadata: EbookMetadata {
-                filename: filename.to_string(),
-                title: Some(title.to_string()),
-                ..Default::default()
-            },
-            cover: None,
-            mtime_epoch: 0,
-            size_bytes: 0,
-            word_count: None,
-        }],
-    )
-    .await
-    .expect("seed book");
-    let books = crate::list_books(pool, library).await.unwrap();
-    let book = books
-        .into_iter()
-        .find(|b| b.title.as_deref() == Some(title))
-        .unwrap();
-    (book.id, book.unique_identifier.clone().unwrap())
 }
 
 fn cfi_update(uuid: &str, cfi: &str, client_updated_at: i64) -> ProgressUpdate {

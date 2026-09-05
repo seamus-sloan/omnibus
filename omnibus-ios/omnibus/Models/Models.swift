@@ -489,6 +489,65 @@ struct ProgressUpdate: Codable, Sendable {
     }
 }
 
+/// How far a ``ResolvedPosition``'s chapter attribution can be trusted.
+/// Reported rather than withheld: a coarse answer the caller knows is coarse
+/// beats an absent one it fills in by guessing.
+enum PositionConfidence: String, Codable, Sendable {
+    case high
+    case low
+}
+
+/// Where a stored position sits in the book, resolved server-side against the
+/// spine and table of contents (reading) or the container's marks (audio).
+///
+/// Every field is optional because the structure behind it may be missing — a
+/// TOC-less EPUB, an audiobook with no chapter marks — and ``confidence`` says
+/// how much of the block to lean on.
+struct ResolvedPosition: Codable, Sendable, Equatable {
+    var spineIndex: Int64?
+    var chapterTitle: String?
+    /// 1-based, so `chapterOrdinal` of ``chaptersTotal`` reads directly.
+    var chapterOrdinal: Int64?
+    var chaptersTotal: Int64?
+    var percentThroughChapter: Int64?
+    var percentThroughBook: Int64?
+    var confidence: PositionConfidence
+
+    enum CodingKeys: String, CodingKey {
+        case spineIndex = "spine_index"
+        case chapterTitle = "chapter_title"
+        case chapterOrdinal = "chapter_ordinal"
+        case chaptersTotal = "chapters_total"
+        case percentThroughChapter = "percent_through_chapter"
+        case percentThroughBook = "percent_through_book"
+        case confidence
+    }
+}
+
+/// Every position the reader holds in one book — the body of
+/// `GET /api/progress/{uuid}`.
+///
+/// Returned whole rather than one format at a time: a reader 87% through the
+/// audiobook and 47% through the EPUB has one true place, and ``furthest``
+/// names it. `?format=` narrows ``records`` when a caller genuinely wants one
+/// side, which is what the per-format reconcile does.
+struct BookProgress: Codable, Sendable {
+    var bookUUID: String
+    var records: [ProgressRecord]
+    var furthest: ProgressFormat?
+    var linked: Bool = false
+
+    enum CodingKeys: String, CodingKey {
+        case bookUUID = "book_uuid"
+        case records, furthest, linked
+    }
+
+    /// The record for one format, or `nil` when the reader has no position in it.
+    func record(for format: ProgressFormat) -> ProgressRecord? {
+        records.first { $0.format == format }
+    }
+}
+
 struct ProgressRecord: Codable, Sendable {
     var bookUUID: String
     var format: ProgressFormat
@@ -508,6 +567,14 @@ struct ProgressRecord: Codable, Sendable {
     /// The `book_files` row the position was taken in. `nil` for positions
     /// saved before the column existed, and against older servers.
     var bookFileID: Int64?
+    /// Whole-book audio duration, so a listening position becomes a percent
+    /// without this device sourcing a runtime from anywhere else. `nil` for
+    /// reading rows, and on the echo a write returns — the server fills it
+    /// on read paths only.
+    var totalDurationSeconds: Double?
+    /// Where this position sits in the book, resolved server-side. `nil` on
+    /// the same terms as ``totalDurationSeconds``.
+    var resolved: ResolvedPosition?
 
     /// The clock two positions may be compared on.
     ///
@@ -530,6 +597,8 @@ struct ProgressRecord: Codable, Sendable {
         case updatedAt = "updated_at"
         case clientUpdatedAt = "client_updated_at"
         case bookFileID = "book_file_id"
+        case totalDurationSeconds = "total_duration_seconds"
+        case resolved
     }
 }
 
@@ -554,9 +623,12 @@ extension ProgressUpdate {
 struct ResumePoint: Codable, Sendable, Identifiable {
     var record: ProgressRecord
     var book: Book
-    var totalDurationSeconds: Double?
-    var chapterNumber: Int64?
-    var chapterCount: Int64?
+    /// 1-based structural part of the audiobook timeline, from the resolved
+    /// file's marks. **Not a book chapter**: a 65-chapter novel stored as a
+    /// 4-part M4B carries four marks, and calling that "chapter 4 of 4" read
+    /// as the end of the book. Real chapters live in ``ProgressRecord/resolved``.
+    var audioPart: Int64?
+    var audioPartCount: Int64?
     /// The saved playback rate for this book's audio, so the hero's "left"
     /// readout can show the wall-clock wait. `nil` for epub rows, when no
     /// preference is saved (1x), and against older servers.
@@ -581,9 +653,8 @@ struct ResumePoint: Codable, Sendable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case record, book
-        case totalDurationSeconds = "total_duration_seconds"
-        case chapterNumber = "chapter_number"
-        case chapterCount = "chapter_count"
+        case audioPart = "audio_part"
+        case audioPartCount = "audio_part_count"
         case playbackRate = "playback_rate"
     }
 
@@ -597,13 +668,34 @@ struct ResumePoint: Codable, Sendable, Identifiable {
     /// card's bar.
     var fraction: Double? {
         if isAudio {
-            guard let total = totalDurationSeconds, total > 0,
+            guard let total = record.totalDurationSeconds, total > 0,
                   let position = record.audioPositionSeconds else { return nil }
             return min(1, max(0, position / total))
         }
         guard let percent = record.progressPercent else { return nil }
         return min(1, max(0, Double(percent) / 100))
     }
+
+    /// Which structural position to name beside this card.
+    ///
+    /// A confidently resolved chapter wins — it is what the reader means by
+    /// "where am I". A low-confidence block is not demoted to nothing but to
+    /// the part readout, which is what it actually measured.
+    var structuralPosition: StructuralPosition? {
+        if let resolved = record.resolved, resolved.confidence == .high,
+           let ordinal = resolved.chapterOrdinal {
+            return .chapter(ordinal: ordinal, total: resolved.chaptersTotal)
+        }
+        guard let part = audioPart else { return nil }
+        return .part(ordinal: part, total: audioPartCount)
+    }
+}
+
+/// The structural position a resume surface names — a real chapter, or the
+/// coarser audiobook part when that is all the container supports.
+enum StructuralPosition: Equatable, Sendable {
+    case chapter(ordinal: Int64, total: Int64?)
+    case part(ordinal: Int64, total: Int64?)
 }
 
 struct SessionReport: Codable, Sendable {

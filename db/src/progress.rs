@@ -6,6 +6,7 @@
 
 use omnibus_shared::ProgressFormat;
 
+mod enrich;
 mod ledger;
 mod resume;
 mod session;
@@ -19,9 +20,9 @@ pub use ledger::{pages_ledger_epoch, SLOT_SECS};
 pub use resume::{recent_progress, resume_points};
 pub use session::{insert_session_tx, record_session, record_session_tx};
 pub use state::{
-    attach_derived_kobo_location, attach_derived_percent, derive_epub_percent, get_playback_rate,
-    get_progress, set_kobo_statistics_tx, set_playback_rate, spawn_epub_percent_derivation,
-    KoboStatistics,
+    attach_derived_kobo_location, attach_derived_percent, book_progress, derive_epub_percent,
+    get_playback_rate, get_progress, set_kobo_statistics_tx, set_playback_rate,
+    spawn_epub_percent_derivation, KoboStatistics,
 };
 pub use upsert::{upsert_progress, upsert_progress_tx};
 

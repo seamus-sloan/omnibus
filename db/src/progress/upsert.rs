@@ -52,6 +52,11 @@ async fn read_progress_row(
         book_file_id: row.try_get::<Option<i64>, _>("book_file_id")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
         client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
+        // The write echo carries positions, not enrichment: resolving a
+        // chapter costs an archive walk that a page-turn write should not
+        // pay for. The read paths fill these.
+        total_duration_seconds: None,
+        resolved: None,
     })
 }
 

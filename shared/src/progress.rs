@@ -201,6 +201,103 @@ pub struct ProgressRecord {
     pub book_file_id: Option<i64>,
     pub updated_at: i64,
     pub client_updated_at: i64,
+    /// Whole-book audio duration (sum of parts), so no caller ever has to
+    /// source an audiobook's runtime out of band to turn
+    /// [`Self::audio_position_seconds`] into a percent. `None` for epub rows.
+    ///
+    /// Read-path only: filled by `GET /api/progress/{uuid}` and the resume
+    /// feed, absent from the echo `POST /api/progress` returns — deriving it
+    /// costs queries a page-turn write should not pay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_duration_seconds: Option<f64>,
+    /// Where this position actually is in the book. Read-path only, on the
+    /// same terms as [`Self::total_duration_seconds`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<ResolvedPosition>,
+}
+
+/// How far a [`ResolvedPosition`]'s chapter attribution can be trusted.
+/// Reported rather than withheld: a coarse answer a caller knows is coarse
+/// beats an absent block it fills in by guessing.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum PositionConfidence {
+    /// Resolved against real structure: a TOC entry that owns its spine
+    /// document, or container-supplied audio chapter marks.
+    High,
+    /// The best available answer, known to be coarse — a percent-only
+    /// position mapped back onto the spine, several TOC entries sharing one
+    /// spine document, or audio marks that are the indexer's synthetic
+    /// per-part fallback rather than real chapters.
+    Low,
+}
+
+/// Where a stored position sits in the book, resolved server-side against the
+/// same spine/TOC data `GET /api/ebooks/{uuid}/chapters` serves and the same
+/// chapter marks the player reads.
+///
+/// Exists so a position is never opaque on the wire: an `epubcfi(...)` or a
+/// raw second count answers "where am I?" only after arithmetic the client
+/// has no data for. Every field is optional because the underlying structure
+/// may be missing (a TOC-less EPUB, an audiobook with no chapter marks);
+/// [`Self::confidence`] says how much of the block to lean on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ResolvedPosition {
+    /// 0-based spine document index, matching `GET /api/ebooks/{uuid}/chapters`.
+    /// `None` for audio positions and for a comic page anchor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spine_index: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_title: Option<String>,
+    /// 1-based, so `chapter_ordinal` of [`Self::chapters_total`] reads
+    /// directly. Deliberately not the stored 0-based `ebook_chapters.ordinal`
+    /// — an off-by-one here is the whole failure this block exists to end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_ordinal: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapters_total: Option<i64>,
+    /// 0..=100 through the resolved chapter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent_through_chapter: Option<i64>,
+    /// 0..=100 through the whole book, on the same ruler
+    /// `ProgressRecord::progress_percent` uses for epub rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent_through_book: Option<i64>,
+    pub confidence: PositionConfidence,
+}
+
+/// Every position the user holds in one book — the body of
+/// `GET /api/progress/{uuid}`.
+///
+/// Returned whole rather than one format at a time: a reader 87% through the
+/// audiobook and 47% through the EPUB has one true place, and an endpoint
+/// that answers with the EPUB row alone reports the wrong one with nothing to
+/// signal it. `format` narrows [`Self::records`] to a single entry when a
+/// caller genuinely wants one side.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct BookProgress {
+    /// The canonical book uuid the positions were resolved against — not
+    /// necessarily the one asked for, which may be a merged-away uuid.
+    pub book_uuid: String,
+    /// One entry per format the user has a position in, newest event time
+    /// first. Empty when the user has never opened the book.
+    pub records: Vec<ProgressRecord>,
+    /// Which record represents the reader's true place: the one furthest
+    /// through the book by whole-book percent, falling back to the most
+    /// recent event time when the two aren't comparable. `None` only when
+    /// [`Self::records`] is empty. A caller that reads nothing else gets the
+    /// right answer.
+    pub furthest: Option<ProgressFormat>,
+    /// Whether the user has confirmed a cross-format link for this book.
+    #[serde(default)]
+    pub linked: bool,
+    /// For linked books: the mapped "resume in the other format" candidate,
+    /// measured from [`Self::furthest`]. Absent when unmappable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_format: Option<crate::cross_format::CrossFormatCandidate>,
 }
 
 /// "Pick up where you left off" entry returned by `GET /api/progress/recent` and `rpc_recent_progress`.
@@ -217,20 +314,67 @@ pub struct ResumePoint {
     /// (absent when the other side is newer or unmappable).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cross_format: Option<crate::cross_format::CrossFormatCandidate>,
-    /// Whole-book audio duration (sum of parts). `None` for epub rows.
+    /// 1-based structural part of the audiobook timeline at the saved
+    /// position, from the resolved file's marks. `None` for epub rows.
+    ///
+    /// **Not a book chapter.** The marks are whatever the container carried,
+    /// which for a 65-chapter novel stored as a 4-part M4B is four of them —
+    /// reported as `chapter 4 of 4`, that read as "at the end of the last
+    /// chapter". Book chapters live in
+    /// [`ProgressRecord::resolved`], which says how far to trust itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_duration_seconds: Option<f64>,
-    /// 1-based chapter number at the saved position. `None` for epub rows.
+    pub audio_part: Option<i64>,
+    /// Total structural parts, for a "3 of 12" readout. `None` for epub rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chapter_number: Option<i64>,
-    /// Total chapter count, for a "Ch. 3 of 12" readout. `None` for epub rows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chapter_count: Option<i64>,
+    pub audio_part_count: Option<i64>,
     /// The user's saved playback rate for this book, so resume surfaces can
     /// rate-adjust their "left" readouts. `None` for epub rows and when no
     /// preference has been saved (treat as 1x).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub playback_rate: Option<f64>,
+}
+
+/// Which structural position a resume surface should name, chosen once here
+/// so every surface makes the same call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StructuralPosition {
+    /// A real book chapter, resolved server-side. `total` is absent for a
+    /// book whose chapter list couldn't be counted.
+    Chapter {
+        ordinal: i64,
+        total: Option<i64>,
+        title: Option<String>,
+    },
+    /// A structural part of an audiobook timeline — the container's marks,
+    /// which may be one per file rather than one per chapter. Rendered as a
+    /// part so a four-file novel never reads as a four-chapter one.
+    Part { ordinal: i64, total: Option<i64> },
+}
+
+impl ResumePoint {
+    /// The structural position to show beside this card, or `None` when the
+    /// book can name neither.
+    ///
+    /// A confidently resolved chapter wins: it is the answer the reader means
+    /// by "where am I". A `Low`-confidence block is not demoted to nothing —
+    /// it is demoted to the part readout, which is what it actually measured.
+    pub fn structural_position(&self) -> Option<StructuralPosition> {
+        if let Some(resolved) = &self.record.resolved {
+            if resolved.confidence == PositionConfidence::High {
+                if let Some(ordinal) = resolved.chapter_ordinal {
+                    return Some(StructuralPosition::Chapter {
+                        ordinal,
+                        total: resolved.chapters_total,
+                        title: resolved.chapter_title.clone(),
+                    });
+                }
+            }
+        }
+        Some(StructuralPosition::Part {
+            ordinal: self.audio_part?,
+            total: self.audio_part_count,
+        })
+    }
 }
 
 /// Batched session row (reader / audio open-to-close span). Mobile

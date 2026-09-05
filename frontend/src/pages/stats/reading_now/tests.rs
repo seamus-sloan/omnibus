@@ -1,5 +1,7 @@
 use super::*;
-use omnibus_shared::{EbookMetadata, ProgressFormat, ProgressRecord};
+use omnibus_shared::{
+    EbookMetadata, PositionConfidence, ProgressFormat, ProgressRecord, ResolvedPosition,
+};
 
 fn months(pairs: &[(&str, i64)]) -> Vec<MonthCount> {
     pairs
@@ -19,7 +21,7 @@ fn summary(as_of: &str, pairs: &[(&str, i64)]) -> StatsSummary {
     }
 }
 
-fn point(percent: Option<i64>, chapter: Option<(i64, i64)>) -> ResumePoint {
+fn point(percent: Option<i64>, part: Option<(i64, i64)>) -> ResumePoint {
     ResumePoint {
         record: ProgressRecord {
             book_uuid: "u".to_string(),
@@ -31,13 +33,14 @@ fn point(percent: Option<i64>, chapter: Option<(i64, i64)>) -> ResumePoint {
             book_file_id: None,
             updated_at: 0,
             client_updated_at: 0,
+            total_duration_seconds: None,
+            resolved: None,
         },
         book: EbookMetadata::default(),
         linked: false,
         cross_format: None,
-        total_duration_seconds: None,
-        chapter_number: chapter.map(|(n, _)| n),
-        chapter_count: chapter.map(|(_, total)| total),
+        audio_part: part.map(|(n, _)| n),
+        audio_part_count: part.map(|(_, total)| total),
         playback_rate: None,
     }
 }
@@ -87,12 +90,25 @@ fn resume_readout_answers_in_whatever_unit_the_book_can_report() {
         resume_readout(&point(Some(62), None)).as_deref(),
         Some("62%")
     );
-    // An audiobook's position is a time offset, not a percent — it answers in
-    // chapters instead of inventing one.
+    // No percent to report: the structural position answers instead of a
+    // zero. The container's marks are parts, not chapters — a 65-chapter
+    // novel stored as 12 files is not on chapter 3.
     assert_eq!(
         resume_readout(&point(None, Some((3, 12)))).as_deref(),
-        Some("Ch 3 of 12")
+        Some("Pt 3 of 12")
     );
+    // A confidently resolved chapter is a chapter, and outranks the part.
+    let mut chaptered = point(None, Some((3, 12)));
+    chaptered.record.resolved = Some(ResolvedPosition {
+        spine_index: Some(4),
+        chapter_title: Some("The Middle".into()),
+        chapter_ordinal: Some(7),
+        chapters_total: Some(24),
+        percent_through_chapter: Some(10),
+        percent_through_book: None,
+        confidence: PositionConfidence::High,
+    });
+    assert_eq!(resume_readout(&chaptered).as_deref(), Some("Ch 7 of 24"));
     // Neither available: silence, not a zero the book never reported.
     assert_eq!(resume_readout(&point(None, None)), None);
 }

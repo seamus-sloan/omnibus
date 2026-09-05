@@ -18,12 +18,10 @@ use crate::auth::AuthUser;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ProgressQuery {
-    #[serde(default = "default_format")]
-    format: ProgressFormat,
-}
-
-fn default_format() -> ProgressFormat {
-    ProgressFormat::Epub
+    /// Narrow the response to one format. Omitted, every format the user has
+    /// a position in comes back — see [`get_progress`].
+    #[serde(default)]
+    format: Option<ProgressFormat>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,18 +63,29 @@ pub(super) async fn post_progress(
     }
 }
 
-/// Fetch the current position for `(user, uuid, format)`. `format` defaults
-/// to `epub` when omitted. Returns `200 { … }` with an `Option<ProgressRecord>`
-/// body (`null` when the user has not yet opened the book in that format).
+/// Every position the user holds in this book, as a [`BookProgress`]
+/// envelope: the records, which one is `furthest`, and the cross-format link
+/// state. `?format=epub|audio` narrows `records` to that format alone.
+///
+/// **This used to default to `epub` and return that record by itself**, which
+/// reported a reader 87% through the audiobook as 47% through the book with
+/// nothing in the payload to say another position existed. The default is now
+/// every format, and `furthest` names the reader's true place outright.
+///
+/// `200 null` when the uuid names no book — distinct from `200 {records: []}`,
+/// which is a real book the user has never opened.
 pub(super) async fn get_progress(
     user: AuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
     Query(q): Query<ProgressQuery>,
 ) -> Response {
-    match db::progress::get_progress(&state.pool, user.id, &uuid, q.format).await {
-        Ok(rec) => Json(rec).into_response(),
-        Err(e) => internal("get_progress", e),
+    match db::progress::book_progress(&state.pool, user.id, &uuid, q.format).await {
+        Ok(progress) => Json(progress).into_response(),
+        Err(ProgressError::BookNotFound) => {
+            Json(None::<omnibus_shared::BookProgress>).into_response()
+        }
+        Err(ProgressError::Sqlx(e)) => internal("book_progress", e),
     }
 }
 

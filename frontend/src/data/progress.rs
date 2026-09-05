@@ -3,6 +3,8 @@
 //! functions on web/SSR. Public signatures are identical across the
 //! `#[cfg]` split so callers stay platform-agnostic.
 
+#[cfg(feature = "mobile")]
+use omnibus_shared::BookProgress;
 use omnibus_shared::{
     AudiobookPlaybackRateRecord, AudiobookPlaybackRateUpdate, ProgressFormat, ProgressRecord,
     ProgressUpdate, ResumePoint, SessionReport,
@@ -86,7 +88,19 @@ pub(crate) async fn get_progress_online(
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    Ok(response.json::<Option<ProgressRecord>>().await?)
+    // `?format=` narrows the envelope to one record rather than replacing it:
+    // the endpoint answers with every position the reader holds, and this
+    // caller wants the one format it is reconciling. Cached per format, so
+    // the stored shape stays a bare record.
+    Ok(response
+        .json::<Option<BookProgress>>()
+        .await?
+        .and_then(|progress| {
+            progress
+                .records
+                .into_iter()
+                .find(|record| record.format == format)
+        }))
 }
 
 /// PUT `/api/audiobooks/{uuid}/playback-rate` — persist a per-book rate.
