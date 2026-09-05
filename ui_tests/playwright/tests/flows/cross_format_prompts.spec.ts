@@ -373,7 +373,58 @@ test("a failed follow flip surfaces the error and leaves the switch where it was
     async () => toggle.click(),
   );
 
-  await expect(page.getByTestId("sync-follow-error")).toBeVisible();
+  const err = page.getByTestId("sync-follow-error");
+  await expect(err).toBeVisible();
+  // Visible is not enough — the message has to READ as a failure. Its class
+  // is the only thing that colours it, and the obvious `bdmq-syncline-warn`
+  // exists solely as a compound selector on the line itself, so a span
+  // carrying it renders in body ink.
+  await expect(err).toHaveClass(/bdmq-syncerr/);
   // The write never landed, so the switch must not claim it did.
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+});
+
+test("the switch keeps the value the server took when the refetch behind it fails", async ({
+  page,
+}) => {
+  // The flip is two round trips: the write, then a re-read of the alignment
+  // that the switch renders from. The re-read keeps the previous view on
+  // failure, so without the acknowledged value standing in, a dropped
+  // refetch would leave the switch showing the PRE-flip state with no error
+  // — and every later click would recompute the same target from it, a
+  // control the reader cannot move again without reloading.
+  await gotoReady(page, `/books/${uuid}`);
+  const toggle = followSwitch(page);
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+
+  // Let the write through, break only the refetch behind it.
+  await page.route("**/api/rpc/cross-format/alignment", (route) =>
+    route.fulfill({ status: 500, body: "boom" }),
+  );
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/cross-format/follow",
+      expectedBody: { uuid, body: { enabled: false } },
+      expectedStatus: 200,
+    },
+    async () => toggle.click(),
+  );
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+
+  // And it is still movable: the next click targets `true`, not `false`
+  // again, which is the half a stuck switch gets wrong.
+  await page.unroute("**/api/rpc/cross-format/alignment");
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/cross-format/follow",
+      expectedBody: { uuid, body: { enabled: true } },
+      expectedStatus: 200,
+    },
+    async () => toggle.click(),
+  );
   await expect(toggle).toHaveAttribute("aria-checked", "true");
 });

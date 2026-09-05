@@ -20,9 +20,11 @@ struct AlignmentSheet: View {
     @State private var busy = false
     @State private var mode: CrossFormatLinkMode = .sequence
     @State private var primary: Int64?
-    /// In-flight guard for the follow write alone; `busy` belongs to the
-    /// confirm/unlink actions and must not disable those for this one.
-    @State private var followBusy = false
+    /// The value of an in-flight follow write, shown over the stored one for
+    /// the round trip and cleared either way when it settles. Doubles as the
+    /// in-flight guard; `busy` belongs to confirm/unlink and must not
+    /// disable those for this one.
+    @State private var followPending: Bool?
     @State private var followError: String?
 
     init(book: Book, onChanged: @escaping () -> Void) {
@@ -359,14 +361,18 @@ struct AlignmentSheet: View {
     /// sync is already paused there, so the switch would govern nothing.
     private var followSwitch: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
-            // Reads the loaded link rather than a local mirror, so the switch
-            // shows the server's answer and never a value it only hopes for
-            // (rule 08's corollary bans optimistically applying this write).
-            // The setter is the write trigger — no `onChange`, so a value the
-            // server hands back can't echo into a second request.
+            // Reads the loaded link, with the in-flight request's value laid
+            // over it for the round trip. Not an optimistic apply: the knob
+            // is disabled while `followPending` is set and drops back to the
+            // stored value if the write fails, so it never reports a setting
+            // as saved that isn't. Reading the link alone would snap the knob
+            // back under the reader's finger on every tap and then move again
+            // when the response landed. The setter is the write trigger — no
+            // `onChange`, so a value the server hands back can't echo into a
+            // second request.
             Toggle(
                 isOn: Binding(
-                    get: { view?.link?.follow ?? false },
+                    get: { followPending ?? view?.link?.follow ?? false },
                     set: { setFollow(to: $0) }
                 )
             ) {
@@ -375,7 +381,7 @@ struct AlignmentSheet: View {
                     .foregroundStyle(palette.ink1Color)
             }
             .tint(palette.accentColor)
-            .disabled(busy || followBusy || !connectivity.isOnline)
+            .disabled(busy || followPending != nil || !connectivity.isOnline)
             .accessibilityIdentifier("alignment-follow")
 
             Text(
@@ -398,14 +404,15 @@ struct AlignmentSheet: View {
 
     /// Write a follow flip through. Configuration-shaped (rule 08 test 1):
     /// never queued, failure surfaced rather than swallowed. The switch is
-    /// held disabled for the round trip — it reads `view.link.follow`, which
-    /// only moves once the server has agreed, so leaving it live would let a
-    /// second tap race the first and settle on the loser's value.
+    /// held disabled for the round trip, so a second tap cannot race the
+    /// first and leave the two responses settling on the loser's value.
     private func setFollow(to next: Bool) {
         guard Self.followWriteNeeded(current: view?.link?.follow, next: next) else { return }
-        followBusy = true
+        followPending = next
         Task {
-            defer { followBusy = false }
+            // Clears on every path, so a failure can't leave the knob stuck
+            // showing a value it only asked for.
+            defer { followPending = nil }
             do {
                 try await UserDataService.setCrossFormatFollow(
                     uuid: book.uuid,
@@ -416,7 +423,8 @@ struct AlignmentSheet: View {
                 onChanged()
                 Haptics.success()
             } catch {
-                // Nothing to revert: the switch never left the stored value.
+                // Nothing to revert — dropping `followPending` drops the knob
+                // back to the stored value on its own.
                 followError = (error as? APIError)?.errorDescription
                     ?? error.localizedDescription
                 Haptics.warning()

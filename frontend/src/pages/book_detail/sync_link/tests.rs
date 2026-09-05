@@ -45,7 +45,7 @@ fn fresh_link() -> AlignmentLink {
 #[component]
 fn SyncLineHost(view: AlignmentView) -> Element {
     let open = use_signal(|| false);
-    sync_line("book-uuid", &view, open, EventHandler::new(move |_| {}))
+    sync_line("book-uuid", &view, 1, open, EventHandler::new(move |_| {}))
 }
 
 fn render(view: &AlignmentView) -> String {
