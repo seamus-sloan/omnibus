@@ -32,7 +32,7 @@ const MIN_MATCH_FRACTION: f64 = 0.5;
 
 /// The indexer's synthetic no-chapter fallback ("Part 1", "Part 2", …).
 /// Structural boundaries only — never title-matched.
-pub(super) fn is_synthetic_title(title: &str) -> bool {
+pub(crate) fn is_synthetic_title(title: &str) -> bool {
     let Some(rest) = title.strip_prefix("Part ") else {
         return false;
     };

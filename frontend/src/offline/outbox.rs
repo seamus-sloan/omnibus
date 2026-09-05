@@ -297,6 +297,11 @@ pub(crate) async fn queue_save_progress(update: &ProgressUpdate) -> Option<Progr
         progress_percent: update.progress_percent,
         kobo_location: update.kobo_location.clone(),
         book_file_id: update.book_file_id,
+        // The replica can't resolve a chapter or a runtime offline, and rule
+        // 08 forbids a promise dressed as a state — so these stay absent
+        // until a read path fills them.
+        total_duration_seconds: None,
+        resolved: None,
         updated_at: now,
         // Optimistic local record: mirrors the server's own COALESCE (issue
         // #1362) — the update's own client event time when it sent one,

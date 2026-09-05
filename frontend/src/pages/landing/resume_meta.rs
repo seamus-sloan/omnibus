@@ -2,7 +2,7 @@
 //! continue-reading hero: percent/remaining labels for audio, and the plain
 //! continue affordance for epub rows that lack a stored percent.
 
-use omnibus_shared::{ProgressFormat, ResumePoint};
+use omnibus_shared::{ProgressFormat, ResumePoint, StructuralPosition};
 
 use crate::pages::listen::remaining_at_rate;
 
@@ -22,7 +22,7 @@ pub(super) fn resume_meta(point: &ResumePoint) -> (String, Option<i64>) {
         };
     }
     let pos = point.record.audio_position_seconds.unwrap_or(0.0);
-    match point.total_duration_seconds.filter(|t| *t > 0.0) {
+    match point.record.total_duration_seconds.filter(|t| *t > 0.0) {
         Some(total) => {
             // Clamped to 0..=100 above, so the cast is in-range (NaN → 0).
             #[allow(clippy::cast_possible_truncation)]
@@ -31,10 +31,18 @@ pub(super) fn resume_meta(point: &ResumePoint) -> (String, Option<i64>) {
                 (total - pos).max(0.0),
                 point.playback_rate.unwrap_or(1.0),
             ));
-            let ch = point
-                .chapter_number
-                .map(|n| format!("Ch. {n} \u{00b7} "))
-                .unwrap_or_default();
+            // A confidently resolved chapter reads as one; the container's
+            // marks read as a part, because for a novel stored as four M4B
+            // files that is what they are.
+            let ch = match point.structural_position() {
+                Some(StructuralPosition::Chapter { ordinal, .. }) => {
+                    format!("Ch. {ordinal} \u{00b7} ")
+                }
+                Some(StructuralPosition::Part { ordinal, .. }) => {
+                    format!("Pt. {ordinal} \u{00b7} ")
+                }
+                None => String::new(),
+            };
             (format!("{ch}{pct}% \u{00b7} {left} left"), Some(pct))
         }
         None => (format!("{} in", format_hms_short(pos)), None),
@@ -78,7 +86,7 @@ pub(super) fn format_hms_short(seconds: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use omnibus_shared::{EbookMetadata, ProgressRecord};
+    use omnibus_shared::{EbookMetadata, PositionConfidence, ProgressRecord, ResolvedPosition};
 
     fn point(format: ProgressFormat, pos: Option<f64>, total: Option<f64>) -> ResumePoint {
         ResumePoint {
@@ -92,32 +100,69 @@ mod tests {
                 book_file_id: None,
                 updated_at: 0,
                 client_updated_at: 0,
+                total_duration_seconds: total,
+                resolved: None,
             },
             book: EbookMetadata::default(),
             linked: false,
             cross_format: None,
-            total_duration_seconds: total,
-            chapter_number: Some(3),
-            chapter_count: Some(10),
+            audio_part: Some(3),
+            audio_part_count: Some(10),
             playback_rate: None,
+        }
+    }
+
+    /// A confidently resolved chapter, as the server sends one.
+    fn resolved(ordinal: i64, confidence: PositionConfidence) -> ResolvedPosition {
+        ResolvedPosition {
+            spine_index: None,
+            chapter_title: Some("The Middle".into()),
+            chapter_ordinal: Some(ordinal),
+            chapters_total: Some(24),
+            percent_through_chapter: Some(10),
+            percent_through_book: Some(50),
+            confidence,
         }
     }
 
     #[test]
     fn resume_meta_reports_percent_and_time_left_for_audio_with_total() {
-        let (meta, pct) = resume_meta(&point(ProgressFormat::Audio, Some(3600.0), Some(7200.0)));
+        let mut p = point(ProgressFormat::Audio, Some(3600.0), Some(7200.0));
+        p.record.resolved = Some(resolved(7, PositionConfidence::High));
+        let (meta, pct) = resume_meta(&p);
         assert_eq!(pct, Some(50));
-        assert_eq!(meta, "Ch. 3 \u{00b7} 50% \u{00b7} 1h 00m left");
+        assert_eq!(meta, "Ch. 7 \u{00b7} 50% \u{00b7} 1h 00m left");
+    }
+
+    #[test]
+    fn resume_meta_names_a_part_rather_than_a_chapter_for_container_marks() {
+        // The marks on a novel stored as ten M4B files are parts. Calling
+        // part 3 of 10 "Ch. 3" is the readout this rename exists to end — and
+        // a low-confidence resolved block is demoted to the same readout,
+        // because that is what it actually measured.
+        let plain = point(ProgressFormat::Audio, Some(3600.0), Some(7200.0));
+        assert_eq!(
+            resume_meta(&plain).0,
+            "Pt. 3 \u{00b7} 50% \u{00b7} 1h 00m left"
+        );
+
+        let mut coarse = plain;
+        coarse.record.resolved = Some(resolved(7, PositionConfidence::Low));
+        assert_eq!(
+            resume_meta(&coarse).0,
+            "Pt. 3 \u{00b7} 50% \u{00b7} 1h 00m left"
+        );
     }
 
     #[test]
     fn resume_meta_scales_time_left_by_the_saved_playback_rate() {
         let mut p = point(ProgressFormat::Audio, Some(3600.0), Some(7200.0));
+        p.record.resolved = Some(resolved(7, PositionConfidence::High));
         p.playback_rate = Some(2.0);
         let (meta, pct) = resume_meta(&p);
         // Percent stays in book time; only the wall-clock wait scales.
         assert_eq!(pct, Some(50));
-        assert_eq!(meta, "Ch. 3 \u{00b7} 50% \u{00b7} 30m left");
+        assert_eq!(meta, "Ch. 7 \u{00b7} 50% \u{00b7} 30m left");
     }
 
     #[test]

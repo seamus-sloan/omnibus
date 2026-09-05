@@ -1,12 +1,11 @@
-//! Resume-card read path: [`recent_progress`] plus book/duration/chapter
-//! enrichment into [`resume_points`], and the audio-file/chapter-position
-//! helpers behind it.
+//! Resume-card read path: [`recent_progress`] plus the book join and the
+//! cross-format collapse pass into [`resume_points`]. Position enrichment
+//! itself lives in [`super::enrich`], shared with the per-book read.
 
-use omnibus_shared::{ChapterInfo, ProgressFormat, ProgressRecord, ResumePoint};
+use omnibus_shared::{ProgressFormat, ProgressRecord, ResumePoint};
 use sqlx::{Row, SqlitePool};
 
-use crate::hls;
-
+use super::enrich::{enrich_record, PositionDetail};
 use super::{parse_format, ProgressError};
 
 /// The user's most recent progress rows across both formats, newest first
@@ -64,6 +63,10 @@ pub async fn recent_progress(
                 book_file_id: row.try_get::<Option<i64>, _>("book_file_id")?,
                 updated_at: row.try_get::<i64, _>("updated_at")?,
                 client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
+                // Read-path enrichment; `enrich_record` fills these for the
+                // callers that serve them.
+                total_duration_seconds: None,
+                resolved: None,
             })
         })
         .collect()
@@ -84,31 +87,11 @@ pub async fn resume_points(
         let Some(book) = crate::get_book_by_uuid(pool, &record.book_uuid).await? else {
             continue;
         };
-        let audio = match record.format {
-            ProgressFormat::Audio => audio_totals(pool, &record.book_uuid, &record).await?,
-            ProgressFormat::Epub => None,
-        };
-        let (total_duration_seconds, chapter_number, chapter_count) = match audio {
-            Some(totals) => {
-                // Overwrite rather than trust the stored id: it may name a
-                // `book_files` row the reindex has since replaced, and the
-                // Continue CTA links straight at `?file_id=` — a dead id
-                // would open the player on a manifest that 404s.
-                record.book_file_id = Some(totals.book_file_id);
-                (
-                    Some(totals.total_duration_seconds),
-                    totals.chapter_number,
-                    totals.chapter_count,
-                )
-            }
-            None => {
-                // Audio row whose book has no audio file left (and every
-                // epub row): drop the stored id rather than hand a CTA an
-                // id that resolves to nothing.
-                record.book_file_id = None;
-                (None, None, None)
-            }
-        };
+        // `Fast`: this feed renders up to twenty cards on every landing load, and
+        // the chapter it names comes out of the CFI string for free. Opening an
+        // archive per card to add a percentage *of* that chapter is not a trade
+        // this surface should make.
+        let audio = enrich_record(pool, &mut record, PositionDetail::Fast).await?;
         // Only rows that will render a listening card need the preference —
         // it feeds the rate-adjusted "left" readout on the resume surfaces.
         // Direct lookup, not `get_playback_rate`: `record.book_uuid` was
@@ -116,7 +99,7 @@ pub async fn resume_points(
         // per row would double this endpoint's query count for a no-op. A row
         // predating a later merge can miss the preference and fall back to 1x
         // until its next write re-canonicalizes it — cosmetic, and accepted.
-        let playback_rate = match total_duration_seconds {
+        let playback_rate = match audio {
             Some(_) => sqlx::query(
                 "SELECT playback_rate FROM audiobook_playback_preferences
                  WHERE user_id = ? AND book_uuid = ?",
@@ -134,9 +117,8 @@ pub async fn resume_points(
             book,
             linked: false,
             cross_format: None,
-            total_duration_seconds,
-            chapter_number,
-            chapter_count,
+            audio_part: audio.as_ref().and_then(|a| a.audio_part),
+            audio_part_count: audio.as_ref().and_then(|a| a.audio_part_count),
             playback_rate,
         });
     }
@@ -229,67 +211,4 @@ fn sqlx_of(e: crate::cross_format::CrossFormatError) -> ProgressError {
         | crate::cross_format::CrossFormatError::CounterpartMissing => ProgressError::BookNotFound,
         crate::cross_format::CrossFormatError::Sqlx(inner) => ProgressError::Sqlx(inner),
     }
-}
-
-/// Which audio file a resume point plays, plus the duration and chapter
-/// position measured against **that** file.
-struct AudioTotals {
-    book_file_id: i64,
-    total_duration_seconds: f64,
-    chapter_number: Option<i64>,
-    chapter_count: Option<i64>,
-}
-
-/// Resolve the audio file for a progress row and measure duration + chapter
-/// position against it. `None` when the book has no resolvable audio file
-/// (e.g. every file was removed after the position was saved).
-///
-/// The row's stored `book_file_id` picks the file for a book carrying more
-/// than one audiobook, so the resume card reads out the narration the user
-/// was actually in. It is a soft reference (rule 06) — a stale id, or one
-/// belonging to another book, falls back to the first audio file by ordinal,
-/// which is what the whole feature did before the id was recorded.
-async fn audio_totals(
-    pool: &SqlitePool,
-    uuid: &str,
-    record: &ProgressRecord,
-) -> Result<Option<AudioTotals>, ProgressError> {
-    let stored = match record.book_file_id {
-        Some(id) => hls::resolve_audiobook_file(pool, uuid, Some(id)).await?,
-        None => None,
-    };
-    let resolved = match stored {
-        Some(resolved) => resolved,
-        None => match hls::resolve_audiobook(pool, uuid).await? {
-            Some(resolved) => resolved,
-            None => return Ok(None),
-        },
-    };
-    let parts = hls::get_parts(pool, resolved.book_file_id).await?;
-    let total: f64 = parts.iter().map(|p| p.duration_seconds).sum();
-    let mut chapters = hls::get_chapters(pool, resolved.book_file_id).await?;
-    chapters.sort_by(|a, b| a.start_seconds.total_cmp(&b.start_seconds));
-    let position = record.audio_position_seconds.unwrap_or(0.0);
-    Ok(Some(AudioTotals {
-        book_file_id: resolved.book_file_id,
-        total_duration_seconds: total,
-        chapter_number: chapter_number_at(&chapters, position),
-        chapter_count: (!chapters.is_empty()).then_some(chapters.len() as i64),
-    }))
-}
-
-/// 1-based chapter number at `elapsed` seconds, mirroring the player's
-/// index-plus-one display (not the stored `file_chapters.ordinal`, which is
-/// container-supplied and not guaranteed dense).
-///
-/// `pub(super)` rather than private: exercised directly by a boundary test
-/// in `progress::tests` alongside the rest of the resume-card coverage.
-pub(super) fn chapter_number_at(chapters: &[ChapterInfo], elapsed: f64) -> Option<i64> {
-    if chapters.is_empty() {
-        return None;
-    }
-    let idx = chapters
-        .partition_point(|c| c.start_seconds <= elapsed)
-        .saturating_sub(1);
-    Some(idx as i64 + 1)
 }

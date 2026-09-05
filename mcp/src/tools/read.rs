@@ -9,8 +9,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use omnibus_shared::{
-    AuthorDetail, AuthorSummary, Bookmark, EbookLibrary, EbookMetadata, GenreWeight, Highlight,
-    JournalEntry, LibraryContents, ProgressFormat, ProgressRecord, ReadStatusRecord, ResumePoint,
+    AuthorDetail, AuthorSummary, BookProgress, Bookmark, EbookLibrary, EbookMetadata, GenreWeight,
+    Highlight, JournalEntry, LibraryContents, ProgressFormat, ReadStatusRecord, ResumePoint,
     SeriesDetail, SeriesSummary, SessionLogPage, Shelf, ShelfSummary, SortDir, SortKey, StatsRange,
     StatsSummary, TagWeight,
 };
@@ -87,7 +87,9 @@ pub struct RecentProgressParams {
 pub struct BookProgressParams {
     /// The book's uuid.
     pub uuid: String,
-    /// Which format's position to read; defaults to `epub`.
+    /// Narrow the response to one format. Omit it — the default returns
+    /// every format the reader holds a position in, which is the only way
+    /// to see that the two disagree.
     pub format: Option<ProgressFormat>,
 }
 
@@ -152,7 +154,7 @@ impl OmnibusMcp {
     }
 
     #[tool(
-        description = "Fetch one book's full metadata by uuid, including its on-disk files (book_files) with per-file formats and sizes."
+        description = "Fetch one book's full metadata by uuid, including its on-disk files (book_files) with per-file formats, sizes, and — for audio files — `duration_seconds`, the file's playing time in whole seconds."
     )]
     pub async fn get_book(
         &self,
@@ -298,7 +300,7 @@ impl OmnibusMcp {
     }
 
     #[tool(
-        description = "The signed-in user's most recent in-progress books — the 'pick up where you left off' feed, with per-book position and format."
+        description = "The signed-in user's most recent in-progress books — the 'pick up where you left off' feed. Each entry carries the book, the position record (with its `total_duration_seconds` and `resolved` chapter block, same shape book_progress returns), and `audio_part`/`audio_part_count`. `audio_part` is a STRUCTURAL part of an audiobook file, not a book chapter: a 65-chapter novel stored as a 4-part M4B reports part 4 of 4, which does not mean the reader is near the end. For chapters, read `record.resolved`."
     )]
     pub async fn recent_progress(
         &self,
@@ -314,24 +316,21 @@ impl OmnibusMcp {
     }
 
     #[tool(
-        description = "The signed-in user's saved position in one book — EPUB CFI or audio seconds depending on format. Returns null when the user has not opened the book in that format."
+        description = "The signed-in user's saved position in one book. By default this returns EVERY format they have a position in, not just the ebook: `records` holds one entry per format, and `furthest` names the one that represents where the reader actually is. Read `furthest` — a reader 87% through the audiobook and 47% through the EPUB is 87% through the book, and answering from the EPUB record alone is how you tell them the wrong thing. Pass `format` only to narrow to one side deliberately. Each record carries the position as stored (`epub_cfi` or `audio_position_seconds`), a whole-book `progress_percent` (computed for audio, so no runtime is ever needed out of band), `total_duration_seconds` for audio, and a `resolved` block naming the place: `chapter_title`, 1-based `chapter_ordinal` of `chapters_total`, `percent_through_chapter`, `percent_through_book`, and `spine_index` for ebooks. `resolved.confidence` is `high` or `low` — `low` means the structure behind it is coarse (a percent-only position, or audio marks that are one-per-file rather than real chapters), so report it as approximate rather than exact. Never reverse-engineer a CFI or divide seconds by a guessed runtime; the answer is in `resolved`. The envelope also carries `linked` and, for a linked book, the `cross_format` candidate for picking up in the other format. Returns null when the uuid names no book; a real book the reader has never opened returns an empty `records`."
     )]
     pub async fn book_progress(
         &self,
         Parameters(p): Parameters<BookProgressParams>,
-    ) -> Result<Json<Option<ProgressRecord>>, ErrorData> {
+    ) -> Result<Json<Option<BookProgress>>, ErrorData> {
         // Exhaustive match rather than a serde round-trip: a new variant
-        // fails the build here instead of silently querying the default.
-        let format = match p.format.unwrap_or(ProgressFormat::Epub) {
-            ProgressFormat::Epub => "epub",
-            ProgressFormat::Audio => "audio",
+        // fails the build here instead of silently narrowing to the wrong one.
+        let query: Vec<(&str, String)> = match p.format {
+            Some(ProgressFormat::Epub) => vec![("format", "epub".to_string())],
+            Some(ProgressFormat::Audio) => vec![("format", "audio".to_string())],
+            None => Vec::new(),
         };
         let path = format!("/api/progress/{}", p.uuid);
-        Ok(Json(
-            self.client
-                .get_json(&path, &[("format", format.to_string())])
-                .await?,
-        ))
+        Ok(Json(self.client.get_json(&path, &query).await?))
     }
 
     #[tool(

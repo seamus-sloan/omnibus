@@ -303,13 +303,13 @@ struct WidgetSnapshotWriterTests {
                 format: format,
                 audioPositionSeconds: position,
                 progressPercent: percent,
-                updatedAt: 1_724_500_000
+                updatedAt: 1_724_500_000,
+                totalDurationSeconds: total
             ),
             book: Book(
                 id: 1, filename: "b.epub", title: "B",
                 uniqueIdentifier: "book-1", formats: ["epub", "m4b"]
             ),
-            totalDurationSeconds: total,
             playbackRate: rate
         )
     }

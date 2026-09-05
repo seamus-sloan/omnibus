@@ -104,7 +104,7 @@ struct ComicResumeFractionTests {
         ResumePoint(
             record: record(percent: percent),
             book: Book(id: 1, filename: "c.cbz"),
-            totalDurationSeconds: nil, chapterNumber: nil, chapterCount: nil
+            audioPart: nil, audioPartCount: nil
         )
     }
 

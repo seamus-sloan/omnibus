@@ -5,7 +5,7 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{FinishedBook, MonthCount, ResumePoint, StatsSummary};
+use omnibus_shared::{FinishedBook, MonthCount, ResumePoint, StatsSummary, StructuralPosition};
 
 use super::goal::year_fraction;
 use crate::components::{CoverTile, CoverTileKind};
@@ -56,15 +56,24 @@ fn year_projection(summary: &StatsSummary) -> Option<i64> {
 /// The right-hand readout on an open book: how far in, in whatever unit that
 /// book can answer.
 ///
-/// An epub reports a whole-book percent; an audiobook reports none (its
-/// position is a time offset), so it answers in chapters instead. A book that
-/// can say neither says nothing rather than inventing a zero.
+/// A whole-book percent when the book can report one — which now includes
+/// audiobooks, whose position the server divides by the runtime it resolved.
+/// Failing that it names the structural position, and a book that can say
+/// neither says nothing rather than inventing a zero.
 fn resume_readout(point: &ResumePoint) -> Option<String> {
     if let Some(pct) = point.record.progress_percent {
         return Some(format!("{pct}%"));
     }
-    match (point.chapter_number, point.chapter_count) {
-        (Some(n), Some(total)) => Some(format!("Ch {n} of {total}")),
+    match point.structural_position()? {
+        StructuralPosition::Chapter {
+            ordinal,
+            total: Some(total),
+            ..
+        } => Some(format!("Ch {ordinal} of {total}")),
+        StructuralPosition::Part {
+            ordinal,
+            total: Some(total),
+        } => Some(format!("Pt {ordinal} of {total}")),
         _ => None,
     }
 }

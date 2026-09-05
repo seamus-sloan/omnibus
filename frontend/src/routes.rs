@@ -556,13 +556,14 @@ mod tests {
                 kobo_location: None,
                 updated_at: 0,
                 client_updated_at: 0,
+                total_duration_seconds: None,
+                resolved: None,
             },
             book: Default::default(),
             linked: false,
             cross_format: None,
-            total_duration_seconds: None,
-            chapter_number: None,
-            chapter_count: None,
+            audio_part: None,
+            audio_part_count: None,
             playback_rate: None,
         }
     }

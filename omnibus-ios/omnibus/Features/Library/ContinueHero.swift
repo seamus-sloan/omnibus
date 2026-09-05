@@ -296,10 +296,17 @@ private struct HeroCard: View {
 
     private var positionLabel: String {
         if isAudio {
-            if let chapter = point.chapterNumber, let count = point.chapterCount {
-                return "Chapter \(chapter) of \(count)"
+            switch point.structuralPosition {
+            case let .chapter(ordinal, total?):
+                return "Chapter \(ordinal) of \(total)"
+            case let .part(ordinal, total?):
+                // Deliberately not "Chapter": these are the container's marks,
+                // which for a novel stored as four M4B files are four parts.
+                return "Part \(ordinal) of \(total)"
+            case .chapter, .part, nil:
+                break
             }
-            if let total = point.totalDurationSeconds,
+            if let total = point.record.totalDurationSeconds,
                let position = point.record.audioPositionSeconds {
                 // Rate-adjusted: the wall-clock wait at the saved speed,
                 // matching the player's own "left" readout. Clamped first —

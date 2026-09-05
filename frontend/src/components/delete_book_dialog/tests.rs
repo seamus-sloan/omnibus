@@ -10,6 +10,7 @@ fn file(id: i64, format: &str, label: &str, path: &str) -> BookFileInfo {
         size_bytes: 1_200_000,
         path: Some(path.to_string()),
         etag: None,
+        duration_seconds: None,
     }
 }
 
