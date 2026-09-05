@@ -524,3 +524,46 @@ async fn the_per_book_read_measures_a_real_cfi_against_the_archive_on_disk() {
     assert_eq!(resolved.percent_through_book, Some(72));
     assert_eq!(resolved.percent_through_chapter, Some(45));
 }
+
+#[tokio::test]
+async fn the_resume_feed_reports_no_percent_rather_than_a_spine_documents_start() {
+    // A CFI-only row has no stored percent — the web reader writes the CFI and
+    // the derivation attaches a percent off the request path afterwards. The
+    // fast path holds a placeholder offset of zero, so anything derived from it
+    // would report the *start* of the spine document as the reader's place.
+    // Naming the chapter and withholding the percent is the honest answer;
+    // reporting the chapter's opening as their position is the confident lie
+    // this whole payload exists to stop telling.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Cfi Only").await;
+    seed_epub_structure(&pool, book_id).await;
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            // Spine index 2, deep into chapter "Two" — but the offset within
+            // that document is exactly what the fast path does not fetch.
+            epub_cfi: Some("epubcfi(/6/6!/4/2/1:900)".into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: Some(100),
+        },
+    )
+    .await
+    .unwrap();
+
+    let points = resume_points(&pool, user, 5).await.unwrap();
+    let resolved = points[0].record.resolved.as_ref().expect("resolved");
+    assert_eq!(resolved.chapter_title.as_deref(), Some("Two"));
+    assert_eq!(resolved.chapter_ordinal, Some(2));
+    assert_eq!(
+        resolved.percent_through_book, None,
+        "50% here would be the start of spine document 2, not the reader"
+    );
+    assert_eq!(resolved.percent_through_chapter, None);
+}

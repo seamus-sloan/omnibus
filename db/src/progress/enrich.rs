@@ -241,15 +241,17 @@ async fn resolve_epub(
         }
     };
 
-    // Under `Fast` the offset is a placeholder zero, so a derived percent would
-    // report the *start* of the spine document rather than the reader's place;
-    // the stored percent is the honest figure there.
+    // Under `Fast` a CFI's offset is a placeholder zero, so deriving from it
+    // would report the *start* of the spine document as the reader's place —
+    // and a CFI-only row (the web reader writes one, and the percent lands
+    // off the request path afterwards) has no stored percent to notice the
+    // difference against. There is no honest figure to give there, so give
+    // none: the chapter is still named, and a caller that needs the percent
+    // asks the single-book read, which walks.
     let percent_through_book = match detail {
         PositionDetail::Full => crate::epub_structure::percent_at(&stats, spine_index, offset)
             .or(record.progress_percent),
-        PositionDetail::Fast => record
-            .progress_percent
-            .or_else(|| crate::epub_structure::percent_at(&stats, spine_index, offset)),
+        PositionDetail::Fast => record.progress_percent,
     };
     let placed = chapter_at_spine(&chapters, spine_index);
     // Consecutive TOC entries inside one spine document are indistinguishable
