@@ -171,10 +171,22 @@ carries no metadata — the alternative (a full per-book metadata fetch each
 tick) is a data and battery cost on the phone and an O(N) load cost on the
 server, and it grows with the reader's library.
 
-Two things follow, and both have already been got wrong:
+Both clients sweep — `refresh_stale_flags` in
+`frontend/src/offline/downloads/staleness.rs`, `refreshStaleFlags` in
+`omnibus-ios/omnibus/Offline/DownloadStaleness.swift`. A client that doesn't
+is not merely slower: iOS saw a replaced file only when the reader opened
+that book's own detail page, because the screen listing downloads reads the
+library projection, which carries no per-file rows to compare against at all.
+
+Three things follow, and each has already been got wrong:
 
 - **Ask on a TTL, not on every tick.** A file changing on the server is not
   urgent; a 60-second poll is a regression dressed as freshness.
+- **A sweep that asked nothing has not asked.** Only a completed round trip
+  may stamp the TTL. Stamping a partial one records work that never
+  finished; stamping an *empty* registry — which on iOS hydrates
+  asynchronously, so "no downloads" and "not loaded yet" look alike at
+  launch — skips the first real sweep for a whole window.
 - **Do not smuggle metadata through it.** Writing a fetched `EbookMetadata`
   straight into the cache with `put_json` bypasses the compare/put/notify
   path, so an open page keeps rendering the old fields even though the cache

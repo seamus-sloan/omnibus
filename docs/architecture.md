@@ -502,7 +502,14 @@ Offline/            — Cache (read-through policies), OfflineStore (SQLite
                       never mix editions, and compares that snapshot against a
                       later metadata refresh to drive "Update available" —
                       three-valued, so "can't tell" never reads as "not
-                      stale"), DownloadFailure (transient vs terminal — a
+                      stale"), DownloadStaleness (the same question for the
+                      whole device at once: a TTL-paced sweep batching every
+                      completed download into one `POST
+                      /api/downloads/validators` per rule 09, chunked at
+                      `MAX_VALIDATOR_QUERY`, storing its answer in
+                      `downloads.stale` so a screen with no per-file metadata
+                      — the listing projection carries none — still learns a
+                      file was replaced), DownloadFailure (transient vs terminal — a
                       dropped link parks the one part that stopped and resumes
                       it from its byte offset, where every error used to
                       abandon the whole multi-part book), DownloadPolicy
