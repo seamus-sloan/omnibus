@@ -346,9 +346,15 @@ struct BookDetailView: View {
     /// metadata editor, a nested detail — was popped off, and whatever it
     /// wrote should show immediately.
     @State private var hasAppeared = false
+    /// Set while a Send-to-Kindle job is in flight, so the row says so and a
+    /// second tap can't enqueue a duplicate delivery.
+    @State private var kindleSending = false
+    /// The finished send's outcome — the alert's payload, success or failure.
+    @State private var kindleReport: KindleReport?
 
     private var downloads = DownloadManager.shared
     private var presentation = Presentation.shared
+    private var connectivity = Connectivity.shared
 
     var body: some View {
         Group {
@@ -480,6 +486,16 @@ struct BookDetailView: View {
                     await model.load(uuid: uuid)
                 }
             }
+        }
+        // A send runs on the server's worker and can fail there, well after
+        // the menu that started it has closed — so its outcome arrives as an
+        // alert rather than as in-place state on a row nobody is looking at.
+        .alert(item: $kindleReport) { report in
+            Alert(
+                title: Text(report.title),
+                message: Text(report.message),
+                dismissButton: .default(Text("OK"))
+            )
         }
         // Outermost, so the stops, bars, chrome, and every sheet above all
         // inherit the book-toned accent.
@@ -862,6 +878,7 @@ struct BookDetailView: View {
                         Label("Export file", systemImage: "square.and.arrow.up")
                     }
                 }
+                kindleRow(book)
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 15, weight: .semibold))
@@ -872,6 +889,48 @@ struct BookDetailView: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .animation(Motion.snap, value: discsOverArt)
+    }
+
+    /// The Send-to-Kindle row, beside Export file — both put the book
+    /// somewhere off the phone. Absent for a book with no EPUB, since that is
+    /// all the endpoint knows how to send; every other case renders, so a
+    /// reader who can't send learns why instead of finding nothing there.
+    ///
+    /// Two blocked cases keep their tap. Oversize spends it on Amazon's
+    /// uploader, which takes files the email path can't — the same answer
+    /// `send_to_kindle_action` gives on web. A missing address spends it
+    /// saying so: the row's subtitle is a nicety the menu may or may not
+    /// draw, so the reason a reader can act on can't rest on it alone.
+    /// Offline is the one that greys out, matching every other network-only
+    /// control here, and is never queued (rule 08 test 2).
+    @ViewBuilder
+    private func kindleRow(_ book: Book) -> some View {
+        let gate = KindleService.gate(
+            hasEpub: book.hasEpub,
+            epubSizeBytes: book.epubSizeBytes,
+            kindleEmail: app.user?.kindleEmail,
+            isOnline: connectivity.isOnline
+        )
+        if !gate.isHidden {
+            Button {
+                switch gate {
+                case .ready:
+                    sendToKindle(book)
+                case .oversize:
+                    if let url = KindleService.webUploadURL { openURL(url) }
+                default:
+                    kindleReport = gate.blockedReport
+                }
+            } label: {
+                // Two `Text`s in a menu row render as title + subtitle.
+                Text(kindleSending ? "Sending\u{2026}" : "Send to Kindle")
+                if let reason = gate.reason {
+                    Text(reason)
+                }
+                Image(systemName: "paperplane")
+            }
+            .disabled(kindleSending || !gate.isTappable)
+        }
     }
 
     /// A quiet pointer at what the next swipe reaches. Home speaks for
@@ -1013,6 +1072,36 @@ struct BookDetailView: View {
             showAudioFilePicker = true
         } else {
             Presentation.shared.openPlayer(book)
+        }
+    }
+
+    /// Enqueue the send and poll it to an outcome, then report that outcome.
+    ///
+    /// Straight to `APIClient` by way of `KindleService`, never the outbox:
+    /// per rule 08 test 2 a send is a command, and one replayed hours later
+    /// delivers a book the reader may have already finished. So it reports
+    /// what happened — including the server-side refusals the gate can't
+    /// pre-flight, chiefly an instance with no SMTP relay configured.
+    private func sendToKindle(_ book: Book) {
+        guard !kindleSending else { return }
+        Haptics.tap()
+        kindleSending = true
+        Task {
+            defer { kindleSending = false }
+            do {
+                try await KindleService.send(uuid: book.uuid)
+                let to = app.user?.kindleEmail?.nilIfBlank ?? "your Kindle"
+                kindleReport = KindleReport(
+                    title: "Sent to Kindle",
+                    message: "\(book.displayTitle) is on its way to \(to)."
+                )
+            } catch {
+                kindleReport = KindleReport(
+                    title: "Couldn't send",
+                    message: (error as? LocalizedError)?.errorDescription
+                        ?? error.localizedDescription
+                )
+            }
         }
     }
 

@@ -554,7 +554,20 @@ Services/           — AuthService, LibraryService, UserDataService,
                       serves the Stats tab's per-sitting log — a direct
                       read rather than a `Cache.live` one, since a page is
                       keyed by a cursor the device only learns from the
-                      page before it
+                      page before it.
+                      KindleService (#2149) — the book-detail Send-to-Kindle
+                      action: `gate` decides up front whether a send can run
+                      (EPUB present, under Kindle's email cap, an address on
+                      the cached `UserSummary`, online), and `send` enqueues
+                      `POST /api/kindle/send` then polls
+                      `/api/kindle/send/status` to a terminal answer. Direct
+                      `APIClient`, never the outbox — rule 08 test 2 makes a
+                      send a command, so it is refused offline rather than
+                      replayed later. Whether the *server* has an SMTP relay
+                      is admin-only (`GET /api/smtp`), so no reader's client
+                      can pre-flight it; that refusal arrives as the enqueue's
+                      409 and is surfaced verbatim, the same way the web
+                      button handles it
 Widgets/            — WidgetSnapshotWriter: builds the App Group snapshot the
                       Home Screen renders from, out of the replica's cached
                       `recent_progress` plus the library mirror, and
