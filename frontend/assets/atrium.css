@@ -1672,22 +1672,6 @@ button.spoiler {
   margin-top: 4px;
   color: var(--ink-0);
 }
-.bd-activity-bar {
-  display: flex; align-items: flex-end; gap: 3px; height: 36px;
-}
-.bd-activity-tick {
-  flex: 1; height: 6px;
-  background: var(--bg-3);
-  border-radius: 1px;
-  display: block;
-}
-.bd-activity-tick:nth-last-child(-n+4) { background: var(--accent); opacity: 0.55; }
-.bd-activity-axis {
-  display: flex; justify-content: space-between;
-  margin-top: 6px;
-  font-size: 9.5px; color: var(--ink-3); letter-spacing: 0.06em;
-}
-
 /* Footer affordance */
 .bd-footer {
   padding: 0 clamp(20px, 4vw, 56px) 60px;
