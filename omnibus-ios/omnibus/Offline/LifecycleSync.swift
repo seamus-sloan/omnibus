@@ -82,6 +82,11 @@ final class LifecycleSync {
         // there is a session and a network to pull with.
         await LibraryIndex.shared.sync()
 
+        // Whether the library files under this device's downloads have been
+        // replaced. TTL-paced inside, so asking on every qualifying return
+        // costs at most one small request a quarter-hour.
+        await DownloadManager.shared.refreshStaleFlags()
+
         await WidgetSnapshotWriter.shared.refresh()
     }
 

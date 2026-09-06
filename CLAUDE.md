@@ -17,7 +17,8 @@ Numbered rules in [.claude/rules/](.claude/rules/), applied in order. Follow the
 - [06-migrations.md](.claude/rules/06-migrations.md) — authoring SQL migrations: `NNNN_` naming, never-edit-applied, the `_norm` backfill pattern, testing against `sqlite::memory:`, and the dev-bounce step.
 - [07-hydration.md](.claude/rules/07-hydration.md) — SSR/WASM hydration parity: never feature-gate a component body on `web`; how to confirm and fix a hydration mismatch.
 - [08-offline-writes.md](.claude/rules/08-offline-writes.md) — what the mutation outbox may queue: content state only, never configuration or commands; the four tests, and what each excludes.
-- [09-content-validators.md](.claude/rules/09-content-validators.md) — the two content validators (response `ETag` vs wire etag), why they're derived rather than stored, and the `conditional::apply` path every byte-serving endpoint takes.
+- [09-content-validators.md](.claude/rules/09-content-validators.md) — the two content validators (response `ETag` vs wire etag), why they're derived rather than stored, and the three-valued comparison both offline clients sweep for.
+- [09a-serving-validated-bytes.md](.claude/rules/09a-serving-validated-bytes.md) — the server half: strong entity-tags, the `serve_file`/`conditional` path every byte-serving endpoint takes, and why `ETag` and `Vary` travel together.
 - [10-reader-calendar.md](.claude/rules/10-reader-calendar.md) — which calendar a figure is cut on: day boundaries take the asking client's offset (one per request), time-of-day takes the offset each session recorded; why the ledger stores a quarter-hour and never a day.
 - [98-keep-skills-fresh.md](.claude/rules/98-keep-skills-fresh.md) — update skills when the code they reference changes.
 - [99-end-of-session.md](.claude/rules/99-end-of-session.md) — end-of-session checklist (docs sync, fmt/clippy, coverage, line-count cap).

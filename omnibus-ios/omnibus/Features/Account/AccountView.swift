@@ -759,32 +759,13 @@ struct DownloadsView: View {
                     books[record.bookUUID] = book
                 }
             }
-            await refreshStaleness()
-        }
-    }
-
-    /// Re-read each completed download's detail metadata so the rows can say
-    /// whether the library file has moved under them.
-    ///
-    /// It has to be the *detail* read: the library listing projection carries
-    /// no per-file rows, so a replaced file is invisible in the mirror this
-    /// screen otherwise reads from. Bounded by the number of downloads, which
-    /// is small by nature, and skipped entirely offline — where the answer
-    /// could not be acted on anyway.
-    private func refreshStaleness() async {
-        guard Connectivity.shared.isOnline else { return }
-        for record in records where record.state == .complete {
-            do {
-                // Only the fresh (server-confirmed) read can settle this —
-                // the replica's provisional answer is what we already have.
-                for try await read in LibraryService.book(uuid: record.bookUUID)
-                where read.isFresh {
-                    books[record.bookUUID] = read.value
-                }
-            } catch {
-                // A row that can't refresh keeps showing what it had.
-                continue
-            }
+            // One request for the whole device, not a detail fetch per row.
+            // The rows above only need titles, which the replica already has;
+            // whether a file has moved underneath them is a question about
+            // validators alone, and asking it that way is what keeps a reader
+            // with fifty downloads from making fifty full metadata fetches
+            // every time this screen appears.
+            await downloads.refreshStaleFlags()
         }
     }
 
@@ -851,11 +832,13 @@ struct DownloadsView: View {
     }
 
     /// Whether this row's library file has moved under the downloaded copy.
-    /// `false` until a refresh has produced detail metadata to compare
-    /// against — the listing projection carries no per-file validators.
+    ///
+    /// Answered by the validator sweep for all but the rows whose book has
+    /// been opened this session — the listing projection this screen reads
+    /// titles from carries no per-file validators, so a detail `Book` is
+    /// something it may happen to have rather than something it can rely on.
     private func isStale(_ record: DownloadRecord) -> Bool {
-        guard let book = books[record.bookUUID] else { return false }
-        return downloads.isStale(record.bookUUID, kind: record.kind, against: book)
+        downloads.isStale(record.bookUUID, kind: record.kind, against: books[record.bookUUID])
     }
 
     private func statusLabel(_ record: DownloadRecord, isStale: Bool) -> String {
