@@ -80,15 +80,13 @@ fn render_stats(i: &BookInsights, progress: &MarqueeProgress, audio_only: bool) 
         if let Some(n) = note {
             div { class: "mono bdmq-statsnote", "{n}" }
         }
-        // One `role="img"` carrying the whole series as a sentence, rather
-        // than 22 bars a screen reader would step through one undifferentiated
-        // tick at a time. The role also makes the element a leaf, so the ticks
-        // inside it need no hiding of their own.
+        // One labelled image, not 22 bars announced a tick at a time. The role
+        // also makes it a leaf, so the ticks need no hiding of their own.
         div {
             class: "rx-spark",
             "data-testid": "bdmq-spark",
             role: "img",
-            "aria-label": "{spark_summary(&spark, &i.as_of_day)}",
+            "aria-label": "{spark_summary(&spark, &i.as_of_day, audio_only)}",
             for (idx, v) in spark.iter().enumerate() {
                 i {
                     key: "{idx}",
@@ -97,9 +95,7 @@ fn render_stats(i: &BookInsights, progress: &MarqueeProgress, audio_only: bool) 
                 }
             }
         }
-        // The axis is the bars' visual scale, and the label above already
-        // states the window and the unit — announced, it would repeat that in
-        // three fragments that only read as a sentence next to the picture.
+        // The bars' visual scale; the label above already states window and unit.
         div { class: "rx-spark-axis", aria_hidden: "true",
             span { "3 wk ago" }
             span { "minutes \u{b7} by day" }
@@ -203,11 +199,17 @@ fn spark_buckets(daily: &[DayActivity], as_of_day: &str) -> Vec<i64> {
 /// Ties on the peak break to the **earliest** day, matching how
 /// `db::stats::book_insights` picks the longest sitting, so the two figures on
 /// one card can't name different days for the same data.
-fn spark_summary(spark: &[i64], as_of_day: &str) -> String {
+///
+/// `audio_only` picks the verb off the same flag the "Time listened" tile
+/// above reads: the buckets union `reading_sessions` and `listening_sessions`,
+/// so a book with only an audiobook is minutes *listened*, and calling them
+/// minutes read is the one thing this sentence can state that is false.
+fn spark_summary(spark: &[i64], as_of_day: &str, audio_only: bool) -> String {
+    let verb = if audio_only { "listened" } else { "read" };
     let window = count_label(spark.len() as i64, "day");
     let total: i64 = spark.iter().sum();
     if total == 0 {
-        return format!("Minutes read per day over the last {window}: none.");
+        return format!("Minutes {verb} per day over the last {window}: none.");
     }
     let active = count_label(spark.iter().filter(|v| **v > 0).count() as i64, "day");
     // Strict `>` keeps the first of equal peaks.
@@ -223,7 +225,7 @@ fn spark_summary(spark: &[i64], as_of_day: &str) -> String {
             },
         );
     let summary = format!(
-        "Minutes read per day over the last {window}: {} across {active}",
+        "Minutes {verb} per day over the last {window}: {} across {active}",
         count_label(total, "minute")
     );
     // The anchor is the same one the buckets were laid out against, so the
@@ -315,7 +317,7 @@ mod tests {
         spark[SPARK_DAYS - 1] = 10;
         spark[0] = 2;
         assert_eq!(
-            spark_summary(&spark, "2026-08-24"),
+            spark_summary(&spark, "2026-08-24", false),
             "Minutes read per day over the last 22 days: 12 minutes across 2 days, \
              most on Aug 24 with 10 minutes."
         );
@@ -325,9 +327,26 @@ mod tests {
     fn spark_summary_says_none_rather_than_naming_a_peak_of_zero() {
         // A book opened once outside the window has an all-zero strip. Naming
         // a "busiest day" there would invent a reading day that never was.
-        let summary = spark_summary(&[0; SPARK_DAYS], "2026-08-24");
+        let summary = spark_summary(&[0; SPARK_DAYS], "2026-08-24", false);
         assert_eq!(summary, "Minutes read per day over the last 22 days: none.");
         assert!(!summary.contains("most on"));
+    }
+
+    #[test]
+    fn spark_summary_says_listened_for_an_audio_only_book() {
+        // The buckets union reading *and* listening sessions, so an
+        // audiobook's minutes were never read — and the tile directly above
+        // this strip already says "Time listened", so the two must agree.
+        let mut spark = vec![0i64; SPARK_DAYS];
+        spark[SPARK_DAYS - 1] = 30;
+        let audio = spark_summary(&spark, "2026-08-24", true);
+        assert!(audio.starts_with("Minutes listened per day"), "{audio}");
+        assert!(!audio.contains("read"), "{audio}");
+        // Including when there is nothing in the window to describe.
+        assert_eq!(
+            spark_summary(&[0; SPARK_DAYS], "2026-08-24", true),
+            "Minutes listened per day over the last 22 days: none."
+        );
     }
 
     #[test]
@@ -337,14 +356,16 @@ mod tests {
         let mut spark = vec![0i64; SPARK_DAYS];
         spark[SPARK_DAYS - 3] = 7;
         spark[SPARK_DAYS - 1] = 7;
-        assert!(spark_summary(&spark, "2026-08-24").contains("most on Aug 22 with 7 minutes"));
+        assert!(
+            spark_summary(&spark, "2026-08-24", false).contains("most on Aug 22 with 7 minutes")
+        );
     }
 
     #[test]
     fn spark_summary_singularizes_a_lone_day_and_minute() {
         let mut spark = vec![0i64; SPARK_DAYS];
         spark[SPARK_DAYS - 1] = 1;
-        assert!(spark_summary(&spark, "2026-08-24").contains("1 minute across 1 day,"));
+        assert!(spark_summary(&spark, "2026-08-24", false).contains("1 minute across 1 day,"));
     }
 
     #[test]
@@ -354,7 +375,7 @@ mod tests {
         // clause rather than a panic or a day counted from the epoch.
         let mut spark = vec![0i64; SPARK_DAYS];
         spark[3] = 5;
-        let summary = spark_summary(&spark, "not-a-day");
+        let summary = spark_summary(&spark, "not-a-day", false);
         assert_eq!(
             summary,
             "Minutes read per day over the last 22 days: 5 minutes across 1 day."
@@ -544,6 +565,22 @@ mod render_tests {
             html.contains("30 minutes across 1 day, most on Aug 27 with 30 minutes"),
             "{html}"
         );
+    }
+
+    // The `audio_only` flag has to reach the label, not just exist: the tile
+    // and the strip are drawn from one call, so an audiobook that reports
+    // "Time listened" above minutes "read" below is one wire away.
+    #[test]
+    fn spark_label_speaks_the_same_format_as_the_tile_above_it() {
+        let mut i = insights(3_600, 1, 3_600, 3_600);
+        i.daily = vec![DayActivity {
+            day: "2026-08-27".into(),
+            seconds: 1_800,
+        }];
+        let html = render(render_stats(&i, &progress_at(50), true));
+        assert!(html.contains("Time listened"), "{html}");
+        assert!(html.contains("Minutes listened per day"), "{html}");
+        assert!(!html.contains("Minutes read per day"), "{html}");
     }
 
     // The axis is the picture's scale, so it stays hidden — but the strip it
