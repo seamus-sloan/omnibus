@@ -130,6 +130,19 @@ struct KindleSendTests {
         #expect(KindleGate.oversize.blockedReport == nil)
     }
 
+    @Test("keeps the oversize row's promise even if its link won't parse")
+    func oversizeHasAnAnswerWithoutTheURL() {
+        // `webUploadURL` is built from a literal, so this is unreachable in
+        // practice — but the invariant above is about what a *tap* does, and
+        // an `if let` with no `else` is how a live row becomes a silent no-op.
+        #expect(KindleService.webUploadURL != nil)
+        let fallback = KindleService.oversizeFallbackReport
+        #expect(!fallback.title.isEmpty)
+        // The address survives in the text, so the way through does not
+        // depend on the link the fallback exists because of.
+        #expect(fallback.message.contains(KindleService.webUploadPage))
+    }
+
     // MARK: - The status poll
 
     private func decodeStatus(_ json: String) throws -> KindleSendStatus {

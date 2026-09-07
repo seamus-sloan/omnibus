@@ -136,7 +136,20 @@ enum KindleService {
 
     /// Amazon's own Send to Kindle page, which accepts files up to 200 MB —
     /// where an EPUB too big to email still has a way through.
-    static let webUploadURL = URL(string: "https://www.amazon.com/sendtokindle")
+    static let webUploadPage = "https://www.amazon.com/sendtokindle"
+    static let webUploadURL = URL(string: webUploadPage)
+
+    /// What the oversize row says when it can't open [`webUploadURL`].
+    ///
+    /// That URL is a literal, so this is unreachable in practice — but the row
+    /// is deliberately tappable, and a tappable row that silently does nothing
+    /// is exactly what [`KindleGate.isTappable`] promises never happens. The
+    /// address is in the text so the way through survives the link failing.
+    static let oversizeFallbackReport = KindleReport(
+        title: "Too large to email",
+        message: "Kindle's email limit is 50 MB. Upload this book at "
+            + "\(webUploadPage), which accepts files up to 200 MB."
+    )
 
     /// Decide whether the action can run, from state the caller already holds:
     /// the book's formats and EPUB size, the cached `UserSummary`'s Kindle

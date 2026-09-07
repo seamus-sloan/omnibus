@@ -567,7 +567,7 @@ Services/           — AuthService, LibraryService, UserDataService,
                       is admin-only (`GET /api/smtp`), so no reader's client
                       can pre-flight it; that refusal arrives as the enqueue's
                       409 and is surfaced verbatim, the same way the web
-                      button handles it
+                      button handles it.
 Widgets/            — WidgetSnapshotWriter: builds the App Group snapshot the
                       Home Screen renders from, out of the replica's cached
                       `recent_progress` plus the library mirror, and

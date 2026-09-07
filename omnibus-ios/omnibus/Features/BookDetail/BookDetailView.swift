@@ -917,7 +917,11 @@ struct BookDetailView: View {
                 case .ready:
                     sendToKindle(book)
                 case .oversize:
-                    if let url = KindleService.webUploadURL { openURL(url) }
+                    if let url = KindleService.webUploadURL {
+                        openURL(url)
+                    } else {
+                        kindleReport = KindleService.oversizeFallbackReport
+                    }
                 default:
                     kindleReport = gate.blockedReport
                 }
@@ -1096,6 +1100,11 @@ struct BookDetailView: View {
                     message: "\(book.displayTitle) is on its way to \(to)."
                 )
             } catch {
+                // A cancellation says the caller went away, not that the send
+                // failed — and the enqueue may well have landed, so claiming
+                // a failure would be the one report that is definitely wrong.
+                // Same reading `isCancellation` exists for in `APIClient`.
+                guard !isCancellation(error) else { return }
                 kindleReport = KindleReport(
                     title: "Couldn't send",
                     message: (error as? LocalizedError)?.errorDescription
