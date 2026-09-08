@@ -143,14 +143,12 @@ Do not probe reindex, send-to-Kindle, or anything under Settings. Those are on
 
 ### Journal
 
-Use these actions, and no near-variants — the **report** matches on them.
-The audit does not: `offline`, `outbox` and `probe` are not nouns it knows,
-so these five land in `audit.json`'s `unverifiable` list on every run, and
-that is expected rather than a gap to fix in your journalling. What the audit
-*does* check is every write you make in step 3, through its ordinary
-`highlight.create` / `journal.create` / `shelf.add` names — those are the
-entries that prove the drain, and they must be journalled exactly as their
-flow documents say.
+Use these actions, and no near-variants — the **report** matches on them,
+and the audit reads them as device state rather than as writes, so they
+never land in `unverifiable`. What the audit *does* check is every write you
+make in step 3, through its ordinary `highlight.create` / `journal.create` /
+`shelf.add` names — those are the entries that prove the drain, and they
+must be journalled exactly as their flow documents say.
 
 | Action | When | `params` must carry |
 |---|---|---|

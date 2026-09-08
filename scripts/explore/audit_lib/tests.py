@@ -139,7 +139,7 @@ class VocabularyTests(unittest.TestCase):
         self.assertEqual(cls.detail, vocabulary.SCOPE_METADATA)
 
     def test_classify_never_guesses_a_write_from_an_unknown_verb(self) -> None:
-        for name in ("shelf.rename", "player.scrub", "journal.pin"):
+        for name in ("shelf.reorder", "player.scrub", "journal.pin"):
             cls = vocabulary.classify(name)
             self.assertEqual(cls.kind, vocabulary.UNKNOWN, name)
             self.assertIn(name, cls.reason or "")
@@ -284,6 +284,42 @@ class ExpectationTests(unittest.TestCase):
         self.assertEqual([e.value for e in exps], ["uuid-A"])
         self.assertIn("did not add", unver[0].why)
 
+    def test_classify_reads_the_device_scenario_nouns_as_observations(self) -> None:
+        # ios_lane.md's offline names and kobo_sync.md's sync check: device
+        # state, not per-user state, so they must not land in `unverifiable`.
+        for action in ("offline.on", "offline.off", "outbox.queued", "outbox.drained",
+                       "probe.refused", "sync.delta"):
+            self.assertEqual(vocabulary.classify(action).kind, vocabulary.OBSERVATION, action)
+
+    def test_classify_recognises_a_shelf_edit_as_an_update_write(self) -> None:
+        for action in ("shelf.edit", "shelf.reorder"):
+            cls = vocabulary.classify(action)
+            self.assertEqual((cls.kind, cls.family, cls.detail), (vocabulary.WRITE, "shelf", "update"), action)
+
+    def test_a_shelf_rename_supersedes_its_create(self) -> None:
+        entries = [
+            entry("shelf.create", seq=1, params={"name": "Weeknight Reading"}),
+            entry("shelf.edit", seq=2, params={"old_name": "Weeknight Reading", "name": "Weeknight Reads"}),
+        ]
+        exps, unver, _, _ = expectations.expectations_for("agent-2", entries)
+        self.assertEqual([e.value for e in exps], ["Weeknight Reads"])
+        self.assertEqual(unver, [])
+
+    def test_a_shelf_edit_keeping_its_name_asserts_it_once(self) -> None:
+        entries = [
+            entry("shelf.create", seq=1, params={"name": "Books Dad Lent Me"}),
+            entry("shelf.edit", seq=2, params={"name": "Books Dad Lent Me", "visibility": "public"}),
+        ]
+        exps, _, _, _ = expectations.expectations_for("agent-2", entries)
+        self.assertEqual([e.value for e in exps], ["Books Dad Lent Me"])
+
+    def test_a_shelf_edit_of_an_earlier_runs_shelf_still_asserts_the_new_name(self) -> None:
+        entries = [entry("shelf.edit", seq=1, params={"old_name": "old pile", "name": "new pile"})]
+        exps, unver, _, claims = expectations.expectations_for("agent-2", entries)
+        self.assertEqual([e.value for e in exps], ["new pile"])
+        self.assertEqual(unver, [])
+        self.assertIn("new pile", claims.shelf_names)
+
     def test_a_shelf_delete_this_run_never_created_cancels_nothing(self) -> None:
         entries = [
             entry("shelf.create", seq=1, params={"name": "mine"}),
@@ -315,10 +351,10 @@ class ExpectationTests(unittest.TestCase):
         self.assertIn("refused", unver[0].why)
 
     def test_an_unknown_action_is_unverifiable_and_names_itself(self) -> None:
-        e = entry("shelf.rename", target=None, params={"name": "x"})
+        e = entry("shelf.reorder", target=None, params={"name": "x"})
         exps, unver, tally, _ = expectations.expectations_for("agent-1", [e])
         self.assertEqual(exps, [])
-        self.assertIn("shelf.rename", unver[0].why)
+        self.assertIn("shelf.reorder", unver[0].why)
         self.assertEqual(tally[vocabulary.UNKNOWN], 1)
 
     def test_an_observation_produces_neither_expectation_nor_unverifiable(self) -> None:
@@ -440,9 +476,9 @@ class ClaimsTests(unittest.TestCase):
         self.assertEqual(compare.unexpected("agent-1", state, self._baseline(), claims), [])
 
     def test_an_unknown_shelf_verb_suppresses_the_shelf_sweep(self) -> None:
-        # FP-4: `shelf.rename` is UNKNOWN — the audit cannot say which shelf
+        # FP-4: `shelf.reorder` is UNKNOWN — the audit cannot say which shelf
         # it touched, so no shelf-level surprise is sound to report.
-        entries = [entry("shelf.rename", params={})]
+        entries = [entry("shelf.reorder", params={})]
         _, _, _, claims = expectations.expectations_for("agent-2", entries)
         self.assertTrue(claims.shelf_any)
         baseline = {"library": [], "actors": {"agent-2": {"books": {}, "shelves": []}}}
@@ -450,7 +486,7 @@ class ClaimsTests(unittest.TestCase):
         self.assertEqual(compare.unexpected("agent-2", state, baseline, claims), [])
 
     def test_a_named_unknown_shelf_verb_claims_just_that_name(self) -> None:
-        entries = [entry("shelf.rename", params={"name": "new name"})]
+        entries = [entry("shelf.reorder", params={"name": "new name"})]
         _, _, _, claims = expectations.expectations_for("agent-2", entries)
         self.assertFalse(claims.shelf_any)
         self.assertIn("new name", claims.shelf_names)

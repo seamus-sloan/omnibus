@@ -95,12 +95,11 @@ control as missing when you are on iOS.
     **Kobo sync** opt-in: read it, confirm the wishlist shelf does *not* offer
     it, and **leave it unticked** unless you were handed
     [kobo_sync.md](../kobo_sync.md). Journal `shelf.edit` with before and
-    after. **The audit does not check an edit** — `shelf.edit` is a verb it
-    does not know, so it lists the entry as unrecognised, which is expected.
-    It verifies a shelf by the name you journalled on `shelf.create`, so if
-    you rename, journal the new name on the `shelf.edit` entry and expect the
-    audit to list the old name as missing; the runner reads the pair
-    together.
+    after. The audit verifies a shelf by name, so a rename must carry both:
+    `old_name` for the name it had and `name` for the name it has now — the
+    audit then stops looking for the old one and looks for the new one. A
+    visibility or rule edit carries the unchanged `name`; the audit does not
+    check visibility or rules, only that the shelf is there.
 12. **Delete it — only a shelf you created in this flow.** Find the delete
     control in **Edit shelf**, read the confirmation, and confirm. On the web
     the rail must drop it and the library must return to All Books; on iOS the
@@ -114,9 +113,10 @@ control as missing when you are on iOS.
 
 `shelf.create` with the name, visibility, and kind — and for a Smart shelf the
 rule and the preview count. `shelf.select` with the name and the resulting
-count. `shelf.edit` with the field, before and after. `shelf.delete` with the
-name. On iOS, `shelf.add` / `shelf.remove` with the shelf and the book uuids —
-those, the create, and the delete are what the audit reconciles.
+count. `shelf.edit` with the field, before and after — and on a rename,
+`old_name` beside `name`. `shelf.delete` with the name. On iOS, `shelf.add` /
+`shelf.remove` with the shelf and the book uuids — those, the create, the
+edit, and the delete are what the audit reconciles.
 
 ## Pass
 

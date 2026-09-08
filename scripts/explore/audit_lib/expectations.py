@@ -683,6 +683,16 @@ def _fold_entry(fold: _Fold, entry: Entry, cls: vocabulary.Classification) -> No
             if not fold.pop("shelf", None, lambda e: e.value == name):
                 fold.skip(entry, f"{entry.action}: deleted a shelf this run did not create")
             return
+        if detail == "update":
+            # Supersede the shelf it edited — by the old name when the edit
+            # renamed, else by the (unchanged) name. Matching nothing cancels
+            # nothing: the edit was of an earlier run's shelf, and the name
+            # it now carries is still asserted below.
+            before = _first_parsable(
+                (_get(p, "old_name", "before_name", "previous_name", "before", "old"),), parse_text
+            )
+            prior = before if before is not UNPARSED else name
+            fold.pop("shelf", None, lambda e: e.value == prior)
         fold.push(exp("shelf", None, f"a shelf named {name!r}", name))
         return
 

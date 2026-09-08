@@ -97,8 +97,8 @@ flows prescribe. Runner: `progress.set` for the device's write and
 `sync.check` for each sync, both under the agent's actor with `surface`
 `kobo`. The audit checks the `progress.set` as a saved reading position and
 reads `sync.check` as a look, so it neither checks nor flags it; the runner's
-journal entries are the record. `shelf.edit` is a verb the audit does not
-know and is listed as unrecognised — expected, not a journalling fault.
+journal entries are the record. `shelf.edit` is checked as the shelf still
+existing under the name it carries; the opt-in itself is not audited.
 
 ## Pass
 
