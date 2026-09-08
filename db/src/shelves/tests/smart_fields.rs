@@ -147,12 +147,7 @@ async fn smart_shelf_updates_when_a_qualifying_book_appears() {
     .unwrap();
     assert_eq!(shelf.book_count, 1);
 
-    // Tag another existing book "essay"; membership recomputes on next read.
-    let book = sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE title = 'Standalone'")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    let _ = book; // Standalone already has "essay"; tag a second book instead.
+    // "Standalone" already carries "essay"; tag a second book and re-read.
     let other = sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE title = 'Other Story'")
         .fetch_one(&pool)
         .await

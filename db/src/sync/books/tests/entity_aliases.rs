@@ -369,11 +369,9 @@ async fn sync_books_issues_one_entity_alias_query_per_kind_not_per_book() {
         .collect();
 
     let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    // Best-effort: a prior test in this binary may have already claimed the
-    // global default (it can only be set once per process). If so, this
-    // counter simply stays at 0 and the loose bound below still holds —
-    // it just stops being a meaningful check for this particular run.
-    let _ = tracing::subscriber::set_global_default(EntityAliasQueryCounter(count.clone()));
+    // A slot another test already claimed must fail here, not read as 0 below.
+    tracing::subscriber::set_global_default(EntityAliasQueryCounter(count.clone()))
+        .expect("the global tracing default was already set elsewhere in this process");
     // Interest in the `sqlx::query` callsite is cached process-wide the
     // first time it fires and is *not* refreshed by installing a new
     // default alone — `init_db`'s migrations above already fired it under
