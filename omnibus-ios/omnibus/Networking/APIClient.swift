@@ -12,6 +12,8 @@ enum APIError: LocalizedError {
     case notConfigured
     case offline
     case unauthorized
+    case invalidCredentials
+    case tooManyAttempts
     case http(status: Int, message: String)
     case decoding(String)
     case transport(String)
@@ -21,6 +23,8 @@ enum APIError: LocalizedError {
         case .notConfigured: "No server configured."
         case .offline: "You're offline."
         case .unauthorized: "Your session expired. Sign in again."
+        case .invalidCredentials: "That username or password isn't right."
+        case .tooManyAttempts: "Too many sign-in attempts. Wait a moment and try again."
         case let .http(status, message):
             message.isEmpty ? "Server error (\(status))." : message
         case let .decoding(detail): "Unexpected response from the server. \(detail)"
@@ -428,6 +432,20 @@ actor APIClient {
     private func validate(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard !(200..<300).contains(http.statusCode) else { return }
+        // A refused sign-in is not an expired session. Both arrive as 401
+        // with the same body, so the endpoint is the only thing separating
+        // them — and mapping the sign-in one to `.unauthorized` told a
+        // reader who mistyped that something happened which did not, then
+        // sent them to retype the same password.
+        if Self.isSignInPath(http.url?.path) {
+            switch http.statusCode {
+            case 401: throw APIError.invalidCredentials
+            // The per-account lockout and the per-IP throttle both answer
+            // 429 with the same generic body as a wrong password.
+            case 429: throw APIError.tooManyAttempts
+            default: break
+            }
+        }
         if http.statusCode == 401 {
             token = nil
             TokenStore.clear()
@@ -437,6 +455,17 @@ actor APIClient {
             throw APIError.unauthorized
         }
         throw APIError.http(status: http.statusCode, message: Self.errorMessage(from: data))
+    }
+
+    /// Whether a URL path is one of the two unauthenticated sign-in routes.
+    ///
+    /// These are the only requests whose 401 means "these credentials were
+    /// refused" rather than "the session this app was holding is gone", so
+    /// they are also the only ones that must not clear the stored token or
+    /// announce `omnibusUnauthorized`.
+    static func isSignInPath(_ path: String?) -> Bool {
+        guard let path else { return false }
+        return path.hasSuffix("/api/auth/login") || path.hasSuffix("/api/auth/register")
     }
 
     private func decode<T: Decodable>(_ data: Data) throws -> T {

@@ -131,6 +131,17 @@ export const AUDIOBOOK_BOOKS: readonly ExpectedAudiobook[] = [
     hasCover: true,
     source: "generated",
   },
+
+  // Resume-paint-only book — see RESUME_BOOK below. ~30s so a saved position
+  // is meaningful; appended last for the same reason as the scrub book.
+  {
+    title: "The Resumable Reverie",
+    author: "Radia Perlman",
+    format: "MP3",
+    parts: 1,
+    hasCover: true,
+    source: "generated",
+  },
 ] as const;
 
 /**
@@ -174,6 +185,18 @@ export const MERGE_SECONDARY = requireAudiobook("The Severable Sequel");
  * auto-attach and shifts no author-scoped count.
  */
 export const SCRUB_BOOK = requireAudiobook("The Scrubbable Saga");
+
+/**
+ * The audiobook reserved for the resume-paint test (#2458): the transport
+ * must show the saved position from the first frame it is visible, not
+ * "Chapter 1 · 0:00" until the media metadata lands.
+ *
+ * That test WRITES a per-(user, book) audio position, which is server state
+ * every later read of this book sees — so like {@link SCRUB_BOOK}, nothing
+ * else may read it. Every other listen test asserts a book *opens at zero*,
+ * which a stray saved position would falsify.
+ */
+export const RESUME_BOOK = requireAudiobook("The Resumable Reverie");
 
 /**
  * Titles the reader specs must exclude when they pick "some generated MP3".

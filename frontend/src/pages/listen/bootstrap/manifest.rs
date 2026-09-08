@@ -78,6 +78,16 @@ pub(super) async fn run_manifest_init(
         loaded_file,
         audio_file_count,
     );
+    // Paint the resume position before the element can seek to it: the
+    // transport's only other writers are `timeupdate` and `seeked`, which
+    // wait on the media metadata. Display only — persistence is gated on the
+    // shim's `_seeded`/`_userActed`, so this can't be written back (#1954,
+    // #1972) — and `None` stays unseeded, naming no file this boot may not
+    // be in.
+    if let Some(pos) = resume_pos {
+        let mut elapsed = playback.elapsed;
+        elapsed.set(pos);
+    }
     let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "null".into());
 
     match manifest {

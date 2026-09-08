@@ -49,9 +49,11 @@ pub(super) fn BookmarksDrawer(
             if marks.is_empty() {
                 div { class: "lp-drawer-empty",
                     p { class: "lp-drawer-empty-title", "No bookmarks yet" }
+                    // The transport's Bookmark button only opens this drawer;
+                    // "+ Bookmark" above is what saves.
                     p { class: "lp-drawer-empty-detail",
-                        "Tap the Bookmark button while listening to save "
-                        "your place. Add a note to any mark below."
+                        "Tap + Bookmark above to save your place. "
+                        "Add a note to any mark below."
                     }
                 }
             } else {

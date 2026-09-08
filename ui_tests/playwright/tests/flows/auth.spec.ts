@@ -101,7 +101,10 @@ test("shows an error when login credentials are wrong", async ({ page }) => {
     async () => page.getByRole("button", { name: "Log in" }).click(),
   );
 
-  await expect(page.getByRole("alert")).toContainText("invalid credentials");
+  // The banner must name the failure, never the wire status (#2468).
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText(/username or password/i);
+  await expect(alert).not.toContainText("401");
   await expect(page).toHaveURL(/\/login$/);
 });
 

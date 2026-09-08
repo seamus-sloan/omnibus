@@ -136,6 +136,22 @@ const FIXTURES: AudiobookInput[] = [
     track: 1,
     frames: 1150,
   },
+  // Resume-paint-only book, reserved for the "opens at the saved position"
+  // test. That spec WRITES a per-(user,book) audio position, which is
+  // globally visible on the shared server and would break every other
+  // spec's "opens at 0:00" assertion — same isolation rationale as the
+  // scrub book. ~30s so a mid-book position is meaningful at the second
+  // granularity `format_hms` renders, and the author appears in no other
+  // fixture (make_epub.ts included) → no auto-attach and no author-scoped
+  // count shift. See `tests/fixtures/audiobooks.ts` (RESUME_BOOK).
+  {
+    filename: "radia_perlman_solo/the_resumable_reverie.mp3",
+    title: "The Resumable Reverie",
+    artist: "Radia Perlman",
+    album: "The Resumable Reverie",
+    track: 1,
+    frames: 1150,
+  },
 ];
 
 // ---------------------------------------------------------------------------

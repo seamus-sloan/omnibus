@@ -237,7 +237,12 @@ final class UploadManager {
         switch error {
         case .http: return true
         case .decoding: return true
-        case .notConfigured, .offline, .transport, .unauthorized: return false
+        // The two sign-in refusals cannot reach an upload — they are raised
+        // only for `/api/auth/login` and `/api/auth/register` — and both mean
+        // the server declined before doing any work.
+        case .notConfigured, .offline, .transport, .unauthorized,
+             .invalidCredentials, .tooManyAttempts:
+            return false
         }
     }
 }

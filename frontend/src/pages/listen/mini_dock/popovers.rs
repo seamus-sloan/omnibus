@@ -5,8 +5,7 @@
 
 use dioxus::prelude::*;
 
-use super::super::chapter_nav::chapter_index_for_elapsed;
-use super::super::sleep::{end_of_chapter_seconds, sleep_chip_label};
+use super::super::sleep::sleep_chip_label;
 use super::super::sleep_panel::{SleepPanelBody, SleepPanelState};
 use super::super::speed_panel::SpeedPanelBody;
 use crate::use_playback;
@@ -120,19 +119,7 @@ pub(super) fn DockSleep(open_panel: Signal<Option<DockPanel>>) -> Element {
         open_panel.set(next);
     };
     let on_select = move |secs: i32| sleep.select_seconds(secs);
-    let on_end_of_chapter = {
-        let chapters = playback.chapters;
-        let elapsed = playback.elapsed;
-        let rate = playback.rate;
-        move |_: ()| {
-            let chs = chapters.peek().clone();
-            let now = *elapsed.peek();
-            let idx = chapter_index_for_elapsed(&chs, now);
-            if let Some(secs) = end_of_chapter_seconds(&chs, idx, now, *rate.peek()) {
-                sleep.select_end_of_chapter(secs);
-            }
-        }
-    };
+    let on_end_of_chapter = move |_: ()| sleep.select_end_of_chapter();
     let on_toggle_fade = move |_: ()| sleep.toggle_fade();
 
     rsx! {

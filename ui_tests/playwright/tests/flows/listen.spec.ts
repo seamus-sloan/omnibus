@@ -2,6 +2,7 @@ import {
   AUDIOBOOK_BOOK_COUNT,
   AUDIOBOOK_BOOKS,
   MERGE_ONLY_TITLES,
+  RESUME_BOOK,
   SCRUB_BOOK,
 } from "../fixtures/audiobooks";
 import { expect, test } from "../fixtures/test";
@@ -713,11 +714,12 @@ test("opens bookmarks drawer and shows empty state", async ({
   // Drawer container is in the DOM.
   await expect(page.getByTestId("bookmarks-drawer")).toBeVisible();
 
-  // Empty state copy — no bookmarks have been saved yet.
+  // Empty state copy — no bookmarks have been saved yet. It must name the
+  // control that saves ("+ Bookmark" inside the drawer), not the transport
+  // button that merely opened it (#2479).
   await expect(page.getByText("No bookmarks yet")).toBeVisible();
-  await expect(
-    page.getByText("Tap the Bookmark button while listening to save"),
-  ).toBeVisible();
+  await expect(page.getByText("Tap + Bookmark above")).toBeVisible();
+  await expect(page.getByTestId("bookmark-add")).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -962,6 +964,77 @@ test("shows the target time immediately after a paused chapter-list seek (#1897)
     .not.toBe(before);
   const target = Number(await seek.inputValue());
   expect(target).toBeGreaterThan(0);
+});
+
+// ---------------------------------------------------------------------------
+// 10c. Reopened player paints the saved position, not 0:00 (#2458)
+// ---------------------------------------------------------------------------
+
+test("paints the saved position before the media element seeks (#2458)", async ({
+  page,
+  request,
+}) => {
+  // RESUME_BOOK is reserved for this test: the position written below is
+  // per-(user, book) server state that outlives it, and every other listen
+  // test asserts a book opens at zero.
+  const uuid = await fetchBookUuidByTitle(request, RESUME_BOOK.title);
+  const savedSeconds = 18;
+  const resp = await request.post("/api/rpc/progress", {
+    data: {
+      update: {
+        book_uuid: uuid,
+        format: "audio",
+        audio_position_seconds: savedSeconds,
+        // Epoch seconds, anchored just behind wall clock — the server
+        // clamps a future clock to now.
+        client_updated_at: Math.floor(Date.now() / 1000) - 60,
+      },
+    },
+  });
+  expect(resp.status(), "audio progress write failed").toBe(200);
+
+  // Hold the media bytes so `loadedmetadata` — and therefore the element's
+  // own `timeupdate` — cannot fire while the assertions run. Without this
+  // the seek lands within milliseconds on a local server and the test would
+  // pass whether or not the transport was seeded.
+  let releaseMedia = (): void => {};
+  const mediaHeld = new Promise<void>((resolve) => {
+    releaseMedia = resolve;
+  });
+  await page.route("**/api/audiobooks/**/parts/**", async (route) => {
+    await mediaHeld;
+    await route.continue();
+  });
+
+  // Plain `goto`, not `gotoReady`: that helper waits for `networkidle`,
+  // which the held media request never reaches. `waitForPlayerReady` is the
+  // real gate anyway — it waits for the transport to be on screen.
+  await page.goto(`/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  // The transport is visible now and the element's clock is still 0. Bug
+  // #2458: the scrub row read "0:00 · <full duration> remaining" for a book
+  // the detail page had just offered to resume from 18 s.
+  await expect
+    .poll(async () => (await scrubStamps(page)).elapsed, {
+      message: "transport should open at the saved position, not 0:00",
+    })
+    .toBeGreaterThan(0);
+  const painted = await scrubStamps(page);
+  expect(painted.elapsed).toBe(savedSeconds);
+  expect(painted.remaining).toBe(painted.total - savedSeconds);
+  expect(
+    Number(await page.getByRole("slider", { name: "Seek" }).inputValue()),
+  ).toBeGreaterThan(0);
+
+  // Releasing the media lets the element seek; the position it settles on is
+  // the one already on screen, so the readout confirms rather than jumps.
+  releaseMedia();
+  await expect
+    .poll(async () => (await scrubStamps(page)).elapsed, {
+      message: "the element's own seek must not move the painted position",
+    })
+    .toBe(savedSeconds);
 });
 
 // ---------------------------------------------------------------------------

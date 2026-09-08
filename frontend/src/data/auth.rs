@@ -378,9 +378,87 @@ async fn post_auth_json<T: serde::Serialize>(
     if !res.ok() {
         let status = res.status();
         let msg = res.text().await.unwrap_or_default();
-        return Err(format!("{status}: {msg}"));
+        return Err(auth_failure_message(status, &msg));
     }
     res.json::<LoginResponse>().await.map_err(|e| e.to_string())
+}
+
+/// Reader-facing copy for a refused login or registration.
+///
+/// The status code is a wire detail, never a sentence: it used to be
+/// formatted straight into the banner, so a mistyped password read
+/// "401: invalid credentials". Only the two statuses whose server body is
+/// written for a machine get their own copy; every other refusal
+/// (`username taken`, a password-validation message, `registration
+/// disabled`) already says something a reader can act on, and is passed
+/// through unchanged so the register page's field classifier still sees
+/// the word it routes on.
+///
+/// Compiled on every target — it is string mapping, not transport — so the
+/// copy is covered by the test suite in each feature pass. Only the web
+/// build calls it — mobile maps the same statuses through `DataError`.
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+pub(crate) fn auth_failure_message(status: u16, body: &str) -> String {
+    match status {
+        // Deliberately does not say which half was wrong; the server's
+        // refusal doesn't either.
+        401 => "That username or password isn't right.".into(),
+        // Both the per-IP throttle and the per-account lockout answer 429
+        // with the same generic body as a wrong password, which would read
+        // as a plain refusal and invite an immediate retry.
+        429 => "Too many sign-in attempts. Wait a moment and try again.".into(),
+        _ => {
+            let trimmed = body.trim();
+            if trimmed.is_empty() {
+                "Sign-in failed. Please try again.".into()
+            } else {
+                trimmed.to_string()
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod failure_message_tests {
+    use super::auth_failure_message;
+
+    #[test]
+    fn auth_failure_message_replaces_the_401_body_without_naming_a_status() {
+        let msg = auth_failure_message(401, "invalid credentials");
+        assert_eq!(msg, "That username or password isn't right.");
+        assert!(!msg.contains("401"));
+    }
+
+    #[test]
+    fn auth_failure_message_distinguishes_a_throttled_attempt_from_a_refusal() {
+        // The server sends the same body as a 401 here, so the status is
+        // the only thing that separates the two.
+        assert_eq!(
+            auth_failure_message(429, "invalid credentials"),
+            "Too many sign-in attempts. Wait a moment and try again."
+        );
+    }
+
+    #[test]
+    fn auth_failure_message_passes_other_refusals_through_for_field_routing() {
+        // `classify_register_error` keys on these words.
+        assert_eq!(
+            auth_failure_message(409, "username taken"),
+            "username taken"
+        );
+        assert_eq!(
+            auth_failure_message(400, "password is too short"),
+            "password is too short"
+        );
+    }
+
+    #[test]
+    fn auth_failure_message_falls_back_when_the_server_sent_no_body() {
+        assert_eq!(
+            auth_failure_message(500, "   "),
+            "Sign-in failed. Please try again."
+        );
+    }
 }
 
 #[cfg(all(test, feature = "mobile"))]
