@@ -7,12 +7,14 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use omnibus_shared::{
-    AudiobookPlaybackRateRecord, AudiobookPlaybackRateUpdate, ProgressFormat, ProgressRecord,
+    AudiobookPlaybackRateRecord, AudiobookPlaybackRateUpdate, BookProgress, ProgressFormat,
+    ProgressRecord,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use crate::{resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec};
 
+use super::enrich::{enrich_record, PositionDetail};
 use super::{format_str, ledger, parse_format, ProgressError};
 
 /// Attach a server-derived KoboSpan location (and percent, when the row
@@ -343,8 +345,17 @@ pub async fn get_progress(
     else {
         return Ok(None);
     };
-    Ok(Some(ProgressRecord {
-        book_uuid: canonical,
+    Ok(Some(row_to_record(canonical, &row)?))
+}
+
+/// Decode one `reading_progress` row. The read-path enrichment fields start
+/// empty — `enrich_record` fills them for the callers that serve them.
+fn row_to_record(
+    book_uuid: String,
+    row: &sqlx::sqlite::SqliteRow,
+) -> Result<ProgressRecord, ProgressError> {
+    Ok(ProgressRecord {
+        book_uuid,
         format: parse_format(row.try_get::<String, _>("format")?.as_str()),
         epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
@@ -353,7 +364,147 @@ pub async fn get_progress(
         book_file_id: row.try_get::<Option<i64>, _>("book_file_id")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
         client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
+        total_duration_seconds: None,
+        resolved: None,
+    })
+}
+
+/// Every position the user holds in one book, enriched with the runtime and
+/// chapter data a caller would otherwise have to reconstruct.
+///
+/// `format` narrows the result to one record; omitted, **every** format the
+/// user has a position in comes back. That default is the point: reading only
+/// the epub row of a book the reader is 87% through in audio reports the
+/// wrong place with nothing to signal it, and [`BookProgress::furthest`]
+/// names the right one outright.
+///
+/// `Ok(None)` when the uuid names no book. A known book the user has never
+/// opened returns an envelope with no records — "no position" and "no book"
+/// are different answers.
+pub async fn book_progress(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+    format: Option<ProgressFormat>,
+) -> Result<Option<BookProgress>, ProgressError> {
+    let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
+        return Ok(None);
+    };
+    let mut records = read_records(pool, user_id, &canonical, format).await?;
+    // `Full`: one book, asked for deliberately — the caller wants the most
+    // precise answer available, and the archive walk is bounded by the number
+    // of formats the reader holds a position in.
+    for record in records.iter_mut() {
+        enrich_record(pool, record, PositionDetail::Full).await?;
+    }
+    // Newest event time first, so a caller that ignores `furthest` and takes
+    // the head still gets the most recently touched format rather than
+    // whatever order SQLite happened to return.
+    records.sort_by_key(|r| std::cmp::Reverse((r.client_updated_at, r.updated_at)));
+    let furthest = furthest_of(&records);
+    let linked = crate::cross_format::get_link(pool, user_id, &canonical)
+        .await
+        .map_err(cross_format_err)?
+        .is_some();
+    // Measured from the reader's true place, not from an arbitrary row: the
+    // candidate answers "where would I pick this up in the other format",
+    // which is only meaningful relative to where they actually are.
+    let cross_format = match (linked, furthest) {
+        (true, Some(from)) => {
+            let target = match from {
+                ProgressFormat::Epub => ProgressFormat::Audio,
+                ProgressFormat::Audio => ProgressFormat::Epub,
+            };
+            match crate::cross_format::resume_candidate(pool, user_id, &canonical, target).await {
+                Ok(resume) => resume.candidate,
+                // A book that vanished mid-read, or an audio set that no
+                // longer matches the one the link was confirmed against, is a
+                // missing candidate — not a failed request.
+                Err(
+                    crate::cross_format::CrossFormatError::BookNotFound
+                    | crate::cross_format::CrossFormatError::AudioSetMismatch,
+                ) => None,
+                Err(e) => return Err(cross_format_err(e)),
+            }
+        }
+        _ => None,
+    };
+    Ok(Some(BookProgress {
+        book_uuid: canonical,
+        records,
+        furthest,
+        linked,
+        cross_format,
     }))
+}
+
+/// Which record represents the reader's true place.
+///
+/// Whole-book percent decides it, because that is the question — a reader is
+/// further along in the format they have covered more of, whichever they
+/// touched last. The comparison needs a percent on **every** record to mean
+/// anything, so a set with any missing one falls back to the most recent
+/// event time rather than ranking a known percent against an assumed zero.
+fn furthest_of(records: &[ProgressRecord]) -> Option<ProgressFormat> {
+    fn percent(r: &ProgressRecord) -> Option<i64> {
+        r.resolved
+            .as_ref()
+            .and_then(|res| res.percent_through_book)
+            .or(r.progress_percent)
+    }
+    if records.iter().all(|r| percent(r).is_some()) {
+        records
+            .iter()
+            .max_by_key(|r| (percent(r).unwrap_or(0), r.client_updated_at, r.updated_at))
+            .map(|r| r.format)
+    } else {
+        records
+            .iter()
+            .max_by_key(|r| (r.client_updated_at, r.updated_at))
+            .map(|r| r.format)
+    }
+}
+
+/// The stored rows for one book, optionally narrowed to a single format.
+/// Positions only — enrichment is the caller's job.
+async fn read_records(
+    pool: &SqlitePool,
+    user_id: i64,
+    canonical: &str,
+    format: Option<ProgressFormat>,
+) -> Result<Vec<ProgressRecord>, ProgressError> {
+    let mut sql = String::from(
+        "SELECT format, epub_cfi, audio_position_seconds, progress_percent, kobo_location,
+                book_file_id, updated_at,
+                COALESCE(client_updated_at, updated_at) AS client_updated_at
+         FROM reading_progress
+         WHERE user_id = ? AND book_uuid = ?",
+    );
+    if format.is_some() {
+        sql.push_str(" AND format = ?");
+    }
+    let mut q = sqlx::query(&sql).bind(user_id).bind(canonical);
+    if let Some(f) = format {
+        q = q.bind(format_str(f));
+    }
+    q.fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| row_to_record(canonical.to_string(), &row))
+        .collect()
+}
+
+/// Narrow a cross-format read error into this module's error space. The
+/// declaration-only refusals are unreachable from the reads above but are
+/// folded rather than panicked on, so a later caller can't open a silent path.
+fn cross_format_err(e: crate::cross_format::CrossFormatError) -> ProgressError {
+    match e {
+        crate::cross_format::CrossFormatError::BookNotFound
+        | crate::cross_format::CrossFormatError::AudioSetMismatch
+        | crate::cross_format::CrossFormatError::LinkRequired
+        | crate::cross_format::CrossFormatError::CounterpartMissing => ProgressError::BookNotFound,
+        crate::cross_format::CrossFormatError::Sqlx(inner) => ProgressError::Sqlx(inner),
+    }
 }
 
 /// Upsert the playback rate for `(user, book)` and return the saved preference.

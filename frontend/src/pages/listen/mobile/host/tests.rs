@@ -39,6 +39,7 @@ fn bf(id: i64, format: &str, ordinal: i64) -> BookFileInfo {
         size_bytes: 0,
         path: None,
         etag: None,
+        duration_seconds: None,
     }
 }
 
