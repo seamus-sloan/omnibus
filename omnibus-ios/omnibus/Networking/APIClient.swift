@@ -443,6 +443,12 @@ actor APIClient {
         if T.self == Empty.self { return Empty() as! T }
         // Several mutating endpoints answer 200 with no body.
         if data.isEmpty, let empty = Empty() as? T { return empty }
+        // A route that grew a body since an older server release: the
+        // empty answer that server still gives is the type's own default,
+        // so a newer app keeps working against it.
+        if data.isEmpty, let bodyless = T.self as? EmptyResponseDefault.Type {
+            return bodyless.emptyResponse as! T
+        }
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
@@ -559,3 +565,10 @@ actor APIClient {
 
 /// Stand-in for endpoints that answer with no meaningful body.
 struct Empty: Codable, Sendable {}
+
+/// A response type an older server may still answer with no body at all —
+/// the value that empty body means. Adopted by a type when the route that
+/// returns it used to be a bare 204.
+protocol EmptyResponseDefault {
+    static var emptyResponse: Self { get }
+}

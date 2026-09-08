@@ -101,7 +101,13 @@ pub async fn remove_wishlist_entry(
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    Ok(response.json::<WishlistRemoval>().await?)
+    // An older server answers with a bare 204 and never purges, so an empty
+    // body means the book stayed.
+    let body = response.text().await?;
+    if body.trim().is_empty() {
+        return Ok(WishlistRemoval::default());
+    }
+    Ok(serde_json::from_str(&body)?)
 }
 
 /// DELETE `/api/physical/{uuid}` — remove a fileless book outright.
