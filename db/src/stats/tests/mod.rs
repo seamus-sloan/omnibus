@@ -155,11 +155,12 @@ pub(super) async fn rate_book(
 /// SQLite itself so it lands in the same calendar month the trailing-12
 /// recursive CTE anchors on, regardless of day-of-month clamping.
 pub(super) async fn months_ago_secs(pool: &SqlitePool, months: i64) -> i64 {
-    sqlx::query_scalar(&format!(
+    sqlx::query_scalar(
         // Mid-month anchor: naive '-N months' from a month-end 'now'
         // (July 31 → "June 31" → July 1) lands the seed in the wrong month.
-        "SELECT CAST(strftime('%s', 'now', 'start of month', '-{months} months', '+14 days') AS INTEGER)"
-    ))
+        "SELECT CAST(strftime('%s', 'now', 'start of month', ?, '+14 days') AS INTEGER)",
+    )
+    .bind(format!("{:+} months", -months))
     .fetch_one(pool)
     .await
     .unwrap()
