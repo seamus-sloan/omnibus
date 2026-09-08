@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 50% of a listening flow |
+| **Runs** | inside listening_to_audiobook |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `bookmark.create`, `bookmark.delete` |
@@ -15,13 +15,20 @@ the one you were actually at.
 
 1. While playing, note the exact position shown — the elapsed time and the
    chapter or file.
-2. Save a bookmark there.
+2. Save a bookmark there. On the web this is two presses: the transport's
+   **Bookmark** button opens the marks panel, and **+ Bookmark** inside it is
+   what saves — the first press alone saves nothing. The panel offers a note
+   field, which is the label this flow means; clicking a saved mark jumps to
+   it. On iOS the save is silent (no toast, no glyph) and the list shows a
+   label and an age but no stored time, so "present at the time you saved"
+   is checked by jumping to it.
 3. Keep listening for a minute or two so the position moves well past it.
 4. Open the list of bookmarks and confirm yours is present at the time you
    saved it.
 5. Occasionally, jump to it and confirm playback resumes at that moment rather
    than a few seconds either side.
-6. Occasionally, delete it and confirm it goes.
+6. Occasionally, delete it and confirm it goes. There is no confirmation
+   step on either surface; the list is where you confirm.
 
 ## Journal
 

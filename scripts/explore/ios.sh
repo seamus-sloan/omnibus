@@ -137,6 +137,15 @@ case "$cmd" in
     # break the launch and container lookups.
     bundle_id="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Info.plist")"
 
+    # Uninstall first: a reinstall keeps the app's container, so the run
+    # would otherwise start signed in as the *previous* run's iOS actor
+    # (r-20260908-01 did), holding its downloads, outbox and offline switch.
+    # A fresh container is what "one agent, one session" means.
+    if [ -n "${OMNIBUS_IOS_KEEP_CONTAINER:-}" ]; then
+      echo "keeping the existing app container (OMNIBUS_IOS_KEEP_CONTAINER set)" >&2
+    else
+      xcrun simctl uninstall "$udid" "$bundle_id" >/dev/null 2>&1 || true
+    fi
     xcrun simctl install "$udid" "$app"
     python3 -c 'import json,sys; print(json.dumps(
         {"udid": sys.argv[1], "bundle_id": sys.argv[2], "app": sys.argv[3]}))' \

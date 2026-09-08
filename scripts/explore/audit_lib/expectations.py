@@ -366,7 +366,7 @@ def _journal_before(entry: Entry) -> Any:
 def _highlight_keys(entry: Entry) -> dict[str, Any]:
     p = entry.params
     note = _first_parsable((_get(p, "note_text", "note", "annotation"),), parse_text)
-    quote = _first_parsable((_get(p, "text", "quote", "selected_text", "passage"),), parse_text)
+    quote = _first_parsable((_get(p, "text", "quote", "selected_text", "passage", "deleted_text"),), parse_text)
     colour = _first_parsable(
         (
             _get(p, "new_colour", "new_color", "to_colour", "to_color"),
@@ -404,7 +404,10 @@ def _old_colour(entry: Entry) -> Any:
 
 def _bookmark_keys(entry: Entry) -> dict[str, Any]:
     p = entry.params
-    label = _first_parsable((_get(p, "title", "label", "name"),), parse_text)
+    # On the iOS lane `title` names the *book* (ios_lane.md), so it is not a
+    # label there; the web has the uuid and may use `title` for the mark.
+    title_keys = () if entry.surface == TITLE_KEYED_SURFACE else ("title",)
+    label = _first_parsable((_get(p, "label", "name", *title_keys),), parse_text)
     position = _first_parsable((_get(p, "position", "epub_cfi", "cfi", "location"),), parse_text)
     return {
         "label": None if label is UNPARSED else label,
@@ -413,7 +416,14 @@ def _bookmark_keys(entry: Entry) -> dict[str, Any]:
 
 
 def _name(entry: Entry) -> Any:
-    return _first_parsable((_get(entry.params, "name", "shelf_name", "title"),), parse_text)
+    """The shelf a shelf-family entry names.
+
+    `shelf` before `title`: an iOS `shelf.add` carries the book in `title`
+    and the shelf in `shelf`, and reading the title as the shelf name made
+    every iOS membership "missing" from a shelf named after a book.
+    """
+    title_keys = () if entry.surface == TITLE_KEYED_SURFACE else ("title",)
+    return _first_parsable((_get(entry.params, "shelf", "shelf_name", "name", *title_keys),), parse_text)
 
 
 def _uuid(entry: Entry) -> Any:
@@ -590,6 +600,10 @@ def _fold_entry(fold: _Fold, entry: Entry, cls: vocabulary.Classification) -> No
                 fold.skip(entry, f"{entry.action}: no readable playback rate in params")
                 return
             fold.scalar(exp("playback rate", uuid, f"playback rate {rate:g}x", rate))
+        elif detail == "delete":
+            # A deletion the agent performed supersedes its own add; the
+            # book being gone is then the expected state, not a loss.
+            fold.scalars.pop(("book_add", uuid), None)
         else:
             fold.scalar(exp("book", uuid, f"book {uuid} present in the library", uuid))
         return
@@ -682,7 +696,20 @@ def _fold_entry(fold: _Fold, entry: Entry, cls: vocabulary.Classification) -> No
         if detail == "delete":
             if not fold.pop("shelf", None, lambda e: e.value == name):
                 fold.skip(entry, f"{entry.action}: deleted a shelf this run did not create")
+            # The members went with the shelf; asserting them afterwards
+            # would report the delete the agent journalled as a loss.
+            fold.sets.pop(("shelf_member", name), None)
             return
+        if detail == "update":
+            # Supersede the shelf it edited — by the old name when the edit
+            # renamed, else by the (unchanged) name. Matching nothing cancels
+            # nothing: the edit was of an earlier run's shelf, and the name
+            # it now carries is still asserted below.
+            before = _first_parsable(
+                (_get(p, "old_name", "before_name", "previous_name", "before", "old"),), parse_text
+            )
+            prior = before if before is not UNPARSED else name
+            fold.pop("shelf", None, lambda e: e.value == prior)
         fold.push(exp("shelf", None, f"a shelf named {name!r}", name))
         return
 

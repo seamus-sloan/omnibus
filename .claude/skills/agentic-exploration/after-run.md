@@ -73,3 +73,31 @@ first run produced one retracted finding and one root-caused CSP bug, and the
 difference was checking. State plainly what was excluded, what was left on the
 instance, and the snapshot name to roll back to.
 
+## When to recommend a rollback
+
+Restoring is the user's call, never yours; `snapshot.sh restore <name>` is
+the command, and you run it only when told to. But the hand-back must say
+whether you *recommend* it, and on what evidence. Recommend a restore when the
+run left state nobody can explain or nobody can undo through the app:
+
+- a `refusals` list showing the guard let something through, or a deletion,
+  merge or copy removal on a book the actor did not own;
+- an audit `unexpected` finding on a **library-wide** thing — a book gone,
+  metadata blanked, a cover swapped onto the wrong book — with no journal
+  entry to explain it;
+- a `high` defect that destroyed data (a merge that lost a side, a shelf
+  delete that took a book);
+- a baseline book changed in a way no agent journalled.
+
+Do **not** recommend one for per-user leftovers — ratings, shelves, journal
+entries, positions on the exploration accounts are what the run is for, and
+the next run's baseline absorbs them.
+
+Say the cost too: a restore discards **every** agent's writes from the run,
+and any book uploaded during it stays in the journal as owned by an actor
+while no longer existing on the instance. That is harmless to ownership (a
+future upload of the same file gets a new uuid and a new `book.add`) but the
+run's `audit.json` will not reconcile against the restored instance, so mark
+the run directory as rolled back — a `ROLLED_BACK` file naming the snapshot
+is enough — before anyone reads its report as current.
+

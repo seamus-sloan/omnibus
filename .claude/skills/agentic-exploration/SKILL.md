@@ -1,6 +1,6 @@
 ---
 name: agentic-exploration
-argument-hint: "[--agents N] [--flows-per-agent K] [--corpus PATH] [--seed S] [--ios]"
+argument-hint: "[--agents N] [--flows-per-agent K] [--corpus PATH] [--seed S] [--ios] [--kobo] [--reader]"
 description: Run an exploratory testing swarm against the persistent Omnibus instance — snapshot, provision accounts, sample flows from the catalog, and fan out one agent per simulated reader. Triggers when the user asks to "run the exploration swarm", "run agentic exploration", "exercise the app with agents", or invokes /agentic-exploration.
 ---
 
@@ -14,7 +14,7 @@ speculatively.
 
 ## 0. Arguments — or an interview
 
-`/agentic-exploration [--agents N] [--flows-per-agent K] [--corpus PATH] [--seed S] [--ios]`
+`/agentic-exploration [--agents N] [--flows-per-agent K] [--corpus PATH] [--seed S] [--ios] [--kobo] [--reader]`
 
 | Arg | Default | Notes |
 |---|---|---|
@@ -23,6 +23,8 @@ speculatively.
 | `--corpus` | — | A directory of books the tests can upload. Required if `adding_book` can be drawn. |
 | `--seed` | random | Print whatever you use — it is what makes a run repeatable. |
 | `--ios` | off | Adds **exactly one** iOS agent on top of `--agents`. More than one is refused — see [drivers.md](drivers.md). |
+| `--kobo` | off | Hands [`kobo_sync.md`](../../../docs/qa/agentic_exploration/kobo_sync.md) to one web agent on top of its draw; you play the device — see [scenarios.md](scenarios.md). |
+| `--reader` | off | Makes one web agent a **non-admin** account, so the shelf-visibility and upload-refusal criteria become decidable — see [scenarios.md](scenarios.md). |
 
 **If the invocation sets none of these — no flags, and no prose fixing a value
 — interview the user before doing anything else**, per
@@ -60,6 +62,8 @@ The database accretes forever and is never reset, so this is the only way back
 from a run that corrupts something. Never skip it because a run "looks safe".
 Print the name — the audit records it, and it is the rollback you hand back.
 
+It needs `OMNIBUS_EXPLORE_SSH_HOST`, which `env.sh check` does not require. **If it fails, stop and ask**: set the host now, or run with no rollback — never choose that yourself. On "no rollback", pass `--snapshot none` at step 6 and say in the hand-back that there is nothing to restore.
+
 ## 4. Provision accounts
 
 ```bash
@@ -70,7 +74,8 @@ Emits JSON: `actor`, `username`, `password`, `action`. **Save it** — the audit
 needs it in steps 6 and 9, and passwords are rotated per run, never stored.
 Idempotent; usernames are stable across runs because provenance ownership is
 keyed on the actor, so fresh accounts would orphan every book previous runs
-uploaded. Hand each agent only its own credential.
+uploaded. Hand each agent only its own credential. Every account it creates is
+an admin; `--reader` needs a second call, in [scenarios.md](scenarios.md).
 
 ## 5. Decide the draw
 
@@ -87,9 +92,13 @@ scripts/explore/sample.py --agents N --flows-per-agent K --seed S --run <run-id>
   merely blocked. Say what you excluded and why; a silent exclusion reads as
   coverage that never happened.
 
-Weights are parsed from `flows/README.md`, the single source of truth. The
-sampler exits non-zero if that table cannot be parsed or its weights do not sum
-to 100 — a bug in the catalog, not a reason to sample by hand.
+The catalog table in `flows/README.md` is the single source of truth: every
+top-level flow is equally likely, and every subflow runs inside its parent.
+The sampler exits non-zero if that table cannot be parsed or a subflow names a
+parent that is not a flow — a bug in the catalog, not a reason to sample by
+hand.
+
+The sampler cannot exclude a **subflow** or vary the draw **per agent**. [scenarios.md](scenarios.md) lists the hand-edits that follow — `merging_books` for an agent owning fewer than two books, the destructive flows for the iOS agent, `viewing_stats` drawn first — and how to check for CBZ and audio before deciding `--exclude`. Every edit is said in the hand-back.
 
 ## 6. Set up the run
 
@@ -137,12 +146,14 @@ looks like, the iOS agent's extra account and scenario, and teardown.
 One subagent per actor, in parallel, each given **only**:
 
 - the absolute path to `docs/qa/agentic_exploration/start.md`, to read in full first;
-- its `actor`, its `surface` (`web`, or `ios` for the one iOS agent), the base URL, and its own username and password;
+- its `actor`, its `surface` (`web`, or `ios` for the one iOS agent), the base URL, and its own username and password — and, for the `--reader` agent, that it is a non-admin;
 - its sampled sequence — hand over **one flow document at a time**, never the list;
-- the corpus path, and `scripts/explore/journal.py append` — the only way to
-  write the journal, since a bare `>>` can tear a line;
+- the corpus path, **the corpus files already uploaded** (per [scenarios.md](scenarios.md), naming this agent's file when two drew `adding_book`), and whether the library holds a CBZ;
+- `scripts/explore/journal.py append` — the only way to write the journal, since a bare `>>` can tear a line — and that `flow.start` carries `base_url`;
 - the run id;
 - **its agent number**, for `driver.sh run <n>` — never another agent's. The iOS agent gets `ios.sh` instead, which takes no agent number.
+
+`resuming_from_another_device` needs the phantom position written **before** the hand-over, `adding_book` needs a **re-guard** before its subflows, every flow is a **fresh subagent** briefed from a standing file, and `--kobo` makes you the device — all in [scenarios.md](scenarios.md).
 
 Tell each agent, verbatim in the brief: read
 [`pitfalls.md`](../../../docs/qa/agentic_exploration/pitfalls.md) before
@@ -174,11 +185,14 @@ empty rather than dropped:
    validate, a step that took far longer than it should.
 3. **Journal files** — every path, as bullets.
 
-Then say what was excluded, what was left on the instance, and the snapshot
-name to roll back to.
+Then say what was excluded or hand-edited, what was left on the instance, and
+the snapshot name to roll back to — or that there is none. Whether to roll
+back is the user's decision; [after-run.md](after-run.md) says when to
+recommend it.
 
 ## Related
 
 - Catalog + contract: [`docs/qa/agentic_exploration/`](../../../docs/qa/agentic_exploration/start.md)
 - Journal + audit: `scripts/explore/{journal,audit}.py` (#2202) · Report: `report.py` (#2203)
 - iOS lane: [`ios_lane.md`](../../../docs/qa/agentic_exploration/ios_lane.md) (#2204)
+- Runner-driven scenarios and draw edits: [scenarios.md](scenarios.md) · Kobo: [`kobo_sync.md`](../../../docs/qa/agentic_exploration/kobo_sync.md)

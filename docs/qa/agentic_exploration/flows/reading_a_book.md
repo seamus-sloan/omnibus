@@ -2,14 +2,14 @@
 
 | | |
 |---|---|
-| **Weight** | 20% |
+| **Runs** | on its own |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `book.open`, `reader.progress`, `reader.close` |
 
-Read roughly a tenth of a book, the way someone would on a lunch break. This is
-the highest-weight flow because reading position is the single most-written
-piece of state in the app, and the one whose loss a reader notices first.
+Read roughly a tenth of a book, the way someone would on a lunch break.
+Reading position is the single most-written piece of state in the app, and the
+one whose loss a reader notices first.
 
 ## Preconditions
 
@@ -17,23 +17,44 @@ A book with an EPUB or CBZ format. Any book — you do not need to own it.
 Prefer one you have read before if you have; resuming is more interesting than
 starting.
 
+**Read a comic about one time in three, when the library has one.** The
+library's formats column says `CBZ` on the books that are comics; the runner
+tells you at hand-over whether any exist, and if none does, do not hunt for
+one. A comic opens in a page-image reader rather than the text reader, with
+no font size or theme to change — the incidental step below is a zoom or a
+page-fit toggle instead.
+
+If the runner hands you
+[resuming_from_another_device](resuming_from_another_device.md) with this
+flow, read it **before step 1**: it changes what you expect to see when the
+book opens.
+
 ## Steps
 
 1. Reach the book from the library, an author page, a search, or the continue
    surface on the home page. Vary this between runs.
 2. Open it to read. Note where it opened — at the start, or where you left off.
 3. Read forward through roughly 10% of the book **by position**, not by time
-   spent. Turn pages the way a person
-   does: some quickly, some slowly. Do not spam the page-forward control.
+   spent. Turn pages the way a person does: some quickly, some slowly. Do not
+   spam the page-forward control. At desktop width the reader is a two-page
+   spread, so the page counter advances by two per turn — that is not a
+   skipped page.
    **If page-turning itself is broken**, that is a `fail` and you should journal
    it as one — but do not abandon the flow. Reaching a position through the
    table of contents, or through Resume, counts as arriving there, so carry on
-   with the rest of the steps and say in the journal how you moved.
+   with the rest of the steps and say in the journal how you moved. The
+   fallback can itself be the finding: a Contents jump that leaves a Loading
+   overlay in place, or a first open that says the book could not be loaded
+   and only a reload cures, are each a `fail` on their own — journal them
+   with the book, and try a second book before deciding the reader is down.
 4. Somewhere in the middle, do one incidental thing a reader does — open the
    table of contents, change the font size, search for a word, switch the
    theme. Pick a different one each time.
-5. Leave the reader with its **Back to book** control, which returns you to the
-   book's detail page. Unlike the audiobook player there is no mini-player, so
+5. Leave the reader with its **Back to book** control (an icon whose
+   accessible name is "Back to book"), which returns you to the book's detail
+   page; the Resume and Start reading controls on that page are links. On iOS the reader closes with an **X**, and when you entered it from
+   the continue card's Read button it returns to the Library tab rather than
+   the detail page — open the detail page from there. Unlike the audiobook player there is no mini-player, so
    this genuinely ends the session.
 6. Come back to the book's detail page and check that your position is
    reflected there.

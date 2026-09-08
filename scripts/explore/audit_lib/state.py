@@ -60,7 +60,9 @@ class ActorState:
         """
         fmt = "audio" if axis == "audio" else "epub"
         return self._memo(
-            "progress", f"{uuid}:{fmt}", lambda: self.client.get_json(f"/api/progress/{uuid}?format={fmt}")
+            "progress",
+            f"{uuid}:{fmt}",
+            lambda: _progress_record(self.client.get_json(f"/api/progress/{uuid}?format={fmt}"), fmt),
         )
 
     def playback_rate(self, uuid: str) -> float | None:
@@ -122,6 +124,26 @@ class ActorState:
         if not matches:
             return None, f"title {title!r} matches no library book"
         return None, f"title {title!r} matches {len(matches)} library books"
+
+
+def _progress_record(payload: Any, fmt: str) -> dict[str, Any] | None:
+    """The one record for `fmt` out of the progress route's answer.
+
+    The route answers an envelope — `{book_uuid, records: [...], furthest,
+    linked}` with one record per format — and an empty `records` when the
+    reader has no position. Reading the envelope as if it were the record
+    made every position "exist" with no location (r-20260908-01), so the
+    audit reported a mismatch on every healthy write.
+    """
+    if not isinstance(payload, dict):
+        return None
+    if "records" not in payload:
+        return payload or None
+    records = [r for r in payload.get("records") or [] if isinstance(r, dict)]
+    for record in records:
+        if str(record.get("format") or "").lower() == fmt:
+            return record
+    return None
 
 
 def normalise_title(title: str) -> str:

@@ -130,6 +130,12 @@ NOUN_POLICY = {
     "session": OBSERVATION,
     "flow": OBSERVATION,
     "page": OBSERVATION,
+    # The iOS lane's offline scenario and the runner's Kobo scenario journal
+    # device state, not per-user state: a look, never a write.
+    "offline": OBSERVATION,
+    "outbox": OBSERVATION,
+    "probe": OBSERVATION,
+    "sync": OBSERVATION,
     # Excluded by policy — any verb on the noun is out of scope.
     "metadata": OUT_OF_SCOPE,
     "cover": OUT_OF_SCOPE,
@@ -215,6 +221,10 @@ VERBS: dict[tuple[str, str], tuple[str, str | None, str | None]] = {
     ("bookmark", "remove"): (WRITE, "bookmark", "delete"),
     ("shelf", "create"): (WRITE, "shelf", "create"),
     ("shelf", "delete"): (WRITE, "shelf", "delete"),
+    # creating_a_shelf.md's edit step. A rename carries `old_name` so the fold
+    # can supersede the create; a visibility-only edit carries the same name.
+    ("shelf", "edit"): (WRITE, "shelf", "update"),
+    ("shelf", "rename"): (WRITE, "shelf", "update"),
     ("shelf", "add"): (WRITE, "shelf_member", "add"),
     ("shelf", "add_books"): (WRITE, "shelf_member", "add"),
     ("shelf", "remove"): (WRITE, "shelf_member", "remove"),
@@ -227,7 +237,9 @@ VERBS: dict[tuple[str, str], tuple[str, str | None, str | None]] = {
     ("wishlist", "view"): (OBSERVATION, None, None),
     ("book", "add"): (WRITE, "book_add", None),
     ("book", "upload"): (WRITE, "book_add", None),
-    ("book", "delete"): (OUT_OF_SCOPE, None, SCOPE_LIBRARY),
+    # An agent's own delete supersedes its own add (deleting_a_book.md); the
+    # fold pops the `book_add` expectation and asserts nothing further.
+    ("book", "delete"): (WRITE, "book_add", "delete"),
     ("book", "open"): (OBSERVATION, None, None),
     ("book", "view"): (OBSERVATION, None, None),
     ("book", "close"): (OBSERVATION, None, None),
@@ -235,6 +247,10 @@ VERBS: dict[tuple[str, str], tuple[str, str | None, str | None]] = {
     ("book", "browse"): (OBSERVATION, None, None),
     # `checkin` defaults to out-of-scope because confirming one writes a
     # physical copy; the two steps before that are only looks.
+    # Removing the last copy of a paper-only book removes the book, so the
+    # remove supersedes the `book.add` the check-in produced; on a book with
+    # files there is no such expectation to pop and this is a no-op.
+    ("checkin", "remove"): (WRITE, "book_add", "delete"),
     ("checkin", "start"): (OBSERVATION, None, None),
     ("checkin", "lookup"): (OBSERVATION, None, None),
     ("checkin", "search"): (OBSERVATION, None, None),

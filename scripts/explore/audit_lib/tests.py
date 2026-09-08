@@ -139,7 +139,7 @@ class VocabularyTests(unittest.TestCase):
         self.assertEqual(cls.detail, vocabulary.SCOPE_METADATA)
 
     def test_classify_never_guesses_a_write_from_an_unknown_verb(self) -> None:
-        for name in ("shelf.rename", "player.scrub", "journal.pin"):
+        for name in ("shelf.reorder", "player.scrub", "journal.pin"):
             cls = vocabulary.classify(name)
             self.assertEqual(cls.kind, vocabulary.UNKNOWN, name)
             self.assertIn(name, cls.reason or "")
@@ -284,6 +284,100 @@ class ExpectationTests(unittest.TestCase):
         self.assertEqual([e.value for e in exps], ["uuid-A"])
         self.assertIn("did not add", unver[0].why)
 
+    def test_classify_reads_the_device_scenario_nouns_as_observations(self) -> None:
+        # ios_lane.md's offline names and kobo_sync.md's sync check: device
+        # state, not per-user state, so they must not land in `unverifiable`.
+        for action in ("offline.on", "offline.off", "outbox.queued", "outbox.drained",
+                       "probe.refused", "sync.delta"):
+            self.assertEqual(vocabulary.classify(action).kind, vocabulary.OBSERVATION, action)
+
+    def test_classify_recognises_a_shelf_edit_as_an_update_write(self) -> None:
+        for action in ("shelf.edit", "shelf.rename"):
+            cls = vocabulary.classify(action)
+            self.assertEqual((cls.kind, cls.family, cls.detail), (vocabulary.WRITE, "shelf", "update"), action)
+
+    def test_a_shelf_rename_supersedes_its_create(self) -> None:
+        entries = [
+            entry("shelf.create", seq=1, params={"name": "Weeknight Reading"}),
+            entry("shelf.edit", seq=2, params={"old_name": "Weeknight Reading", "name": "Weeknight Reads"}),
+        ]
+        exps, unver, _, _ = expectations.expectations_for("agent-2", entries)
+        self.assertEqual([e.value for e in exps], ["Weeknight Reads"])
+        self.assertEqual(unver, [])
+
+    def test_a_shelf_edit_keeping_its_name_asserts_it_once(self) -> None:
+        entries = [
+            entry("shelf.create", seq=1, params={"name": "Books Dad Lent Me"}),
+            entry("shelf.edit", seq=2, params={"name": "Books Dad Lent Me", "visibility": "public"}),
+        ]
+        exps, _, _, _ = expectations.expectations_for("agent-2", entries)
+        self.assertEqual([e.value for e in exps], ["Books Dad Lent Me"])
+
+    def test_a_shelf_edit_of_an_earlier_runs_shelf_still_asserts_the_new_name(self) -> None:
+        entries = [entry("shelf.edit", seq=1, params={"old_name": "old pile", "name": "new pile"})]
+        exps, unver, _, claims = expectations.expectations_for("agent-2", entries)
+        self.assertEqual([e.value for e in exps], ["new pile"])
+        self.assertEqual(unver, [])
+        self.assertIn("new pile", claims.shelf_names)
+
+    def test_a_shelf_delete_drops_its_journalled_memberships(self) -> None:
+        entries = [
+            entry("shelf.create", seq=1, params={"name": "Rainy Sunday Stack"}),
+            entry("shelf.add", seq=2, target=BOOK, params={"shelf": "Rainy Sunday Stack"}),
+            entry("shelf.delete", seq=3, params={"name": "Rainy Sunday Stack"}),
+        ]
+        exps, unver, _, _ = expectations.expectations_for("agent-6", entries)
+        self.assertEqual(exps, [])
+        self.assertEqual(unver, [])
+
+    def test_a_book_delete_supersedes_the_actors_own_add(self) -> None:
+        entries = [
+            entry("book.add", seq=1, target=BOOK, params={"source_filename": "x.epub"}),
+            entry("book.delete", seq=2, target=BOOK, params={"files": ["x.epub"]}),
+        ]
+        exps, unver, _, _ = expectations.expectations_for("agent-3", entries)
+        self.assertEqual(exps, [])
+        self.assertEqual(unver, [])
+
+    def test_a_copy_removal_supersedes_a_paper_only_add(self) -> None:
+        entries = [
+            entry("book.add", seq=1, target=BOOK, params={"title": "paper only"}),
+            entry("checkin.remove", seq=2, target=BOOK, params={}),
+        ]
+        exps, _, _, _ = expectations.expectations_for("agent-4", entries)
+        self.assertEqual(exps, [])
+
+    def test_ios_bookmark_and_shelf_entries_do_not_read_the_book_title_as_a_name(self) -> None:
+        bm = entry("bookmark.create", seq=1, target=BOOK, params={"title": "Dawnshard", "location": "page 32"})
+        bm = journal.Entry(**{**bm.__dict__, "surface": "ios"})
+        sh = entry("shelf.add", seq=2, target=BOOK, params={"title": "Dawnshard", "shelf": "Lunch Break Picks"})
+        sh = journal.Entry(**{**sh.__dict__, "surface": "ios"})
+        exps, _, _, _ = expectations.expectations_for("agent-6", [bm, sh])
+        by_family = {e.family: e for e in exps}
+        self.assertIsNone(by_family["bookmark"].value.get("label"))
+        self.assertEqual(by_family["shelf_member"].target, "Lunch Break Picks")
+
+    def test_a_highlight_delete_naming_deleted_text_pops_that_create(self) -> None:
+        entries = [
+            entry("highlight.create", seq=1, target=BOOK, params={"selected_text": "first passage", "colour": "amber"}),
+            entry("highlight.create", seq=2, target=BOOK, params={"selected_text": "second passage", "colour": "green"}),
+            entry("highlight.delete", seq=3, target=BOOK, params={"deleted_text": "first passage"}),
+        ]
+        exps, unver, _, _ = expectations.expectations_for("agent-3", entries)
+        self.assertEqual([e.value["quote"] for e in exps], ["second passage"])
+        self.assertEqual(unver, [])
+
+    def test_progress_reads_the_records_envelope(self) -> None:
+        from .state import _progress_record
+        env = {"book_uuid": BOOK, "records": [
+            {"format": "epub", "epub_cfi": "epubcfi(/6/2!/4/1:0)", "progress_percent": 39},
+            {"format": "audio", "audio_position_seconds": 12.5},
+        ], "furthest": "epub", "linked": False}
+        self.assertEqual(_progress_record(env, "epub")["progress_percent"], 39)
+        self.assertEqual(_progress_record(env, "audio")["audio_position_seconds"], 12.5)
+        self.assertIsNone(_progress_record({"book_uuid": BOOK, "records": []}, "epub"))
+        self.assertEqual(_progress_record({"format": "epub", "epub_cfi": "x"}, "epub")["epub_cfi"], "x")
+
     def test_a_shelf_delete_this_run_never_created_cancels_nothing(self) -> None:
         entries = [
             entry("shelf.create", seq=1, params={"name": "mine"}),
@@ -315,10 +409,10 @@ class ExpectationTests(unittest.TestCase):
         self.assertIn("refused", unver[0].why)
 
     def test_an_unknown_action_is_unverifiable_and_names_itself(self) -> None:
-        e = entry("shelf.rename", target=None, params={"name": "x"})
+        e = entry("shelf.reorder", target=None, params={"name": "x"})
         exps, unver, tally, _ = expectations.expectations_for("agent-1", [e])
         self.assertEqual(exps, [])
-        self.assertIn("shelf.rename", unver[0].why)
+        self.assertIn("shelf.reorder", unver[0].why)
         self.assertEqual(tally[vocabulary.UNKNOWN], 1)
 
     def test_an_observation_produces_neither_expectation_nor_unverifiable(self) -> None:
@@ -440,9 +534,9 @@ class ClaimsTests(unittest.TestCase):
         self.assertEqual(compare.unexpected("agent-1", state, self._baseline(), claims), [])
 
     def test_an_unknown_shelf_verb_suppresses_the_shelf_sweep(self) -> None:
-        # FP-4: `shelf.rename` is UNKNOWN — the audit cannot say which shelf
+        # FP-4: `shelf.reorder` is UNKNOWN — the audit cannot say which shelf
         # it touched, so no shelf-level surprise is sound to report.
-        entries = [entry("shelf.rename", params={})]
+        entries = [entry("shelf.reorder", params={})]
         _, _, _, claims = expectations.expectations_for("agent-2", entries)
         self.assertTrue(claims.shelf_any)
         baseline = {"library": [], "actors": {"agent-2": {"books": {}, "shelves": []}}}
@@ -450,7 +544,7 @@ class ClaimsTests(unittest.TestCase):
         self.assertEqual(compare.unexpected("agent-2", state, baseline, claims), [])
 
     def test_a_named_unknown_shelf_verb_claims_just_that_name(self) -> None:
-        entries = [entry("shelf.rename", params={"name": "new name"})]
+        entries = [entry("shelf.reorder", params={"name": "new name"})]
         _, _, _, claims = expectations.expectations_for("agent-2", entries)
         self.assertFalse(claims.shelf_any)
         self.assertIn("new name", claims.shelf_names)

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 25% of a details flow |
+| **Runs** | inside browsing_book_details |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `journal.create`, `journal.update`, `journal.delete` |
@@ -13,7 +13,8 @@ independently.
 
 **It is not private.** The app presents the journal as a shared, attributed
 per-book surface ("THE JOURNAL · 1 ENTRY FROM 1 READER", with a "· you" marker
-on your own byline). Seeing another reader's entry is therefore expected, not a
+on your own byline on the web; iOS shows no such marker, and ownership there
+is implied by the Edit and Delete controls alone). Seeing another reader's entry is therefore expected, not a
 leak. What *would* be a finding is an entry attributed to the wrong person, or
 your own entry appearing without the "you" marker.
 

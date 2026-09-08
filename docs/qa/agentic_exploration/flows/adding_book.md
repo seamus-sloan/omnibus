@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Weight** | 10% |
+| **Runs** | on its own |
 | **Owner-only** | n/a — **this flow is what creates ownership** |
 | **Surfaces** | web |
-| **Actions** | `book.add`, `book.add.confirm` |
+| **Actions** | `book.add`, `book.add.verify` |
 
 Upload a book from the corpus. This is the only flow that grows the library,
 and its `book.add` journal entry is what makes you the owner of the result —
@@ -28,8 +28,12 @@ uploads the file while skipping the entire client-side path this flow exists to
 exercise, and it would report a pass for a broken uploader. An upload you did
 not perform through the screen is not this flow.
 
-The corpus path handed to you at spawn. Pick a file you have not added before;
-the harness tells you which of the corpus you have already used.
+The corpus path handed to you at spawn, **and the list of corpus files already
+uploaded** — the runner derives it from every run's journals and hands it to
+you in the brief, and when two agents draw this flow in one run the runner
+also names which file is yours. Pick a file on neither list. If you were
+handed no such list, ask before uploading rather than guessing: a file added
+twice attaches to the first copy as a second format and changes what you own.
 
 **The corpus is something you upload, not something you install.** Every book
 in this flow reaches the library by going through the app's Add-books screen.
@@ -45,7 +49,9 @@ goes in through the front door* in [start.md](../start.md).
 2. Choose the **Upload type**: *Ebook* or *Audiobook*. It matters — an ebook
    takes a single file, an audiobook takes several at once.
 3. Choose a file from the corpus, by dropping it on the drop zone or through
-   the file chooser. Journal the filename **before** you upload it.
+   the file chooser. Journal the filename **before** you upload it, as
+   `book.add` with `outcome: uncertain` and no target — the audit skips a
+   non-`ok` entry, and the `ok` one at step 8 supersedes it.
 4. The app extracts the file's metadata and shows a **review form** under
    "Review the details, then add to your library." Read it against what you know
    the book to be. Real library files frequently carry garbled, swapped, or
@@ -66,24 +72,36 @@ goes in through the front door* in [start.md](../start.md).
    editing Author replaces only the first. Journal every name the form showed,
    then confirm them on the detail page.
 5. Click **Add to library**.
-6. Wait for the book to appear in the library. Indexing is asynchronous — give
-   it time and re-check rather than reporting it missing straight away.
-7. Open its detail page from the library grid. Confirm the cover, title, author,
-   format, publication date, and identifiers are plausible for that book. The
-   detail page shows no page or chapter count — do not go looking for one.
+6. The app lands on the new book's detail page itself once the add finishes.
+   Go back to the library and confirm the book is there too; indexing is
+   asynchronous — give it a moment and re-check rather than reporting it
+   missing straight away. The library may be in table view from an earlier
+   flow.
+7. Open its detail page from the library. Confirm the cover, title, author,
+   format and identifiers are plausible for that book. The detail page shows
+   no page count, no chapter count, and no publication-date row — do not go
+   looking for them. A first open in the reader that fails with "This book
+   couldn't be loaded" and then works after a reload is a finding in its own
+   right; journal it.
 8. **Journal `book.add` with the resulting uuid.** This is the ownership record.
+9. Once the book can be opened, journal `book.add.verify` with what the detail
+   page showed. The trailing `.verify` is how you say "I checked it stuck";
+   do not invent another name for it.
 
 Two refusals you may legitimately meet, both correct behaviour: "Title and
 author are required." if you clear those fields, and "You don't have permission
-to add books to this library." if your account lacks upload rights. Journal
-either as `refused`, not as a failure.
+to add books to this library." if your account lacks upload rights — which is
+the case when the runner briefed you as a **reader**; then the refusal is the
+whole flow, and a screen that lets a reader upload anyway is the finding.
+Journal either as `refused`, not as a failure.
 
 ## Journal
 
-`book.add` carrying the source filename, the resulting **uuid**, the detected
-format, and the extracted title and author. If the upload failed, journal it
-with `outcome: error` and the message — a rejected upload is as interesting as
-an accepted one.
+`book.add` carrying `source_filename` (the file's name as it is in the corpus
+— the runner reads this key to build the used-files list), the resulting
+**uuid**, the detected format, and the extracted title and author. If the
+upload failed, journal it with `outcome: error` and the message — a rejected
+upload is as interesting as an accepted one.
 
 ## Pass
 
@@ -91,7 +109,8 @@ an accepted one.
 - The book appears in the library within a reasonable wait.
 - Title, author, and cover were extracted from the file and are plausible.
 - The detail page opens and the book can be read or played.
-- Adding a second, different file produces a second, distinct book.
+- Adding a second, different file produces a second, distinct book — only
+  when the runner handed you two files.
 
 ## Fail
 
@@ -109,6 +128,11 @@ an accepted one.
   feature, not a defect — but journal it clearly when it happens, because it
   changes what you own.
 - Large audiobook files take a while. Judge by whether progress is being made,
-  not by elapsed time alone.
+  not by elapsed time alone. A large file refused with a server error after
+  about thirty seconds is a finding, not a slow upload — journal the size and
+  the timing.
+- A cover declared only through the EPUB2 manifest and guide, with no
+  `<meta name="cover">`, may not be extracted even though the reader renders
+  it. Journal it as a finding with the file named.
 - A file the app legitimately does not support should be refused with a clear
   message. A clear refusal is a pass; a silent one is a fail.
