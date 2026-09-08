@@ -25,7 +25,7 @@ use crate::pages::book_detail::chapter_ref;
 /// carries no title to print. `None` when the string has no readable spine
 /// step — the caller then shows the saved date alone.
 pub(super) fn highlight_locator(cfi: &str, chapters: &[AlignmentEbookChapter]) -> Option<String> {
-    let titled = chapter_ref::chapter_index_for_cfi(&spine_indices(chapters), cfi)
+    let titled = chapter_ref::chapter_index_for_cfi(chapters.iter().map(|c| c.spine_index), cfi)
         .and_then(|idx| chapters.get(idx))
         .map(|c| c.title.trim())
         .filter(|t| !t.is_empty());
@@ -33,10 +33,4 @@ pub(super) fn highlight_locator(cfi: &str, chapters: &[AlignmentEbookChapter]) -
         return Some(title.to_string());
     }
     chapter_ref::cfi_spine_ordinal(cfi).map(|n| format!("Section {n}"))
-}
-
-/// Each chapter's 0-based `spine_index` in TOC order — the shape
-/// [`chapter_ref::chapter_index_for_cfi`] resolves against.
-fn spine_indices(chapters: &[AlignmentEbookChapter]) -> Vec<i64> {
-    chapters.iter().map(|c| c.spine_index).collect()
 }

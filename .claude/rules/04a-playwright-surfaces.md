@@ -26,8 +26,12 @@ after the page renders, so `from-same-hand-loading` (a quiet note, no count)
 precedes either `from-same-hand` or `from-same-hand-empty` — it used to assert
 "the only book by X" while still fetching (#2478). Playwright's auto-wait
 handles the settled assertions, but a spec that wants the *loading* state must
-hold the request open (`page.route("**/api/authors/*", …)`) rather than racing
-it, and one asserting "no other books" must target
+hold the request open rather than racing it — and the route to hold is the
+**server function**, `POST /api/rpc/author`, not the REST `GET
+/api/authors/{id}` the mobile client uses; a spec that routes the latter
+catches nothing on web. Holding it also means `networkidle` never arrives, so
+use a plain `page.goto`, not `gotoReady`. A spec asserting "no other books"
+must target
 `from-same-hand-empty`, never the mere absence of tiles.
 
 **A saved passage's locator is a chapter title, not "Chapter N".** Once the

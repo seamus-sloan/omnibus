@@ -435,7 +435,7 @@ fn same_hand_section(
                 }
             } else {
                 div { class: "m-strip",
-                    for ab in linkable.clone().unwrap_or_default() {
+                    for ab in linkable.iter().flatten() {
                         {same_hand_tile(ab, server_url)}
                     }
                 }

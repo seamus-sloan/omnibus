@@ -244,8 +244,10 @@ fn chapter_now(
         .epub_cfi
         .as_deref()
         .and_then(|cfi| {
-            let spines: Vec<i64> = chapters.iter().map(|c| c.spine_index).collect();
-            super::super::chapter_ref::chapter_index_for_cfi(&spines, cfi)
+            super::super::chapter_ref::chapter_index_for_cfi(
+                chapters.iter().map(|c| c.spine_index),
+                cfi,
+            )
         })
         .or_else(|| {
             // No CFI: chapter starts are whole-book percents (0..=100), the same
