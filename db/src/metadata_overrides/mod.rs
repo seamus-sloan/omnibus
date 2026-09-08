@@ -12,6 +12,7 @@
 // the named items are re-exported below.
 mod fts;
 mod links;
+pub(crate) mod sql;
 mod upsert;
 
 #[cfg(test)]

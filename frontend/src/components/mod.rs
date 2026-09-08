@@ -102,6 +102,12 @@ pub use confirm_modal::{confirm_modal_body, ConfirmModal, ConfirmModalAction, Co
 pub mod quote_card;
 pub use quote_card::QuoteCardPanel;
 
+// Read-only half-star rating display, shared by every surface that shows a
+// rating without editing it (the stats finished list, the other-readers'
+// ratings rows).
+pub mod star_rating;
+pub use star_rating::{fmt_stars, StarRating};
+
 // Shared file-picker upload `onchange` builder used by `author_photo_edit`'s
 // file section and the journal composer's image-insert toolbar button.
 pub(crate) mod image_upload;

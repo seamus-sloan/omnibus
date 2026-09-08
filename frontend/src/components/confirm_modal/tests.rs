@@ -55,6 +55,16 @@ fn confirm_modal_renders_the_backdrop_panel_title_body_and_actions() {
     assert!(html.contains("del-btn-danger"));
 }
 
+// Regression for #2465: the stats drill sheet answered only its Close
+// button, because the shell it is built on was not a key-event target.
+#[test]
+fn confirm_modal_shell_is_focusable_so_escape_can_reach_its_key_handler() {
+    let html = render(rsx! { Harness {} });
+    assert!(html.contains(r#"tabindex="-1""#), "{html}");
+    assert!(html.contains(r#"role="dialog""#), "{html}");
+    assert!(html.contains(r#"aria-modal="true""#), "{html}");
+}
+
 #[component]
 fn BusyHarness() -> Element {
     confirm_modal_body(

@@ -220,6 +220,36 @@ async fn top_authors_and_tags_rank_by_seconds() {
     assert_eq!(s.top_tags[1].name, "classic");
 }
 
+// Regression for #2455: the MOST-READ AUTHOR tile printed the scanned
+// `stephen-fry` slug while the book's own page named the overridden author.
+#[tokio::test]
+async fn top_authors_credit_the_overridden_creator_and_fold_it_with_its_own_books() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let user = seed_user(&pool, "alice").await;
+    let b1 = book_id(&pool, "uuid-1").await;
+    let b2 = book_id(&pool, "uuid-2").await;
+
+    link_author(&pool, b1, "stephen-fry").await;
+    link_author(&pool, b2, "Stephen Fry").await;
+    sqlx::query("INSERT INTO metadata_overrides (book_uuid, overrides) VALUES (?, ?)")
+        .bind("uuid-1")
+        .bind(r#"{"creators":[{"name":"Stephen Fry","role":"author"}]}"#)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    reading_session(&pool, user, "uuid-1", T0, 900).await;
+    reading_session(&pool, user, "uuid-2", T0, 300).await;
+
+    let s = compute(&pool, user, StatsRange::AllTime, 0).await.unwrap();
+
+    // One author, not a slug beside its own corrected name.
+    assert_eq!(s.top_authors.len(), 1);
+    assert_eq!(s.top_authors[0].name, "Stephen Fry");
+    assert_eq!(s.top_authors[0].seconds, 1200);
+}
+
 #[tokio::test]
 async fn empty_library_returns_zeroed_summary() {
     let pool = init_db("sqlite::memory:").await.unwrap();

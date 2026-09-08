@@ -46,7 +46,13 @@ fn dismiss_unless_busy(busy: bool, on_dismiss: EventHandler<()>) {
 /// caller's rendered markup, which is the one thing this refactor must not
 /// do.
 ///
-/// 8 heterogeneous props left ungrouped: 16 call sites make a chrome struct
+/// Escape dismisses on the same gate as a backdrop click. `focus_on_open`
+/// is what makes that reachable without a prior click — the panel takes focus
+/// once painted, as the listen page's overlay panels do (#2242) — and it is
+/// opt-in rather than the default because a modal that autofocuses a field of
+/// its own (the merge dialog's search box) must keep that focus.
+///
+/// 9 heterogeneous props left ungrouped: 16 call sites make a chrome struct
 /// not worth the churn.
 #[component]
 pub fn ConfirmModal(
@@ -57,6 +63,7 @@ pub fn ConfirmModal(
     busy: bool,
     on_dismiss: EventHandler<()>,
     #[props(default)] head: Option<Element>,
+    #[props(default = false)] focus_on_open: bool,
     children: Element,
 ) -> Element {
     rsx! {
@@ -69,6 +76,21 @@ pub fn ConfirmModal(
             onclick: move |evt| {
                 evt.stop_propagation();
                 dismiss_unless_busy(busy, on_dismiss);
+            },
+            onkeydown: move |evt: KeyboardEvent| {
+                if evt.key() == Key::Escape {
+                    evt.prevent_default();
+                    dismiss_unless_busy(busy, on_dismiss);
+                }
+            },
+            // Focusable so the keydown above receives Escape at all: without
+            // a tabindex the wrapper is not a key-event target, and focus
+            // otherwise sits on the trigger outside the modal.
+            tabindex: "-1",
+            onmounted: move |evt: MountedEvent| {
+                if focus_on_open {
+                    crate::focus_after_paint::focus_after_paint(&evt);
+                }
             },
             div { class: "{dialog_class}", onclick: move |evt| evt.stop_propagation(),
                 if let Some(h) = head { {h} }
