@@ -35,8 +35,9 @@ pub(crate) async fn fetch_resume_with(
 }
 
 /// "Synced here" toolbar control: declares the current listening position
-/// as a sync point and turns follow mode on. Configuration-shaped (rule
-/// 08): direct call, never queued, failure shown in place.
+/// as a sync point, leaving an existing link's follow setting alone.
+/// Configuration-shaped (rule 08): direct call, never queued, failure
+/// shown in place.
 #[component]
 pub(super) fn SyncHereButton() -> Element {
     let playback = crate::use_playback();
