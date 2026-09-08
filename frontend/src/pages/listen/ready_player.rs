@@ -14,7 +14,7 @@ use super::bookmarks_drawer::BookmarksDrawer;
 use super::chapter_nav::{chapter_index_for_elapsed, chapter_next_target, chapter_prev_target};
 use super::chapters_drawer::ChaptersDrawer;
 use super::overlays::{FailedOverlay, PreparingOverlay};
-use super::sleep::{end_of_chapter_seconds, sleep_toolbar_label, use_sleep, SleepController};
+use super::sleep::{sleep_toolbar_label, use_sleep, SleepController};
 use super::sleep_panel::{SleepPanel, SleepPanelState};
 use super::speed_panel::SpeedPanel;
 use super::stage::{
@@ -68,20 +68,12 @@ pub(super) struct PlaybackSignals {
 /// component body.
 fn build_sleep_panel_state(
     sleep: SleepController,
-    chapters: Signal<Vec<ChapterInfo>>,
-    elapsed: Signal<f64>,
-    rate: Signal<f64>,
-    current_chapter_index: Memo<usize>,
     has_chapters: bool,
 ) -> (SleepPanelState, Option<i32>, bool) {
     let on_sleep_select = move |secs: i32| sleep.select_seconds(secs);
-    let on_sleep_end_of_chapter = move |_: ()| {
-        let chs_now = chapters.peek().clone();
-        let idx = current_chapter_index();
-        if let Some(secs) = end_of_chapter_seconds(&chs_now, idx, *elapsed.peek(), *rate.peek()) {
-            sleep.select_end_of_chapter(secs);
-        }
-    };
+    // The controller reads the live chapter map, position and rate itself, so
+    // there is one place the end-of-chapter boundary is derived (#2457).
+    let on_sleep_end_of_chapter = move |_: ()| sleep.select_end_of_chapter();
     let on_sleep_toggle_fade = move |_: ()| sleep.toggle_fade();
     // Read once and hand back alongside the state so callers (the toolbar
     // label/active flag) don't re-read the signal.
@@ -175,14 +167,8 @@ pub(super) fn ReadyPlayer(
     let failed = playback_failed();
     let chs = chapters();
     let ch_idx = current_chapter_index();
-    let (sleep_state, sleep_remaining, sleep_active) = build_sleep_panel_state(
-        sleep,
-        chapters,
-        elapsed,
-        signals.rate,
-        current_chapter_index,
-        !chs.is_empty(),
-    );
+    let (sleep_state, sleep_remaining, sleep_active) =
+        build_sleep_panel_state(sleep, !chs.is_empty());
     let bookmark_toast = (bookmarks.toast)();
     let user_id = crate::use_current_user_summary()().map(|user| user.id);
 

@@ -56,8 +56,11 @@ pub(super) fn sleep_toolbar_label(remaining: Option<i32>) -> String {
 }
 
 /// Mini-dock Sleep-chip label: bare "Sleep" when off, the live countdown for
-/// a duration preset, and a fixed "End of ch." tag for the chapter option
-/// (its remaining seconds drift with seeks, so a countdown would mislead).
+/// a duration preset, and a fixed "End of ch." tag for the chapter option.
+/// The chapter timer's *pause point* now follows the playhead
+/// ([`reanchored_end_of_chapter`]), but its countdown is only corrected
+/// while the position is moving — a paused player's would still drift down,
+/// so the tag stays a tag.
 pub(super) fn sleep_chip_label(remaining: Option<i32>, choice: SleepChoice) -> String {
     match (choice, remaining) {
         (SleepChoice::EndOfChapter, Some(s)) if s > 0 => "Sleep \u{00b7} End of ch.".to_string(),
@@ -85,6 +88,33 @@ pub(super) fn end_of_chapter_seconds(
     Some(rem.ceil() as i32)
 }
 
+/// How far the countdown may sit from the true remainder before it is
+/// treated as pointing at the wrong chapter. Ordinary playback keeps the two
+/// within a second of each other (both advance one wall-clock second per
+/// tick); only a seek, a chapter jump or a speed change opens a real gap.
+const REANCHOR_TOLERANCE_SECONDS: i32 = 3;
+
+/// The countdown an armed end-of-chapter timer should be showing, given where
+/// the playhead now is — or `None` to leave the tick alone.
+///
+/// The timer is a plain countdown seeded once at arming, so a listener who
+/// jumps to a different chapter (or skips within one, or changes speed) is
+/// left counting toward a boundary that is no longer the one ahead of them,
+/// and playback runs straight through the seam. Correcting the countdown on
+/// divergence rather than re-deriving it on every position report is what
+/// keeps a *paused* player counting down exactly as it did before: `elapsed`
+/// stops moving there, so this never runs.
+pub(super) fn reanchored_end_of_chapter(
+    chapters: &[ChapterInfo],
+    counting_down_from: i32,
+    elapsed: f64,
+    rate: f64,
+) -> Option<i32> {
+    let idx = super::chapter_nav::chapter_index_for_elapsed(chapters, elapsed);
+    let fresh = end_of_chapter_seconds(chapters, idx, elapsed, rate)?;
+    ((fresh - counting_down_from).abs() > REANCHOR_TOLERANCE_SECONDS).then_some(fresh)
+}
+
 /// Sleep-timer handle returned by [`use_sleep_timer`]. Cheap to copy; the
 /// controller methods bump an internal session token so an in-flight tick
 /// from a cancelled session is ignored.
@@ -98,6 +128,12 @@ pub(crate) struct SleepController {
     /// `1.0`, so cancelling/expiring the timer doesn't fight the volume
     /// slider's chosen level.
     volume: Signal<f64>,
+    /// Playback position, chapter map and speed. Held here so the
+    /// end-of-chapter option reads them at the moment it is armed rather
+    /// than being handed a value each call site computed for itself.
+    chapters: Signal<Vec<ChapterInfo>>,
+    elapsed: Signal<f64>,
+    rate: Signal<f64>,
 }
 
 impl SleepController {
@@ -129,8 +165,16 @@ impl SleepController {
         self.select_seconds(0);
     }
 
-    /// Arm the timer to fire at the end of the current chapter.
-    pub fn select_end_of_chapter(&self, secs: i32) {
+    /// Arm the timer to fire at the end of the chapter now playing. A no-op
+    /// when the chapter list can't place the playhead — arming a countdown
+    /// off a stale or empty list would pause at an arbitrary moment.
+    pub fn select_end_of_chapter(&self) {
+        let chs = self.chapters.peek().clone();
+        let now = *self.elapsed.peek();
+        let idx = super::chapter_nav::chapter_index_for_elapsed(&chs, now);
+        let Some(secs) = end_of_chapter_seconds(&chs, idx, now, *self.rate.peek()) else {
+            return;
+        };
         let mut remaining = self.remaining;
         let mut choice = self.choice;
         let mut token = self.token;
@@ -162,16 +206,54 @@ pub(crate) fn use_sleep() -> SleepController {
 
 /// Install the sleep-timer signals and the self-re-arming countdown effect.
 /// Called once from App root (`use_user_and_playback_contexts`) so the
-/// countdown outlives `/listen`. The effect is declared unconditionally
+/// countdown outlives `/listen`. Both effects are declared unconditionally
 /// (hook-order parity across SSR and WASM); only the audio interop and the
-/// 1 s tick are web-gated. `volume` is the shared
-/// [`crate::PlaybackState::volume`] signal — the fade restores to it instead
-/// of a hardcoded `1.0`.
-pub(crate) fn use_sleep_timer(volume: Signal<f64>) -> SleepController {
+/// 1 s tick are web-gated. The signals come from the shared
+/// [`crate::PlaybackState`] — the fade restores to its `volume` instead of a
+/// hardcoded `1.0`, and the chapter map, position and speed are what the
+/// end-of-chapter option is armed from and re-anchored against.
+pub(crate) fn use_sleep_timer(playback: &crate::PlaybackState) -> SleepController {
+    let volume = playback.volume;
+    let chapters = playback.chapters;
+    let elapsed = playback.elapsed;
+    let rate = playback.rate;
     let remaining = use_signal(|| None::<i32>);
     let choice = use_signal(|| SleepChoice::Off);
     let fade = use_signal(|| true);
     let token = use_signal(|| 0u32);
+
+    // Keep the end-of-chapter countdown pointed at the chapter that is
+    // actually playing. Armed, it was a fixed countdown seeded from the
+    // chapter under the playhead at that instant: jumping to another chapter
+    // left it counting toward a boundary the listener had already left, and
+    // playback ran straight through the new chapter's end.
+    use_effect(move || {
+        let now = elapsed();
+        let rate_now = rate();
+        // Read (not clone) the chapter list: this runs on every position
+        // report, several times a second, for a timer that is usually off.
+        // The read is unconditional so the effect keeps its subscription.
+        let fresh = {
+            let chs = chapters.read();
+            if !matches!(*choice.peek(), SleepChoice::EndOfChapter) {
+                return;
+            }
+            // A countdown at or below zero is mid-expiry, and the playhead is
+            // at the seam: re-anchoring here would hand the timer the *next*
+            // chapter's length instead of letting it pause.
+            let Some(cur) = *remaining.peek() else {
+                return;
+            };
+            if cur <= 0 {
+                return;
+            }
+            reanchored_end_of_chapter(&chs, cur, now, rate_now)
+        };
+        if let Some(fresh) = fresh {
+            let mut remaining = remaining;
+            remaining.set(Some(fresh));
+        }
+    });
 
     use_effect(move || {
         let Some(secs) = remaining() else {
@@ -229,6 +311,9 @@ pub(crate) fn use_sleep_timer(volume: Signal<f64>) -> SleepController {
         fade,
         token,
         volume,
+        chapters,
+        elapsed,
+        rate,
     }
 }
 
@@ -323,6 +408,49 @@ mod tests {
     fn end_of_chapter_seconds_none_for_out_of_range_index() {
         let chs = vec![ch(0.0, 300.0)];
         assert_eq!(end_of_chapter_seconds(&chs, 5, 10.0, 1.0), None);
+    }
+
+    // Three chapters: 0..300, 300..900, 900..1500.
+    fn three_chapters() -> Vec<ChapterInfo> {
+        vec![ch(0.0, 300.0), ch(300.0, 600.0), ch(900.0, 600.0)]
+    }
+
+    #[test]
+    fn reanchored_end_of_chapter_follows_a_jump_to_an_earlier_chapter() {
+        let chs = three_chapters();
+        // Armed 250 s from the end of chapter 3, then sent back to 27 s
+        // before chapter 1's end. The timer must now count to *that* seam.
+        assert_eq!(reanchored_end_of_chapter(&chs, 250, 273.0, 1.0), Some(27));
+    }
+
+    #[test]
+    fn reanchored_end_of_chapter_follows_a_skip_inside_the_same_chapter() {
+        let chs = three_chapters();
+        // Still in chapter 2, but 400 s further along than the countdown
+        // believes — a skip forward is as stale as a chapter jump.
+        assert_eq!(reanchored_end_of_chapter(&chs, 480, 820.0, 1.0), Some(80));
+    }
+
+    #[test]
+    fn reanchored_end_of_chapter_leaves_ordinary_playback_alone() {
+        let chs = three_chapters();
+        // One tick on from a countdown of 480: the true remainder is 479,
+        // inside the jitter band, so the tick keeps the countdown.
+        assert_eq!(reanchored_end_of_chapter(&chs, 480, 421.0, 1.0), None);
+        assert_eq!(reanchored_end_of_chapter(&chs, 480, 423.0, 1.0), None);
+    }
+
+    #[test]
+    fn reanchored_end_of_chapter_follows_a_speed_change() {
+        let chs = three_chapters();
+        // The same 480 book-seconds play out in 240 wall-seconds at 2x, so
+        // a countdown armed at 1x is twice as long as the wait really is.
+        assert_eq!(reanchored_end_of_chapter(&chs, 480, 420.0, 2.0), Some(240));
+    }
+
+    #[test]
+    fn reanchored_end_of_chapter_is_none_when_the_chapter_list_cannot_place_the_playhead() {
+        assert_eq!(reanchored_end_of_chapter(&[], 480, 420.0, 1.0), None);
     }
 
     #[test]
