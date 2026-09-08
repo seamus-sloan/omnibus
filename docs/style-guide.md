@@ -286,8 +286,9 @@ Inline `#[cfg(test)] mod tests` only for 1–2 trivial tests.
 **Why:** prod files stay readable when the test block isn't padding
 them. A `books/tests.rs` sibling is one file to open when you want
 the tests, and one file to skip when you want the prod code. The
-existing [db/src/books/tests.rs](../db/src/books/tests.rs) is the
-model.
+existing [db/src/books/tests/](../db/src/books/tests/) is the
+model (a directory of topic files once the sibling outgrows the ~800-line
+cap, with the shared fixtures in its `mod.rs`).
 
 **Migration note.** Existing inline `mod tests` blocks are not in
 violation by themselves; the rule kicks in when a module is being
@@ -342,7 +343,7 @@ function is supposed to do without opening the test. "FAILED
 finds_by_title" doesn't tell you *which* function or *how* it should
 find.
 
-**Pattern.** [db/src/books/tests.rs](../db/src/books/tests.rs) names
+**Pattern.** [db/src/books/tests/](../db/src/books/tests/) names
 like `search_books_finds_by_title_and_ranks_by_bm25`,
 `list_books_populates_formats_from_book_files`.
 
