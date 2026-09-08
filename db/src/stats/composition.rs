@@ -10,6 +10,7 @@ use std::sync::{Mutex, OnceLock};
 use omnibus_shared::{CompositionDimension, CompositionSlice, LibraryComposition, MeasuredTotal};
 use sqlx::{Row, SqlitePool};
 
+use super::language::{language_label, UNKNOWN_LABEL};
 use super::library::{live_book_count, LIVE_BOOK};
 use super::StatsError;
 
@@ -184,46 +185,102 @@ async fn formats(pool: &SqlitePool) -> Result<CompositionDimension, StatsError> 
     Ok(CompositionDimension { slices, coverage })
 }
 
-/// Language mix by `languages.code`, tail folded into "Other" like every
-/// other open-ended dimension — a library can carry more than
-/// [`SLICE_LIMIT`] languages.
+/// Language mix, tail folded into "Other" like every other open-ended
+/// dimension — a library can carry more than [`SLICE_LIMIT`] languages.
+///
+/// Bucketed by [`language_label`], **not** by the raw `languages.code`: files
+/// spell one language several ways (`en`, `en-US`, `eng`), and counting the
+/// spellings reported a 28-book library as holding three Englishes (#2466).
+/// The fold happens in Rust rather than SQL because the alias table is a Rust
+/// table; grouping in SQL would need it restated as a `CASE` ladder.
 ///
 /// Books with no language link are **uncovered**, not bucketed as unknown: an
 /// absent link means the file never declared one, which the coverage pair
-/// already says without inventing a bucket for it.
+/// already says without inventing a bucket for it. A book that declared `und`
+/// *did* answer, and lands in [`UNKNOWN_LABEL`] alongside the other ways of
+/// declining.
 async fn languages(pool: &SqlitePool) -> Result<CompositionDimension, StatsError> {
-    linked_dimension(
+    let (slices, coverage) = linked_slices_and_coverage(
         pool,
         "books_languages_link",
         "language",
         "languages",
         "code",
     )
-    .await
+    .await?;
+    Ok(CompositionDimension {
+        slices: fold_tail(fold_labels(slices, language_label)),
+        coverage,
+    })
+}
+
+/// Re-bucket slices under `label_of`, summing the placements that land
+/// together and re-ordering the result the way the SQL did (count desc, label
+/// asc) so [`fold_tail`] still splits a sorted list.
+///
+/// Placements are summed, not de-duplicated: the coverage pair counts link
+/// rows, so a book tagged both `en` and `eng` is two placements before the
+/// fold and must stay two after it, or the slices stop summing to
+/// `coverage.total`. The overlap is disclosed the same way the format
+/// dimension discloses a dual-format book — by `total - books`.
+///
+/// [`UNKNOWN_LABEL`] sinks to the bottom of an equal-count tie so a real
+/// language never sorts below it, and is the one bucket that may be folded
+/// into "Other" like any other tail slice.
+fn fold_labels(
+    slices: Vec<CompositionSlice>,
+    label_of: impl Fn(&str) -> String,
+) -> Vec<CompositionSlice> {
+    let mut folded: Vec<CompositionSlice> = Vec::new();
+    for slice in slices {
+        let label = label_of(&slice.label);
+        match folded.iter_mut().find(|s| s.label == label) {
+            Some(existing) => existing.books += slice.books,
+            None => folded.push(CompositionSlice {
+                label,
+                books: slice.books,
+            }),
+        }
+    }
+    folded.sort_by(|a, b| {
+        b.books.cmp(&a.books).then_with(|| {
+            (a.label == UNKNOWN_LABEL)
+                .cmp(&(b.label == UNKNOWN_LABEL))
+                .then_with(|| a.label.cmp(&b.label))
+        })
+    });
+    folded
 }
 
 /// Publisher spread by `publishers.name`, tail folded into "Other".
 async fn publishers(pool: &SqlitePool) -> Result<CompositionDimension, StatsError> {
-    linked_dimension(
+    let (slices, coverage) = linked_slices_and_coverage(
         pool,
         "books_publishers_link",
         "publisher",
         "publishers",
         "name",
     )
-    .await
+    .await?;
+    Ok(CompositionDimension {
+        slices: fold_tail(slices),
+        coverage,
+    })
 }
 
 /// The shared body of the two link-table dimensions: `books_*_link` is keyed
 /// `PRIMARY KEY(book, <fk>)` (migration `0002`), so one row *is* one placement
 /// and `COUNT(*)` over the live rows is the slices' sum by construction.
-async fn linked_dimension(
+///
+/// Returns the slices **unfolded**, because one caller re-buckets them first
+/// ([`languages`]) and folding before that would strand a spelling in "Other".
+async fn linked_slices_and_coverage(
     pool: &SqlitePool,
     link_table: &str,
     fk: &str,
     entity_table: &str,
     name_col: &str,
-) -> Result<CompositionDimension, StatsError> {
+) -> Result<(Vec<CompositionSlice>, MeasuredTotal), StatsError> {
     let slices = read_slices(
         pool,
         &format!(
@@ -247,10 +304,7 @@ async fn linked_dimension(
         ),
     )
     .await?;
-    Ok(CompositionDimension {
-        slices: fold_tail(slices),
-        coverage,
-    })
+    Ok((slices, coverage))
 }
 
 /// Publication decades, oldest first.

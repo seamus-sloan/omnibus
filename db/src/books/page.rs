@@ -9,6 +9,7 @@ use omnibus_shared::{EbookMetadata, SortDir, SortKey, ViewFilters};
 use sqlx::{Row, SqlitePool};
 
 use crate::interaction::INTERACTED_AT_ISO;
+use crate::metadata_overrides::sql::{effective_text_sql, override_sql, overrides_win_sql};
 
 use super::projection::{
     backfill_creator_ids, merge_overrides_into_books, row_to_ebook, BOOK_COLUMNS,
@@ -226,43 +227,6 @@ fn build_page_sql(
         "
     );
     (sql, binds)
-}
-
-/// SQL mirror of `apply_overrides`' precedence gate: does this book's scan
-/// root rank `omnibus_overrides` above `embedded_tags`? The stored list is
-/// validated whole on write, so a token's byte offset is its rank; a list
-/// carrying neither token falls back to overrides-win, as the Rust side does.
-macro_rules! overrides_win_sql {
-    () => {
-        "(instr(l.metadata_precedence, '\"omnibus_overrides\"') = 0
-           OR instr(l.metadata_precedence, '\"embedded_tags\"') = 0
-           OR instr(l.metadata_precedence, '\"omnibus_overrides\"')
-              > instr(l.metadata_precedence, '\"embedded_tags\"'))"
-    };
-}
-
-/// The user-facing value of one override field, or NULL when the book has no
-/// override for it (or its scan root ranks the override below the scan).
-macro_rules! override_sql {
-    ($path:literal) => {
-        concat!(
-            "NULLIF(CASE WHEN ",
-            overrides_win_sql!(),
-            " THEN json_extract(mo.overrides, '",
-            $path,
-            "') END, '')"
-        )
-    };
-}
-
-/// An axis keyed on the *displayed* value: the override where one exists, the
-/// scanned column otherwise. `COLLATE NOCASE` is restated because a `COALESCE`
-/// expression carries no implicit collation — without it the three text axes
-/// would silently become case-sensitive, unlike the NOCASE columns they wrap.
-macro_rules! effective_text_sql {
-    ($($path:literal),+ ; $scanned:literal) => {
-        concat!("COALESCE(", $(override_sql!($path), ", ",)+ $scanned, ") COLLATE NOCASE")
-    };
 }
 
 /// The `(primary, secondary)` sort expressions for each axis. `primary`

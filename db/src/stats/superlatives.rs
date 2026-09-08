@@ -10,20 +10,38 @@
 use omnibus_shared::{BookSuperlative, DayActivity, Superlatives, FASTEST_READ_MIN_SECS};
 use sqlx::{Row, SqlitePool};
 
+use crate::metadata_overrides::sql::{
+    effective_text_sql, override_join_sql, override_sql, overrides_win_sql,
+};
+
 use super::compute::{SESSION_ROWS, USER_SESSION_ROWS};
 use super::{calendar, pages, sessionize, StatsError};
 
-/// The author join every book-naming superlative shares: position-0 creator,
-/// left-joined so a book with no author link still wins its category.
-const AUTHOR_JOIN: &str = "\
-    LEFT JOIN books_authors_link bal ON bal.book = b.id AND bal.position = 0 \
-    LEFT JOIN authors a ON a.id = bal.author";
+/// The joins every book-naming superlative shares: position-0 creator,
+/// left-joined so a book with no author link still wins its category, plus
+/// the override layer [`BOOK_COLUMNS`] reads through.
+const AUTHOR_JOIN: &str = concat!(
+    "LEFT JOIN books_authors_link bal ON bal.book = b.id AND bal.position = 0 \
+     LEFT JOIN authors a ON a.id = bal.author",
+    override_join_sql!()
+);
 
 /// The three columns every book-naming superlative selects, minus its own
-/// `value`. `COALESCE` on the title mirrors `compute::finished_books` — an
-/// untitled row still has to name itself.
-const BOOK_COLUMNS: &str = "\
-    b.uuid AS uuid, COALESCE(b.title, 'Untitled') AS title, a.name AS author";
+/// `value`.
+///
+/// Both text columns read the **effective** value — the override where the
+/// reader set one, the scanned column otherwise — because a standout that
+/// named a book "Hyperion Cantos 01 - Hyperion" while every other surface
+/// called it "Hyperion" is the same book by two names (#2455). Overrides are
+/// the authority. `COALESCE` on the title mirrors `compute::finished_books`:
+/// an untitled row still has to name itself.
+const BOOK_COLUMNS: &str = concat!(
+    "b.uuid AS uuid, ",
+    effective_text_sql!("$.title"; "COALESCE(b.title, 'Untitled')"),
+    " AS title, ",
+    effective_text_sql!("$.creators[0].name"; "a.name"),
+    " AS author"
+);
 
 /// Every superlative for one user's window. Runs the ranked queries and
 /// applies the one cross-figure rule: a "shortest book" that says nothing

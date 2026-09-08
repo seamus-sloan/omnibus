@@ -15,6 +15,10 @@ use omnibus_shared::{
 };
 use sqlx::{Row, SqlitePool};
 
+use crate::metadata_overrides::sql::{
+    effective_text_sql, override_join_sql, override_sql, overrides_win_sql,
+};
+
 use super::{
     calendar, genre, goals, pages, patterns, ratings, sessionize, streak, superlatives, StatsError,
 };
@@ -326,17 +330,36 @@ pub(super) async fn busiest_week(
     })
 }
 
+/// Time spent per author, most-read first — the source of the "Most-read
+/// author" standout.
+///
+/// Grouped on the **effective** position-0 creator name rather than
+/// `authors.id`, so a book re-attributed through `metadata_overrides` is
+/// credited to the author the reader sees on it, and a scanned author slug
+/// (`stephen-fry`) that has been renamed stops headlining the tile (#2455).
+/// The name is the group key because an overridden creator has no
+/// `authors` row to key on; `COLLATE NOCASE` on the expression folds case
+/// drift into one row, as the id used to.
+///
+/// The link joins are LEFT for the same reason: a book whose only author is
+/// an override carries no link row, and an inner join would drop the time
+/// spent on it entirely.
 pub(super) async fn top_authors(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
 ) -> Result<Vec<RankedEntity>, StatsError> {
     let sql = format!(
-        "SELECT a.name AS name, SUM(x.secs) AS seconds FROM ({SESSION_BOOK_SECS}) x
-             JOIN books b ON b.uuid = x.book_uuid
-             JOIN books_authors_link bal ON bal.book = b.id AND bal.position = 0
-             JOIN authors a ON a.id = bal.author
-         GROUP BY a.id ORDER BY seconds DESC, a.name ASC LIMIT ?"
+        "SELECT name, SUM(secs) AS seconds FROM (
+             SELECT {} AS name, x.secs AS secs FROM ({SESSION_BOOK_SECS}) x
+                 JOIN books b ON b.uuid = x.book_uuid
+                 LEFT JOIN books_authors_link bal ON bal.book = b.id AND bal.position = 0
+                 LEFT JOIN authors a ON a.id = bal.author
+                 {}
+         ) WHERE name IS NOT NULL AND name <> ''
+         GROUP BY name ORDER BY seconds DESC, name ASC LIMIT ?",
+        effective_text_sql!("$.creators[0].name"; "a.name"),
+        override_join_sql!()
     );
     ranked(pool, &sql, user_id, start).await
 }
@@ -445,6 +468,9 @@ pub(super) async fn finished_count(
 /// both ways collapses to one row with the newest completion moment. Ghosted
 /// books (no live `books` row for the `book_uuid`) are omitted from the rail and
 /// the count. Capped at [`FINISHED_BOOKS_LIMIT`] newest completions.
+///
+/// Titles and authors read the effective (override-aware) value, so a renamed
+/// book is named here the way its own page names it (#2455).
 pub(super) async fn finished_books(
     pool: &SqlitePool,
     user_id: i64,
@@ -452,8 +478,8 @@ pub(super) async fn finished_books(
 ) -> Result<Vec<FinishedBook>, StatsError> {
     let sql = format!(
         "SELECT b.uuid AS uuid,
-                COALESCE(b.title, 'Untitled') AS title,
-                a.name AS author,
+                {} AS title,
+                {} AS author,
                 MAX(f.finished_at) AS finished_at,
                 MAX(b.has_cover) AS has_cover,
                 MAX(ur.half_stars) AS half_stars
@@ -461,11 +487,15 @@ pub(super) async fn finished_books(
          JOIN books b ON b.uuid = f.book_uuid
          LEFT JOIN books_authors_link bal ON bal.book = b.id AND bal.position = 0
          LEFT JOIN authors a ON a.id = bal.author
+         {}
          LEFT JOIN user_ratings ur ON ur.user_id = ? AND ur.book_uuid = b.uuid
          WHERE f.finished_at >= ?
          GROUP BY b.uuid
          ORDER BY finished_at DESC
-         LIMIT ?"
+         LIMIT ?",
+        effective_text_sql!("$.title"; "COALESCE(b.title, 'Untitled')"),
+        effective_text_sql!("$.creators[0].name"; "a.name"),
+        override_join_sql!()
     );
     let rows = sqlx::query(&sql)
         .bind(user_id)

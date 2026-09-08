@@ -28,6 +28,7 @@ mod composition;
 mod compute;
 mod genre;
 mod goals;
+mod language;
 mod library;
 mod pages;
 mod patterns;

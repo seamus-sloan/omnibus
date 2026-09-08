@@ -103,6 +103,18 @@ async fn listen_session(pool: &SqlitePool, user: i64, uuid: &str, started_at: i6
     .unwrap();
 }
 
+/// Store a metadata override for `book_uuid`. Overrides are the authority for
+/// what a book is called, so the superlative queries have to read through
+/// them (#2455).
+async fn seed_override(pool: &SqlitePool, book_uuid: &str, overrides_json: &str) {
+    sqlx::query("INSERT INTO metadata_overrides (book_uuid, overrides) VALUES (?, ?)")
+        .bind(book_uuid)
+        .bind(overrides_json)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 // --- the empty window ---------------------------------------------------
 
 #[tokio::test]
@@ -692,6 +704,64 @@ async fn fastest_read_breaks_a_tie_on_title() {
         .unwrap();
 
     assert_eq!(fastest.title, "Alpha");
+}
+
+// --- effective (override-aware) naming ----------------------------------
+
+// Regression for #2455: LONGEST SITTING titled a book by its file name while
+// every other surface used the overridden title.
+#[tokio::test]
+async fn book_superlatives_name_a_book_by_its_overridden_title_and_author() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(
+        &pool,
+        lib,
+        "u-h",
+        "Hyperion Cantos 01 - Hyperion",
+        Some(500),
+    )
+    .await;
+    seed_author(&pool, "u-h", "simmons-dan", 0).await;
+    seed_override(
+        &pool,
+        "u-h",
+        r#"{"title":"Hyperion","creators":[{"name":"Dan Simmons","role":"author"}]}"#,
+    )
+    .await;
+    finish(&pool, user, "u-h", D0).await;
+    read_session(&pool, user, "u-h", D0, 3_600).await;
+
+    let s = superlatives(&pool, user, 0, 0).await.unwrap();
+
+    let longest = s.longest_book.unwrap();
+    assert_eq!(longest.title, "Hyperion");
+    assert_eq!(longest.author.as_deref(), Some("Dan Simmons"));
+    let sit = s.longest_sit.unwrap();
+    assert_eq!(sit.title, "Hyperion");
+    assert_eq!(sit.author.as_deref(), Some("Dan Simmons"));
+}
+
+#[tokio::test]
+async fn book_superlatives_fall_back_to_the_scanned_title_when_nothing_overrides_it() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "u-a", "Scanned Title", Some(400)).await;
+    seed_author(&pool, "u-a", "Scanned Author", 0).await;
+    // An override that names other fields must not blank the ones it omits.
+    seed_override(&pool, "u-a", r#"{"publisher":"Tor"}"#).await;
+    finish(&pool, user, "u-a", D0).await;
+
+    let longest = superlatives(&pool, user, 0, 0)
+        .await
+        .unwrap()
+        .longest_book
+        .unwrap();
+
+    assert_eq!(longest.title, "Scanned Title");
+    assert_eq!(longest.author.as_deref(), Some("Scanned Author"));
 }
 
 // --- error path ---------------------------------------------------------

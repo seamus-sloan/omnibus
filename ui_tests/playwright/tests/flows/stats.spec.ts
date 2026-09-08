@@ -487,6 +487,19 @@ test("the Finished drill-in lists the books completed in the window", async ({
   await expect(page.getByTestId("stats-drill-in")).toHaveCount(0);
 });
 
+// Regression for #2465: the sheet is a modal scrim over the page, and Escape
+// did nothing — the Close button was the only way out.
+test("Escape closes an open drill sheet", async ({ page }) => {
+  await gotoReady(page, "/stats");
+
+  await page.getByTestId("stats-tile-finished").click();
+  await expect(page.getByTestId("stats-drill-in")).toBeVisible();
+
+  await page.keyboard.press("Escape");
+
+  await expect(page.getByTestId("stats-drill-in")).toHaveCount(0);
+});
+
 test("switching the period re-queries and relabels the window", async ({
   page,
 }) => {

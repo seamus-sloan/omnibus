@@ -121,20 +121,14 @@ fn resume_percent_clamps_into_the_bar_and_defaults_to_empty() {
 }
 
 #[test]
-fn stars_label_fills_to_the_rating_and_em_dashes_an_unrated_book() {
-    assert_eq!(
-        stars_label(Some(5.0)),
-        "\u{2605}\u{2605}\u{2605}\u{2605}\u{2605}"
-    );
-    assert_eq!(
-        stars_label(Some(4.0)),
-        "\u{2605}\u{2605}\u{2605}\u{2605}\u{2606}"
-    );
-    // Five glyphs cannot show a half, so it rounds to the nearer whole star;
-    // the drill-in histogram carries the exact distribution.
-    assert_eq!(
-        stars_label(Some(3.5)),
-        "\u{2605}\u{2605}\u{2605}\u{2605}\u{2606}"
-    );
-    assert_eq!(stars_label(None), "\u{2014}");
+fn clamped_stars_keeps_a_half_and_reports_an_unrated_book_as_none() {
+    assert_eq!(clamped_stars(Some(5.0)), Some(5.0));
+    assert_eq!(clamped_stars(Some(4.0)), Some(4.0));
+    // Regression for #2467: this card used to round 4.5 up to five whole
+    // stars while the tile beside it read 4.5.
+    assert_eq!(clamped_stars(Some(4.5)), Some(4.5));
+    assert_eq!(clamped_stars(None), None);
+    // Out-of-range values clamp rather than overflowing the row.
+    assert_eq!(clamped_stars(Some(7.0)), Some(5.0));
+    assert_eq!(clamped_stars(Some(-1.0)), Some(0.0));
 }

@@ -297,7 +297,8 @@ pub(super) fn finished_book_as_ebook(book: &FinishedBook) -> EbookMetadata {
 
 /// The drill-in sheet/modal: header + close, delta chip, trend chart, and
 /// (Finished only) the finished-books list. `expanded` closes on backdrop
-/// click or the close button. Built on the shared `ConfirmModal` shell (see
+/// click, Escape, or the close button. Built on the shared `ConfirmModal`
+/// shell (see
 /// `components::confirm_modal`) — `busy: false` since no mutation is ever
 /// in flight here, the grabber + title/close head go in the `head` slot,
 /// and `backdrop_class`/`dialog_class` keep this sheet's own bottom-sheet
@@ -322,6 +323,10 @@ pub(super) fn DrillIn(
             backdrop_class: "st-drill-scrim".to_string(),
             dialog_class: "st-drill-sheet".to_string(),
             busy: false,
+            // The sheet is opened from a tile outside it, so nothing inside
+            // holds focus — without this Escape would never reach the shell's
+            // key handler (#2465).
+            focus_on_open: true,
             on_dismiss: move |_| expanded.set(None),
             head: rsx! {
                 div { class: "st-drill-grabber" }

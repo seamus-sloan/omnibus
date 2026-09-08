@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{AttributedRating, RatingRecord, RatingUpdate};
 
 use crate::components::user_avatar::UserAvatar;
+use crate::components::{fmt_stars, StarRating};
 use crate::time::now_unix;
 use crate::{data, use_server_url};
 
@@ -310,53 +311,12 @@ fn BdOtherRatingRow(rating: AttributedRating) -> Element {
                     span { class: "bd-other-rating-name", "{rating.username}" }
                     " {age}"
                 }
-                BdOtherRatingStars { stars: rating.stars }
-            }
-        }
-    }
-}
-
-#[component]
-fn BdOtherRatingStars(stars: f32) -> Element {
-    rsx! {
-        span {
-            class: "bd-other-rating-stars",
-            aria_label: "{fmt_stars(stars)} out of 5 stars",
-            for i in 1..=5u8 {
-                {
-                    let slot = i as f32;
-                    let fill = if stars >= slot {
-                        100
-                    } else if stars >= slot - 0.5 {
-                        50
-                    } else {
-                        0
-                    };
-                    rsx! {
-                        span {
-                            key: "{i}",
-                            class: "bd-other-rating-star-slot",
-                            aria_hidden: "true",
-                            span { class: "bd-star-bg", "\u{2605}" }
-                            span {
-                                class: "bd-star-fg",
-                                style: "width: {fill}%",
-                                "\u{2605}"
-                            }
-                        }
-                    }
+                StarRating {
+                    stars: rating.stars,
+                    extra_class: "bd-other-rating-stars".to_string(),
                 }
             }
         }
-    }
-}
-
-/// Render a star value without a trailing `.0` (`4.5` stays, `4.0` → `4`).
-fn fmt_stars(v: f32) -> String {
-    if v.fract().abs() < f32::EPSILON {
-        format!("{v:.0}")
-    } else {
-        format!("{v:.1}")
     }
 }
 

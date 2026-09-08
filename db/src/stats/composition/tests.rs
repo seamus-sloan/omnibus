@@ -337,8 +337,9 @@ async fn languages_and_publishers_count_distinct_live_books_and_report_their_cov
 
     let c = composed(&pool).await;
 
-    assert_eq!(by_label(&c.languages).get("eng"), Some(&2));
-    assert_eq!(by_label(&c.languages).get("fra"), Some(&1));
+    // Bucketed by language, not by the code a file happened to spell it with.
+    assert_eq!(by_label(&c.languages).get("English"), Some(&2));
+    assert_eq!(by_label(&c.languages).get("French"), Some(&1));
     assert_eq!(c.languages.coverage.books, 2);
     assert_eq!(c.languages.coverage.total, 3);
     assert_eq!(c.languages.overlap(), 1);
@@ -348,6 +349,31 @@ async fn languages_and_publishers_count_distinct_live_books_and_report_their_cov
 
     assert_eq!(by_label(&c.publishers).get("Tor"), Some(&1));
     assert_eq!(c.publishers.uncovered(c.books), 2);
+}
+
+// Regression for #2466: `en 19, en-US 7, eng 1, UND 1` presented three
+// spellings of English and an unknown as four languages of one library.
+#[tokio::test]
+async fn languages_fold_every_spelling_of_one_language_into_a_single_bucket() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = seed_lib(&pool).await;
+    for (i, code) in ["en", "en-US", "eng", "und"].iter().enumerate() {
+        let book = seed_book(&pool, lib, &format!("u-{i}"), "EPUB").await;
+        link_language(&pool, book, code).await;
+    }
+
+    let c = composed(&pool).await;
+
+    let labels = by_label(&c.languages);
+    assert_eq!(labels.get("English"), Some(&3));
+    // A declared `und` answered the question with "I don't know", which is a
+    // bucket — unlike a book with no language link at all.
+    assert_eq!(labels.get("Unknown"), Some(&1));
+    assert_eq!(labels.len(), 2);
+    // Folding rebuckets placements; it never invents or drops one.
+    assert_eq!(c.languages.coverage.total, 4);
+    assert_eq!(c.languages.coverage.books, 4);
+    assert_eq!(c.languages.uncovered(c.books), 0);
 }
 
 #[tokio::test]

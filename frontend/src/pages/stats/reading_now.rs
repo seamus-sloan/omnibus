@@ -8,7 +8,7 @@ use dioxus_router::Link;
 use omnibus_shared::{FinishedBook, MonthCount, ResumePoint, StatsSummary, StructuralPosition};
 
 use super::goal::year_fraction;
-use crate::components::{CoverTile, CoverTileKind};
+use crate::components::{CoverTile, CoverTileKind, StarRating};
 use crate::{use_server_url, Route};
 
 /// How far into the year the projection stays quiet. A handful of books over
@@ -199,25 +199,26 @@ fn finished_row(book: &FinishedBook, server_url: &str) -> Element {
                     div { class: "st-finished-author", "{author}" }
                 }
             }
-            div { class: "st-finished-stars", {stars_label(book.rating)} }
+            if let Some(stars) = clamped_stars(book.rating) {
+                StarRating { stars, extra_class: "st-finished-stars".to_string() }
+            } else {
+                div { class: "st-finished-stars st-finished-unrated", "\u{2014}" }
+            }
         }
     }
 }
 
-/// A rating as filled and hollow stars, or the em-dash for an unrated book.
-/// Half stars round to the nearer whole one — five glyphs cannot show a half,
-/// and the drill-in's histogram is where the exact distribution lives.
-fn stars_label(rating: Option<f64>) -> String {
-    let Some(rating) = rating else {
-        return "\u{2014}".to_string();
-    };
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let filled = rating.round().clamp(0.0, 5.0) as usize;
-    format!(
-        "{}{}",
-        "\u{2605}".repeat(filled),
-        "\u{2606}".repeat(5 - filled)
-    )
+/// A finished book's rating as the 0..=5 value the star row draws, or `None`
+/// for an unrated book — which the row renders as an em-dash rather than five
+/// hollow stars it would have to explain.
+///
+/// Halves are preserved: the server sends `half_stars / 2`, so a 4.5 arrives
+/// as 4.5 and must be drawn as four and a half (#2467), not rounded to the
+/// nearer whole star the way this card once did.
+fn clamped_stars(rating: Option<f64>) -> Option<f32> {
+    // Ratings are 0.0..=5.0 by construction; the cast is exact over that range.
+    #[allow(clippy::cast_possible_truncation)]
+    Some(rating?.clamp(0.0, 5.0) as f32)
 }
 
 #[cfg(test)]

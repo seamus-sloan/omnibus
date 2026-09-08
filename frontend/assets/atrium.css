@@ -1089,6 +1089,14 @@ html, body { overscroll-behavior: none; }
   position: absolute; top: 0; height: 100%; width: 50%;
   margin: 0; padding: 0; border: 0; background: none; cursor: pointer; z-index: 2;
 }
+/* Read-only star row (components::star_rating), shared by the stats finished
+   list and the other-readers' ratings rows. Same 0/50/100% fill rule as the
+   interactive widget above, without the click targets. */
+.star-rating { display: inline-flex; gap: 2px; line-height: 1; }
+.star-slot { position: relative; display: inline-block; width: 1em; height: 1em; }
+.star-bg, .star-fg { position: absolute; inset: 0; line-height: 1; pointer-events: none; }
+.star-bg { color: var(--bg-3); }
+.star-fg { color: var(--accent); overflow: hidden; white-space: nowrap; }
 .bd-star-half-left { left: 0; }
 .bd-star-half-right { right: 0; }
 .bd-star-half:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1116,13 +1124,7 @@ html, body { overscroll-behavior: none; }
 .bd-other-rating-name {
   color: var(--ink); font-weight: 600;
 }
-.bd-other-rating-stars {
-  display: inline-flex; gap: 1px; flex: 0 0 auto;
-  color: var(--accent); font-size: 13px; line-height: 1;
-}
-.bd-other-rating-star-slot {
-  position: relative; display: inline-block; width: 1em; height: 1em;
-}
+.bd-other-rating-stars { gap: 1px; flex: 0 0 auto; font-size: 13px; }
 .bd-readstatus-head, .bd-wishlist-head, .bd-shelves-head { margin-bottom: 8px; }
 .bd-shelves { display: flex; gap: 6px; flex-wrap: wrap; }
 
@@ -9471,7 +9473,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-finished-body { flex: 1; min-width: 0; }
 .st-finished-title { font-size: 18px; }
 .st-finished-author { font-size: 11.5px; }
-.st-finished-stars { font-family: var(--mono); font-size: 11px; color: var(--accent); flex: none; }
+.st-finished-stars { font-size: 13px; flex: none; }
+.st-finished-unrated { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
 
 /* ── Books-per-month trend chart ──────────────────────────────────── */
 .st-monthly-head {
