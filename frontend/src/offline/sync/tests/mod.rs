@@ -1,9 +1,8 @@
 //! Connectivity-state, error-classification and outbox-drain tests, split
 //! by sub-topic into the sibling modules below; the loopback mock server
 //! and queue fixtures they share live here. Real `reqwest` errors are
-//! produced against live sockets — a refused connect for the offline
-//! class, a garbage-body response for the decode class — so the classifier
-//! is exercised on the exact error values production sees.
+//! produced against live sockets, so the classifier is exercised on the
+//! exact error values production sees.
 
 #![allow(clippy::await_holding_lock)]
 
