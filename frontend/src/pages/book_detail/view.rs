@@ -116,7 +116,7 @@ pub(super) struct LoadedCtx {
 pub(super) fn render_loaded(
     b: EbookMetadata,
     description: DescriptionSignals,
-    author_books: Vec<EbookMetadata>,
+    author_books: Option<Vec<EbookMetadata>>,
     rail: RailButtons,
     suggestions: Option<SuggestionsResponse>,
     ctx: LoadedCtx,
@@ -146,7 +146,7 @@ pub(super) fn render_loaded(
 pub(super) fn render_loaded(
     b: EbookMetadata,
     description: DescriptionSignals,
-    author_books: Vec<EbookMetadata>,
+    author_books: Option<Vec<EbookMetadata>>,
     rail: RailButtons,
     suggestions: Option<SuggestionsResponse>,
     ctx: LoadedCtx,

@@ -15,6 +15,7 @@ use crate::components::SessionLogList;
 use crate::date_fmt::civil_from_days;
 use crate::format::count_label;
 use crate::time::now_unix;
+use crate::time::{local_date_offset, use_local_dates_ready};
 
 use crate::pages::book_detail::rating::BdRatingWidget;
 
@@ -32,11 +33,14 @@ pub(super) fn MarqueeStatsStop(
     audio_only: bool,
     wish_mode: bool,
 ) -> Element {
+    // Hoisted for the whole stop: every date below is a stored instant, and
+    // they must all land on the reader's calendar together (#2464).
+    let dates_ready = use_local_dates_ready()();
     rsx! {
         div { class: "bdmq-k", if wish_mode { "Stats" } else { "What this read has looked like" } }
         match insights {
             Some(i) if i.sessions > 0 && !wish_mode => rsx! {
-                {render_stats(&i, &progress, audio_only)}
+                {render_stats(&i, &progress, audio_only, dates_ready)}
                 div { class: "bdmq-k bdmq-logk", "The sittings behind it" }
                 SessionLogList { book: Some(uuid.clone()), compact: true }
             },
@@ -58,8 +62,13 @@ pub(super) fn MarqueeStatsStop(
 }
 
 /// The populated record: stat grid, note line, spark.
-fn render_stats(i: &BookInsights, progress: &MarqueeProgress, audio_only: bool) -> Element {
-    let started_short = short_date(i.started_at);
+fn render_stats(
+    i: &BookInsights,
+    progress: &MarqueeProgress,
+    audio_only: bool,
+    dates_ready: bool,
+) -> Element {
+    let started_short = short_date(i.started_at, local_date_offset(dates_ready, i.started_at));
     let started_sub = days_in_label(now_unix(), i.started_at);
     let avg = duration_label(avg_sit_secs(i));
     let time_label = if audio_only {
@@ -75,7 +84,14 @@ fn render_stats(i: &BookInsights, progress: &MarqueeProgress, audio_only: bool) 
             {stat_cell("Started", &started_short, &started_sub)}
             {stat_cell(time_label, &duration_label(i.seconds_total), &count_label(i.sessions, "session"))}
             {stat_cell("Pickups", &i.sessions.to_string(), &format!("avg sit {avg}"))}
-            {stat_cell("Longest sit", &duration_label(i.longest_seconds), &short_date(i.longest_started_at))}
+            {stat_cell(
+                "Longest sit",
+                &duration_label(i.longest_seconds),
+                &short_date(
+                    i.longest_started_at,
+                    local_date_offset(dates_ready, i.longest_started_at),
+                ),
+            )}
         }
         if let Some(n) = note {
             div { class: "mono bdmq-statsnote", "{n}" }
@@ -162,12 +178,19 @@ fn time_left_note(i: &BookInsights, progress: &MarqueeProgress) -> Option<String
     ))
 }
 
-/// Short "Mon D" date from unix seconds (UTC — same bucketing as the data).
-pub(super) fn short_date(unix_secs: i64) -> String {
+/// Short "Mon D" date from unix seconds, shifted by `offset_secs`.
+///
+/// **Pass an offset only for a real instant.** A raw `started_at` is one, and
+/// dating it in UTC put a 23:36 sitting on the following day while the spark
+/// beside it — bucketed on the reader's own calendar by the server — drew it
+/// on the right one (#2464). A value already derived from a *local day
+/// number* (`day * 86_400`) is midnight of a day that has been placed
+/// already; shifting it again moves it off that day.
+pub(super) fn short_date(unix_secs: i64, offset_secs: i64) -> String {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
-    let (_, m, d) = civil_from_days(unix_secs.div_euclid(86_400));
+    let (_, m, d) = civil_from_days((unix_secs + offset_secs).div_euclid(86_400));
     format!("{} {d}", MONTHS[(m as usize - 1).min(11)])
 }
 
@@ -237,7 +260,8 @@ fn spark_summary(spark: &[i64], as_of_day: &str, audio_only: bool) -> String {
     let day = end - (spark.len() as i64 - 1) + peak_idx as i64;
     format!(
         "{summary}, most on {} with {}.",
-        short_date(day * 86_400),
+        // Already a local day number from the server; see `short_date`.
+        short_date(day * 86_400, 0),
         count_label(peak, "minute")
     )
 }
@@ -489,8 +513,11 @@ mod tests {
     }
 
     #[test]
-    fn short_date_formats_utc_month_day() {
-        assert_eq!(short_date(1_700_000_000), "Nov 14");
+    fn short_date_formats_the_month_day_on_the_given_offset() {
+        assert_eq!(short_date(1_700_000_000, 0), "Nov 14");
+        // A 23:13 local sitting west of UTC stays on its own day (#2464).
+        assert_eq!(short_date(1_700_000_000, -5 * 3600), "Nov 14");
+        assert_eq!(short_date(1_700_006_400, -5 * 3600), "Nov 14");
     }
 
     #[test]
@@ -520,7 +547,7 @@ mod render_tests {
     fn stat_grid_renders_singular_nouns_for_a_count_of_one() {
         let mut i = insights(3_600, 1, 3_600, 3_600);
         i.started_at = now_unix() - 86_400;
-        let html = render(render_stats(&i, &progress_at(50), false));
+        let html = render(render_stats(&i, &progress_at(50), false, false));
         assert!(html.contains("1 day in"), "{html}");
         assert!(html.contains("1 session"), "{html}");
         assert!(!html.contains("1 days in"), "{html}");
@@ -531,7 +558,7 @@ mod render_tests {
     fn stat_grid_keeps_plural_nouns_above_one() {
         let mut i = insights(3_600, 4, 3_600, 3_600);
         i.started_at = now_unix() - 3 * 86_400;
-        let html = render(render_stats(&i, &progress_at(50), false));
+        let html = render(render_stats(&i, &progress_at(50), false, false));
         assert!(html.contains("3 days in"), "{html}");
         assert!(html.contains("4 sessions"), "{html}");
     }
@@ -544,7 +571,7 @@ mod render_tests {
     fn stat_grid_reads_today_on_the_start_day() {
         let mut i = insights(3_600, 1, 3_600, 3_600);
         i.started_at = now_unix();
-        let html = render(render_stats(&i, &progress_at(50), false));
+        let html = render(render_stats(&i, &progress_at(50), false, false));
         assert_eq!(html.matches("today").count(), 2, "{html}");
         assert!(!html.contains("day in"), "{html}");
     }
@@ -559,7 +586,7 @@ mod render_tests {
             day: "2026-08-27".into(),
             seconds: 1_800,
         }];
-        let html = render(render_stats(&i, &progress_at(50), false));
+        let html = render(render_stats(&i, &progress_at(50), false, false));
         assert!(html.contains("role=\"img\""), "{html}");
         assert!(
             html.contains("30 minutes across 1 day, most on Aug 27 with 30 minutes"),
@@ -577,7 +604,7 @@ mod render_tests {
             day: "2026-08-27".into(),
             seconds: 1_800,
         }];
-        let html = render(render_stats(&i, &progress_at(50), true));
+        let html = render(render_stats(&i, &progress_at(50), true, false));
         assert!(html.contains("Time listened"), "{html}");
         assert!(html.contains("Minutes listened per day"), "{html}");
         assert!(!html.contains("Minutes read per day"), "{html}");
@@ -589,7 +616,7 @@ mod render_tests {
     #[test]
     fn spark_axis_stays_hidden_while_the_strip_it_labels_does_not() {
         let i = insights(3_600, 1, 3_600, 3_600);
-        let html = render(render_stats(&i, &progress_at(50), false));
+        let html = render(render_stats(&i, &progress_at(50), false, false));
         // Exactly one, and it is the axis's: the axis renders *after* the
         // strip, so nothing up to the strip's own testid may carry one.
         assert_eq!(html.matches("aria-hidden=\"true\"").count(), 1, "{html}");

@@ -122,7 +122,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
 /// data-fetch + dispatch shell instead of a wall of hook declarations.
 struct BookDetailSignals {
     book: Signal<Option<EbookMetadata>>,
-    author_books: Signal<Vec<EbookMetadata>>,
+    author_books: Signal<Option<Vec<EbookMetadata>>>,
     // F3.3 suggestions. Starts `None` on both SSR and the first WASM paint so
     // hydration markup matches (rule 07); the client effect below populates it.
     suggestions: Signal<Option<SuggestionsResponse>>,
@@ -159,7 +159,7 @@ fn use_book_detail_signals() -> BookDetailSignals {
     let refresh = use_signal(|| 0u32);
     BookDetailSignals {
         book: use_signal(|| None),
-        author_books: use_signal(Vec::new),
+        author_books: use_signal(|| None),
         suggestions: use_signal(|| None),
         suggestions_epoch: use_signal(|| 0u64),
         loading: use_signal(|| true),
@@ -221,7 +221,7 @@ struct PhysSignals {
 #[derive(Clone, Copy)]
 struct BookDataSignals {
     book: Signal<Option<EbookMetadata>>,
-    author_books: Signal<Vec<EbookMetadata>>,
+    author_books: Signal<Option<Vec<EbookMetadata>>>,
     loading: Signal<bool>,
     error: Signal<Option<String>>,
     refresh: Signal<u32>,
@@ -292,7 +292,7 @@ fn render_book_shell(
     b: EbookMetadata,
     merge: MergeSignals,
     page: PageSignals,
-    author_books: Vec<EbookMetadata>,
+    author_books: Option<Vec<EbookMetadata>>,
     suggestions: Option<SuggestionsResponse>,
     is_admin: ReadSignal<bool>,
     server_url: String,
@@ -308,9 +308,16 @@ fn render_book_shell(
     // returns `false` during SSR and for non-admins on every platform.
     let is_admin_flag = is_admin();
 
-    let (merge_button, merge_ui) = build_merge_pieces(is_admin_flag, merge, &server_url, &b);
+    // Both rail controls act on files: "Delete files…" removes them, and
+    // "Merge with…" folds this record's files into another book. A wishlist
+    // entry or a paper-only book has none, so it is offered neither (#2471) —
+    // its removal is "Remove from wishlist" / "Remove copy" in the physical
+    // panel, and the delete dialog's own "this book has no files on disk"
+    // admission was the tell that the control should never have been there.
+    let file_admin = is_admin_flag && !b.formats.is_empty();
+    let (merge_button, merge_ui) = build_merge_pieces(file_admin, merge, &server_url, &b);
     let (delete_button, delete_ui) =
-        build_delete_pieces(is_admin_flag, delete_open, merge.refresh, &b);
+        build_delete_pieces(file_admin, delete_open, merge.refresh, &b);
 
     let body = render_loaded(
         b,
@@ -431,7 +438,7 @@ fn fetch_book_and_author_books(
     server_url: String,
     uuid: String,
     mut book: Signal<Option<EbookMetadata>>,
-    mut author_books: Signal<Vec<EbookMetadata>>,
+    mut author_books: Signal<Option<Vec<EbookMetadata>>>,
     mut loading: Signal<bool>,
     mut error: Signal<Option<String>>,
     mut description: DescriptionSignals,
@@ -448,7 +455,7 @@ fn fetch_book_and_author_books(
             == Some(uuid.as_str());
         if !same_book {
             loading.set(true);
-            author_books.set(Vec::new());
+            author_books.set(None);
         }
         match data::get_ebook(&server_url, &uuid).await {
             Ok(b) => {
@@ -467,20 +474,31 @@ fn fetch_book_and_author_books(
                 book.set(b);
                 error.set(None);
                 loading.set(false);
-                if let Some((Some(aid), current_uuid)) = author_fetch {
-                    if let Ok(Some(ad)) = data::get_author(&server_url, aid).await {
+                // Every path out of here has to *settle* the signal, not just
+                // the one that finds books: `None` means "not fetched yet" and
+                // the section renders a loading note against it (#2478), so a
+                // book with no author id, an author that 404s, or a failed
+                // request must land on `Some(vec![])` — the honest "no others"
+                // — rather than leaving the note up for good.
+                match author_fetch {
+                    Some((Some(aid), current_uuid)) => {
+                        let others = match data::get_author(&server_url, aid).await {
+                            Ok(Some(ad)) => ad
+                                .books
+                                .into_iter()
+                                .filter(|ab| ab.unique_identifier != current_uuid)
+                                .collect(),
+                            _ => Vec::new(),
+                        };
                         let still_current =
                             book().as_ref().and_then(|b| b.unique_identifier.as_ref())
                                 == current_uuid.as_ref();
                         if still_current {
-                            let others: Vec<EbookMetadata> = ad
-                                .books
-                                .into_iter()
-                                .filter(|ab| ab.unique_identifier != current_uuid)
-                                .collect();
-                            author_books.set(others);
+                            author_books.set(Some(others));
                         }
                     }
+                    // No creator to ask about: settled, and empty.
+                    _ => author_books.set(Some(Vec::new())),
                 }
             }
             Err(e) => {

@@ -76,7 +76,7 @@ pub(super) struct MarqueeAdminActions {
 pub(super) fn MarqueeStage(
     b: EbookMetadata,
     view: MarqueeViewFacts,
-    author_books: Vec<EbookMetadata>,
+    author_books: Option<Vec<EbookMetadata>>,
     suggestions: Option<SuggestionsResponse>,
     admin: MarqueeAdminActions,
     phys: PhysSignals,

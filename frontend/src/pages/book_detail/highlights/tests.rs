@@ -4,15 +4,61 @@
 use super::locator::highlight_locator;
 use super::*;
 
+/// TOC chapters as the alignment view carries them. `percent` is unused by the
+/// locator (it resolves on the spine step), so it stays 0.
+fn toc(entries: &[(&str, i64)]) -> Vec<AlignmentEbookChapter> {
+    entries
+        .iter()
+        .map(|(title, spine_index)| AlignmentEbookChapter {
+            title: (*title).to_string(),
+            percent: 0.0,
+            spine_index: *spine_index,
+        })
+        .collect()
+}
+
 #[test]
 fn highlight_locator_names_the_reader_chapter_when_the_structure_is_loaded() {
-    // #2356: with the chapter table known, a passage names the chapter the
-    // reader shows, not the raw spine ordinal that counts front matter. The
-    // range CFI's spine step is `/14` → ordinal 7 → 0-based spine 6; against
-    // chapters starting at spines 0, 6 and 12 that resolves to chapter 2.
+    // #2356: with the chapter table known, a passage resolves to the chapter
+    // the reader shows, not the raw spine ordinal that counts front matter.
+    // The range CFI's spine step is `/14` → ordinal 7 → 0-based spine 6;
+    // against chapters starting at spines 0, 6 and 12 that is the second.
+    // #2463: it is named by that chapter's *title*, not "Chapter 2" — a TOC
+    // counts front matter, so the two numbers routinely disagree.
     assert_eq!(
-        highlight_locator("epubcfi(/6/14[chap03]!/4/2,/1:0,/1:120)", &[0, 6, 12]),
-        Some("Chapter 2".to_string())
+        highlight_locator(
+            "epubcfi(/6/14[chap03]!/4/2,/1:0,/1:120)",
+            &toc(&[("Front matter", 0), ("Chapter 12: Inej", 6), ("Kaz", 12)])
+        ),
+        Some("Chapter 12: Inej".to_string())
+    );
+}
+
+// Regression for #2463: the eighteenth TOC entry of a book whose front matter
+// and part dividers carry entries of their own is not "Chapter 18".
+#[test]
+fn highlight_locator_names_the_chapter_rather_than_its_toc_ordinal() {
+    let chapters = toc(&[
+        ("Cover", 0),
+        ("Part One", 4),
+        ("Chapter 1: Joost", 6),
+        ("Chapter 2: Inej", 8),
+    ]);
+    // Spine step `/16` → ordinal 8 → 0-based spine 7, which falls in the third
+    // entry (spine 6) — its title, never "Chapter 3".
+    assert_eq!(
+        highlight_locator("epubcfi(/6/16!/4/2)", &chapters),
+        Some("Chapter 1: Joost".to_string())
+    );
+}
+
+#[test]
+fn highlight_locator_falls_back_to_the_section_when_the_matched_chapter_is_untitled() {
+    // A TOC entry with no title has no name to print, so the spine section
+    // stays — a raw locator beats a blank one.
+    assert_eq!(
+        highlight_locator("epubcfi(/6/14!/4/2)", &toc(&[("", 0), ("   ", 6)])),
+        Some("Section 7".to_string())
     );
 }
 
@@ -33,7 +79,7 @@ fn highlight_locator_falls_back_to_the_section_before_the_first_chapter() {
     // to name, so it keeps the raw spine section rather than misreporting
     // chapter 1.
     assert_eq!(
-        highlight_locator("epubcfi(/6/2!/4)", &[4, 8]),
+        highlight_locator("epubcfi(/6/2!/4)", &toc(&[("A", 4), ("B", 8)])),
         Some("Section 1".to_string())
     );
 }
@@ -199,7 +245,7 @@ mod render_tests {
                 server_url: String::new(),
                 quote_target: use_signal(|| None),
                 dates_ready: use_local_dates_ready(),
-                chapter_spines: use_signal(Vec::<i64>::new),
+                chapters: use_signal(Vec::<AlignmentEbookChapter>::new),
             }
         }
     }
@@ -246,7 +292,7 @@ mod render_tests {
                 server_url: String::new(),
                 quote_target: use_signal(|| None),
                 dates_ready: use_local_dates_ready(),
-                chapter_spines: use_signal(Vec::<i64>::new),
+                chapters: use_signal(Vec::<AlignmentEbookChapter>::new),
             }
         }
     }
@@ -290,7 +336,7 @@ mod render_tests {
                 highlights: use_signal(|| seeded_list(8)),
                 server_url: String::new(),
                 quote_target: use_signal(|| None),
-                chapter_spines: use_signal(Vec::<i64>::new),
+                chapters: use_signal(Vec::<AlignmentEbookChapter>::new),
             }
         }
     }
@@ -321,7 +367,7 @@ mod render_tests {
                 server_url: String::new(),
                 quote_target: use_signal(|| None),
                 dates_ready: use_local_dates_ready(),
-                chapter_spines: use_signal(Vec::<i64>::new),
+                chapters: use_signal(Vec::<AlignmentEbookChapter>::new),
             }
         }
     }

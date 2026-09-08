@@ -193,6 +193,65 @@ pub fn format_date_short_opt(raw: &str) -> Option<String> {
     })
 }
 
+/// The same short date as [`format_date_short_opt`], but for a stored
+/// *instant* — re-dated onto the calendar `offset_secs` describes.
+///
+/// The distinction is why this is a separate function rather than a parameter
+/// on the one above. `added_at` is a moment in time (`2026-09-08T03:36:00Z`),
+/// so which day it fell on depends on where the reader is: 03:36 UTC is the
+/// previous evening in Detroit, and dating it in UTC put "Added Sep 8th" on a
+/// page whose every other stamp read Sep 7 (#2464). A *publication* date
+/// carries no time of day and belongs to no zone — shifting it would move a
+/// book's publication a day earlier for half the world — so `published` keeps
+/// [`format_date_short_opt`].
+///
+/// Falls back to the unshifted render when the string carries no time of day
+/// (a bare `YYYY-MM-DD`, or year-only), for the same reason: there is no
+/// instant there to re-date. `offset_secs` of `0` is the SSR / pre-hydration
+/// path and renders identically to [`format_date_short_opt`] (rule 07).
+pub fn format_instant_short_opt(raw: &str, offset_secs: i64) -> Option<String> {
+    let Some(unix_secs) = instant_secs(raw) else {
+        return format_date_short_opt(raw);
+    };
+    let (y, m, d) = crate::date_fmt::civil_from_days((unix_secs + offset_secs).div_euclid(86_400));
+    if y <= i64::from(SENTINEL_YEAR_MAX) {
+        return None;
+    }
+    let month = month_name(m)?;
+    Some(format!("{month} {d}{}, {y}", ordinal_suffix(d)))
+}
+
+/// Unix seconds for a stored timestamp that carries a time of day —
+/// `2026-09-08T03:36:00Z` or the SQLite `datetime()` shape
+/// `2024-01-02 03:04:05`. `None` when the string is a bare calendar date (no
+/// `T`/space separator), which has no instant to resolve, or when any segment
+/// fails to parse.
+///
+/// Deliberately ignores a trailing numeric offset: everything the server
+/// writes here is UTC (`strftime(..., 'unixepoch')` in `books::projection`),
+/// and guessing at a zone suffix would be worse than the honest fallback.
+pub fn instant_secs(raw: &str) -> Option<i64> {
+    let raw = raw.trim();
+    let (date_part, time_part) = raw.split_once(['T', ' '])?;
+    let mut date = date_part.split('-');
+    let y: i64 = date.next()?.parse().ok()?;
+    let m: u32 = date.next()?.parse().ok()?;
+    let d: u32 = date.next()?.parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let clock = time_part.trim_end_matches('Z');
+    let mut hms = clock.split(':');
+    let h: i64 = hms.next()?.parse().ok()?;
+    let mi: i64 = hms.next().unwrap_or("0").parse().ok()?;
+    // Seconds may carry a fractional part or a zone suffix; take the integer
+    // head and drop the rest.
+    let sec: i64 = hms
+        .next()
+        .map_or(Some(0), |s| s.split(['.', '+', '-']).next()?.parse().ok())?;
+    Some(crate::date_fmt::days_from_civil(y, m, d) * 86_400 + h * 3600 + mi * 60 + sec)
+}
+
 /// The bare publication year for a kicker or a cover caption, or `None` when
 /// the source names no real year. Goes through the same parse and sentinel
 /// gate as [`format_date_short`], so a kicker can never disagree with the

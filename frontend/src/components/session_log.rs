@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 use omnibus_shared::SessionLogEntry;
 
 use crate::date_fmt::civil_from_days;
+use crate::time::{local_date_offset, use_local_dates_ready};
 use crate::{data, use_server_url};
 
 /// "Xh Ym" / "Xm" length label for a sitting. Shared with the book-detail
@@ -23,17 +24,22 @@ pub fn duration_label(secs: i64) -> String {
     }
 }
 
-/// `"Nov 14, 2023 · 22:13"` from unix seconds.
+/// `"Nov 14, 2023 · 22:13"` from unix seconds, shifted by `offset_secs`.
 ///
-/// UTC, like every other date on the stats surfaces (the heatmap and the
-/// per-book spark bucket by UTC day), and derived with no wall-clock read so
-/// SSR and the first WASM paint agree (rule 07).
-fn fmt_started(unix_secs: i64) -> String {
+/// Both halves move together: a sitting at 23:36 local on the 7th is not
+/// "Sep 8 · 03:36" (#2464). Pass [`crate::time::local_date_offset`]'s result
+/// — `0` until the client is past hydration, so SSR and the first WASM paint
+/// agree (rule 07). This is the client rendering a stored instant in the
+/// viewer's zone, which rule 10 puts outside its server-side day-boundary
+/// arithmetic; the day *buckets* beside it are already cut on the reader's
+/// offset by `db::stats::calendar`, so this is what makes the two agree.
+fn fmt_started(unix_secs: i64, offset_secs: i64) -> String {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
-    let days = unix_secs.div_euclid(86_400);
-    let secs_of_day = unix_secs.rem_euclid(86_400);
+    let shifted = unix_secs + offset_secs;
+    let days = shifted.div_euclid(86_400);
+    let secs_of_day = shifted.rem_euclid(86_400);
     let (y, m, d) = civil_from_days(days);
     let month = MONTHS[(m as usize).saturating_sub(1).min(11)];
     let (h, mi) = (secs_of_day / 3600, (secs_of_day % 3600) / 60);
@@ -52,6 +58,9 @@ fn fmt_started(unix_secs: i64) -> String {
 /// would shift.
 #[component]
 pub fn SessionLogList(book: Option<String>, compact: bool) -> Element {
+    // Hoisted once for the whole list rather than per row (see
+    // `use_local_dates_ready`).
+    let dates_ready = use_local_dates_ready();
     let server_url = use_server_url();
     let mut entries: Signal<Vec<SessionLogEntry>> = use_signal(Vec::new);
     let mut next_before: Signal<Option<String>> = use_signal(|| None);
@@ -140,7 +149,9 @@ pub fn SessionLogList(book: Option<String>, compact: bool) -> Element {
                         key: "{e.book_uuid}-{e.started_at}",
                         class: "st-log-row",
                         "data-testid": "session-log-row",
-                        div { class: "mono st-log-when", {fmt_started(e.started_at)} }
+                        div { class: "mono st-log-when",
+                            {fmt_started(e.started_at, local_date_offset(dates_ready(), e.started_at))}
+                        }
                         div { class: "st-log-mid",
                             if show_title {
                                 div { class: "st-log-book", "{e.title}" }

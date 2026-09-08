@@ -876,7 +876,12 @@ struct BookDetailView: View {
                         Label("Edit metadata", systemImage: "pencil")
                     }
                 }
-                if app.user?.canDownload == true {
+                // `formats` empty is a record with nothing on disk — a
+                // wishlist entry or a paper-only book. There is no file to
+                // export, so the row is absent rather than offering a share
+                // sheet that can only fail (#2471). Send to Kindle already
+                // drops itself the same way, via its own `hasEpub` gate.
+                if app.user?.canDownload == true, !book.formats.isEmpty {
                     Button {
                         Task { await shareBook(book) }
                     } label: {

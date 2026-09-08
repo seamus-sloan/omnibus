@@ -480,7 +480,11 @@ fn MarqueeCtaRow(
                 if view.has_audio && view.has_ebook {
                     BdImmersiveButton { uuid: uuid.clone(), label: "Immersive" }
                 }
-                BdExportMenu {
+                // Every item behind this trigger sends or downloads a file,
+                // so a fileless record (wishlist entry, paper-only book) gets
+                // no trigger at all rather than an empty menu (#2471).
+                if view.has_ebook || view.has_audio {
+                    BdExportMenu {
                     ctx: BdExportContext {
                         uuid: uuid.clone(),
                         has_ebook: view.has_ebook,
@@ -489,6 +493,7 @@ fn MarqueeCtaRow(
                         book_title: title.clone(),
                         epub_size_bytes: b.epub_size_bytes,
                     },
+                    }
                 }
             }
         }
