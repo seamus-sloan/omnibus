@@ -292,7 +292,7 @@ class ExpectationTests(unittest.TestCase):
             self.assertEqual(vocabulary.classify(action).kind, vocabulary.OBSERVATION, action)
 
     def test_classify_recognises_a_shelf_edit_as_an_update_write(self) -> None:
-        for action in ("shelf.edit", "shelf.reorder"):
+        for action in ("shelf.edit", "shelf.rename"):
             cls = vocabulary.classify(action)
             self.assertEqual((cls.kind, cls.family, cls.detail), (vocabulary.WRITE, "shelf", "update"), action)
 
