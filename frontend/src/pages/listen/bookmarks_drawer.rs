@@ -49,9 +49,8 @@ pub(super) fn BookmarksDrawer(
             if marks.is_empty() {
                 div { class: "lp-drawer-empty",
                     p { class: "lp-drawer-empty-title", "No bookmarks yet" }
-                    // Name the control that actually saves. The transport's
-                    // Bookmark button only opens this drawer, so copy pointing
-                    // at it sent listeners back to press it a second time.
+                    // The transport's Bookmark button only opens this drawer;
+                    // "+ Bookmark" above is what saves.
                     p { class: "lp-drawer-empty-detail",
                         "Tap + Bookmark above to save your place. "
                         "Add a note to any mark below."

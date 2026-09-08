@@ -78,16 +78,12 @@ pub(super) async fn run_manifest_init(
         loaded_file,
         audio_file_count,
     );
-    // Paint the resolved position before the element can seek to it. The
-    // transport renders `playback.elapsed`, whose only other writers are the
-    // element's own `timeupdate` and `seeked` — so until the media metadata
-    // lands (2-22 s on a cold cache for a large m4b) it showed "Chapter 1 ·
-    // 0:00 · <full duration> remaining" for a book the detail page had just
-    // offered to resume. Display only: persistence runs through
-    // `post_audio_progress`, behind the shim's `_seeded`/`_userActed` gates,
-    // so a seeded value can never be written back (#1954, #1972). `None`
-    // stays unseeded — that is the unattributable multi-file case, where a
-    // number would name a position in a file this boot may not be in.
+    // Paint the resume position before the element can seek to it: the
+    // transport's only other writers are `timeupdate` and `seeked`, which
+    // wait on the media metadata. Display only — persistence is gated on the
+    // shim's `_seeded`/`_userActed`, so this can't be written back (#1954,
+    // #1972) — and `None` stays unseeded, naming no file this boot may not
+    // be in.
     if let Some(pos) = resume_pos {
         let mut elapsed = playback.elapsed;
         elapsed.set(pos);
