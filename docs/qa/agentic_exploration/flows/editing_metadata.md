@@ -29,8 +29,9 @@ them is that each has been wrong on its own before:
   sometimes instead of the editor page; the criteria are the same, and the
   edited chip must appear in the list without a reload.
 - **The library table's inline cells.** In table view, clicking a title,
-  author, series, tags, genres, published or language cell opens an editor in
-  place; Enter saves, Escape discards. Occasionally make your one edit here —
+  author, series, published or language cell opens a text editor in place;
+  Enter saves, Escape discards. The tags and genres cells open a **chip**
+  editor instead, and Escape there keeps a chip already added. Occasionally make your one edit here —
   then open the detail page and confirm it agrees, and confirm the **sort**
   still holds if the column you edited is the one the table is sorted on
   (see [sorting_the_library.md](sorting_the_library.md): the displayed value
@@ -53,7 +54,9 @@ the same.
    library-wide and permanent — every reader sees it, on a book nobody owns —
    and your journal entry already records that you made the change. See *What
    you type into the app* in [start.md](../start.md).
-4. Occasionally replace the cover image instead. Use **that book's own**
+4. Occasionally replace the cover image instead. The editor page shows
+   Published as a raw ISO datetime and Description as HTML source; both are
+   how the file stored them, and the detail page renders both cleanly. Use **that book's own**
    `cover.jpg` sidecar from the corpus — another book's cover would make the
    shared library worse, which this flow tells you not to do. Note that the
    cover is written **immediately** on picking it, before you press Save, and

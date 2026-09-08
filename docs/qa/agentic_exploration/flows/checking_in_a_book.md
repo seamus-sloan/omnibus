@@ -21,19 +21,25 @@ here, never against the baseline corpus.
 
 ## Steps
 
-1. Click **Check in** in the nav.
+1. Click **Check in** in the nav. On the web it opens a dialog over the page
+   you are on, not a page of its own; on iOS it is behind the Library
+   masthead's `+` → Add books → Scan a barcode, which on a simulator offers
+   ISBN and title fields instead of the camera.
 2. Enter an ISBN, or search by title. **There is no author field** — a title
    alone, as [wishlist.md](wishlist.md) says.
 3. Read the candidates. The lookup checks your library first, then external
    services, and the outcome it offers depends on what it found:
    - **"In your physical collection"** — you already filed this one. Correct;
      journal it and pick another book.
-   - **"Check in this copy"** — the book exists digitally and this adds the
-     print copy. Read the note about print and digital editions carrying
-     different ISBNs; the app asks before filing against the wrong book.
-     Take this path for a book **you uploaded**.
-   - **"I own it"** with no digital match — creates a paper-only book and its
-     first copy. Take this path for a real book that is not in the library.
+   - **"Check in this copy"** (iOS: **"I already have this book"**) — the book
+     exists digitally and this adds the print copy. An **"Is this the book?"**
+     interstitial comes first, because print and digital editions carry
+     different ISBNs; the app asks before filing against the wrong book. Take
+     this path for a book **you uploaded**. An edition note can be written
+     here as well as later.
+   - **"I own it"** (iOS: **"Add as physical book"**) with no digital match —
+     creates a paper-only book and its first copy. Take this path for a real
+     book that is not in the library.
      **Journal `book.add` for the result with its uuid**: a book you created
      here is one you own, exactly as an upload would be, and without that
      entry nobody can ever remove it.
@@ -41,13 +47,22 @@ here, never against the baseline corpus.
      should turn it into a real entry. Only try this on a book *you*
      wishlisted earlier.
 4. Confirm. Watch for the confirmation naming the right book.
-5. Open the book's detail page and confirm the physical pill is there, and
-   that the library grid shows the PHYS badge on it.
-6. If the pill offers a note on the copy — where it lives, its condition —
-   write one a person would write, and confirm it sticks after a reload.
-7. Re-run the same lookup and confirm the app now says you have it.
-8. Occasionally, on a book **you own**, remove the copy and confirm the pill
-   and badge go. On a book you do not own the guard will refuse with a `403`
+5. Open the book's detail page and confirm the physical copy is shown — on
+   the web a **Physical copy** card under THE FILES with an "In your physical
+   collection" marker; on iOS a Physical copy row and an "On your shelf —
+   physical copy" bar. Then confirm the library shows it: the web **table**
+   view's Formats cell carries PHYS; grid tiles carry no badge on either
+   surface.
+6. If the copy card offers a note — where it lives, its condition — write
+   one a person would write, journal it as `checkin.note`, and confirm it
+   sticks after a reload. iOS offers no note.
+7. Re-run the same lookup. The web navigates straight to the book with no
+   message; iOS shows an "Already on your shelf" card. Both are recognition.
+8. Occasionally, on a book **you own**, remove the copy — the web's control
+   is labelled "I sold it" — and confirm the card and badge go. Removing the
+   **last** copy of a paper-only book removes the book, after a dialog that
+   offers to move it to the wishlist instead; that is correct. iOS has no
+   remove control, so the book stays; say so. On a book you do not own the guard will refuse with a `403`
    carrying `ownership_guard`; journal that `refused` and do not look for
    another route.
 
@@ -55,12 +70,15 @@ here, never against the baseline corpus.
 
 `checkin.lookup` with the query and the candidates, as in
 [wishlist.md](wishlist.md). `checkin.confirm` with the path taken, the book's
-uuid, and the ISBN filed. `book.add` for a paper-only book, with the uuid and
-the title and author the app recorded. `checkin.remove` with the uuid.
+uuid, and the ISBN filed. `checkin.note` with the note text. `book.add` for
+a paper-only book, with the uuid and the title and author the app recorded
+(on iOS, the title in `params.title`). `checkin.remove` with the uuid.
 
 **The audit does not verify copies.** Physical copies are library-wide state,
 and the vocabulary lists `checkin` as out of scope; the `book.add` for a
-paper-only book is the one entry here it checks. Your journal is still the
+paper-only book is the one entry here it checks — and a `checkin.remove` on
+that book supersedes it, so a paper-only book you created and then removed
+is expected to be gone. Your journal is still the
 record — a copy that appears with nothing journalling it is what the runner
 will ask about.
 
@@ -79,8 +97,9 @@ will ask about.
 - A copy files against a different book than the one confirmed.
 - A paper-only book appears with empty or wrong metadata.
 - The pill or badge is missing after a reload.
-- Removing a copy deletes the book, or removes a different copy. High
-  severity.
+- Removing a copy from a book that **has files** deletes the book, or
+  removes a different copy. High severity. (Removing the last copy of a
+  paper-only book removes the book by design.)
 - The lookup offers "I own it" for a book that is plainly in the library.
 
 ## Sharp edges

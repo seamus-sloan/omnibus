@@ -66,6 +66,9 @@ finds itself on one of them has wandered off a flow.
 - **The Android hybrid shell.** No driver exists for it. Its markup is the web
   frontend's, so web flows cover most of what it renders, but its native
   chrome is unexercised.
+- **Shelf deletion and membership on the web.** Both exist only on the iOS
+  shelf screen; the web can create, select and edit a shelf but never fill or
+  delete one, and `creating_a_shelf.md` says which steps are iOS-only.
 - **Password and Kindle-email changes.** On the account page beside the
   profile, and off-limits for the reasons `updating_profile.md` gives: a
   changed password locks the agent out of the rest of its run.

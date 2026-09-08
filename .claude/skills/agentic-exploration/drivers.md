@@ -29,6 +29,12 @@ keeps usernames stable. Without the guard, ownership is only a sentence in
 agent destroying another's books; with it, the request is refused before it is
 sent.
 
+The owned set is read once, when the guard is installed; a book the agent
+uploads later is not in it until you run `guard` again — see
+[scenarios.md](scenarios.md) for the three-step hand-over that follows an
+upload. The guard's refusal is a synthetic 403 carrying the request URL, so
+the app renders a permission failure rather than a transport error.
+
 After the run, `driver.sh refusals <n>` lists what each agent was stopped from
 doing. **A non-empty list is a finding about the agent or the flow document,
 not about the app.**
@@ -42,7 +48,8 @@ upload of any size passes through.
 ## When a browser dies
 
 `driver.sh run` answers `{"driver": "dead"}` when the agent's server went down
-under a command, and `{"driver": "up"}` when the server is fine and the command
+under a command — a locator timeout thrown inside a promise chain rather than
+awaited at the top level is enough to take the Node process with it — and `{"driver": "up"}` when the server is fine and the command
 never returned — an app hang, or a locator that never matched. The first is the
 harness: the agent journals an `issue`, runs `driver.sh restart <n>`, and the
 guard is reinstalled — it lives in the old process and does not come back on
@@ -61,7 +68,12 @@ scripts/explore/ios.sh state         # {online, running, forced_offline}
 a session — the same collapse as a shared browser, with no isolation available
 to fix it. `--ios` adds one; asking for more is a refusal, not a clamp.
 
-It is a full agent with its own account, so provision `N+1`. Give it
+It is a full agent with its own account, so provision `N+1`. `ios.sh up`
+uninstalls the app before installing it, so the container — and with it the
+previous run's session, downloads and outbox — starts empty (set
+`OMNIBUS_IOS_KEEP_CONTAINER=1` to keep it); the brief still tells the agent
+to check the You tab first, because a kept container comes up signed in as
+the previous run's iOS actor. Give it
 `surface: ios`, [`ios_lane.md`](../../../docs/qa/agentic_exploration/ios_lane.md)
 alongside `start.md`, and the `offline_outbox` scenario from that file **on top
 of** its sampled flows — it is the only surface that can run it. There is no

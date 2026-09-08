@@ -35,17 +35,26 @@ book opens.
    surface on the home page. Vary this between runs.
 2. Open it to read. Note where it opened — at the start, or where you left off.
 3. Read forward through roughly 10% of the book **by position**, not by time
-   spent. Turn pages the way a person
-   does: some quickly, some slowly. Do not spam the page-forward control.
+   spent. Turn pages the way a person does: some quickly, some slowly. Do not
+   spam the page-forward control. At desktop width the reader is a two-page
+   spread, so the page counter advances by two per turn — that is not a
+   skipped page.
    **If page-turning itself is broken**, that is a `fail` and you should journal
    it as one — but do not abandon the flow. Reaching a position through the
    table of contents, or through Resume, counts as arriving there, so carry on
-   with the rest of the steps and say in the journal how you moved.
+   with the rest of the steps and say in the journal how you moved. The
+   fallback can itself be the finding: a Contents jump that leaves a Loading
+   overlay in place, or a first open that says the book could not be loaded
+   and only a reload cures, are each a `fail` on their own — journal them
+   with the book, and try a second book before deciding the reader is down.
 4. Somewhere in the middle, do one incidental thing a reader does — open the
    table of contents, change the font size, search for a word, switch the
    theme. Pick a different one each time.
-5. Leave the reader with its **Back to book** control, which returns you to the
-   book's detail page. Unlike the audiobook player there is no mini-player, so
+5. Leave the reader with its **Back to book** control (an icon whose
+   accessible name is "Back to book"), which returns you to the book's detail
+   page; the Resume and Start reading controls on that page are links. On iOS the reader closes with an **X**, and when you entered it from
+   the continue card's Read button it returns to the Library tab rather than
+   the detail page — open the detail page from there. Unlike the audiobook player there is no mini-player, so
    this genuinely ends the session.
 6. Come back to the book's detail page and check that your position is
    reflected there.

@@ -38,22 +38,32 @@ there are fewer, journal that and end the flow `uncertain`.
    Two consequences worth knowing before you report anything. Only five of the
    axes have a sortable header — **Recently Interacted has no column**, so it is
    reachable from the grid alone; do not call it missing from the table. And the
-   header for **Newest Added** is labelled just **Added**. Same axis, two names;
-   that is not two different sorts disagreeing.
+   header for **Newest Added** is labelled just **Added** — and that column is
+   hidden below about 1366px wide, so at a narrower window the table has no
+   route to that axis at all. Same axis, two names; that is not two different
+   sorts disagreeing. A header sorts from its inner button, not the cell; the
+   two date headers open **descending** on first click, the others ascending;
+   grid tiles show no series value, so verify Series in the table.
+
+   On iOS there is one view and one menu beside "All books", carrying a format
+   filter, the six axes and a direction row; the direction carries across an
+   axis change, and "reload" is a relaunch.
 4. **Read the rows and check them yourself.** Do not trust the control's label —
    walk the list and confirm it really is ordered on the field you chose, using
    the values the page is *showing you*.
 
    **Read the whole list, not the first screenful.** The Author-sort defect
-   this step exists to catch does not show up at the top: the first five rows
-   look correctly ordered and the break comes further down. So when the head
+   this step exists to catch may not show up at the top — one run saw the
+   first five rows correctly ordered with the break further down, another saw
+   it at row 1. So when the head
    looks right and something later looks wrong, the *entire list* is your
    evidence base — the break is only provable by reading every row and testing
    what key would actually produce the order you got.
 5. Flip the sort direction and confirm the order reverses.
 6. Switch between the **table** and **grid** views and confirm the same books
    appear in the same order in both.
-7. Reload, and confirm your chosen sort and view survived.
+7. Reload, and confirm your chosen sort and view survived — after the
+   loading flash, not during it (see [pitfalls.md](../pitfalls.md)).
 8. Try at least two different axes in one run. Title and Author are the most
    revealing, because you can verify them by eye.
 
@@ -85,7 +95,11 @@ the break as well; five rows from the top do not show it.
 ## Sharp edges
 
 - **Recently Interacted moves as other agents use the library.** Two agents
-  seeing different orders under it is expected; do not report it.
+  seeing different orders under it is expected; do not report it. Its key is
+  shown nowhere, so it is checkable only for reversal, count and stability.
+- A book's **SORT BY** value (the file's "file-as") is visible only on the
+  editor page. When an order looks wrong, that page tells you whether the
+  file or the app chose the key; journal it either way.
 - Books added by others mid-flow will change counts underneath you. Re-read the
   count rather than trusting one from a minute ago.
 - Missing values (no series, no interaction yet) have to sort somewhere.

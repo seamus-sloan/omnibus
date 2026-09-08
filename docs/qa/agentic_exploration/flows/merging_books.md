@@ -34,14 +34,23 @@ another name, and the same ownership rule applies to both books.
 2. Journal the full state of **both** books first: uuids, titles, authors,
    formats, and any progress, highlights, ratings, or read status on either.
    You cannot check what survived a merge without knowing what went in.
-3. Start the merge and choose the other book as the target.
+3. Start the merge and choose the other book. Read which one the dialog says
+   is **kept** — the app's model is that everything folds into the entry you
+   are viewing — and journal it, so a renamed survivor can be told from a
+   merge that went the wrong way.
 4. Read whatever the app tells you it is about to do. If the summary does not
    match the two books you chose, stop and journal an anomaly.
 5. Confirm the merge.
 6. Inspect the result: one book, both formats present, metadata intact.
 7. Confirm the other book is gone from the library.
-8. If an undo is offered, occasionally take it and confirm both books come
-   back whole.
+8. If an undo is offered, take it and confirm both books come back whole.
+   **The undo is a toast on the page you merged from, and it does not survive
+   a reload** — so take it before the one reload pitfalls.md allows, and check
+   every field of your before-state on both books afterwards: title, authors,
+   series and number, tags, genres, description, ISBN, rating, read status,
+   position, highlights, journal entries. Check whose journal entries sit on
+   each book; an entry that belongs to another reader landing on the survivor
+   and staying there after the undo is high severity.
 
 ## Journal
 

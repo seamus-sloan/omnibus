@@ -39,7 +39,9 @@ import json, pathlib, sys
 for j in sorted(pathlib.Path(sys.argv[1]).glob("*/journal.jsonl")):
     for line in j.open():
         e = json.loads(line)
-        if e.get("action") == "book.add" and e.get("outcome") == "ok":
+        # Require a target: a `book.add` whose upload never produced a
+        # book (r-20260829-01's crashed audiobook) must not retire its file.
+        if e.get("action") == "book.add" and e.get("outcome") == "ok" and e.get("target"):
             p = e.get("params", {})
             print(p.get("source_filename") or p.get("filename") or p.get("file") or "?")
 PY
@@ -48,6 +50,42 @@ PY
 Hand each agent that list with the corpus path. Two agents drawing
 `adding_book` in one run must be handed **different** files by you, or both
 may pick the same one and the second silently attaches to the first.
+
+## Re-guard after every upload, and hand the destructive subflows separately
+
+`driver.sh guard` bakes the owned set into the browser when it runs, and it
+never re-reads the journal. A book uploaded mid-run is therefore **not** in
+its own agent's owned set, and `merging_books` and `deleting_a_book` — which
+always follow `adding_book` — are refused for exactly the book they exist to
+act on. So the hand-over is three steps, not one:
+
+1. hand `adding_book` alone, and wait for its report;
+2. `driver.sh guard <n> agent-<n> "$(scripts/explore/owned.sh agent-<n>)"`,
+   which now includes the new uuid;
+3. hand `merging_books` and `deleting_a_book` as their own step.
+
+Say in the brief that the subflows will follow separately, so the agent does
+not start their `flow.start` lines early.
+
+## One fresh subagent per flow
+
+A subagent cannot be messaged after it reports, so every flow is a fresh
+subagent. Keep the standing part of the brief — identity, driver, journal,
+rails, corpus — in one file per agent and point each new subagent at it, and
+give it a two-sentence recap of what its actor did in earlier flows (the
+books it touched, the names it used, where the browser is). Each brief tells
+the agent to use a scratch directory named for its actor: the harness's
+scratchpad is shared, and one run routed an agent's commands into another
+agent's browser through a clobbered helper script.
+
+Two things look like a finished agent and are not. A subagent that backgrounds
+a long sleep fires a completion notification while its flow is still open —
+**read the journal for a `flow.end` before handing the next flow**; the
+duplicate iOS agent of run `r-20260908-01` came from trusting the
+notification. And an API rate limit kills every subagent at once, mid-flow:
+on resume, derive each actor's state from the journal (open flows are a
+`flow.start` with no `flow.end`) and brief the fresh subagent to finish them
+without writing a second `flow.start`.
 
 ## Non-admin readers
 
@@ -99,7 +137,11 @@ Journal it under the agent's actor with `journal.py append --actor agent-N
 --surface phantom --flow resuming_from_another_device --action progress.set
 --target <uuid> --params '{"format":"epub","percent":40,"variant":"newer"}'`.
 Then hand the agent the flow with the uuid, the variant, and the position in
-human terms.
+human terms. Pick a book no other agent is reading or editing, and one the
+agent has not opened — the audit keys progress per book, and a percent
+placed ahead of a later sitting makes that sitting credit zero pages on the
+Stats page, which is honest but confusing to the agent handed `viewing_stats`
+afterwards.
 
 ## The Kobo scenario (`--kobo`)
 

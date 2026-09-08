@@ -22,7 +22,11 @@ must never affect what you see.
    generated token: no ids, no timestamps. Journal the exact text.
 4. Carry on reading for a page or two.
 5. Open the list of saved passages and confirm yours is there, with its colour
-   and note intact.
+   and note intact. On the web that list is the reader's top-bar **Highlights
+   and notes** panel — clicking a highlighted passage in the text opens
+   nothing, and notes and recolours live in that panel alone. The detail page
+   lists passages and notes but shows no colour, so colour is checkable only
+   in the reader.
 6. Change the colour and confirm it sticks.
 7. **Delete a highlight only if you have made more than one in this run**, and
    never the last one standing. Every highlight you leave behind is evidence the
@@ -48,7 +52,10 @@ otherwise.
   passage, not a neighbouring one.
 - It survives leaving the reader and coming back.
 - The note is attached to the right highlight, with the text you typed.
-- It appears in the book's saved-passages list on the detail page.
+- It appears in the book's saved-passages list on the detail page. That list's
+  **Open in book** link is in scope to read, not to follow: following it moves
+  your reading position, which contradicts the `reader.close` you are about
+  to journal.
 - Colour changes and deletions persist.
 
 ## Fail

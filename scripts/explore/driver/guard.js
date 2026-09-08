@@ -61,7 +61,10 @@
     // Endpoints that destroy or restructure a book. Anything book-scoped is
     // gated on the owned set; author and series deletion is refused outright,
     // because start.md forbids it for every agent regardless of ownership.
-    const BOOK_SCOPED = /\/api\/(rpc\/(books\/delete-files|merge-books)$|physical\/)/;
+    // `physical/` matches both the REST `/api/physical/…` routes and the
+    // server-function `/api/rpc/physical/copies/delete` — run r-20260908-01
+    // found copy removals sailing past a pattern anchored on `/api/physical/`.
+    const BOOK_SCOPED = /\/api\/(rpc\/(books\/delete-files|merge-books)$|(rpc\/)?physical\/)/;
     const ALWAYS_REFUSED = /\/api\/rpc\/(author\/delete|cleanup\/delete-entity)/;
     // Undo is destructive and owner-only, but its payload carries a merge_log_id
     // and no uuid, so ownership cannot be read from the request. Refusing it
@@ -103,10 +106,17 @@
         // 403 rather than a transport error: the app renders a permission
         // failure, which is what the agent should observe and journal, instead
         // of a network stack error it would mistake for a bug.
-        return new Response(JSON.stringify({ error: "ownership_guard", why, targets }), {
+        const response = new Response(JSON.stringify({ error: "ownership_guard", why, targets }), {
           status: 403,
           headers: { "content-type": "application/json" },
         });
+        // A synthetic Response has an empty `url`, and the Dioxus server-function
+        // client parses `response.url` before it reads the status — so the
+        // refusal surfaced as "relative URL without a base", a transport error
+        // an agent cannot tell from an app bug (r-20260908-01). Give it the URL
+        // the request was made to, so the app renders the 403 it was built for.
+        Object.defineProperty(response, "url", { value: url });
+        return response;
       };
 
       if (ALWAYS_REFUSED.test(url)) return refuse("author and series deletion are forbidden by the rails", []);

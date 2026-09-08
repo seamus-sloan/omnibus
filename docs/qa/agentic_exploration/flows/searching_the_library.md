@@ -5,7 +5,7 @@
 | **Runs** | on its own |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
-| **Actions** | `search.query`, `search.open`, `nav.follow` |
+| **Actions** | `search.query`, `search.open` |
 
 Find things the way a reader who half-remembers them does. Search writes
 nothing, so it is cheap — and it is where a metadata edit made an hour ago
@@ -27,19 +27,30 @@ three or four, journal that and end the flow `uncertain`.
 3. Search for an **author's surname** and confirm the author appears in the
    Authors section and their books in the Books section.
 4. Search for a **series name** and confirm the series appears.
-5. Search for a **tag or genre** you saw on a book's detail page.
+5. Search for a **tag** and a **genre** you saw on a book's detail page —
+   one of each, and prefer a tag or genre that a reader **added through the
+   app** over one that came from a file, because the two are indexed
+   differently and the added one is where the gap has been.
 6. Search for something that should match **nothing** — a word from no book
    you know of — and confirm the page says so rather than showing an empty
    frame or stale results.
 7. Misspell one of the earlier queries by a letter and note whether anything
    comes back. Fuzzy matching is not promised; journal what you saw as an
-   observation, not a finding.
+   observation, not a finding. Then search an **accented** name with and
+   without its accents (an author like Pérez Galdós) and note which sections
+   match each spelling.
 8. **If you or another agent edited a book's metadata earlier in the run**,
    search for the *new* value and for the *old* one. The edited value is what
    the library shows, so it is what search should find. The old value still
    matching is worth journalling, but as `uncertain`.
 9. Open a result of each kind and confirm you land on the thing you clicked —
-   the book, the author, the series.
+   the book, the author, the series. On the results page also try the
+   controls beside the sections — the sort and view buttons and the "On this
+   page" rail — and drive the palette from the keyboard: arrows, Enter,
+   Escape.
+10. If you or another agent added a book or renamed one this run, search for
+    it: a new book should be findable within a couple of minutes, and a
+    renamed one under its **current** title only.
 
 **Do not search for book text.** The palette's full-text section is marked
 "Coming soon", and journal entries are not indexed either. A passage from

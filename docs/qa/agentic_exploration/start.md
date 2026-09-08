@@ -87,10 +87,18 @@ agents invent are usually the ones that were never built.
 
 The nav carries almost everything: **Library**, **Authors**, **Series**,
 **Stats**, **search**, **Check in**, **Add books**, and your avatar for the
-account menu, which is also where **Sign out** lives. Shelves are a rail above
-the library on the web and a screen under **You** on iOS. Books open from the
-library grid, and everything about a book — reader, player, metadata editor,
-journal, saved passages, delete — opens from that book's own page.
+account menu, which is also where **Sign out** lives. On the web, **Check in**
+is a button that opens a dialog over the page you are on, not a page of its
+own. Shelves are a rail above the library on the web and a screen under
+**You** on iOS; on iOS, Check in lives behind the Library masthead's `+` →
+**Add books** → **Scan a barcode**. Books open from the library grid, and
+everything about a book — reader, player, metadata editor, journal, saved
+passages, delete — opens from that book's own page.
+
+**Your account page is the Account section of Settings** on the web (user
+menu → Edit), and the **You** tab on iOS. That one section — display name,
+picture, reading goals, the detail-page scroll-stop toggle — is yours to
+change; every other Settings section is on the rails below.
 
 If you cannot find a way to reach what a flow asks for, **that is the finding**:
 journal it `uncertain` and say what you looked for. If you land somewhere that
@@ -150,7 +158,10 @@ transcripts are thrown away.
 | `outcome` | `ok`, `error`, `refused` (an ownership or permission refusal that was correct), or `uncertain` (you did it and cannot tell whether it took). Anything but `ok` needs a `note`, and the audit does not check a write that is not `ok`. |
 | `note` | One human sentence **about the outcome**. Required whenever `outcome` is not `ok`. Content the *user* wrote — a highlight's note, a journal entry — belongs in `params` under its own key (`note_text`), never here. |
 
-Three entries are special:
+Three entries are special, and a subflow that runs inside another flow
+gets its **own** pair of them — `adding_highlight` inside `reading_a_book`
+opens and closes itself, under its own `flow` name, between the parent's
+start and end:
 
 - **`flow.start`** — first line of every flow. `params` carries `base_url`,
   the instance you are driving; the report names the instance from it.
@@ -235,8 +246,10 @@ Never, whatever a flow seems to invite:
 - **Put a file into the library directory by any means other than uploading it
   through the app.** See above — this is the one that looks helpful and is not.
 - Destroy anything you do not own.
-- Touch **Settings** — library paths, API keys, SMTP, and the like are
-  instance-wide configuration and one edit breaks the run for everyone.
+- Touch **Settings** — library paths, API keys, SMTP, users, and the like
+  are instance-wide configuration and one edit breaks the run for everyone.
+  The **Account** section is the one exception, and only for what *Your
+  identity* above lists.
 - Trigger a reindex, a library scan, or an FTS rebuild.
 - Send to Kindle or Kobo. These deliver real things to real places. (Marking a
   shelf for Kobo *sync* is different — it sends nothing until a device asks —

@@ -24,8 +24,9 @@ turn up something cosmetic that no assertion would catch.
    must not be journalled as one. In grid view, click the tile.
 2. Actually read the page. Cover, title, author, series, description, formats,
    dates, identifiers, tags, genres, ratings, saved passages, suggestions.
-   There is **no page or chapter count** on this page — do not go looking for
-   one, and do not report its absence.
+   There is **no page count** on this page, and a chapter figure appears only
+   once a position exists ("Ch. 7 of 13" in the HOME section) — do not report
+   its absence on a book you have not opened.
 3. Ask of each thing: is this plausible? A publication year of 0101, a date in 1900,
    an author of "Unknown, Unknown", a description that is raw HTML, a cover
    that belongs to another book — all findings.
@@ -58,7 +59,10 @@ turn up something cosmetic that no assertion would catch.
        [merging_books.md](merging_books.md).
      Tag and genre chips are not links and go nowhere — that is correct. The
      export menu's downloads are for you to *see*, not to take: a download
-     fetches a real file and Send to Kindle is on the rails.
+     fetches a real file and Send to Kindle is on the rails. A book with
+     **none** of the optional links — one author, one file, no passages, no
+     paper copy, no other format, suggestions off — is a common and legitimate
+     draw; journal which were absent rather than hunting.
    - **Look at the suggestions.** These come from Hardcover and need a
      server-wide API key. If the panel offers an "Add a Hardcover API key" CTA
      instead of books, the feature is switched off — that is **not** a finding,
@@ -69,7 +73,9 @@ turn up something cosmetic that no assertion would catch.
      position and listening position are independent; both showing is
      correct, and one moving because the other did is not.
    - **Flip the scroll-stop layout.** The detail page has two shapes, chosen
-     by a toggle on **your own** account page: off (the default) is one
+     by a toggle on **your own** account page (Settings → Account on the web,
+     reached from the user menu's Edit link; You → Book details on iOS): off
+     (the default) is one
      continuous page with the sections introduced by rules; on snaps the page
      section by section with a dot rail. Go to your account page, turn it on,
      come back to this book, and confirm the page now snaps and the dot rail
@@ -126,5 +132,10 @@ and the audit does not check it.
 - The scroll-stop toggle is yours alone. Another agent seeing the other
   layout on the same book is two settings, not one bug. Leave it **off** when
   you are done, so the next flow you draw sees the default.
-- On iOS the detail screen has one layout and no scroll-stop toggle; skip that
-  step there and say so.
+- On iOS the series name is plain text, not a link, and there is no control
+  that clears a rating (set and re-set work). Journal both as observations
+  about the surface, not failures of the step.
+- Setting a never-opened book to **Reading** has been observed to mint a 0%
+  position and put the book on the continue fan. Whether that is intended is
+  open; journal exactly what the home page and the detail page show before
+  and after the status change rather than deciding.

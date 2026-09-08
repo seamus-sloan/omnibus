@@ -37,7 +37,13 @@ yours. The runner picks `stale` only for a book you have read before.
    continue surface on the home page, and the detail page's progress. Journal
    what each shows. Under `newer` they should already show the phantom
    position; under `stale` they should show yours.
-2. Open the book to read. Note exactly where it opened.
+2. Open the book to read. Note exactly where it opened. **Then leave the
+   reader with no page turned and read the detail page again.** This is the
+   decisive observation of the whole flow: if the open itself has rewritten
+   the position — the detail page now says 0% where it said the phantom's
+   figure a moment ago — that is the data-loss direction, and reading on from
+   here (step 4) would mask it, because reading forward legitimately
+   supersedes a position. Journal both readings before you continue.
 3. Compare against what the runner told you. Under `newer`, you should be at
    the phantom position, give or take a page; under `stale`, at your own.
 4. Read on for a few pages, past the phantom position if you are near it.
@@ -74,13 +80,23 @@ already in the journal as `progress.set` under your actor with `surface`
   opens at another.
 - Your reading is later overwritten by the phantom position. High severity:
   that is a device fighting the server and winning wrongly.
+- **The open overwrites the phantom.** The reader opens at the cover and the
+  detail page drops from the phantom's figure to 0% before you turn a page.
+  High severity: a reader who opened the book on the web has just lost the
+  place they held on their phone or Kobo.
 - Progress goes backwards on the detail page after you read forward.
 
 ## Sharp edges
 
 - **A percent-only position is exact to a page, not a sentence.** The phantom
   writes a whole-book percent the way a Kobo does, so the reader may open at
-  the start of the page containing it. Within a page is agreement.
+  the start of the page containing it. Within a page is agreement. **The
+  cover is never agreement.** The detail page resolves the same percent to a
+  chapter ("Ch. 18 · Chapter 12"), so the position is placeable; a reader
+  that opens at the cover has ignored it.
+- Two subflows share fail criteria with their parent, so one defect can
+  fail `reading_a_book` and this flow both. That is expected — say in each
+  `flow.end` reason which single observation carried the verdict.
 - **Position and read status are separate writes.** A phantom position on a
   book you never opened does not by itself mark it Reading; the runner says
   whether it set the status too.

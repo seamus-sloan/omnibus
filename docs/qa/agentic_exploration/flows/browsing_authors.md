@@ -13,14 +13,17 @@ where duplicates and mis-groupings hide.
 
 ## Steps
 
-1. Open the list of authors.
+1. Open the list of authors. Try its sort control (last name / most books)
+   and its name filter, and confirm the header count while filtered — it may
+   read as the library total rather than a match count; journal which.
 2. Scan it. Look for the same person appearing twice under slightly different
    spellings, entries that are obviously not a person, and empty names.
 3. Open an author with several books.
 4. Check the books listed are actually by that author, and that the count
    matches what is shown.
 5. Open one of them and confirm its detail page names the same author.
-6. Go back and open a second author, ideally one with a single book.
+6. Go back and open a second author with a single book — the common case in
+   a small library; the several-book author in step 3 is the scarce pick.
 7. Occasionally follow an author from a book's detail page rather than from the
    index, and confirm you land on the same page.
 
@@ -54,6 +57,13 @@ with the name, the book count shown, and the count you actually saw.
   present or absent — are a real and known messiness in library metadata.
   Journal them as `uncertain` rather than `fail`; they are worth collecting but
   are usually the source files, not the app.
-- A book with several authors legitimately appears under each.
+- A book with several authors legitimately appears under each. On iOS the
+  detail page shows one author card for all of them and it opens only the
+  first; journal that as an observation about the surface.
+- A paper-only or wishlist book with no files counts on an author's page but
+  may not in the index; journal both figures and say which surfaces agree.
+- A stray credit that traces to a merge, an undo or a metadata edit belongs
+  to that flow's journal, not this one's — the index renders stored credits
+  faithfully.
 - Another agent may be editing an author's books as you read. Counts shifting
   between two visits is expected.

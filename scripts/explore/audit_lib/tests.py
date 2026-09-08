@@ -320,6 +320,64 @@ class ExpectationTests(unittest.TestCase):
         self.assertEqual(unver, [])
         self.assertIn("new pile", claims.shelf_names)
 
+    def test_a_shelf_delete_drops_its_journalled_memberships(self) -> None:
+        entries = [
+            entry("shelf.create", seq=1, params={"name": "Rainy Sunday Stack"}),
+            entry("shelf.add", seq=2, target=BOOK, params={"shelf": "Rainy Sunday Stack"}),
+            entry("shelf.delete", seq=3, params={"name": "Rainy Sunday Stack"}),
+        ]
+        exps, unver, _, _ = expectations.expectations_for("agent-6", entries)
+        self.assertEqual(exps, [])
+        self.assertEqual(unver, [])
+
+    def test_a_book_delete_supersedes_the_actors_own_add(self) -> None:
+        entries = [
+            entry("book.add", seq=1, target=BOOK, params={"source_filename": "x.epub"}),
+            entry("book.delete", seq=2, target=BOOK, params={"files": ["x.epub"]}),
+        ]
+        exps, unver, _, _ = expectations.expectations_for("agent-3", entries)
+        self.assertEqual(exps, [])
+        self.assertEqual(unver, [])
+
+    def test_a_copy_removal_supersedes_a_paper_only_add(self) -> None:
+        entries = [
+            entry("book.add", seq=1, target=BOOK, params={"title": "paper only"}),
+            entry("checkin.remove", seq=2, target=BOOK, params={}),
+        ]
+        exps, _, _, _ = expectations.expectations_for("agent-4", entries)
+        self.assertEqual(exps, [])
+
+    def test_ios_bookmark_and_shelf_entries_do_not_read_the_book_title_as_a_name(self) -> None:
+        bm = entry("bookmark.create", seq=1, target=BOOK, params={"title": "Dawnshard", "location": "page 32"})
+        bm = journal.Entry(**{**bm.__dict__, "surface": "ios"})
+        sh = entry("shelf.add", seq=2, target=BOOK, params={"title": "Dawnshard", "shelf": "Lunch Break Picks"})
+        sh = journal.Entry(**{**sh.__dict__, "surface": "ios"})
+        exps, _, _, _ = expectations.expectations_for("agent-6", [bm, sh])
+        by_family = {e.family: e for e in exps}
+        self.assertIsNone(by_family["bookmark"].value.get("label"))
+        self.assertEqual(by_family["shelf_member"].target, "Lunch Break Picks")
+
+    def test_a_highlight_delete_naming_deleted_text_pops_that_create(self) -> None:
+        entries = [
+            entry("highlight.create", seq=1, target=BOOK, params={"selected_text": "first passage", "colour": "amber"}),
+            entry("highlight.create", seq=2, target=BOOK, params={"selected_text": "second passage", "colour": "green"}),
+            entry("highlight.delete", seq=3, target=BOOK, params={"deleted_text": "first passage"}),
+        ]
+        exps, unver, _, _ = expectations.expectations_for("agent-3", entries)
+        self.assertEqual([e.value["quote"] for e in exps], ["second passage"])
+        self.assertEqual(unver, [])
+
+    def test_progress_reads_the_records_envelope(self) -> None:
+        from .state import _progress_record
+        env = {"book_uuid": BOOK, "records": [
+            {"format": "epub", "epub_cfi": "epubcfi(/6/2!/4/1:0)", "progress_percent": 39},
+            {"format": "audio", "audio_position_seconds": 12.5},
+        ], "furthest": "epub", "linked": False}
+        self.assertEqual(_progress_record(env, "epub")["progress_percent"], 39)
+        self.assertEqual(_progress_record(env, "audio")["audio_position_seconds"], 12.5)
+        self.assertIsNone(_progress_record({"book_uuid": BOOK, "records": []}, "epub"))
+        self.assertEqual(_progress_record({"format": "epub", "epub_cfi": "x"}, "epub")["epub_cfi"], "x")
+
     def test_a_shelf_delete_this_run_never_created_cancels_nothing(self) -> None:
         entries = [
             entry("shelf.create", seq=1, params={"name": "mine"}),

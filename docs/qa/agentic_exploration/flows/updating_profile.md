@@ -17,16 +17,22 @@ never change anyone's permissions, and never delete a user.
 
 ## Steps
 
-1. Go to your account page.
+1. Go to your account page — Settings → Account on the web (user menu →
+   Edit), inside the otherwise off-limits Settings screen; the You tab on
+   iOS.
 2. Change your display name to a **different plausible person's name** — not
    your actor id, not a counter, not a date. A stale copy elsewhere is just as
    obvious when the chrome still says `Mara Ellison` after you saved
    `Ada Whitfield`, and the name is displayed all over the app and copied into
    your wishlist shelf's name, so it needs to read like a person's.
 3. Save, and confirm the new name appears in the app's own chrome — wherever
-   your name is shown while you are signed in.
+   your name is shown while you are signed in. The nav trigger shows initials
+   or the picture; the full name is inside the opened user menu. On iOS there
+   is no toast — the sheet closes and the You header updates.
 4. Occasionally replace your picture instead, and confirm it appears everywhere
-   your avatar does. The corpus is book files, but many author folders carry a
+   your avatar does. On the web the file uploads on selection with no separate
+   Save; on iOS the picker is the photo library, which a simulator cannot be
+   fed — journal that step `uncertain` there. The corpus is book files, but many author folders carry a
    `cover.jpg` sidecar — use one of those.
 5. Navigate away, come back, and confirm both stuck.
 6. Reload the page and confirm again.
@@ -76,10 +82,10 @@ them.
 
 ## Sharp edges
 
-- The display name is **copied** into certain shelf names when it is set, so
-  those keep the old name until something updates them. Whether that is a bug
-  is a judgement call — journal it as `uncertain` and describe exactly what you
-  saw, rather than deciding.
+- The display name is denormalised into the wishlist shelf's name. Every run
+  so far has seen it follow the new name on the same save; a shelf that keeps
+  the old name is therefore worth a real observation, journalled `uncertain`
+  with exactly what you saw.
 - Your account settings are **not** queued when offline. The iOS agent must not
   attempt a profile change while offline; if a control is available offline and
   appears to succeed, that itself is the finding.

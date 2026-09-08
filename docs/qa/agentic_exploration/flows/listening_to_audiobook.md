@@ -5,7 +5,7 @@
 | **Runs** | on its own |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
-| **Actions** | `book.open`, `player.play`, `player.seek`, `player.rate`, `player.close` |
+| **Actions** | `book.open`, `player.play`, `player.seek`, `player.rate`, `player.sleep`, `player.close` |
 
 Listen to roughly a tenth of an audiobook **by position** — a tenth of a ten-hour
 book is an hour of playback you should skip through, not an hour of real time
@@ -24,8 +24,8 @@ chapter seams are testable even when file seams are not.
 ## Steps
 
 1. Reach the book and start listening.
-2. **Skip ahead to roughly 10% of the book** rather than listening through to
-   it — a tenth of a ten-hour audiobook is an hour of wall clock, and nothing
+2. **Advance by roughly a tenth of the book** (or to at least 10% if you are
+   starting from the beginning) rather than listening through to it — a tenth of a ten-hour audiobook is an hour of wall clock, and nothing
    here tests your patience. Play a stretch at each place you land so you can
    hear that audio actually runs, and use the controls the way a listener does:
    skip back thirty seconds after losing the thread, skip forward past
@@ -34,12 +34,17 @@ chapter seams are testable even when file seams are not.
 4. If the book has several files or chapters, cross at least one boundary and
    watch what happens at the seam.
 5. Occasionally set a sleep timer and watch it count down; you need not wait
-   for it to fire.
-6. **Go back to the library, then close the mini-player.** Follow the book title
-   out of the player, then use the persistent mini-player's "Stop and close
+   for it to fire — though "End of chapter" armed just before one of a book's
+   short early chapters fires inside the budget, which is worth seeing once.
+   Journal it as `player.sleep`. Closing the player cancels it.
+6. **Leave the player, then close the mini-player.** On the web, follow the
+   book title out of the player — it goes to the book's **detail page**, not
+   the library — then use the persistent mini-player's "Stop and close
    player". There is no single exit control, and leaving via the title does
-   **not** stop playback — the mini-player keeps going, which is intended.
-   Then check the book's detail page reflects where you got to.
+   **not** stop playback — the mini-player keeps going, which is intended. On
+   iOS the top-left chevron minimises the player; the mini-player shows only
+   above the Library tab's bar and closes with its **X**. Then check the
+   book's detail page reflects where you got to.
 
 ## Journal
 
@@ -51,7 +56,10 @@ position, file, and rate.
 ## Pass
 
 - Audio starts within a few seconds and plays continuously.
-- Elapsed and remaining times advance sensibly and agree with each other.
+- Elapsed and remaining times advance sensibly and agree with each other —
+  at 1.0×. At any other rate, remaining is rate-adjusted wall time while
+  elapsed is book time, so the two do not sum to the total; that is the
+  intended clock, not a fault.
 - Skip controls move by the amount they advertise.
 - A speed change takes effect and is still in force after leaving and
   returning.
@@ -73,6 +81,11 @@ position, file, and rate.
   finished. Both are automatic.
 - The first few seconds may buffer while the server prepares the audio. Give it
   a moment before calling it a stall.
+- The chapters panel lists chapter **durations**, not start offsets, so the
+  seam you want to cross has to be added up. While that panel, or the speed
+  or sleep panel, is open its scrim covers the transport; close it (its own
+  Close, or a click on the scrim) before the skip buttons will answer.
+- The title/author link that leaves the player sits outside `<main>`.
 - A book that exists as both an ebook and an audiobook keeps **separate**
   positions for each. Reading position not moving because you listened is
   correct.

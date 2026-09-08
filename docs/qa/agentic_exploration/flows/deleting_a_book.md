@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Runs** | inside adding_book |
+| **Runs** | inside adding_book — handed over as its own step, after the runner refreshes the ownership guard |
 | **Owner-only** | **yes** |
 | **Surfaces** | web |
 | **Actions** | `book.delete`, `book.delete.verify` |
@@ -33,9 +33,14 @@ skipped and why.
 2. Find **Delete files…** on the detail page. It is admin-only on the web and
    absent on iOS; if you are running as a non-admin reader it will not be
    there, which is correct — journal `refused` and end.
-3. Read what the dialog offers. A book with two formats should let you choose
-   which files go; a single-format book removes the only one. Journal the
-   choice offered.
+3. Read what the dialogs offer — there are two. The first is a file picker
+   (a checkbox per file on disk, Select all, and a button that stays disabled
+   until something is ticked); the second is a confirmation that discloses
+   what else goes with the files — reading sessions, journal entries — and
+   states whether the book will be removed entirely. **Journal that second
+   dialog's wording**: it answers step 6 before you click, and if it names
+   another reader's data the book is no longer yours alone — stop, as the
+   preconditions say.
 4. If the book has two formats, delete **one** first. Confirm the book
    survives with the other format, its detail page still opens, and the
    deleted format's reader or player is no longer offered.
@@ -44,8 +49,9 @@ skipped and why.
    outcomes you see, because both may be intended: the book gone entirely, or
    the book still listed as an entry with no files. Journal which, and do not
    report either as a defect on its own.
-7. Check the author and series pages the book was on. An author with no other
-   books may vanish from the index; that is derived data behaving correctly.
+7. Check the author and series **indexes** the book was on. An author or a
+   series with no other books vanishes from its index, so there may be no
+   page left to open; that is derived data behaving correctly.
 8. Reload and confirm the state holds.
 
 ## Journal

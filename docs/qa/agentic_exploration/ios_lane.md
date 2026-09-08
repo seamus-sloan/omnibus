@@ -23,8 +23,30 @@ scripts/explore/ios.sh screenshot  # a PNG you can look at
 ```
 
 Taps and typing are not in that script — use whatever simulator control your
-harness gives you, and read the screen from `screenshot`. The prime directive
-still holds: **you navigate by tapping**, never by deep link. The only URL you
+harness gives you, and read the screen from `screenshot`. **Before your first
+flow, open the You tab and read who is signed in**: the simulator keeps the
+previous run's session, and run `r-20260908-01` started signed in as the
+*last* run's iOS actor. Sign that session out and sign in as yourself. Three
+more things about driving a simulator: a tap issued just before a screenshot
+lands *after* it, so pause a second or two between them; the system's "Save
+Password?" sheet appears after a sign-in and needs dismissing; and the
+keyboard autocorrects — curly quotes, capitalised line starts, an em dash
+dropped — so type plain ASCII and expect the text the app holds to differ
+from the text you sent. A tap lands on whatever is *under* it, so after a
+swipe let the sheet stop moving before you aim.
+
+The surface has less than the web in a few places, and each is a known gap
+rather than a finding: no metadata editor page (a shelf tile's long-press
+menu does offer **Edit metadata**, the provider-backed fetch of #2127); no
+Edit shelf control; no copy note and no
+remove-copy control for a physical copy; no delete for any book; no
+rating-clear control; no toast on a profile save (the sheet closes and the
+header updates); "reload" is `ios.sh relaunch`; and after sign-out the
+**Welcome back** screen keeps the server, with the connect step behind "Use a
+different server". The You tab's **Book details → Use scroll stops** toggle
+exists, as on the web.
+
+The prime directive still holds: **you navigate by tapping**, never by deep link. The only URL you
 may send the app is the offline switch below, and that is a device control,
 not a destination.
 
@@ -76,8 +98,12 @@ not observable from the web surface.
 
 1. **Online, on the shelf you will use.** Open a book you are about to write
    to and note what it currently shows: position, read status, rating,
-   highlights, bookmarks, journal entries. Journal that as your baseline; the
-   audit compares against it.
+   highlights, journal entries (bookmarks live only inside the reader's
+   Bookmarks & Highlights sheet, so read them there). Journal that as your
+   baseline; the audit compares against it. **Create a hand-picked shelf of
+   your own now**, under You → Shelves, if you have none: shelf creation is
+   correctly refused offline, and step 3 needs a shelf that is yours rather
+   than another reader's.
 
    **Then download it, while you still can.** The reader serves the downloaded
    file when there is one and otherwise fetches the book over `/api/*` — which

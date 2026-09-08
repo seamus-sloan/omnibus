@@ -45,6 +45,34 @@ rather than pressing on with unreliable evidence.
   `page.getByTestId("add-books-file-input").setInputFiles("/abs/path.epub")`
   and then read the review form's fields. A file of any size is fine — a
   multi-part audiobook included.
+- **A locator that times out inside a `.then()` chain kills the driver.**
+  The rejection is unhandled in the driver's process and Node exits — that is
+  what took agent-1's browser down on a Play click. Keep every command one
+  top-level `await`, one statement per call, and let a timeout come back as an
+  error rather than as a dead server.
+- **A mouse drag over the reader's iframe hangs the command** for the full
+  timeout while the page stays responsive. Select text with a triple-click,
+  or a click and a shift-click; both produce a correct highlight.
+- **The scratch directory is shared with every other agent.** A helper script
+  you drop there is overwritten by theirs, and one run sent an agent's
+  commands into another agent's browser that way. Use a directory named for
+  your actor and nothing else.
+- **Some names are not what they look like.** The nav's "LIBRARY" is
+  uppercase by CSS, so match it case-insensitively. The shelf dialog's Create
+  button may read `Create · N` once a name is typed (one agent saw the count,
+  another a plain "Create"), and rail chips'
+  accessible names are prefixed by kind ("Smart shelf Weeknight Reading").
+  A table column sorts from its header's inner **button**, not the cell.
+  The journal composer's toolbar buttons are named `Bold`, `Italic`,
+  `Strikethrough`, `Heading 1/2`, `Quote`, `Bullet list`, `Numbered list`,
+  `Checklist`, `Inline code`, `Link`, `Spoiler — blurred until clicked`.
+- **Two surfaces are hover fans.** The continue surface is one (below), and
+  so is "From the same hand" on a book page: the author lead card covers all
+  but a sliver of each sibling cover until you hover, so a click that lands
+  nowhere is the fan, not a dead tile.
+- **An open command palette blocks every other click** with its scrim. A
+  driver that leaves it open after a failed step then sees each page click
+  "intercepted". Close it (Escape) before navigating.
 - **A `"driver": "dead"` answer from `driver.sh run` is your harness, not the
   app.** Your browser server died under the command and the app never saw it.
   Journal an anomaly of kind `issue`, run `driver.sh restart <n>`, have the
@@ -72,12 +100,18 @@ Each of these was nearly filed as a defect by an agent that checked first.
   on any book page and read as two expanded panels drawn over the page. Check
   computed style before believing a panel is open.
 - **The persistent mini-player lives outside `<main>`.** Audio playing with "no
-  visible transport" usually means you only looked inside `main`.
+  visible transport" usually means you only looked inside `main` — and the
+  listen page has no `<main>` landmark at all, so read `document.body` there.
 - **The journal composer is a CodeMirror contenteditable.** `locator.fill()`
   silently strips every newline, collapsing a multi-paragraph entry to one line
   — which looks exactly like the app truncating your text. Use
-  `keyboard.type`. `ControlOrMeta+End` also does not move the caret to the end
-  there, so an "append" can land mid-document.
+  `keyboard.type`. Neither `End` nor `ControlOrMeta+End` moves the caret to
+  the end there, so an "append" can land mid-document, and an empty line is a
+  zero-size span the driver cannot click — reach it with ArrowDown from a
+  neighbour.
+- **"Synced here" in the reader footer is a button**, not a status. It
+  declares the ebook and audiobook aligned at that spot, and it is shown on
+  ebook-only books too. It never jumps anywhere.
 
 ## Deliberate app behaviour
 
@@ -106,6 +140,23 @@ Each of these is intended, and each has been mistaken for a defect before:
   changed underneath you.
 - **Indexing is asynchronous.** A newly added book may take a moment to appear.
   Wait and re-check before reporting it missing.
+- **The library reloads through its defaults.** For two or three seconds
+  after a reload the page shows the grid toggle, Title sort, no count and no
+  books; then the saved view, sort and direction come back. A read taken in
+  that window sees a revert that is not one. The book detail page likewise
+  shows a bare "Loading…" shell for several seconds on reload.
+- **Remaining time in the player is rate-adjusted.** At 1.5× elapsed is book
+  time and remaining is wall time, so the two do not sum to the total. That
+  is the intended clock (#2246), not a counter fault.
+- **Every reader's wishlist shelf is listed for everyone, marked Public.**
+  Seeing other readers' wishlists on the rail or the iOS Shelves grid is by
+  design; seeing their *entries inside your own* wishlist is the finding.
+- **PHYS is a table-view badge.** On the web a paper copy shows in the table's
+  Formats cell and on the detail page's Physical copy card; grid tiles carry
+  no badge on either surface.
+- **Re-running a check-in lookup on a book you already filed navigates
+  straight to it** on the web, with no message; iOS shows an "Already on your
+  shelf" card instead. Both are recognition, not silence.
 - **The book detail page has two layouts, chosen by a per-user setting.** With
   scroll stops off (the default) it is one continuous page; with them on it
   snaps section by section, with a dot rail down the side. Only one exists at

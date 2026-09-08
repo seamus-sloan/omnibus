@@ -153,7 +153,7 @@ One subagent per actor, in parallel, each given **only**:
 - the run id;
 - **its agent number**, for `driver.sh run <n>` — never another agent's. The iOS agent gets `ios.sh` instead, which takes no agent number.
 
-`resuming_from_another_device` needs the phantom position written **before** the hand-over, and `--kobo` makes you the device — both in [scenarios.md](scenarios.md).
+`resuming_from_another_device` needs the phantom position written **before** the hand-over, `adding_book` needs a **re-guard** before its subflows, every flow is a **fresh subagent** briefed from a standing file, and `--kobo` makes you the device — all in [scenarios.md](scenarios.md).
 
 Tell each agent, verbatim in the brief: read
 [`pitfalls.md`](../../../docs/qa/agentic_exploration/pitfalls.md) before
