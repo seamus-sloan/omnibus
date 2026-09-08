@@ -373,3 +373,60 @@ async fn download_validators_resolves_a_merged_uuid_to_the_surviving_book() {
         "a download taken before a merge must still be answerable"
     );
 }
+
+#[tokio::test]
+async fn get_book_files_sums_the_parts_into_a_per_file_duration() {
+    // An audiobook's runtime is the one thing a caller cannot derive from the
+    // rest of the row, and guessing one from training data is how a listening
+    // position becomes a wrong percent.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO scan_roots (id, path, display_name) VALUES (1, '/lib', 'Lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title) \
+         VALUES ('bk', 'b.m4b', 1, '/lib/b.m4b', 'Book') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let audio_id: i64 = sqlx::query_scalar(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch, ordinal) \
+         VALUES (?, 'M4B', 'b', 4096, 255, 0) RETURNING id",
+    )
+    .bind(book_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch, ordinal) \
+         VALUES (?, 'EPUB', 'b', 4096, 255, 0)",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    for (ordinal, duration) in [(0i64, 1200.4f64), (1, 600.2)] {
+        sqlx::query(
+            "INSERT INTO book_file_parts \
+                (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) \
+             VALUES (?, ?, 'p', 1, 0, ?)",
+        )
+        .bind(audio_id)
+        .bind(ordinal)
+        .bind(duration)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let files = get_book_files(&pool, book_id).await.unwrap();
+    let audio = files.iter().find(|f| f.format == "M4B").unwrap();
+    let epub = files.iter().find(|f| f.format == "EPUB").unwrap();
+    assert_eq!(audio.duration_seconds, Some(1801));
+    assert_eq!(
+        epub.duration_seconds, None,
+        "a file with no parts has no runtime to report, which is not the same as zero"
+    );
+}

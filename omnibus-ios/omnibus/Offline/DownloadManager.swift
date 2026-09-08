@@ -159,6 +159,14 @@ final class DownloadManager: NSObject {
     /// registry is fully populated.
     private var resumable: Set<String> = []
 
+    /// When the last validator sweep finished, or `nil` if none has this
+    /// launch. See `refreshStaleFlags`.
+    ///
+    /// In memory rather than on disk on purpose: a device that was off for a
+    /// week should ask on its first trigger back, not wait out a TTL it slept
+    /// through.
+    var lastValidatorSweep: Date?
+
     private static let wifiOnlyKey = "omnibus.downloads.wifiOnly"
 
     /// Whether downloads may use a cellular or otherwise metered path.
@@ -429,8 +437,32 @@ final class DownloadManager: NSObject {
     /// Renderer-facing form of [`staleness(of:kind:against:)`]: "don't know"
     /// reads as "not stale", because prompting a reader to re-download on a
     /// guess is worse than staying quiet.
-    func isStale(_ uuid: String, kind: DownloadKind, against book: Book) -> Bool {
-        staleness(of: uuid, kind: kind, against: book) ?? false
+    ///
+    /// `book` is optional, and a caller that hasn't got one is the common
+    /// case rather than the odd one: the library listing projection carries no
+    /// file rows, so a screen listing downloads has nothing to compare
+    /// against. Those fall back to what the last validator sweep stored —
+    /// which is why the sweep exists.
+    func isStale(_ uuid: String, kind: DownloadKind, against book: Book? = nil) -> Bool {
+        if let book, let answer = staleness(of: uuid, kind: kind, against: book) { return answer }
+        return record(for: uuid, kind: kind)?.stale ?? false
+    }
+
+    /// Apply one validator answer to the registry, answering the record it
+    /// changed so the caller can persist it — `nil` when nothing changed.
+    ///
+    /// Lives here rather than beside the rest of the sweep because `records`
+    /// is `private(set)`, and the decision it applies is
+    /// `staleUpdate(for:from:)`, which is where the three-valued rule is
+    /// written down.
+    func noteValidator(_ answer: DownloadValidator) -> DownloadRecord? {
+        let key = DownloadRecord.key(answer.bookUUID, answer.format.kind)
+        guard var record = records[key],
+              let stale = Self.staleUpdate(for: record, from: answer)
+        else { return nil }
+        record.stale = stale
+        records[key] = record
+        return record
     }
 
     /// Whether any downloaded format of this book has been superseded.

@@ -211,7 +211,7 @@ struct InProgressCard: View {
     /// it reports the percentage it does carry — the same split
     /// `ContinueHero` makes, and for the same reason.
     static func positionLabel(_ point: ResumePoint) -> String {
-        if point.isAudio, let total = point.totalDurationSeconds,
+        if point.isAudio, let total = point.record.totalDurationSeconds,
             let position = point.record.audioPositionSeconds
         {
             let left = Format.atRate(max(0, total - position), rate: point.playbackRate ?? 1.0)

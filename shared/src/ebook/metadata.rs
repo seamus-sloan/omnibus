@@ -209,4 +209,14 @@ pub struct BookFileInfo {
     /// backfill of those columns never reads as a content change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub etag: Option<String>,
+    /// Playing time of this file, summed over its parts. Present for audio
+    /// rows only, so a caller reading `book_files` never has to source an
+    /// audiobook's runtime from anywhere else — guessing one from training
+    /// data is how a listening position becomes a wrong percent.
+    ///
+    /// Whole seconds, unlike the fractional `ProgressRecord::total_duration_seconds`
+    /// this rounds: a catalog row is read for "how long is it", not for
+    /// position arithmetic, and an integer keeps this row `Eq`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<i64>,
 }

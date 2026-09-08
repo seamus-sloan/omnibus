@@ -1,6 +1,7 @@
 //! Unit tests for the `progress` module, split by sub-topic into the sibling
 //! modules below; the shared book/user/audio-file seeding fixtures live here.
 
+mod book_progress;
 mod concurrency;
 mod derive_percent;
 mod kobo_statistics;
@@ -44,6 +45,40 @@ async fn seed(pool: &SqlitePool, library: &str, title: &str) -> (i64, String) {
         vec![crate::ebook::IndexedBook {
             metadata: EbookMetadata {
                 filename: format!("{title}.epub").to_lowercase(),
+                title: Some(title.to_string()),
+                ..Default::default()
+            },
+            cover: None,
+            mtime_epoch: 0,
+            size_bytes: 0,
+            word_count: None,
+        }],
+    )
+    .await
+    .expect("seed book");
+    let books = crate::list_books(pool, library).await.unwrap();
+    let book = books
+        .into_iter()
+        .find(|b| b.title.as_deref() == Some(title))
+        .unwrap();
+    (book.id, book.unique_identifier.clone().unwrap())
+}
+
+/// Like [`seed`] but with an explicit on-disk filename, so `book_file_path`
+/// resolves to a file the test actually wrote. Shared by the derived-percent
+/// and position-resolution suites, which both need a real archive on disk.
+async fn seed_named_file(
+    pool: &SqlitePool,
+    library: &str,
+    title: &str,
+    filename: &str,
+) -> (i64, String) {
+    replace_books(
+        pool,
+        library,
+        vec![crate::ebook::IndexedBook {
+            metadata: EbookMetadata {
+                filename: filename.to_string(),
                 title: Some(title.to_string()),
                 ..Default::default()
             },
