@@ -1,9 +1,8 @@
 //! Tests for the reading-stats REST handlers, split by route into the
 //! sibling modules below; the session seeding fixtures they share live
-//! here. The `db::stats` cache is process-wide and keyed on
-//! `(user_id, range, offset_minutes)`, and every fixture pool restarts user
-//! ids at 1 — so each content-asserting test uses a distinct range (or a
-//! distinct resolved offset) to keep its cache key unique across the binary.
+//! here. The `db::stats` cache is process-wide and every fixture pool
+//! restarts user ids at 1, so each content-asserting test picks a distinct
+//! range or offset to keep its cache key unique across the binary.
 
 mod goals;
 mod session_log;
