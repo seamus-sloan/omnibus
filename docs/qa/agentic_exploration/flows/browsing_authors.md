@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Weight** | 8% |
+| **Weight** | 6% |
 | **Owner-only** | no — but **never delete an author** |
 | **Surfaces** | web, iOS |
-| **Actions** | `authors.index`, `author.view`, `nav.follow` |
+| **Actions** | `author.index`, `author.view`, `nav.follow` |
 
 Walk the author index and open a few. This flow is mostly about whether the
 index agrees with the library — author grouping is derived, and derived data is
@@ -26,7 +26,8 @@ where duplicates and mis-groupings hide.
 
 ## Journal
 
-`authors.index` with the total count and any suspicious entries verbatim —
+`author.index` (singular — the audit knows the noun `author`, not `authors`)
+with the total count and any suspicious entries verbatim —
 near-duplicate spellings especially, since those are the finding. `author.view`
 with the name, the book count shown, and the count you actually saw.
 

@@ -106,3 +106,15 @@ Each of these is intended, and each has been mistaken for a defect before:
   changed underneath you.
 - **Indexing is asynchronous.** A newly added book may take a moment to appear.
   Wait and re-check before reporting it missing.
+- **The book detail page has two layouts, chosen by a per-user setting.** With
+  scroll stops off (the default) it is one continuous page; with them on it
+  snaps section by section, with a dot rail down the side. Only one exists at
+  a time, and which one you see follows your own account page toggle — another
+  agent seeing the other layout is not a disagreement.
+- **The stats window pills move one band only.** Week / Month / Year /
+  Lifetime govern the "In this window" band; the streak, the goals, the
+  heatmap and the open-books list are standing figures and are *meant* to stay
+  put. Under Lifetime the per-tile comparisons are absent by design.
+- **Tag and genre chips on a detail page are not links.** They are inert on the
+  page, and editable only through the `+` control beside them. Clicking one
+  and going nowhere is correct.

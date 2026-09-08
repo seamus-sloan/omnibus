@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 15% |
+| **Weight** | 13% |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `book.open`, `player.play`, `player.seek`, `player.rate`, `player.close` |

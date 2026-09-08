@@ -2,14 +2,17 @@
 
 | | |
 |---|---|
-| **Weight** | 5% |
+| **Weight** | 4% |
 | **Owner-only** | no — a wishlist is per-user |
 | **Surfaces** | web, iOS |
 | **Actions** | `checkin.start`, `checkin.lookup`, `wishlist.add`, `wishlist.remove` |
 
 A wishlist entry is a book you do not have. It is reached through **checking in
 a book**, not through a button on a library page — the app looks the book up on
-the web first, and the wishlist is one of the outcomes it offers.
+the web first, and the wishlist is one of the outcomes it offers. The other
+outcomes — filing a print copy — are
+[checking_in_a_book](checking_in_a_book.md); this flow takes the wishlist
+path only.
 
 That lookup is the interesting part. It goes out to real external services, so
 this flow exercises a code path that depends on the network and can legitimately
@@ -35,7 +38,10 @@ fail.
 
 `checkin.lookup` with what you searched for and the candidates returned —
 titles and authors, in order. `wishlist.add` with the chosen title, author, and
-ISBN, plus the resulting entry's identifier if one is shown.
+ISBN, plus the resulting entry's identifier — put the book's uuid in `target`
+if the app shows one, since that is what the audit looks for on your wishlist
+shelf; without it the entry is journalled but not checked. `wishlist.remove`
+with the same.
 
 ## Pass
 

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 20% |
+| **Weight** | 18% |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `book.open`, `reader.progress`, `reader.close` |
@@ -16,6 +16,18 @@ piece of state in the app, and the one whose loss a reader notices first.
 A book with an EPUB or CBZ format. Any book — you do not need to own it.
 Prefer one you have read before if you have; resuming is more interesting than
 starting.
+
+**Read a comic about one time in three, when the library has one.** The
+library's formats column says `CBZ` on the books that are comics; the runner
+tells you at hand-over whether any exist, and if none does, do not hunt for
+one. A comic opens in a page-image reader rather than the text reader, with
+no font size or theme to change — the incidental step below is a zoom or a
+page-fit toggle instead.
+
+If the runner hands you
+[resuming_from_another_device](resuming_from_another_device.md) with this
+flow, read it **before step 1**: it changes what you expect to see when the
+book opens.
 
 ## Steps
 

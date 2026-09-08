@@ -24,6 +24,8 @@ avoid. The numeric defaults are `sample.py`'s own, so the two cannot drift.
 | `--corpus` | Where is the corpus — **a directory of books the tests can upload**? | a path, or none |
 | `--seed` | Reuse a seed, or draw a fresh one? | fresh (default), or a number |
 | `--ios` | Add the one iOS agent? | no (default), yes |
+| `--kobo` | Run the Kobo scenario — you play the device against one web agent's account? | no (default), yes |
+| `--reader` | Make one web agent a non-admin reader, so the shelf-visibility and upload-refusal criteria are decidable? | no (default), yes |
 
 The corpus question says what a corpus *is* because the word is this system's
 alone: a reader who has not read `start.md` cannot answer "where is the
@@ -70,5 +72,7 @@ shell and Python halves of one run target different instances. It refuses a key
 nothing reads and a value that would not survive being loaded back.
 
 The optional settings (`OMNIBUS_EXPLORE_SSH_HOST` and its siblings) are never
-prompted for. Snapshotting and the server-log half of the report need them; a
-run without them still works, and says what it could not read.
+prompted for by `check`. The server-log half of the report degrades without
+them and says so. **Snapshotting does not degrade — it fails**, and SKILL.md
+step 3 says what to do then: ask whether to set the host now or run with no
+rollback, and never make that choice yourself.

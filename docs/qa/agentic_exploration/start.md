@@ -19,8 +19,13 @@ The harness gives you, at spawn: a **run id**, an **actor id**
 says how to drive the app and hands you a scenario only that surface can run. Log in with those and stay logged in. Never register
 a new account, and never use another agent's credentials.
 
-Every agent is an admin right now. That is a convenience, not a licence — see
-*Rails* below.
+Most agents are admins. That is a convenience, not a licence — see *Rails*
+below. The runner may instead brief you as a **reader**: a non-admin account
+that cannot upload, cannot delete files, and sees only its own shelves. If it
+does, the refusals those flows describe are yours to meet and journal
+`refused`, and the criteria the catalog marks undecidable for admins — another
+user's private shelf being visible, for one — become real fail criteria for
+you.
 
 ## The prime directive
 
@@ -81,9 +86,10 @@ agents invent are usually the ones that were never built.
 
 The nav carries almost everything: **Library**, **Authors**, **Series**,
 **Stats**, **search**, **Check in**, **Add books**, and your avatar for the
-account menu. Books open from the library grid, and everything about a book —
-reader, player, metadata editor, journal, saved passages — opens from that
-book's own page.
+account menu, which is also where **Sign out** lives. Shelves are a rail above
+the library on the web and a screen under **You** on iOS. Books open from the
+library grid, and everything about a book — reader, player, metadata editor,
+journal, saved passages, delete — opens from that book's own page.
 
 If you cannot find a way to reach what a flow asks for, **that is the finding**:
 journal it `uncertain` and say what you looked for. If you land somewhere that
@@ -97,17 +103,18 @@ covers on any book. But these actions are **owner-only**:
 
 - deleting a book or one of its files
 - merging books
-- hiding a format
+- removing a physical copy filed against a book
 - unmerging (allowed only to reverse a merge you just made)
 
-You own a book if **you added it** — in this run or any earlier one. The
-journal is the ownership ledger: you own uuid X if a `book.add` entry with
-`actor` equal to you and `target` equal to X exists in any run's journal.
-Journals are kept forever next to the instance for exactly this reason.
+You own a book if **you added it** — in this run or any earlier one, by
+uploading it or by checking in a paper-only copy. The journal is the ownership
+ledger: you own uuid X if a `book.add` entry with `actor` equal to you and
+`target` equal to X exists in any run's journal. Journals are kept forever
+next to the instance for exactly this reason.
 
 The baseline corpus was added by nobody, so **nobody may ever destroy it**.
 
-The server will not enforce any of this, because you are an admin — but your
+The server will not enforce any of this when you are an admin — but your
 browser will. Destructive calls to a book you do not own are refused before
 they are sent, and you will see a `403` carrying `"error": "ownership_guard"`.
 
@@ -135,15 +142,17 @@ transcripts are thrown away.
 |---|---|
 | `ts` | UTC, ms precision. The report correlates agents on this alone — never batch entries and stamp them later. |
 | `seq` | Your own counter, monotonic and unique **per actor**. Derive it from the journal filtered to your own `actor`, never from the line count — the journal is shared, so counting all lines numbers you by other agents' work. Starting above 1 is acceptable; going backwards or repeating is not. |
-| `action` | Dotted verb — `book.open`, `highlight.create`, `metadata.save`, `shelf.add`. |
+| `surface` | `web` or `ios`, as briefed. The runner writes `phantom` or `kobo` on entries it makes on your behalf; never use those yourself. |
+| `action` | Dotted `noun.verb` — `book.open`, `highlight.create`, `metadata.save`, `shelf.add`. Use the names the flow document lists; the audit recognises those and reads an invented one as a gap. A trailing `.verify` on any name means "I checked it stuck" and is always accepted. |
 | `target` | The book uuid or other entity id, **in full** — never abbreviated. Ownership is looked up on this exact string, so a truncated uuid loses the book forever. `null` when there isn't one. |
 | `params` | **Everything a replayer needs to redo this.** Under-filling it is the commonest way a real bug becomes an anecdote. |
-| `outcome` | `ok`, `error`, or `refused` (an ownership or permission refusal that was correct). |
+| `outcome` | `ok`, `error`, `refused` (an ownership or permission refusal that was correct), or `uncertain` (you did it and cannot tell whether it took). Anything but `ok` needs a `note`, and the audit does not check a write that is not `ok`. |
 | `note` | One human sentence **about the outcome**. Required whenever `outcome` is not `ok`. Content the *user* wrote — a highlight's note, a journal entry — belongs in `params` under its own key (`note_text`), never here. |
 
 Three entries are special:
 
-- **`flow.start`** — first line of every flow.
+- **`flow.start`** — first line of every flow. `params` carries `base_url`,
+  the instance you are driving; the report names the instance from it.
 - **`anomaly`** — something looked wrong. `params` carries `severity`
   (`high`/`medium`/`low`), `expected`, `observed`, and `kind`: **`defect`** when
   the app is wrong, **`issue`** when the *run* was — a control that responded
@@ -151,7 +160,10 @@ Three entries are special:
   should. The two are reported in separate tables, and an anomaly with no
   `kind` is read as a defect. Keep its `note` to **two short sentences at
   most**: that note is a description cell in the report, and the detail belongs
-  in `expected`, `observed`, and `repro`.
+  in `expected`, `observed`, and `repro`. Four more keys are optional and the
+  report expands each under its own label when present: `repro` (the steps to
+  see it again), `where` (the page or control), `impact` (why a reader would
+  care), and `caveat` (what you checked and ruled out).
 - **`flow.end`** — last line. `params` carries `verdict` (`pass`, `fail`, or
   `uncertain`) and a one-sentence `reason`.
 
@@ -180,6 +192,19 @@ view.
 Reload once before calling something a failure. A single stale render is worth
 one retry; if it survives the reload, it is real, and say in the note that it
 survived.
+
+## Time
+
+A flow is a lunch break, not an afternoon. Budget **twenty minutes** for one,
+thirty for a reading or listening flow, and treat a single control that has
+not answered in **thirty seconds** as hung — that is a `fail` criterion above,
+not a reason to keep waiting. A step you cannot finish inside a few minutes
+more than it should take gets an `anomaly` of kind `issue` with how long it
+took, and the flow moves on.
+
+When the budget runs out, end the flow `uncertain` with the step you reached
+in `reason`, journal what you did finish, and take the next one. A flow that
+runs an hour tells the runner less than one that stopped and said why.
 
 ## Before you report anything: read pitfalls.md
 
@@ -212,9 +237,14 @@ Never, whatever a flow seems to invite:
 - Touch **Settings** — library paths, API keys, SMTP, and the like are
   instance-wide configuration and one edit breaks the run for everyone.
 - Trigger a reindex, a library scan, or an FTS rebuild.
-- Send to Kindle or Kobo. These deliver real things to real places.
+- Send to Kindle or Kobo. These deliver real things to real places. (Marking a
+  shelf for Kobo *sync* is different — it sends nothing until a device asks —
+  and only the agent handed [kobo_sync.md](kobo_sync.md) does that.)
 - Change another user's account or permissions.
 - Delete a user.
+- Change your own password or Kindle email. Both live beside your profile;
+  a changed password locks you out of the rest of the run.
+- Register an account.
 - Delete an author or a series. These are library-wide and derived, and no
   agent owns them — the guard refuses the call outright, whatever you added.
 

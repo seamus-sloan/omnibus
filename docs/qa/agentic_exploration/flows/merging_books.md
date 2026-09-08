@@ -19,7 +19,14 @@ server does not enforce ownership, you do.
 ## Preconditions
 
 Two books you added, ideally in this run via [adding_book](adding_book.md).
-Confirm ownership of both from your journal before starting.
+Confirm ownership of both from your journal before starting. The runner checks
+this before handing the flow over and withholds it from an agent that owns
+fewer than two; if you were handed it anyway and own only one, journal that
+and end `uncertain` — do not upload a second book to make the numbers work.
+
+The detail page's **Link Formats** control offers the same join from the other
+direction when two books are one work in two formats. It is a merge under
+another name, and the same ownership rule applies to both books.
 
 ## Steps
 
@@ -77,3 +84,10 @@ detectable.
   That is deliberate so old links keep working — not a leak.
 - Search indexes may lag by a moment after a merge. Re-check before reporting
   a stale result.
+- A merged ebook-plus-audiobook book gains the **immersive read** invitation
+  on its detail page. Seeing it appear after the merge is correct; if you
+  drew [deleting_a_book](deleting_a_book.md) too, deleting one format should
+  take it away again.
+- **The audit does not verify merges.** `merge.*` is out of its scope because
+  the result is library-wide. Your before-state journal entries are the only
+  record that can show what a merge lost.

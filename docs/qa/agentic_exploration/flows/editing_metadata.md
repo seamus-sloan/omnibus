@@ -5,7 +5,7 @@
 | **Weight** | 25% of a details flow |
 | **Owner-only** | **no** — but see below |
 | **Surfaces** | web |
-| **Actions** | `metadata.open`, `metadata.save`, `cover.replace` |
+| **Actions** | `metadata.open`, `metadata.save`, `cover.replace`, `genre.edit`, `tag.edit` |
 
 Metadata edits are **library-wide**: every user sees them, and they outlive
 reindexing. Any agent may make them, which is deliberate — but it means the
@@ -15,6 +15,29 @@ correct answer. Your journal entry is still the record of what you meant.
 Because this is shared and unverifiable, **be conservative**: change one or two
 fields, make the change obviously yours, and never blank a field that had
 content.
+
+## Three doors
+
+Metadata can be edited from three places, and the point of rotating between
+them is that each has been wrong on its own before:
+
+- **The editor page**, opened from the book's detail page. Every field; a
+  Save with an edited-field count. Steps 1–7 below describe it.
+- **The detail page's chip editors.** The `+` beside the genres and the `+`
+  beside the tags on the detail page open an inline editor for that one
+  list, saved on the spot. Use these for a genre or tag edit at least
+  sometimes instead of the editor page; the criteria are the same, and the
+  edited chip must appear in the list without a reload.
+- **The library table's inline cells.** In table view, clicking a title,
+  author, series, tags, genres, published or language cell opens an editor in
+  place; Enter saves, Escape discards. Occasionally make your one edit here —
+  then open the detail page and confirm it agrees, and confirm the **sort**
+  still holds if the column you edited is the one the table is sorted on
+  (see [sorting_the_library.md](sorting_the_library.md): the displayed value
+  and the sort key must agree after an edit).
+
+Whichever door, the rules below about what to write and what to journal are
+the same.
 
 ## Steps
 
@@ -44,7 +67,10 @@ content.
 
 `metadata.open` with the uuid and the **before** values of everything you are
 about to touch. `metadata.save` with the field names and their before and after
-values. `cover.replace` with the uuid and the source filename.
+values, and `door` — `editor`, `chips` or `table` — so a finding names where
+the edit was made. `genre.edit` / `tag.edit` when you used a chip editor, with
+before and after. `cover.replace` with the uuid and the source filename. All
+of these are out of the audit's scope, by design: the journal is the record.
 
 The before values matter more here than anywhere else: with several agents
 editing freely, the only way to reconstruct what happened is from each agent's
@@ -63,6 +89,11 @@ own record of what it found and what it left.
 
 - The editor opens with another book's values.
 - Saving reports success but nothing changes.
+- An edit made through one door is not visible through another — a table
+  cell edit the detail page does not show, or a chip edit the editor page
+  does not carry.
+- A table cell edit changes the displayed value but the column no longer
+  sorts on it.
 - A field you did not touch changes.
 - The save errors, or hangs past thirty seconds.
 - A replaced cover appears on a different book.
@@ -78,3 +109,8 @@ own record of what it found and what it left.
   library grid. Wait and re-check before reporting it.
 - Genres are stored as an override like any other edit — editing them marks the
   book as having overrides, which is expected.
+- The description accepts a paragraph of prose. Editing it is fine; blanking
+  it is not, and a description that arrived as raw HTML from the file is a
+  finding about the file's import, not something to fix by hand.
+- On iOS there is no editor of any kind; this subflow is web-only, and the
+  runner will not hand it to the iOS agent.

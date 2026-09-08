@@ -5,7 +5,7 @@
 | **Weight** | 10% |
 | **Owner-only** | n/a — **this flow is what creates ownership** |
 | **Surfaces** | web |
-| **Actions** | `book.add`, `book.add.confirm` |
+| **Actions** | `book.add`, `book.add.verify` |
 
 Upload a book from the corpus. This is the only flow that grows the library,
 and its `book.add` journal entry is what makes you the owner of the result —
@@ -28,8 +28,12 @@ uploads the file while skipping the entire client-side path this flow exists to
 exercise, and it would report a pass for a broken uploader. An upload you did
 not perform through the screen is not this flow.
 
-The corpus path handed to you at spawn. Pick a file you have not added before;
-the harness tells you which of the corpus you have already used.
+The corpus path handed to you at spawn, **and the list of corpus files already
+uploaded** — the runner derives it from every run's journals and hands it to
+you in the brief, and when two agents draw this flow in one run the runner
+also names which file is yours. Pick a file on neither list. If you were
+handed no such list, ask before uploading rather than guessing: a file added
+twice attaches to the first copy as a second format and changes what you own.
 
 **The corpus is something you upload, not something you install.** Every book
 in this flow reaches the library by going through the app's Add-books screen.
@@ -72,18 +76,24 @@ goes in through the front door* in [start.md](../start.md).
    format, publication date, and identifiers are plausible for that book. The
    detail page shows no page or chapter count — do not go looking for one.
 8. **Journal `book.add` with the resulting uuid.** This is the ownership record.
+9. Once the book can be opened, journal `book.add.verify` with what the detail
+   page showed. The trailing `.verify` is how you say "I checked it stuck";
+   do not invent another name for it.
 
 Two refusals you may legitimately meet, both correct behaviour: "Title and
 author are required." if you clear those fields, and "You don't have permission
-to add books to this library." if your account lacks upload rights. Journal
-either as `refused`, not as a failure.
+to add books to this library." if your account lacks upload rights — which is
+the case when the runner briefed you as a **reader**; then the refusal is the
+whole flow, and a screen that lets a reader upload anyway is the finding.
+Journal either as `refused`, not as a failure.
 
 ## Journal
 
-`book.add` carrying the source filename, the resulting **uuid**, the detected
-format, and the extracted title and author. If the upload failed, journal it
-with `outcome: error` and the message — a rejected upload is as interesting as
-an accepted one.
+`book.add` carrying `source_filename` (the file's name as it is in the corpus
+— the runner reads this key to build the used-files list), the resulting
+**uuid**, the detected format, and the extracted title and author. If the
+upload failed, journal it with `outcome: error` and the message — a rejected
+upload is as interesting as an accepted one.
 
 ## Pass
 

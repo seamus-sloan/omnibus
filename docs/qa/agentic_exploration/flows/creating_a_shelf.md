@@ -5,9 +5,10 @@
 | **Weight** | 4% |
 | **Owner-only** | no; shelves are per-user |
 | **Surfaces** | web (create only), iOS (create and fill) |
-| **Actions** | `shelf.create`, `shelf.select`, `shelf.edit` |
+| **Actions** | `shelf.create`, `shelf.select`, `shelf.edit`, `shelf.delete` |
 
-Make a shelf and confirm it exists, is yours, and behaves when selected.
+Make a shelf and confirm it exists, is yours, and behaves when selected. Then
+change it, and — for a shelf you made in this flow — take it away again.
 
 ## ⚠️ Read this before you start
 
@@ -55,7 +56,13 @@ control as missing when you are on iOS.
    the two must agree exactly. Do not reuse a name you have already used.
 4. Choose its visibility — **Private** or **Public** — and note whether you are
    making a hand-picked shelf or a **Smart** one (a smart shelf fills itself
-   from a rule; a hand-picked one does not).
+   from a rule; a hand-picked one does not). **Make it Smart at least every
+   other time on the web**, because that is the only shelf the web can fill:
+   write a rule a reader would — an author you saw in the index, a genre from
+   a book page — and read the **preview** the form shows before you create.
+   Journal the rule and the preview count; the shelf must hold exactly those
+   books once created, and a book that matches the rule but is missing, or one
+   that does not and is present, is a finding.
 
    **iOS only shows you back a *public* choice.** The shelf screen's meta line
    reads "N books · Manual · Public", and a private shelf simply omits that
@@ -81,12 +88,35 @@ control as missing when you are on iOS.
     `+` (or **Add the first book**), and confirm they appear. Then long-press
     one, choose **Remove from shelf**, and confirm it leaves the shelf but
     **not** the library.
+11. **Edit it.** Open **Edit shelf** (the pencil on the web; the shelf screen's
+    edit control on iOS) and change **one** thing — the name, or the
+    visibility, or on a Smart shelf the rule. Save, and confirm the change on
+    the rail or card and after a reload. On the web the form also carries a
+    **Kobo sync** opt-in: read it, confirm the wishlist shelf does *not* offer
+    it, and **leave it unticked** unless you were handed
+    [kobo_sync.md](../kobo_sync.md). Journal `shelf.edit` with before and
+    after. **The audit does not check an edit** — `shelf.edit` is a verb it
+    does not know, so it lists the entry as unrecognised, which is expected.
+    It verifies a shelf by the name you journalled on `shelf.create`, so if
+    you rename, journal the new name on the `shelf.edit` entry and expect the
+    audit to list the old name as missing; the runner reads the pair
+    together.
+12. **Delete it — only a shelf you created in this flow.** Find the delete
+    control in **Edit shelf**, read the confirmation, and confirm. On the web
+    the rail must drop it and the library must return to All Books; on iOS the
+    card must go. Reload and confirm it stays gone. Then confirm every book
+    that was on it is **still in the library** — a shelf delete removes the
+    shelf, never a book. Journal `shelf.delete` with the name; the audit pops
+    the matching `shelf.create` and expects nothing. Never delete a shelf you
+    did not create this flow, and never the wishlist.
 
 ## Journal
 
-`shelf.create` with the name, visibility, and kind. `shelf.select` with the name
-and the resulting count. On iOS, `shelf.add` / `shelf.remove` with the shelf and
-the book uuids — those are what the audit reconciles.
+`shelf.create` with the name, visibility, and kind — and for a Smart shelf the
+rule and the preview count. `shelf.select` with the name and the resulting
+count. `shelf.edit` with the field, before and after. `shelf.delete` with the
+name. On iOS, `shelf.add` / `shelf.remove` with the shelf and the book uuids —
+those, the create, and the delete are what the audit reconciles.
 
 ## Pass
 
@@ -103,21 +133,24 @@ the book uuids — those are what the audit reconciles.
   and that screen lists exactly the shelf's books.
 - On iOS, added books appear and a removed book leaves the shelf but stays in
   the library.
+- A Smart shelf holds exactly the books its rule previewed.
+- An edit sticks, and a delete removes the shelf and nothing else.
 
 ## Fail
 
 - The shelf saves under a different name, visibility, or kind.
 - It does not appear, or disappears after a reload.
 - Selecting it shows books that do not belong to it.
-- Another user's shelf is visible **and you are not an admin**. Admins see every
-  shelf by design, and the exploration accounts are currently all admins — so on
-  this instance the criterion is undecidable and you should journal `uncertain`
-  rather than guess. Non-admin exploration accounts are planned; once one exists
-  this becomes a real, decidable fail criterion and the `uncertain` escape stops
-  applying. (Worth reporting separately: another user's private shelf
-  renders in the rail with no owner attribution, while the wishlists beside it
-  do show owner names.)
+- Another user's **private** shelf is visible **and you were briefed as a
+  reader**. Admins see every shelf by design, so for an admin agent the
+  criterion is undecidable — journal `uncertain` rather than guess. The runner
+  can provision one non-admin reader per run precisely so this becomes
+  decidable; if that is you, it is a real fail. (Worth reporting separately
+  either way: another user's private shelf renders in the rail with no owner
+  attribution, while the wishlists beside it do show owner names.)
 - **On iOS:** removing a book from a shelf deletes the book. High severity.
+- Deleting a shelf deletes a book. High severity.
+- A Smart shelf's preview and its contents disagree.
 
 ## Sharp edges
 
