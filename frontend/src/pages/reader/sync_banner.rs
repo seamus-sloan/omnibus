@@ -55,8 +55,9 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
 }
 
 /// "Synced here" footer pill: declares the current reading position (full
-/// precision) as a sync point and turns follow mode on. Configuration-
-/// shaped (rule 08): direct call, never queued, failure shown in place.
+/// precision) as a sync point, leaving an existing link's follow setting
+/// alone. Configuration-shaped (rule 08): direct call, never queued,
+/// failure shown in place.
 #[component]
 pub(super) fn SyncHerePill(uuid: String, loc: Signal<super::signals::RelocateData>) -> Element {
     let mut label = use_signal(|| "Synced here");

@@ -3,7 +3,7 @@ use axum::{
     body::{to_bytes, Body},
     http::{header::AUTHORIZATION, Request, StatusCode},
 };
-use omnibus_shared::ProgressRecord;
+use omnibus_shared::BookProgress;
 use tower::ServiceExt;
 
 use super::*;
@@ -202,10 +202,92 @@ async fn api_progress_round_trip_last_write_wins() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-    let rec: Option<ProgressRecord> = serde_json::from_slice(&bytes).unwrap();
-    let rec = rec.unwrap();
+    let progress: Option<BookProgress> = serde_json::from_slice(&bytes).unwrap();
+    let progress = progress.unwrap();
+    // `?format=` narrows the envelope rather than replacing it.
+    assert_eq!(progress.records.len(), 1);
+    let rec = &progress.records[0];
     assert_eq!(rec.epub_cfi.as_deref(), Some("epubcfi(/6/12!/4/8/3:7)"));
     assert_eq!(rec.format, ProgressFormat::Epub);
+    assert_eq!(progress.furthest, Some(ProgressFormat::Epub));
+}
+
+#[tokio::test]
+async fn api_get_progress_without_a_format_returns_every_format_and_names_the_furthest() {
+    // The endpoint used to default to `epub` and answer with that row alone,
+    // which reported a reader most of the way through the audiobook as barely
+    // started. The default is now every position they hold.
+    let (app, _state, pool) = fixture().await;
+    let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Dual Format").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    for body in [
+        serde_json::json!({
+            "book_uuid": uuid, "format": "epub",
+            "epub_cfi": "epubcfi(/6/12!/4/8/3:7)", "progress_percent": 47,
+        }),
+        serde_json::json!({
+            "book_uuid": uuid, "format": "audio", "audio_position_seconds": 900.0,
+        }),
+    ] {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/progress")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/progress/{uuid}"))
+                .method("GET")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let progress: Option<BookProgress> = serde_json::from_slice(&bytes).unwrap();
+    let progress = progress.unwrap();
+    assert_eq!(progress.records.len(), 2);
+    // The audio row has no audio file to measure against, so it reports no
+    // percent and the tie-break is the most recent event time.
+    assert!(progress.furthest.is_some());
+}
+
+#[tokio::test]
+async fn api_get_progress_returns_null_for_an_unknown_book() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/progress/no-such-uuid")
+                .method("GET")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let progress: Option<BookProgress> = serde_json::from_slice(&bytes).unwrap();
+    assert!(progress.is_none());
 }
 
 #[tokio::test]

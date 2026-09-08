@@ -604,6 +604,7 @@ mod tests {
             size_bytes: 0,
             path: None,
             etag: None,
+            duration_seconds: None,
         }
     }
 
