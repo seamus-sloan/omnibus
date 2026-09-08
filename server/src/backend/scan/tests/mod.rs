@@ -1,9 +1,7 @@
 //! Tests for the Physical Check-In scan REST handlers, split by route into
 //! the sibling modules below; the fake user, seeded-book and request
-//! fixtures they share live here. These stay network-free: an exact-ISBN
-//! hit and an invalid ISBN both resolve before any provider call, and the
-//! write paths never touch the network — the online rungs are covered by
-//! the `omnibus_db::scan` wiremock tests.
+//! fixtures they share live here. Everything stays network-free — the
+//! online rungs are covered by the `omnibus_db::scan` wiremock tests.
 
 mod google_books_key;
 mod resolve;

@@ -1,9 +1,8 @@
 //! Unit tests for the length ladder and the aggregates over it, split by
 //! sub-topic into the sibling modules below; the book, session, completion
 //! and ledger seeding fixtures they share live here. Every input is a
-//! persisted column, so these seed those columns directly — no EPUB or CBZ
-//! is opened, and the ledger is seeded rather than driven through the
-//! position write path (covered in `db::progress::ledger`).
+//! persisted column, so the fixtures seed those columns directly rather
+//! than opening a file or driving the position write path.
 
 mod detail;
 mod ledger_days;
