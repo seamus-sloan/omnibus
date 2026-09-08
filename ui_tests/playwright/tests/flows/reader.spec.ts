@@ -4,6 +4,7 @@ import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
+import { storedProgress } from "../utils/progress";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
 // Re-seed in this spec's beforeAll so the running server is indexed against
@@ -594,12 +595,8 @@ test("restores the exact reading position when the reader is reopened", async ({
   // we left: the restore may briefly persist a pre-correction snapshot, but
   // the settled landing (and the one-spread nudge for boundary CFIs) always
   // wins the last write.
-  const storedCfi = async () => {
-    const rec = await request.get(`/api/progress/${uuid}?format=epub`);
-    if (!rec.ok()) return "";
-    const body = (await rec.json()) as { epub_cfi?: string } | null;
-    return body?.epub_cfi ?? "";
-  };
+  const storedCfi = async () =>
+    (await storedProgress(request, uuid))?.epub_cfi ?? "";
 
   // Leave the reader (explicit navigation — equivalent to the reader-back
   // button, which routes to the book's detail page), then

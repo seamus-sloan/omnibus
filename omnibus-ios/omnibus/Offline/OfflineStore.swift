@@ -187,6 +187,18 @@ struct DownloadRecord: Sendable, Identifiable {
     /// validator.
     var sourceEtag: String?
 
+    /// What the last validator sweep concluded about this copy, or `nil` for
+    /// "can't tell" — nothing has asked yet, or a validator was missing on
+    /// one side of the comparison.
+    ///
+    /// Stored rather than derived because the screens that list downloads have
+    /// no per-file metadata to compare against: the library listing projection
+    /// carries no `book_files` rows, so without this a replaced file was
+    /// invisible until the reader opened that book's detail page. Three-valued
+    /// for the same reason the comparison is — see
+    /// `DownloadManager.staleUpdate(for:from:)`.
+    var stale: Bool?
+
     /// Where in [`files`] a transfer's part ordinal lands. A `nil` ordinal is
     /// a task started by a build that predates per-part downloads, which by
     /// construction had exactly one file.
@@ -327,6 +339,12 @@ actor OfflineStore {
         // `local_path` as the single file it is.
         if !hasColumn("downloads", "files") {
             exec("ALTER TABLE downloads ADD COLUMN files TEXT")
+        }
+        // Additive as well: a row written before the validator sweep existed
+        // carries a null, which is exactly the "nothing has asked yet" it
+        // means from then on.
+        if !hasColumn("downloads", "stale") {
+            exec("ALTER TABLE downloads ADD COLUMN stale INTEGER")
         }
         // Coalescing key for the outbox: a second position write for the same
         // book should replace the first, not queue behind it.
@@ -984,13 +1002,14 @@ actor OfflineStore {
         let sql = """
             INSERT INTO downloads
               (book_uuid, kind, format, state, local_path, total_bytes, received_bytes,
-               updated_at, error, source_etag, files)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               updated_at, error, source_etag, files, stale)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(book_uuid, kind) DO UPDATE SET
               format = excluded.format, state = excluded.state, local_path = excluded.local_path,
               total_bytes = excluded.total_bytes, received_bytes = excluded.received_bytes,
               updated_at = excluded.updated_at, error = excluded.error,
-              source_etag = excluded.source_etag, files = excluded.files
+              source_etag = excluded.source_etag, files = excluded.files,
+              stale = excluded.stale
             """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         bind(stmt, 1, record.bookUUID)
@@ -1010,12 +1029,17 @@ actor OfflineStore {
         } else {
             sqlite3_bind_null(stmt, 11)
         }
+        if let stale = record.stale {
+            sqlite3_bind_int(stmt, 12, stale ? 1 : 0)
+        } else {
+            sqlite3_bind_null(stmt, 12)
+        }
         sqlite3_step(stmt)
     }
 
     private static let downloadColumns = """
         book_uuid, kind, format, state, local_path, total_bytes, received_bytes, updated_at,
-        error, source_etag, files
+        error, source_etag, files, stale
         """
 
     func download(for uuid: String, kind: DownloadKind) -> DownloadRecord? {
@@ -1172,7 +1196,12 @@ actor OfflineStore {
             ),
             updatedAt: sqlite3_column_int64(stmt, 7),
             error: text(stmt, 8),
-            sourceEtag: text(stmt, 9)
+            sourceEtag: text(stmt, 9),
+            // Read through the column type, not `sqlite3_column_int`, which
+            // reports 0 for a null — turning "nothing has asked yet" into a
+            // stored "not stale".
+            stale: sqlite3_column_type(stmt, 11) == SQLITE_NULL
+                ? nil : sqlite3_column_int(stmt, 11) != 0
         )
     }
 

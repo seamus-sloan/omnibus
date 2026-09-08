@@ -20,18 +20,18 @@ enum UserDataService {
 
     /// The position for one book in one format.
     ///
-    /// `?format=` is not optional in practice: the server defaults it to `epub`,
-    /// so an audiobook read without it silently answered with the reading
-    /// position instead. `nil` is a real answer — a book nobody has opened in
-    /// this format has no row, and the endpoint returns `null` for it.
+    /// `?format=` narrows the endpoint's envelope to the one record this
+    /// reconcile is about; without it the server answers with every format the
+    /// reader holds a position in. `nil` is a real answer — a book nobody has
+    /// opened in this format has no row.
     static func progress(
         uuid: String, format: ProgressFormat
     ) -> AsyncThrowingStream<CacheRead<ProgressRecord?>, Error> {
         Cache.live(CacheKey.progress(uuid, format)) {
-            let record: ProgressRecord? = try await APIClient.shared.get(
+            let progress: BookProgress? = try await APIClient.shared.get(
                 "/api/progress/\(uuid)", query: ["format": format.rawValue]
             )
-            return record
+            return progress?.record(for: format)
         }
     }
 
@@ -173,17 +173,21 @@ enum UserDataService {
         var points = points
         var point: ResumePoint
         if let existing = points.firstIndex(where: { $0.matches(record) }) {
-            // Keep the audio duration and chapter readout the server computed —
-            // this device can't derive them, and dropping them would blank the
-            // card's progress bar on every save.
+            // Keep the duration and resolved position the server computed —
+            // this device can't derive either, and a locally-written record
+            // carries only the position, so overwriting wholesale would blank
+            // the card's progress bar on every save.
             point = points[existing]
-            point.record = record
+            var merged = record
+            merged.totalDurationSeconds =
+                record.totalDurationSeconds ?? point.record.totalDurationSeconds
+            merged.resolved = record.resolved ?? point.record.resolved
+            point.record = merged
             points.remove(at: existing)
         } else {
             guard let book else { return nil }
             point = ResumePoint(
-                record: record, book: book, totalDurationSeconds: nil,
-                chapterNumber: nil, chapterCount: nil
+                record: record, book: book, audioPart: nil, audioPartCount: nil
             )
         }
         points.insert(point, at: 0)
@@ -1027,10 +1031,22 @@ extension UserDataService {
         let _: Empty = try await APIClient.shared.delete("/api/books/\(uuid)/cross-format-link")
     }
 
+    /// Flip follow mode on an existing link — whether opening one format
+    /// jumps to the spot the other reached. Off keeps the alignment the
+    /// reader confirmed and only stops the jumps; `unlinkCrossFormat` is
+    /// what discards it. Same never-queued contract as the confirm (rule 08
+    /// test 1). 409 when there is no link to flip.
+    static func setCrossFormatFollow(uuid: String, enabled: Bool) async throws {
+        let _: Empty = try await APIClient.shared.post(
+            "/api/books/\(uuid)/cross-format-follow",
+            body: SetFollowMode(enabled: enabled)
+        )
+    }
+
     /// A "synced here" declaration: records the declaring surface's own
-    /// position as a user anchor and turns follow mode on. Rule 08: a
-    /// deferred declaration would calibrate positions that no longer
-    /// correspond — direct call only, disabled offline at the control.
+    /// position as a user anchor, leaving an existing link's follow setting
+    /// alone. Rule 08: a deferred declaration would calibrate positions
+    /// that no longer correspond — direct call only, disabled offline.
     static func declareSyncPoint(_ decl: DeclareSyncPoint) async throws {
         let _: Empty = try await APIClient.shared.post(
             "/api/books/\(decl.bookUUID)/sync-point",
