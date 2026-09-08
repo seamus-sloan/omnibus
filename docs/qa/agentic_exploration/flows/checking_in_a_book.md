@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 3% |
+| **Runs** | on its own |
 | **Owner-only** | filing a copy: no; removing one: **yes** — see below |
 | **Surfaces** | web, iOS |
 | **Actions** | `checkin.start`, `checkin.lookup`, `checkin.confirm`, `book.add`, `checkin.remove` |

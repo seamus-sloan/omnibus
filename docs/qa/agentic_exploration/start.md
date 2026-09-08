@@ -8,8 +8,9 @@ Read this file once. Then you will be handed one flow document at a time from
 [flows/](flows/); execute it, journal it, report a verdict, and wait for the
 next one.
 
-The full flow list, with weights, is in [flows/README.md](flows/README.md).
-You never sample from it yourself — you are handed a flow; you execute it.
+The full flow list is in [flows/README.md](flows/README.md). Every flow is
+equally likely to be drawn, and you never sample from it yourself — you are
+handed a flow; you execute it.
 
 ## Your identity
 

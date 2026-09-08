@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 5% |
+| **Runs** | on its own |
 | **Owner-only** | no — stats are per-user |
 | **Surfaces** | web, iOS |
 | **Actions** | `stats.view`, `stats.range`, `stats.scope`, `stats.goal` |

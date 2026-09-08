@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 4% |
+| **Runs** | on its own |
 | **Owner-only** | no — a wishlist is per-user |
 | **Surfaces** | web, iOS |
 | **Actions** | `checkin.start`, `checkin.lookup`, `wishlist.add`, `wishlist.remove` |

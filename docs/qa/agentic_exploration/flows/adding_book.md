@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 10% |
+| **Runs** | on its own |
 | **Owner-only** | n/a — **this flow is what creates ownership** |
 | **Surfaces** | web |
 | **Actions** | `book.add`, `book.add.verify` |

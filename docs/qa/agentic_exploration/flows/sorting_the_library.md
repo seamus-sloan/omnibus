@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 7% |
+| **Runs** | on its own |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `library.sort`, `library.view` |

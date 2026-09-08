@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 4% |
+| **Runs** | on its own |
 | **Owner-only** | no; shelves are per-user |
 | **Surfaces** | web (create only), iOS (create and fill) |
 | **Actions** | `shelf.create`, `shelf.select`, `shelf.edit`, `shelf.delete` |

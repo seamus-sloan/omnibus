@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 50% of a reading flow |
+| **Runs** | inside reading_a_book |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `highlight.create`, `highlight.note`, `highlight.recolour`, `highlight.delete` |

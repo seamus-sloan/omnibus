@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 25% of a details flow |
+| **Runs** | inside browsing_book_details |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `journal.create`, `journal.update`, `journal.delete` |

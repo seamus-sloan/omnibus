@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 6% |
+| **Runs** | on its own |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `series.index`, `series.view`, `nav.follow` |

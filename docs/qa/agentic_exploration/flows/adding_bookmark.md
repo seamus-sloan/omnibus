@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 50% of a listening flow |
+| **Runs** | inside listening_to_audiobook |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `bookmark.create`, `bookmark.delete` |

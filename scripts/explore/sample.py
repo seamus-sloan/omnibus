@@ -2,15 +2,21 @@
 """Draw the flow sequence for an exploration run.
 
 The agent never samples — see "you never sample anything yourself" in
-docs/qa/agentic_exploration/start.md. An LLM told "20% chance to browse authors"
-will not produce that distribution; it will produce roughly never or roughly
-always. So the runner owns the dice and hands over one flow at a time.
+docs/qa/agentic_exploration/start.md. An LLM told "pick a flow at random" will
+not produce a uniform draw; it will produce the same three flows every time.
+So the runner owns the dice and hands over one flow at a time.
 
-Weights come from the catalog table in flows/README.md, which is therefore the
-single source of truth rather than documentation of a config kept elsewhere. The
-parser is deliberately strict: if the table cannot be read, or the top-level
-weights do not sum to 100, this exits non-zero rather than silently sampling
-from a distribution nobody intended.
+Every top-level flow is equally likely. There is no weight column: the run
+is looking for defects, not modelling how often a reader does something, and
+a weighted draw over a distinct sample mostly decided which low-weight flows
+never ran at all. A subflow always runs inside its parent, for the same
+reason: a roll that skips it is a roll that skips a check.
+
+The catalog table in flows/README.md is the single source of truth for which
+flows exist and which parent a subflow runs inside. The parser is
+deliberately strict: if the table cannot be read, or a subflow names a parent
+that is not a top-level flow, this exits non-zero rather than silently
+drawing from a catalog nobody intended.
 """
 
 from __future__ import annotations
@@ -23,64 +29,48 @@ import sys
 from pathlib import Path
 
 ROW = re.compile(r"^\|\s*\[([a-z_]+)\]\([^)]+\)\s*\|\s*([^|]+?)\s*\|")
-BARE = re.compile(r"^(\d+)%$")
-COND = re.compile(r"^(\d+)%\s+of\s+an?\s+(.+?)\s+flow$")
-
-# Which parent each conditional weight attaches to. The table phrases these in
-# prose ("50% of a reading flow"), so map that phrasing onto the flow name.
-PARENT = {
-    "reading": "reading_a_book",
-    "listening": "listening_to_audiobook",
-    "details": "browsing_book_details",
-    "add-a-book": "adding_book",
-}
+TOP = "on its own"
+INSIDE = re.compile(r"^inside\s+([a-z_]+)$")
 
 
-def parse_catalog(path: Path) -> tuple[dict[str, int], dict[str, list[tuple[str, int]]]]:
-    top: dict[str, int] = {}
-    subs: dict[str, list[tuple[str, int]]] = {}
+def parse_catalog(path: Path) -> tuple[list[str], dict[str, list[str]]]:
+    top: list[str] = []
+    subs: dict[str, list[str]] = {}
     for line in path.read_text().splitlines():
         m = ROW.match(line)
         if not m:
             continue
-        name, weight = m.group(1), m.group(2).strip()
-        if bare := BARE.match(weight):
-            top[name] = int(bare.group(1))
-        elif cond := COND.match(weight):
-            parent = PARENT.get(cond.group(2))
-            if parent is None:
-                sys.exit(f"unknown parent phrasing in catalog: {weight!r}")
-            subs.setdefault(parent, []).append((name, int(cond.group(1))))
+        name, runs = m.group(1), m.group(2).strip()
+        if runs == TOP:
+            top.append(name)
+        elif inside := INSIDE.match(runs):
+            subs.setdefault(inside.group(1), []).append(name)
         else:
-            sys.exit(f"unparseable weight in catalog for {name}: {weight!r}")
+            sys.exit(f"unparseable 'Runs' cell in catalog for {name}: {runs!r}")
 
     if not top:
         sys.exit(f"no top-level flows parsed from {path} — has the table format changed?")
-    total = sum(top.values())
-    if total != 100:
-        sys.exit(f"top-level weights sum to {total}, not 100 — fix {path}")
+    for parent in subs:
+        if parent not in top:
+            sys.exit(f"subflow parent {parent!r} is not a top-level flow — fix {path}")
     return top, subs
 
 
 def draw(top, subs, count, rng, first=None):
-    """Draw `count` distinct flows, weighted. `first` is forced to the front."""
-    pool = dict(top)
+    """Draw `count` distinct flows, uniformly. `first` is forced to the front."""
+    pool = list(top)
     picked: list[str] = []
     if first:
         if first not in pool:
             sys.exit(f"--first {first} is not a top-level flow")
         picked.append(first)
-        pool.pop(first)
-    while len(picked) < count and pool:
-        name = rng.choices(list(pool), weights=list(pool.values()))[0]
-        picked.append(name)
-        pool.pop(name)
+        pool.remove(first)
+    picked.extend(rng.sample(pool, min(count - len(picked), len(pool))))
 
-    out = []
-    for name in picked:
-        rolled = [s for s, w in subs.get(name, []) if rng.random() < w / 100]
-        out.append({"flow": name, "subflows": rolled})
-    return out
+    return [
+        {"flow": name, "subflows": list(subs.get(name, []))}
+        for name in picked
+    ]
 
 
 def main() -> None:
@@ -98,7 +88,7 @@ def main() -> None:
                     / "docs/qa/agentic_exploration/flows/README.md")
     ap.add_argument("--library-empty", action="store_true",
                     help="force adding_book first for every agent: with no books, "
-                         "ten of the flows have nothing to act on")
+                         "most flows have nothing to act on")
     ap.add_argument("--exclude", default="",
                     help="comma-separated flows to drop (e.g. a flow whose "
                          "content the corpus cannot supply)")
@@ -110,8 +100,9 @@ def main() -> None:
         sys.exit("--flows-per-agent must be at least 1")
 
     top, subs = parse_catalog(args.catalog)
-    for name in filter(None, (s.strip() for s in args.exclude.split(","))):
-        top.pop(name, None)
+    excluded = {s.strip() for s in args.exclude.split(",") if s.strip()}
+    top = [t for t in top if t not in excluded]
+    subs = {p: [s for s in names if s not in excluded] for p, names in subs.items() if p not in excluded}
 
     # Flows are drawn distinct, so asking for more than exist would silently
     # yield a shorter sequence — a coverage cut that reads as coverage.

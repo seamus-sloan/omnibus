@@ -11,10 +11,11 @@ a subflow, and it cannot vary the draw per agent. Two edits are routine, and
 **every edit is said in the hand-back** — a silent edit reads as a flow that
 ran.
 
-- **`merging_books` needs two owned books.** Before the run, count each
-  agent's owned uuids: `scripts/explore/owned.sh agent-N | tr ',' '\n' | wc -l`.
-  An agent with fewer than two, whose draw did not also give it `adding_book`,
-  cannot merge; strip the subflow from that agent's sequence.
+- **`merging_books` needs two owned books.** It always runs inside
+  `adding_book`, which uploads one — so the agent needs at least one more
+  from an earlier run. Before the run, count each agent's owned uuids:
+  `scripts/explore/owned.sh agent-N | tr ',' '\n' | wc -l`. An agent with
+  none cannot merge; strip the subflow from that agent's sequence.
 - **The iOS agent never runs `adding_book`, `merging_books` or
   `deleting_a_book`** — there is no ownership guard on that surface. Re-draw
   its sequence with `--exclude adding_book` and a fresh `--agents 1`, using

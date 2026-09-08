@@ -92,9 +92,11 @@ scripts/explore/sample.py --agents N --flows-per-agent K --seed S --run <run-id>
   merely blocked. Say what you excluded and why; a silent exclusion reads as
   coverage that never happened.
 
-Weights are parsed from `flows/README.md`, the single source of truth. The
-sampler exits non-zero if that table cannot be parsed or its weights do not sum
-to 100 — a bug in the catalog, not a reason to sample by hand.
+The catalog table in `flows/README.md` is the single source of truth: every
+top-level flow is equally likely, and every subflow runs inside its parent.
+The sampler exits non-zero if that table cannot be parsed or a subflow names a
+parent that is not a flow — a bug in the catalog, not a reason to sample by
+hand.
 
 The sampler cannot exclude a **subflow** or vary the draw **per agent**. [scenarios.md](scenarios.md) lists the hand-edits that follow — `merging_books` for an agent owning fewer than two books, the destructive flows for the iOS agent, `viewing_stats` drawn first — and how to check for CBZ and audio before deciding `--exclude`. Every edit is said in the hand-back.
 

@@ -2,14 +2,14 @@
 
 | | |
 |---|---|
-| **Weight** | 18% |
+| **Runs** | on its own |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `book.open`, `reader.progress`, `reader.close` |
 
-Read roughly a tenth of a book, the way someone would on a lunch break. This is
-the highest-weight flow because reading position is the single most-written
-piece of state in the app, and the one whose loss a reader notices first.
+Read roughly a tenth of a book, the way someone would on a lunch break.
+Reading position is the single most-written piece of state in the app, and the
+one whose loss a reader notices first.
 
 ## Preconditions
 

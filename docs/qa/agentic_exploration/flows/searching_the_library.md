@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 5% |
+| **Runs** | on its own |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `search.query`, `search.open`, `nav.follow` |

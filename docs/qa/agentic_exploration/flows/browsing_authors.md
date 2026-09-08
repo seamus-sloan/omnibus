@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 6% |
+| **Runs** | on its own |
 | **Owner-only** | no — but **never delete an author** |
 | **Surfaces** | web, iOS |
 | **Actions** | `author.index`, `author.view`, `nav.follow` |

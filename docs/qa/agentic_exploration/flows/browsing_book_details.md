@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 17% |
+| **Runs** | on its own |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `book.view`, `rating.set`, `status.set`, `nav.follow`, `ui.scroll_stops` |

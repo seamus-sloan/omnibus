@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 25% of an add-a-book flow |
+| **Runs** | inside adding_book |
 | **Owner-only** | **yes** |
 | **Surfaces** | web |
 | **Actions** | `book.delete`, `book.delete.verify` |

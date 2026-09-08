@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 25% of a details flow |
+| **Runs** | inside browsing_book_details |
 | **Owner-only** | **no** — but see below |
 | **Surfaces** | web |
 | **Actions** | `metadata.open`, `metadata.save`, `cover.replace`, `genre.edit`, `tag.edit` |

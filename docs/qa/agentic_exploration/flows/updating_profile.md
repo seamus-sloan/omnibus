@@ -2,15 +2,15 @@
 
 | | |
 |---|---|
-| **Weight** | 2% |
+| **Runs** | on its own |
 | **Owner-only** | your own account only |
 | **Surfaces** | web, iOS |
 | **Actions** | `profile.update`, `avatar.replace`, `auth.logout`, `auth.login` |
 
-Change your display name or your picture, then sign out and back in. Low
-weight because people do it rarely — but the display name is copied into other
-places when it is set, so changing it has reach beyond the account page, and
-signing back in is the only time an agent sees the login screen at all.
+Change your display name or your picture, then sign out and back in. People
+do this rarely — but the display name is copied into other places when it is
+set, so changing it has reach beyond the account page, and signing back in is
+the only time an agent sees the login screen at all.
 
 **Only ever change your own account.** Never open another user's account,
 never change anyone's permissions, and never delete a user.

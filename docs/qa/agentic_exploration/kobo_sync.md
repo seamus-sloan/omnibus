@@ -1,7 +1,7 @@
 # The Kobo scenario
 
 A runner-driven scenario, like the iOS lane's offline outbox: it is **not** in
-the weighted catalog, one web agent is handed it when the run is started with
+the catalog's draw, one web agent is handed it when the run is started with
 `--kobo`, and the runner does half the work. A Kobo is a device, and no agent
 has one — so the runner speaks the device's protocol with `curl` while the
 agent watches the app.

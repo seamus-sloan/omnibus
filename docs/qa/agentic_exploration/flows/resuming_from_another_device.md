@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 25% of a reading flow |
+| **Runs** | inside reading_a_book |
 | **Owner-only** | no |
 | **Surfaces** | web, iOS |
 | **Actions** | `book.open`, `reader.progress`, `progress.set` (runner) |

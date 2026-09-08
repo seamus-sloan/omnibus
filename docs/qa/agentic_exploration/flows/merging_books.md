@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Weight** | 50% of an add-a-book flow |
+| **Runs** | inside adding_book |
 | **Owner-only** | **yes — both books** |
 | **Surfaces** | web |
 | **Actions** | `merge.attempt`, `merge.confirm`, `merge.undo` |
