@@ -216,5 +216,6 @@ Deeper architecture — module maps, request-flow diagrams, mobile auth — is i
 | SSR/WASM hydration parity | [07-hydration.md](../.claude/rules/07-hydration.md) |
 | Offline write queueing | [08-offline-writes.md](../.claude/rules/08-offline-writes.md) |
 | Content validators / ETags | [09-content-validators.md](../.claude/rules/09-content-validators.md) |
+| Serving bytes: `serve_file`, preconditions, `Vary` | [09a-serving-validated-bytes.md](../.claude/rules/09a-serving-validated-bytes.md) |
 
 UI work also has a design system: [design/atrium-design-system.md](design/atrium-design-system.md).

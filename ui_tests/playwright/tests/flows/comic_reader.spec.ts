@@ -4,6 +4,7 @@ import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
+import { storedProgress } from "../utils/progress";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
 // Both CBZ fixtures are reserved for this spec (see fixtures/epubs.ts), and
@@ -187,14 +188,13 @@ test("pages forward, saves each turn, resumes, and auto-marks reading then finis
   }
 
   // The server now holds the anchor for page index 3.
-  const stored = await request.get(`/api/progress/${uuid}?format=epub`);
-  expect(stored.status()).toBe(200);
-  const record = (await stored.json()) as {
-    epub_cfi: string | null;
-    progress_percent: number | null;
-  };
-  expect(record.epub_cfi).toBe("comic-page:3");
-  expect(record.progress_percent).toBe(50);
+  const record = await storedProgress(request, uuid);
+  expect(record?.epub_cfi).toBe("comic-page:3");
+  expect(record?.progress_percent).toBe(50);
+  // A comic has no spine to resolve against, so the block reports the percent
+  // it does carry rather than inventing a chapter.
+  expect(record?.resolved?.percent_through_book).toBe(50);
+  expect(record?.resolved?.chapter_title).toBeUndefined();
 
   // Leave, reopen: the pager restores the saved page, not page 1.
   await gotoReady(page, `/books/${uuid}`);

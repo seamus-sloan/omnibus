@@ -77,9 +77,10 @@ pub async fn rpc_unlink_cross_format(uuid: String) -> Result<bool> {
 }
 
 /// A "synced here" declaration from the reader or the player: records a
-/// user anchor at the declaring surface's position and turns follow mode
-/// on. Refusals (no link on a multi-file book, stale audio set, no
-/// counterpart position) come back as renderable messages.
+/// user anchor at the declaring surface's position, leaving an existing
+/// link's follow setting alone. Refusals (no link on a multi-file book,
+/// stale audio set, no counterpart position) come back as renderable
+/// messages.
 #[post("/api/rpc/cross-format/sync-point", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_declare_sync_point(decl: DeclareSyncPoint) -> Result<()> {
     if let Err(msg) = decl.validate() {

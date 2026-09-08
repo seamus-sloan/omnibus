@@ -23,11 +23,17 @@ use super::{CrossFormatError, CrossFormatLink};
 const SYNC_POINT_REPLACE_SLACK: f64 = 0.005;
 
 /// Record a "synced here" declaration: pair the declaring surface's
-/// position with the counterpart format's stored row, store it as a user
-/// anchor, and turn follow mode on. A single-audio-file book with no link
-/// yet is auto-confirmed as a sequence link (unambiguous); a multi-file
-/// book must confirm the alignment first — the declaration never guesses
-/// an order.
+/// position with the counterpart format's stored row and store it as a
+/// user anchor. A single-audio-file book with no link yet is auto-confirmed
+/// as a sequence link (unambiguous, follow on); a multi-file book must
+/// confirm the alignment first — the declaration never guesses an order.
+///
+/// A declaration is **calibration, not a mode switch**: it states that two
+/// spots are the same spot, which is worth recording whether or not the
+/// reader wants the formats chasing each other. So a link that already
+/// exists keeps the follow value it carried. Forcing it back on here would
+/// make the follow toggle cosmetic — one "Sync here" would silently undo a
+/// deliberate off, with nothing on screen saying so.
 pub async fn declare_sync_point(
     pool: &SqlitePool,
     user_id: i64,
@@ -203,8 +209,10 @@ async fn audio_declared_pair(
 }
 
 /// Fold the declared pair into the link's stored anchors (replacing a
-/// re-declaration of the same spot) and turn follow mode on, inside the
-/// caller's transaction.
+/// re-declaration of the same spot), inside the caller's transaction.
+/// Deliberately does not touch `follow` — a link created by this same
+/// declaration was inserted with it on, and one that already existed keeps
+/// the reader's own setting (see [`declare_sync_point`]).
 async fn store_anchor(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     user_id: i64,
@@ -224,7 +232,7 @@ async fn store_anchor(
     let json = serde_json::to_string(&anchors).unwrap_or_else(|_| "[]".into());
 
     sqlx::query(
-        "UPDATE cross_format_links SET user_anchors = ?, follow = 1
+        "UPDATE cross_format_links SET user_anchors = ?
          WHERE user_id = ? AND book_uuid = ?",
     )
     .bind(&json)
