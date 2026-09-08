@@ -63,38 +63,44 @@ should soft-reference `book_uuid TEXT` (no FK, no cascade), like
 `metadata_overrides` — not a cascading `book_id` FK that wipes user data
 on reindex.
 
-**A new table holding per-reader state keyed on `book_uuid` must also be
-added to `RETARGET_TABLES` in `db/src/merge/transaction.rs`** — that list is
-the other half of the contract. Merge deletes the source `books` row, so a
-table missing from it strands the reader's rows on a uuid no book carries:
-invisible to every query that joins `books`, still counted by every query
-that doesn't. Migration `0079` heals the rows already stranded that way; the
-list is what stops new ones. If the table carries a `UNIQUE` key the retarget
-would collide on, it needs a collision helper beside it — and **which one is
-decided by what a row holds, not by which list is nearer**:
+**A new table keyed on `book_uuid` must also be settled in
+`db/src/merge/transaction.rs`** — that file is the other half of the contract.
+Merge deletes the source `books` row, so a table it never touches strands its
+rows on a uuid no book carries: invisible to every query that joins `books`,
+still counted by every query that doesn't. Migration `0079` heals the rows
+already stranded that way; the lists are what stop new ones, and
+`merge_settles_every_book_uuid_table` enumerates the schema and fails on a
+table in neither:
 
-- **Snapshot → `DEDUPE_TABLES`.** A position, a rating, a read status: only
-  one of the two rows can be true at once, so the shared latest-wins helper
-  keeps the newer and drops the other. **A dedupe deletes, so it is only
-  reversible if the merge writes both sides down first** — `db/src/merge/
-  curation.rs` is that record for read status and ratings, and undo replays it.
-  A table added to `DEDUPE_TABLES` without one has no undo: whichever row lost
-  is gone, and the survivor keeps a value that started on the other book.
+- **`RETARGET_TABLES`** — rows that follow the book. Per-reader state, but
+  also the library-wide facts about it: the shelves holding it
+  (`shelf_books`), its copies (`physical_copies`), who wants it
+  (`wishlist_entries`), its cross-format link and its content index.
+- **`MERGE_EXEMPT_TABLES`** — rows deliberately left behind, each with the
+  reason written beside it (a cache the target regenerates, a device
+  snapshot whose stale row *is* the removal signal). Not a list to grow
+  casually.
+
+If the table carries a `UNIQUE` key the retarget would collide on, it needs an
+entry in `COLLISION_TABLES` too — and **which rule is decided by what a row
+holds, not by which list is nearer**:
+
+- **Snapshot → `Keep::Max`/`Keep::Min`/`Keep::Target`.** A position, a rating,
+  a read status: only one of the two rows can be true at once, so the helper
+  keeps the newer (or the earlier wish, the lower shelf slot, the survivor's
+  own link) and drops the other. **A dedupe deletes, so it is only reversible
+  if the merge writes both sides down first** — `db/src/merge/curation/` is
+  that record for read status and ratings, and undo replays it. An entry
+  added without one has no undo: whichever row lost is gone, and the survivor
+  keeps a value that started on the other book.
 - **Counter → `fold_ledger_counters`.** A per-reader table keyed on a time
   bucket (`reading_progress_daily`, `reading_progress_slots`) counts ground
   covered, and a reader who covered ground in both editions in the same
   bucket covered all of it — the two rows are **summed**. Latest-wins there
   is silent data loss dressed as a tie-break, so a counter table joins
-  `RETARGET_TABLES` and this helper, never `DEDUPE_TABLES`. What a bucket may
-  be keyed on in the first place is
+  `RETARGET_TABLES` and this helper, never `COLLISION_TABLES`. What a bucket
+  may be keyed on in the first place is
   [10-reader-calendar.md](10-reader-calendar.md).
-
-The list is deliberately **not** every table with a `book_uuid` column.
-Library-wide tables (`shelf_books`, `physical_copies`, `wishlist_entries`,
-`cross_format_links`, the suggestion caches) are out of scope here and are
-handled — or deliberately not — by their own owners; adding one to
-`RETARGET_TABLES` without understanding its merge semantics is a change in
-its own right, not a box to tick.
 
 ## Testing
 

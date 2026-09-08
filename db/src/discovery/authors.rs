@@ -140,10 +140,11 @@ const EFFECTIVE_AUTHOR_CTE: &str = r#"WITH effective AS (
            )"#;
 
 /// [`EFFECTIVE_AUTHOR_CTE`] plus a `scoped` CTE narrowing its membership to
-/// books whose scan root is one of `library_paths`. `None` passes every row
-/// through; `Some(&[])` matches nothing, which is what a surface with no
-/// configured library should list. Path binds occupy `?3` onwards, so the
-/// caller's next free parameter is [`limit_param`].
+/// books in the library (`super::library_member`) whose scan root is one of
+/// `library_paths`. `None` passes every root through; `Some(&[])` matches
+/// nothing, which is what a surface with no configured library should list.
+/// Path binds occupy `?3` onwards, so the caller's next free parameter is
+/// [`limit_param`].
 fn scoped_author_cte(library_paths: Option<&[&str]>) -> String {
     let filter = match library_paths {
         None => "1".to_string(),
@@ -156,13 +157,14 @@ fn scoped_author_cte(library_paths: Option<&[&str]>) -> String {
             format!("l.path IN ({binds})")
         }
     };
+    let member = super::library_member("b", "l");
     format!(
         r"{EFFECTIVE_AUTHOR_CTE}, scoped AS (
              SELECT e.book_id, e.series_index
                FROM effective e
                JOIN books b ON b.id = e.book_id
                LEFT JOIN scan_roots l ON l.id = b.library_id
-              WHERE {filter}
+              WHERE {filter} AND {member}
            )"
     )
 }

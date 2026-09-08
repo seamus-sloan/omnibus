@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use omnibus_shared::{
     BookRef, CheckInRequest, ExternalBookMeta, PhysicalCopy, ResolveMetaRequest, ResolveRequest,
     ScanOutcome, ScanSearchRequest, ScanSearchResponse, UpdateCopyNoteRequest, WishlistAddRequest,
-    WishlistSource,
+    WishlistRemoval, WishlistSource,
 };
 
 use crate::client::ClientError;
@@ -338,13 +338,19 @@ impl OmnibusMcp {
     ) -> Result<Json<Ack>, ErrorData> {
         let uuid = crate::tools::path_segment(&p.uuid, "uuid")?;
         let path = format!("/api/physical/{uuid}/wishlist");
-        self.client
-            .write_no_content::<()>(Method::DELETE, &path, None)
+        let removal: WishlistRemoval = self
+            .client
+            .write_json::<(), _>(Method::DELETE, &path, None)
             .await
             .map_err(write_error)?;
-        Ok(Json(Ack {
-            message: format!("removed {uuid} from the wishlist"),
-        }))
+        let message = if removal.book_deleted {
+            format!(
+                "removed {uuid} from the wishlist; nothing else held the book, so it left the library with the entry"
+            )
+        } else {
+            format!("removed {uuid} from the wishlist")
+        };
+        Ok(Json(Ack { message }))
     }
 
     #[tool(

@@ -114,14 +114,17 @@ pub(super) async fn post_wishlist_entry(
 }
 
 /// Remove a book from the caller's wishlist. Idempotent — removing an absent
-/// entry still returns 204, since the desired end state already holds.
+/// entry still succeeds, since the desired end state already holds. Answers
+/// 200 with a `WishlistRemoval` rather than 204: a wishlist-only book nobody
+/// else wants goes with its last entry, and the client standing on that book's
+/// page has to be told so.
 pub(super) async fn delete_wishlist_entry(
     user: AuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
 ) -> Response {
     match db::remove_wishlist_entry(&state.pool, user.id, &uuid).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(removal) => Json(removal).into_response(),
         Err(e) => physical_error("remove_wishlist_entry", e),
     }
 }

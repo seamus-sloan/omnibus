@@ -94,7 +94,23 @@ const EFFECTIVE_SERIES_CTE: &str = r#"WITH effective AS (
                 AND json_extract(mo.overrides, '$.series') = ?2 COLLATE NOCASE
            )"#;
 
-/// Run the `effective`-CTE + `BOOK_COLUMNS` SELECT and hydrate each row
+/// [`EFFECTIVE_SERIES_CTE`] plus a `scoped` CTE keeping only the members
+/// that are in the library (`super::library_member`) — a wishlist-only book
+/// filed into a series is one reader's wish, not a volume the library holds.
+fn scoped_series_cte() -> String {
+    let member = super::library_member("b", "l");
+    format!(
+        r"{EFFECTIVE_SERIES_CTE}, scoped AS (
+             SELECT e.book_id, e.series_index
+               FROM effective e
+               JOIN books b ON b.id = e.book_id
+               LEFT JOIN scan_roots l ON l.id = b.library_id
+              WHERE {member}
+           )"
+    )
+}
+
+/// Run the `scoped`-CTE + `BOOK_COLUMNS` SELECT and hydrate each row
 /// into [`EbookMetadata`]. The nested vec is capped at
 /// [`MAX_DISCOVERY_BOOKS`].
 async fn fetch_series_books(
@@ -102,11 +118,12 @@ async fn fetch_series_books(
     series_id: i64,
     series_name: &str,
 ) -> Result<Vec<EbookMetadata>, DiscoveryError> {
+    let cte = scoped_series_cte();
     let sql = format!(
-        r"{EFFECTIVE_SERIES_CTE}
+        r"{cte}
            SELECT {BOOK_COLUMNS}
            FROM books b
-           JOIN effective e ON e.book_id = b.id
+           JOIN scoped e ON e.book_id = b.id
            ORDER BY e.series_index NULLS LAST, b.sort, b.id
            LIMIT ?3"
     );
@@ -132,9 +149,10 @@ async fn count_effective_series_members(
     series_id: i64,
     series_name: &str,
 ) -> Result<i64, sqlx::Error> {
+    let cte = scoped_series_cte();
     let sql = format!(
-        r"{EFFECTIVE_SERIES_CTE}
-           SELECT COUNT(*) FROM effective"
+        r"{cte}
+           SELECT COUNT(*) FROM scoped"
     );
     sqlx::query_scalar(&sql)
         .bind(series_id)

@@ -44,11 +44,16 @@ struct AddBooksToShelfSheet: View {
             .background(ScreenBackground())
             .navigationTitle(shelfName)
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(
-                text: $query,
-                placement: .navigationBarDrawer(displayMode: .always),
-                prompt: "Search your library"
-            )
+            // The app's own field rather than `.searchable`: the UIKit drawer
+            // hides the whole navigation bar while it has focus, Add button
+            // included — so the one state in which a reader has found the
+            // book they wanted was the one state they could not commit from.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                SearchField(text: $query, prompt: "Search your library")
+                    .screenPadding()
+                    .padding(.vertical, Spacing.sm)
+                    .background(ScreenBackground())
+            }
             .onChange(of: query) { _, value in schedule(value) }
             .toolbar { toolbar }
         }

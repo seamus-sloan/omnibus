@@ -393,22 +393,21 @@ async fn move_links(
 }
 
 /// Every table that soft-references `books.uuid` and must follow the book
-/// across a merge. Mostly per-user; `kobo_annotations_sync` is the one
-/// per-device entry, which is why its collision is handled separately below
-/// rather than by [`dedupe_latest_wins`].
+/// across a merge: the per-reader state (positions, sessions, annotations,
+/// journals, curation), the library-wide facts about the book (the shelves
+/// holding it, its checked-in copies, who wants it, its confirmed cross-format
+/// alignment) and the content index cut from its files. `kobo_annotations_sync`
+/// is the one per-device entry, which is why its collision is handled
+/// separately below rather than by [`dedupe_collisions`].
 ///
-/// This list is the merge's half of the soft-reference contract: a per-reader
-/// table added to the schema but not here silently strands its rows on the
-/// deleted source uuid, where they are invisible to anything joining `books`
-/// and still visible to anything that doesn't.
-///
-/// **Not exhaustive over every `book_uuid` column.** `shelf_books`,
-/// `wishlist_entries`, `cross_format_links` and `physical_copies` also
-/// soft-reference a book and do *not* follow a merge today — a shelved book
-/// merged into another drops off its shelf. That is a separate pre-existing
-/// bug with its own semantics to settle (which shelf wins, what an inherited
-/// wishlist entry means), deliberately not folded in here.
-const RETARGET_TABLES: [&str; 13] = [
+/// This list is the merge's half of the soft-reference contract: a table keyed
+/// on `book_uuid` but absent from it silently strands its rows on the deleted
+/// source uuid, where they are invisible to anything joining `books` and still
+/// visible to anything that doesn't. Every such table is either here or in
+/// [`MERGE_EXEMPT_TABLES`] with its reason, and
+/// `merge_settles_every_book_uuid_table` fails the moment a new one is in
+/// neither.
+pub(super) const RETARGET_TABLES: [&str; 18] = [
     "reading_progress",
     "reading_progress_marks",
     "reading_progress_daily",
@@ -422,40 +421,138 @@ const RETARGET_TABLES: [&str; 13] = [
     "journal_entries",
     "book_read_status",
     "user_ratings",
+    "shelf_books",
+    "physical_copies",
+    "wishlist_entries",
+    "cross_format_links",
+    "book_content_chapters",
 ];
 
-/// The subset of [`RETARGET_TABLES`] carrying a `UNIQUE` key the retarget would
-/// collide on, with the extra key column beyond `(user_id, book_uuid)` where
-/// there is one. Resolved latest-wins by [`dedupe_latest_wins`] before the
-/// retarget runs.
+/// The `book_uuid`-keyed tables the merge deliberately leaves alone, each
+/// with the reason. Not a list to grow casually: an entry here means the rows
+/// the source leaves behind were judged harmless, and
+/// `merge_settles_every_book_uuid_table` holds the schema to it.
+// Only that test reads it; it lives here so the reason sits beside the list.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) const MERGE_EXEMPT_TABLES: [(&str, &str); 4] = [
+    (
+        "metadata_overrides",
+        "shallow-merged onto the target by `merge_overrides` in the same transaction",
+    ),
+    (
+        "book_suggestions",
+        "regenerable suggestion cache; the target keeps its own and the source's rows are unreachable",
+    ),
+    (
+        "book_suggestion_state",
+        "regenerable suggestion cache; the target keeps its own and the source's rows are unreachable",
+    ),
+    (
+        "kobo_books_sync",
+        "per-device sync snapshot: the stranded row is what tells the device on its next sync that the source entitlement is gone",
+    ),
+];
+
+/// Which of two rows survives a `UNIQUE` collision once the source's uuid
+/// retargets onto the target's.
+#[derive(Clone, Copy)]
+pub(super) enum Keep {
+    /// The row with the greater `column`; ties go to the target.
+    Max(&'static str),
+    /// The row with the smaller `column`; ties go to the target.
+    Min(&'static str),
+    /// The target's row, unconditionally.
+    Target,
+}
+
+/// A [`RETARGET_TABLES`] entry whose `UNIQUE` key the retarget would violate:
+/// the key's columns beyond `book_uuid`, and the rule that picks the survivor.
+pub(super) struct Collision {
+    pub table: &'static str,
+    pub keys: &'static [&'static str],
+    pub keep: Keep,
+}
+
+/// The subset of [`RETARGET_TABLES`] with a `UNIQUE` key to settle, resolved
+/// by [`dedupe_collisions`] before the retarget runs.
 ///
 /// **A dedupe is destructive, so it is only reversible if the merge wrote both
 /// sides down first.** `book_read_status` and `user_ratings` are recorded in
-/// [`super::curation`] and restored by undo. The three progress-shaped entries
-/// are not, and undo leaves them on the target — the same documented asymmetry
-/// as sessions and annotations, and the reason a new entry here needs a
-/// deliberate answer rather than just a line in this list.
-const DEDUPE_TABLES: [(&str, Option<&str>); 5] = [
-    ("reading_progress", Some("format")),
+/// [`super::curation`] and restored by undo. Nothing else here is, and undo
+/// leaves it on the target — the same documented asymmetry as sessions and
+/// annotations, and the reason a new entry needs a deliberate answer rather
+/// than just a line in this list.
+pub(super) const COLLISION_TABLES: [Collision; 9] = [
+    Collision {
+        table: "reading_progress",
+        keys: &["user_id", "format"],
+        keep: Keep::Max("updated_at"),
+    },
     // The forward-progress mark is a snapshot of a position, exactly like the
     // progress row it shadows, so latest-wins is the same right answer here.
-    // Its day buckets are not — see `fold_daily_ledger`.
-    ("reading_progress_marks", Some("format")),
-    ("audiobook_playback_preferences", None),
-    ("book_read_status", None),
-    ("user_ratings", None),
+    // Its day buckets are not — see `fold_ledger_counters`.
+    Collision {
+        table: "reading_progress_marks",
+        keys: &["user_id", "format"],
+        keep: Keep::Max("updated_at"),
+    },
+    Collision {
+        table: "audiobook_playback_preferences",
+        keys: &["user_id"],
+        keep: Keep::Max("updated_at"),
+    },
+    Collision {
+        table: "book_read_status",
+        keys: &["user_id"],
+        keep: Keep::Max("updated_at"),
+    },
+    Collision {
+        table: "user_ratings",
+        keys: &["user_id"],
+        keep: Keep::Max("updated_at"),
+    },
+    // Both editions on one shelf: the book keeps the earlier slot, so a shelf
+    // someone ordered by hand doesn't reshuffle under them.
+    Collision {
+        table: "shelf_books",
+        keys: &["shelf_id"],
+        keep: Keep::Min("position"),
+    },
+    // Wanting both editions is wanting the book once; the earlier entry is the
+    // original statement of it.
+    Collision {
+        table: "wishlist_entries",
+        keys: &["user_id"],
+        keep: Keep::Min("added_at"),
+    },
+    // A link pins the audio file set it was confirmed against, and the merge
+    // changes that set on the target either way — so both links pause until
+    // re-confirmed. The target's is at least about files the survivor holds.
+    Collision {
+        table: "cross_format_links",
+        keys: &["user_id"],
+        keep: Keep::Target,
+    },
+    // The format-collision check admits one text file per book, so a target
+    // with chapters indexed its own; the source's could only come from a file
+    // the target has no room for.
+    Collision {
+        table: "book_content_chapters",
+        keys: &["spine_index"],
+        keep: Keep::Target,
+    },
 ];
 
-/// Re-parent every per-user row from the source book onto the target: reading
-/// progress, playback preferences, bookmarks, sessions, highlights, journal
-/// entries, read status, and ratings. The F1 user-data tables soft-reference
-/// the durable `books.uuid`, so re-parenting is an `UPDATE … SET book_uuid =
-/// <target> WHERE book_uuid = <source>` (no FK cascade — a cascade would
-/// *delete* the children). The two canonical uuids are read from `books` while
-/// the source row still exists (it is deleted later in `finalize_merge`).
+/// Re-parent every row keyed on the source's uuid onto the target: the reader
+/// state, the shelf memberships, copies, wishlist entries and cross-format
+/// links, and the content index. All of it soft-references the durable
+/// `books.uuid`, so re-parenting is an `UPDATE … SET book_uuid = <target> WHERE
+/// book_uuid = <source>` (no FK cascade — a cascade would *delete* the
+/// children). The two canonical uuids are read from `books` while the source
+/// row still exists (it is deleted later in `finalize_merge`).
 ///
 /// Tables with a `UNIQUE` key the retarget would violate are deduped first;
-/// see [`DEDUPE_TABLES`] and [`dedupe_latest_wins`].
+/// see [`COLLISION_TABLES`] and [`dedupe_collisions`].
 async fn move_progress_and_history(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     source_id: i64,
@@ -473,8 +570,8 @@ async fn move_progress_and_history(
     // Before the dedupe, which is what makes the readers it applies to
     // identifiable — afterwards the losing row is gone.
     clear_sitting_clock(tx, &source_uuid, &target_uuid).await?;
-    for (table, extra_key) in DEDUPE_TABLES {
-        dedupe_latest_wins(tx, table, extra_key, &source_uuid, &target_uuid).await?;
+    for collision in &COLLISION_TABLES {
+        dedupe_collisions(tx, collision, &source_uuid, &target_uuid).await?;
     }
     fold_ledger_counters(tx, &source_uuid, &target_uuid).await?;
     // Per-device annotation sync state keys on (device_id, book_uuid) rather
@@ -585,7 +682,7 @@ async fn fold_ledger_counters(
 /// mark the dedupe is about to choose between, so their next observation on the
 /// merged book re-baselines.
 ///
-/// `dedupe_latest_wins` picks that mark by `updated_at` alone, and since
+/// `dedupe_collisions` picks that mark by `updated_at` alone, and since
 /// migration `0095` a mark is a *ceiling* on accrual rather than a value the
 /// next write simply replaces. A source book 90% read winning over a target 10%
 /// read would otherwise suppress every gain below 90% on the merged book for a
@@ -624,25 +721,38 @@ async fn clear_sitting_clock(
     Ok(())
 }
 
-async fn dedupe_latest_wins(
+/// Settle one table's `UNIQUE` collisions per its [`Keep`] rule, so the blanket
+/// retarget that follows never violates the key.
+///
+/// Two passes, in this order: keeping one row means deleting a loser on
+/// whichever side it falls, and pass 2's blanket delete of colliding target
+/// rows is only correct once pass 1 has removed the source rows the target
+/// already beat.
+async fn dedupe_collisions(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
-    table: &str,
-    extra_key: Option<&str>,
+    collision: &Collision,
     source_uuid: &str,
     target_uuid: &str,
 ) -> Result<(), sqlx::Error> {
-    // `table` / `extra_key` are fixed literals from the consts above, never
+    // Table and column names are fixed literals from `COLLISION_TABLES`, never
     // user input.
-    let also = extra_key
+    let table = collision.table;
+    let same_key: String = collision
+        .keys
+        .iter()
         .map(|k| format!(" AND o.{k} = {table}.{k}"))
-        .unwrap_or_default();
+        .collect();
+    let target_wins = match collision.keep {
+        Keep::Max(col) => format!(" AND o.{col} >= {table}.{col}"),
+        Keep::Min(col) => format!(" AND o.{col} <= {table}.{col}"),
+        Keep::Target => String::new(),
+    };
 
-    // Losing source rows first (target is newer or equal) …
+    // Losing source rows first …
     let sql = format!(
         "DELETE FROM {table} WHERE book_uuid = ?2 AND EXISTS (
             SELECT 1 FROM {table} o
-             WHERE o.book_uuid = ?1 AND o.user_id = {table}.user_id{also}
-               AND o.updated_at >= {table}.updated_at)"
+             WHERE o.book_uuid = ?1{same_key}{target_wins})"
     );
     sqlx::query(&sql)
         .bind(target_uuid)
@@ -650,11 +760,15 @@ async fn dedupe_latest_wins(
         .execute(&mut **tx)
         .await?;
 
-    // … then losing target rows (a strictly newer source row survived).
+    // … then the target rows a surviving source row beat. Under `Keep::Target`
+    // no source row survives a collision, so there is nothing to do.
+    if matches!(collision.keep, Keep::Target) {
+        return Ok(());
+    }
     let sql = format!(
         "DELETE FROM {table} WHERE book_uuid = ?1 AND EXISTS (
             SELECT 1 FROM {table} o
-             WHERE o.book_uuid = ?2 AND o.user_id = {table}.user_id{also})"
+             WHERE o.book_uuid = ?2{same_key})"
     );
     sqlx::query(&sql)
         .bind(target_uuid)

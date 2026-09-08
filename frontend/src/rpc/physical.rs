@@ -6,7 +6,7 @@ use dioxus::fullstack::post;
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use omnibus_db as db;
-use omnibus_shared::physical::{PhysicalCopy, WishlistEntry};
+use omnibus_shared::physical::{PhysicalCopy, WishlistEntry, WishlistRemoval};
 // Only the server-side body names the source; the client half never sees it.
 #[cfg(feature = "server")]
 use omnibus_shared::physical::WishlistSource;
@@ -98,9 +98,11 @@ pub async fn rpc_add_wishlist_entry(uuid: String) -> Result<WishlistEntry> {
     )
 }
 
-/// Remove a book from the caller's wishlist. A no-op when absent.
+/// Remove a book from the caller's wishlist. A no-op when absent. Reports
+/// whether the book itself went with the entry — a wishlist-only book nobody
+/// else wants has no reason left to exist, and the page needs to leave it.
 #[post("/api/rpc/physical/wishlist/remove", pool: PoolExt, user: AuthUser)]
-pub async fn rpc_remove_wishlist_entry(uuid: String) -> Result<()> {
+pub async fn rpc_remove_wishlist_entry(uuid: String) -> Result<WishlistRemoval> {
     Ok(db::remove_wishlist_entry(&pool.0, user.id, &uuid)
         .await
         .map_err(|e| map_physical_error("remove wishlist entry", e))?)

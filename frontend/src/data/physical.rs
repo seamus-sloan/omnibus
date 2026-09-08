@@ -3,7 +3,7 @@
 //! fileless-book removal. Mobile calls `/api/physical/*` REST routes; web/SSR
 //! proxy the RPC server functions in `crate::rpc` behind a shared signature.
 
-use omnibus_shared::physical::{PhysicalCopy, WishlistEntry};
+use omnibus_shared::physical::{PhysicalCopy, WishlistEntry, WishlistRemoval};
 
 #[cfg(not(feature = "mobile"))]
 use super::note_server_fn_err;
@@ -89,15 +89,19 @@ pub async fn add_wishlist_entry(server_url: &str, uuid: &str) -> Result<Wishlist
 }
 
 /// DELETE `/api/physical/{uuid}/wishlist` — remove the caller's wishlist entry.
+/// The answer says whether the book went with it.
 #[cfg(feature = "mobile")]
-pub async fn remove_wishlist_entry(server_url: &str, uuid: &str) -> Result<(), DataError> {
+pub async fn remove_wishlist_entry(
+    server_url: &str,
+    uuid: &str,
+) -> Result<WishlistRemoval, DataError> {
     let url = format!("{server_url}/api/physical/{uuid}/wishlist");
     let response = with_bearer(http_client().delete(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    Ok(())
+    Ok(response.json::<WishlistRemoval>().await?)
 }
 
 /// DELETE `/api/physical/{uuid}` — remove a fileless book outright.
@@ -166,7 +170,10 @@ pub async fn add_wishlist_entry(_server_url: &str, uuid: &str) -> Result<Wishlis
 
 /// Web/SSR `remove_wishlist_entry` — proxies to `rpc_remove_wishlist_entry`.
 #[cfg(not(feature = "mobile"))]
-pub async fn remove_wishlist_entry(_server_url: &str, uuid: &str) -> Result<(), DataError> {
+pub async fn remove_wishlist_entry(
+    _server_url: &str,
+    uuid: &str,
+) -> Result<WishlistRemoval, DataError> {
     crate::rpc::rpc_remove_wishlist_entry(uuid.to_string())
         .await
         .map_err(note_server_fn_err)

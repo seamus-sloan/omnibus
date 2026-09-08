@@ -11,7 +11,8 @@ struct WishlistSection: View {
     let book: Book
     let entry: WishlistEntry
     /// Run once the server has dropped the entry, so the page can clear it.
-    var onRemoved: () -> Void
+    /// `true` when the book went with the entry, so the page can leave too.
+    var onRemoved: (Bool) -> Void
 
     @Environment(\.palette) private var palette
     @Environment(\.openURL) private var openURL
@@ -21,7 +22,7 @@ struct WishlistSection: View {
     @State private var busy = false
     @State private var error: String?
 
-    init(book: Book, entry: WishlistEntry, onRemoved: @escaping () -> Void) {
+    init(book: Book, entry: WishlistEntry, onRemoved: @escaping (Bool) -> Void) {
         self.book = book
         self.entry = entry
         self.onRemoved = onRemoved
@@ -92,12 +93,12 @@ struct WishlistSection: View {
         error = nil
         Task {
             do {
-                try await UserDataService.removeWishlistEntry(uuid: book.uuid)
+                let bookDeleted = try await UserDataService.removeWishlistEntry(uuid: book.uuid)
                 busy = false
                 Haptics.success()
                 // The card goes with the entry, so the page owns the state
                 // rather than this view holding a removed row on screen.
-                withAnimation(Motion.settle) { onRemoved() }
+                withAnimation(Motion.settle) { onRemoved(bookDeleted) }
             } catch {
                 busy = false
                 self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription

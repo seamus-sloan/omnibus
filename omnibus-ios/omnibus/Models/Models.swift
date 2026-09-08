@@ -2302,6 +2302,17 @@ struct WishlistEntry: Codable, Equatable, Sendable {
     }
 }
 
+/// What removing a wishlist entry did beyond dropping the row. A book that
+/// existed only to be wanted goes with its last entry, and `bookDeleted` is
+/// how the detail screen learns the book it is showing is gone.
+struct WishlistRemoval: Codable, Equatable, Sendable {
+    var bookDeleted: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case bookDeleted = "book_deleted"
+    }
+}
+
 /// `Json(BookRef { book_uuid })` — returned by all three scan writes.
 struct BookRef: Codable, Sendable {
     var bookUUID: String

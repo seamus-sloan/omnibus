@@ -7,6 +7,7 @@ use super::*;
 use crate::author_photos_data::{upsert_author_photo, AuthorPhotoSource};
 use crate::books::list_books;
 use crate::metadata_overrides::upsert_metadata_overrides;
+use crate::physical::{add_physical_copy, create_fileless_book, FilelessBook};
 use crate::pool::init_db;
 use crate::sync::replace_books;
 use crate::test_support::{
@@ -1253,4 +1254,91 @@ fn discovery_error_from_metadata_overrides_error_returns_other_for_bulk_write_va
         matches!(&err, DiscoveryError::Other(msg) if msg.contains("abc")),
         "expected Other carrying the source message, got {err:?}"
     );
+}
+
+// -----------------------------------------------------------------
+// A wishlist-only book is not "in your library"
+// -----------------------------------------------------------------
+
+/// A fileless book under the physical pseudo-root — what a wishlist add mints.
+async fn seed_fileless(pool: &sqlx::SqlitePool, title: &str, author: &str) -> String {
+    create_fileless_book(
+        pool,
+        FilelessBook {
+            title: title.to_string(),
+            authors: vec![author.to_string()],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn get_author_omits_a_wishlist_only_book_and_counts_a_checked_in_one() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let id = author_id_by_name(&pool, "Ada Lovelace").await;
+    seed_fileless(&pool, "Wanted", "Ada Lovelace").await;
+    let owned = seed_fileless(&pool, "Owned", "Ada Lovelace").await;
+    add_physical_copy(&pool, &owned, None, None, None)
+        .await
+        .unwrap();
+
+    let author = get_author(&pool, id).await.unwrap().expect("author exists");
+
+    let titles: Vec<_> = author
+        .books
+        .iter()
+        .filter_map(|b| b.title.clone())
+        .collect();
+    assert!(
+        titles.contains(&"Owned".to_string()),
+        "a checked-in copy is in the library"
+    );
+    assert!(
+        !titles.contains(&"Wanted".to_string()),
+        "a wish is not a book the library holds: {titles:?}"
+    );
+    assert_eq!(
+        author.book_count, 4,
+        "the count agrees with the index, not the wish"
+    );
+}
+
+#[tokio::test]
+async fn get_series_omits_a_wishlist_only_book_and_counts_a_checked_in_one() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let sid = series_id_by_name(&pool, "Saga").await;
+    let wished = seed_fileless(&pool, "Saga: Wanted", "Ada Lovelace").await;
+    let owned = seed_fileless(&pool, "Saga: Owned", "Ada Lovelace").await;
+    add_physical_copy(&pool, &owned, None, None, None)
+        .await
+        .unwrap();
+    for uuid in [&wished, &owned] {
+        sqlx::query(
+            "INSERT INTO books_series_link (book, series) SELECT id, ? FROM books WHERE uuid = ?",
+        )
+        .bind(sid)
+        .bind(uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let series = get_series(&pool, sid)
+        .await
+        .unwrap()
+        .expect("series exists");
+
+    let titles: Vec<_> = series
+        .books
+        .iter()
+        .filter_map(|b| b.title.clone())
+        .collect();
+    assert!(titles.contains(&"Saga: Owned".to_string()));
+    assert!(!titles.contains(&"Saga: Wanted".to_string()), "{titles:?}");
+    assert_eq!(series.book_count, 3);
 }
