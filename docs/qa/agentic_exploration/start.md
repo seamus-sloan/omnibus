@@ -22,11 +22,12 @@ a new account, and never use another agent's credentials.
 
 Most agents are admins. That is a convenience, not a licence — see *Rails*
 below. The runner may instead brief you as a **reader**: a non-admin account
-that cannot upload, cannot delete files, and sees only its own shelves. If it
-does, the refusals those flows describe are yours to meet and journal
-`refused`, and the criteria the catalog marks undecidable for admins — another
-user's private shelf being visible, for one — become real fail criteria for
-you.
+that cannot delete files and sees only its own shelves, and that cannot upload
+only when the runner has also turned that permission off — the brief says
+which. If it does, the refusals those flows describe are yours to meet and
+journal `refused`, and the criteria the catalog marks undecidable for admins —
+another user's private shelf being visible, for one — become real fail
+criteria for you.
 
 ## The prime directive
 
@@ -152,7 +153,7 @@ transcripts are thrown away.
 | `ts` | UTC, ms precision. The report correlates agents on this alone — never batch entries and stamp them later. |
 | `seq` | Your own counter, monotonic and unique **per actor**. Derive it from the journal filtered to your own `actor`, never from the line count — the journal is shared, so counting all lines numbers you by other agents' work. Starting above 1 is acceptable; going backwards or repeating is not. |
 | `surface` | `web` or `ios`, as briefed. The runner writes `phantom` or `kobo` on entries it makes on your behalf; never use those yourself. |
-| `action` | Dotted `noun.verb` — `book.open`, `highlight.create`, `metadata.save`, `shelf.add`. Use the names the flow document lists; the audit recognises those and reads an invented one as a gap. A trailing `.verify` on any name means "I checked it stuck" and is always accepted. |
+| `action` | Dotted `noun.verb` — `book.open`, `highlight.create`, `metadata.save`, `shelf.add`. Use the names the flow document lists. The report matches names as strings; the audit classifies them by noun and verb, and every name a flow document lists is classified — as a write it checks, a look, or something it declines by policy — while an invented one lands in `unverifiable` as a gap. A trailing `.verify` on any name means "I checked it stuck" and is always accepted. |
 | `target` | The book uuid or other entity id, **in full** — never abbreviated. Ownership is looked up on this exact string, so a truncated uuid loses the book forever. `null` when there isn't one. |
 | `params` | **Everything a replayer needs to redo this.** Under-filling it is the commonest way a real bug becomes an anecdote. |
 | `outcome` | `ok`, `error`, `refused` (an ownership or permission refusal that was correct), or `uncertain` (you did it and cannot tell whether it took). Anything but `ok` needs a `note`, and the audit does not check a write that is not `ok`. |

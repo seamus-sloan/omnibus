@@ -68,7 +68,7 @@ entry with an empty result list.
 - A title word, an author, a series, and a tag each find what they name.
 - An empty result is reported as empty.
 - Opening a result lands on it.
-- The results agree with the library: a book search finds shows in the grid,
+- The results agree with the library: a book a search finds is in the grid,
   and an author it names has an index entry.
 
 ## Fail
