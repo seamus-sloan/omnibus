@@ -3,6 +3,7 @@
 //! live here.
 
 mod forward_progress;
+mod library_rows;
 mod migration_0079;
 mod reader_state;
 mod relocation;

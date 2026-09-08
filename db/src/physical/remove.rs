@@ -50,16 +50,22 @@ pub async fn delete_fileless_book(pool: &SqlitePool, book_uuid: &str) -> Result<
         .map_err(map_delete_error)?;
     tx.commit().await?;
 
-    let uuids = vec![canonical];
+    discard_cover_files(canonical).await;
+    Ok(())
+}
+
+/// Best-effort cover cleanup once a fileless book's row is gone. Covers are a
+/// rebuildable cache, so a failed unlink never fails the delete that preceded
+/// it — the row is already committed away.
+pub(super) async fn discard_cover_files(uuid: String) {
     if let Err(join_err) = tokio::task::spawn_blocking(move || {
-        delete_override_cover(&uuids[0]);
-        delete_cover_files_for(&uuids);
+        delete_override_cover(&uuid);
+        delete_cover_files_for(std::slice::from_ref(&uuid));
     })
     .await
     {
-        tracing::error!(error = %join_err, "delete_fileless_book: cover cleanup spawn_blocking failed");
+        tracing::error!(error = %join_err, "fileless book delete: cover cleanup spawn_blocking failed");
     }
-    Ok(())
 }
 
 /// Fold a `deletion::DeleteError` from the shared purge into `PhysicalError`.

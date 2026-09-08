@@ -815,17 +815,27 @@ enum UserDataService {
     /// but not the other is a worse contract than an online-only pair — you
     /// could clear the wishlist on a plane and not put anything back. The
     /// control is disabled while offline, per the rule's corollary.
-    static func removeWishlistEntry(uuid: String) async throws {
-        let _: Empty = try await APIClient.shared.delete("/api/physical/\(uuid)/wishlist")
+    ///
+    /// Returns whether the book itself went with the entry — a wishlist-only
+    /// book nobody else wants has no reason left to exist, and the screen
+    /// showing it has to leave.
+    static func removeWishlistEntry(uuid: String) async throws -> Bool {
+        let removal: WishlistRemoval = try await APIClient.shared.delete("/api/physical/\(uuid)/wishlist")
         // Record "not tracked" rather than dropping the key: an absent replica
         // makes the next read throw offline, and the answer is now known.
         await Cache.write(CacheKey.wishlistEntry(uuid), WishlistEntry?.none)
+        if removal.bookDeleted {
+            // The cached detail would otherwise keep answering for a book the
+            // server no longer has.
+            await OfflineStore.shared.cacheDelete(CacheKey.book(uuid))
+        }
         // The wishlist is a real shelf whose membership derives from these
         // entries, so its page still lists the book and the shelf lists still
         // count it. Drop the page before invalidating the lists — the shelf id
         // this route doesn't carry is read off the cached list.
         await dropCachedWishlistPages()
         await invalidateShelves()
+        return removal.bookDeleted
     }
 
     /// Forget any cached wishlist shelf page, so the shelf doesn't keep showing

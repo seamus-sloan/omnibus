@@ -9,6 +9,7 @@ use super::super::*;
 use crate::author_photos_data::{upsert_author_photo, AuthorPhotoSource};
 use crate::books::list_books;
 use crate::metadata_overrides::upsert_metadata_overrides;
+use crate::physical::add_physical_copy;
 use crate::pool::init_db;
 use crate::sync::replace_books;
 use crate::test_support::{
@@ -277,4 +278,35 @@ async fn get_author_populates_has_photo() {
     .unwrap();
     let ada = get_author(&pool, ada_id).await.unwrap().unwrap();
     assert!(ada.has_photo, "manual upload should yield has_photo = true");
+}
+
+#[tokio::test]
+async fn get_author_omits_a_wishlist_only_book_and_counts_a_checked_in_one() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let id = author_id_by_name(&pool, "Ada Lovelace").await;
+    super::seed_fileless(&pool, "Wanted", "Ada Lovelace").await;
+    let owned = super::seed_fileless(&pool, "Owned", "Ada Lovelace").await;
+    add_physical_copy(&pool, &owned, None, None, None)
+        .await
+        .unwrap();
+
+    let author = get_author(&pool, id).await.unwrap().expect("author exists");
+
+    let titles: Vec<_> = author
+        .books
+        .iter()
+        .filter_map(|b| b.title.clone())
+        .collect();
+    assert!(
+        titles.contains(&"Owned".to_string()),
+        "a checked-in copy is in the library"
+    );
+    assert!(
+        !titles.contains(&"Wanted".to_string()),
+        "a wish is not a book the library holds: {titles:?}"
+    );
+    assert_eq!(
+        author.book_count, 4,
+        "the count agrees with the index, not the wish"
+    );
 }

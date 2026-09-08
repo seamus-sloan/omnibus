@@ -10,7 +10,7 @@ use omnibus_shared::physical::{PhysicalCopy, WishlistEntry, WishlistSource};
 use crate::components::glyphs::book_glyph;
 use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 use crate::time::now_unix;
-use crate::{data, use_server_url};
+use crate::{data, use_server_url, Route};
 
 use super::{BdSectionHead, PhysSignals};
 
@@ -864,7 +864,14 @@ pub(super) fn remove_from_wishlist(
     err.set(None);
     spawn(async move {
         match data::remove_wishlist_entry(&url, &uuid).await {
-            Ok(()) => wishlist.set(None),
+            Ok(removal) => {
+                wishlist.set(None);
+                // A wishlist-only book nobody else wants went with the entry,
+                // so this page is now about a book that does not exist.
+                if removal.book_deleted {
+                    dioxus_router::navigator().replace(Route::Landing {});
+                }
+            }
             Err(e) => err.set(Some(e.to_string())),
         }
         busy.set(false);

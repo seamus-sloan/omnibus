@@ -8,7 +8,7 @@ use axum::{
     http::{header::AUTHORIZATION, Request, StatusCode},
 };
 use omnibus_db as db;
-use omnibus_shared::physical::{PhysicalCopy, WishlistEntry, WishlistSource};
+use omnibus_shared::physical::{PhysicalCopy, WishlistEntry, WishlistRemoval, WishlistSource};
 use tower::ServiceExt;
 
 use crate::auth::test_support as auth_test_support;
@@ -313,7 +313,7 @@ async fn api_delete_wishlist_entry_is_idempotent() {
     let token = auth_test_support::bearer_token(&pool, user.id).await;
 
     // No entry to begin with: the desired end state already holds, so this is
-    // a 204 rather than a 404.
+    // a success rather than a 404.
     let res = app
         .oneshot(req(
             "DELETE",
@@ -324,7 +324,53 @@ async fn api_delete_wishlist_entry_is_idempotent() {
         .await
         .unwrap();
 
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(res.status(), StatusCode::OK);
+    let removal: WishlistRemoval = json_body(res).await;
+    assert!(!removal.book_deleted, "a book with a copy checked in stays");
+}
+
+#[tokio::test]
+async fn api_delete_wishlist_entry_purges_a_wishlist_only_book() {
+    let _covers = CoversDirGuard::new("phys_wish_purge");
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let uuid = db::create_fileless_book(
+        &pool,
+        db::FilelessBook {
+            title: "Wanted".into(),
+            authors: vec!["Ada Lovelace".into()],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .expect("create_fileless_book");
+    db::add_wishlist_entry(&pool, user.id, &uuid, WishlistSource::Search)
+        .await
+        .expect("add_wishlist_entry");
+
+    let res = app
+        .oneshot(req(
+            "DELETE",
+            &format!("/api/physical/{uuid}/wishlist"),
+            &token,
+            None,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let removal: WishlistRemoval = json_body(res).await;
+    assert!(removal.book_deleted);
+    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books WHERE uuid = ?")
+        .bind(&uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0, "the book existed only to be wanted");
 }
 
 #[tokio::test]

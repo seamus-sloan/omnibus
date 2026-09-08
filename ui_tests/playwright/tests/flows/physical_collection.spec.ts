@@ -133,12 +133,15 @@ test("adds then removes a wishlist entry", async ({ page, request }) => {
   await expect(page.getByTestId("format-badge-wishlist")).toBeVisible();
   await expect(page.getByTestId("wishlist-card")).toBeVisible();
   await expect(page.getByTestId("find-a-copy")).toBeVisible();
+  // The viewer's own Wishlist shelf holds the book now, and the More stop's
+  // shelf list says so off the same signal the card reads — no refetch.
+  await expect(page.getByTestId("bdmq-shelves")).toContainText("Wishlist");
 
   await page.route("**/api/rpc/physical/wishlist/remove", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: "null",
+      body: JSON.stringify({ book_deleted: false }),
     }),
   );
   await expectMutation(
@@ -152,6 +155,7 @@ test("adds then removes a wishlist entry", async ({ page, request }) => {
   );
 
   await expect(page.getByTestId("add-to-wishlist")).toBeVisible();
+  await expect(page.getByTestId("bdmq-shelves")).toBeHidden();
 });
 
 test("surfaces an error when the wishlist add fails", async ({

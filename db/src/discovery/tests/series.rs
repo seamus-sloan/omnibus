@@ -7,6 +7,7 @@ use omnibus_shared::MetadataOverrides;
 use super::super::*;
 use crate::books::list_books;
 use crate::metadata_overrides::upsert_metadata_overrides;
+use crate::physical::add_physical_copy;
 use crate::pool::init_db;
 use crate::test_support::{
     seed_books_for_one_author_and_series, seed_discovery_fixture, series_id_by_name, CoversTempDir,
@@ -179,4 +180,39 @@ async fn get_series_pins_series_id_for_books_moved_between_series() {
             .any(|b| b.title.as_deref() == Some("Other Story")),
         "override moved Other Story off Pioneers",
     );
+}
+
+#[tokio::test]
+async fn get_series_omits_a_wishlist_only_book_and_counts_a_checked_in_one() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let sid = series_id_by_name(&pool, "Saga").await;
+    let wished = super::seed_fileless(&pool, "Saga: Wanted", "Ada Lovelace").await;
+    let owned = super::seed_fileless(&pool, "Saga: Owned", "Ada Lovelace").await;
+    add_physical_copy(&pool, &owned, None, None, None)
+        .await
+        .unwrap();
+    for uuid in [&wished, &owned] {
+        sqlx::query(
+            "INSERT INTO books_series_link (book, series) SELECT id, ? FROM books WHERE uuid = ?",
+        )
+        .bind(sid)
+        .bind(uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let series = get_series(&pool, sid)
+        .await
+        .unwrap()
+        .expect("series exists");
+
+    let titles: Vec<_> = series
+        .books
+        .iter()
+        .filter_map(|b| b.title.clone())
+        .collect();
+    assert!(titles.contains(&"Saga: Owned".to_string()));
+    assert!(!titles.contains(&"Saga: Wanted".to_string()), "{titles:?}");
+    assert_eq!(series.book_count, 3);
 }

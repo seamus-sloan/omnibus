@@ -6,9 +6,11 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{EbookMetadata, SeriesDetail, ShelfSummary, SuggestionsResponse};
+use omnibus_shared::physical::WishlistEntry;
+use omnibus_shared::{EbookMetadata, SeriesDetail, ShelfKind, ShelfSummary, SuggestionsResponse};
 
 use crate::components::atrium::Cover;
+use crate::contexts::use_current_user_summary;
 use crate::{data, use_server_url, Route};
 
 use super::super::body::{BdAuthorCluster, BdPageCtx, BdSameHand, BdSuggestionsStrip};
@@ -22,6 +24,9 @@ pub(super) struct MoreStopCtx {
     pub author_books: Vec<EbookMetadata>,
     pub suggestions: Option<SuggestionsResponse>,
     pub page: BdPageCtx,
+    /// The viewer's wishlist entry for this book, shared with the hero so the
+    /// shelf list follows the Add / Remove buttons without a refetch.
+    pub wishlist: Signal<Option<WishlistEntry>>,
 }
 
 /// The More stop: the shelf beside this book, the author's other work, then
@@ -42,6 +47,7 @@ pub(super) fn MarqueeMoreStop(
         author_books,
         suggestions,
         page,
+        wishlist,
     } = ctx;
     rsx! {
         div { class: "bdmq-tight bdmq-more", "data-testid": "bdmq-more",
@@ -53,7 +59,10 @@ pub(super) fn MarqueeMoreStop(
                     detail: series,
                 }
             } else {
-                MarqueeStandaloneShelves { uuid: b.unique_identifier.clone().unwrap_or_default() }
+                MarqueeStandaloneShelves {
+                    uuid: b.unique_identifier.clone().unwrap_or_default(),
+                    wishlist,
+                }
             }
             div { class: "bdmq-morerule" }
             BdSameHand {
@@ -153,11 +162,19 @@ fn render_series_item(x: &EbookMetadata, current_uuid: &str, next_uuid: Option<&
     }
 }
 
-/// Standalone: the hand-picked shelves holding this book, as chips.
+/// Standalone: the shelves holding this book, as chips — the hand-picked ones
+/// plus the viewer's own Wishlist when the book is on it.
+///
+/// The wishlist shelf's membership derives from `wishlist_entries`, not
+/// `shelf_books`, so the per-book membership read never names it; the landing
+/// gallery counts the book under it all the same. It is read off the page's
+/// own wishlist signal instead, so it appears the moment the Add button lands
+/// and goes with Remove.
 #[component]
-fn MarqueeStandaloneShelves(uuid: String) -> Element {
+fn MarqueeStandaloneShelves(uuid: String, wishlist: Signal<Option<WishlistEntry>>) -> Element {
     let server_url = use_server_url();
-    let mut shelves = use_signal(|| None::<Vec<ShelfSummary>>);
+    let me = use_current_user_summary();
+    let mut shelves = use_signal(|| None::<(Vec<ShelfSummary>, Vec<i64>)>);
     // A fast SPA hop between books can leave the previous book's shelf fetch
     // in flight; drop its result rather than showing it under the new book.
     let mut load_seq = use_signal(|| 0u64);
@@ -174,18 +191,26 @@ fn MarqueeStandaloneShelves(uuid: String) -> Element {
                 let holding = data::shelves_containing(&url, &uuid).await;
                 if let (Ok(all), Ok(ids)) = (all, holding) {
                     if *load_seq.peek() == my_load {
-                        let held: Vec<ShelfSummary> =
-                            all.into_iter().filter(|s| ids.contains(&s.id)).collect();
-                        shelves.set(Some(held));
+                        shelves.set(Some((all, ids)));
                     }
                 }
             });
         }));
     }
+    let held = shelves().map(|(all, ids)| {
+        let my_id = me().map(|u| u.id);
+        let wished = wishlist().is_some();
+        all.into_iter()
+            .filter(|s| {
+                ids.contains(&s.id)
+                    || (wished && s.kind == ShelfKind::Wishlist && Some(s.owner_user_id) == my_id)
+            })
+            .collect::<Vec<ShelfSummary>>()
+    });
 
     rsx! {
         div { class: "bdmq-k", "Standalone \u{b7} on your shelves" }
-        match shelves() {
+        match held {
             Some(held) if !held.is_empty() => rsx! {
                 div { class: "bdmq-chips bdmq-shelfchips", "data-testid": "bdmq-shelves",
                     for (i, s) in held.iter().enumerate() {

@@ -242,6 +242,7 @@ pub(super) fn MarqueeStage(
                         server_url: ctx.server_url.clone(),
                         is_admin: ctx.is_admin,
                     },
+                    wishlist: phys.wishlist,
                 },
             }
         },

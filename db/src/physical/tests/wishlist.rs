@@ -4,7 +4,7 @@
 use omnibus_shared::physical::WishlistSource;
 use sqlx::SqlitePool;
 
-use crate::test_support::seed_minimal_books;
+use crate::test_support::{seed_minimal_books, CoversTempDir};
 
 use super::super::*;
 use super::{count, pool, seed_user};
@@ -193,4 +193,79 @@ async fn get_wishlist_entry_is_scoped_to_the_asking_user() {
         .await
         .unwrap()
         .is_none());
+}
+
+/// A wishlist-only book, minted the way a wishlist add mints one.
+async fn seed_wished(pool: &SqlitePool, user: i64, title: &str) -> String {
+    let uuid = create_fileless_book(
+        pool,
+        FilelessBook {
+            title: title.into(),
+            authors: vec!["Ada Lovelace".into()],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap();
+    add_wishlist_entry(pool, user, &uuid, WishlistSource::Search)
+        .await
+        .unwrap();
+    uuid
+}
+
+#[tokio::test]
+async fn remove_wishlist_entry_purges_a_book_that_existed_only_to_be_wanted() {
+    let _covers = CoversTempDir::new("wishlist_purge");
+    let pool = pool().await;
+    let user = seed_user(&pool, "reader").await;
+    let uuid = seed_wished(&pool, user, "Wanted").await;
+
+    let removal = remove_wishlist_entry(&pool, user, &uuid).await.unwrap();
+
+    assert!(removal.book_deleted);
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 0);
+    assert_eq!(
+        count(&pool, "SELECT COUNT(*) FROM wishlist_entries").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn remove_wishlist_entry_keeps_a_book_another_reader_still_wants() {
+    let pool = pool().await;
+    let user = seed_user(&pool, "reader").await;
+    let other = seed_user(&pool, "other").await;
+    let uuid = seed_wished(&pool, user, "Wanted").await;
+    add_wishlist_entry(&pool, other, &uuid, WishlistSource::Detail)
+        .await
+        .unwrap();
+
+    let removal = remove_wishlist_entry(&pool, user, &uuid).await.unwrap();
+
+    assert!(!removal.book_deleted);
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert!(get_wishlist_entry(&pool, other, &uuid)
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn remove_wishlist_entry_keeps_a_ghosted_library_book() {
+    // No file, but a real scan root: the reindex owns that row and its
+    // retention, and a reader unwishing it must not delete it out from under.
+    let pool = pool().await;
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "reader").await;
+    add_wishlist_entry(&pool, user, "uuid-1", WishlistSource::Detail)
+        .await
+        .unwrap();
+
+    let removal = remove_wishlist_entry(&pool, user, "uuid-1").await.unwrap();
+
+    assert!(!removal.book_deleted);
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
 }

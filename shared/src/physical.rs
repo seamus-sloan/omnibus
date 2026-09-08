@@ -99,5 +99,14 @@ pub struct WishlistEntry {
     pub source: WishlistSource,
 }
 
+/// What removing a wishlist entry did beyond dropping the row. A book that
+/// existed only to be wanted — no file, no copy, nobody else's wish — goes
+/// with its last entry, and `book_deleted` is how the client learns the page
+/// it is standing on is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct WishlistRemoval {
+    pub book_deleted: bool,
+}
+
 #[cfg(test)]
 mod tests;

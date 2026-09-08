@@ -817,7 +817,7 @@ struct StopHome: View {
     var lifted = true
     var onMore: () -> Void
     var onAlignment: () -> Void
-    var onRemovedWishlist: () -> Void
+    var onRemovedWishlist: (Bool) -> Void
 
     @Environment(\.palette) private var palette
 

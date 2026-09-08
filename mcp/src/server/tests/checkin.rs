@@ -15,6 +15,7 @@ use axum::routing::{get, post};
 use axum::{Json as AxumJson, Router};
 use omnibus_shared::{
     ExternalBookMeta, MetadataProvider, PhysicalCopy, ScanBook, ScanOutcome, ScanSearchResponse,
+    WishlistRemoval,
 };
 use rmcp::handler::server::wrapper::Parameters;
 
@@ -127,9 +128,11 @@ async fn wishlist_add(
 async fn wishlist_delete(
     State(stub): State<Arc<WriteStub>>,
     Path(uuid): Path<String>,
-) -> StatusCode {
+) -> AxumJson<WishlistRemoval> {
     stub.wishlist_deletes.lock().unwrap().push(uuid);
-    StatusCode::NO_CONTENT
+    AxumJson(WishlistRemoval {
+        book_deleted: false,
+    })
 }
 
 fn copy(note: Option<String>) -> PhysicalCopy {

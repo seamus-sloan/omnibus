@@ -786,7 +786,12 @@ struct BookDetailView: View {
                 lifted: lifted,
                 onMore: { showDescription = true },
                 onAlignment: { showAlignment = true },
-                onRemovedWishlist: { model.wishlistEntry = nil }
+                onRemovedWishlist: { bookDeleted in
+                    model.wishlistEntry = nil
+                    // A wishlist-only book nobody else wants went with the
+                    // entry; this screen is now about a book that is gone.
+                    if bookDeleted { dismiss() }
+                }
             )
         case .stats:
             StopStats(book: book, model: model)
