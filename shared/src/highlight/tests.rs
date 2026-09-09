@@ -95,6 +95,10 @@ fn highlight_serializes_an_anchorless_row_with_an_explicit_null_cfi() {
         text: Some("quote".into()),
         client_id: Some("kobo-uuid".into()),
         created_at: 5,
+        created_at_iso: None,
+        spine_index: None,
+        chapter_title: None,
+        percent_through_book: None,
     };
     let json = serde_json::to_value(&h).expect("serialize");
     // The key stays present (honest null) so decoders see a stable shape.

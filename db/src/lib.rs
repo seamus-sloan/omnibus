@@ -5,6 +5,7 @@
 //! `feature = "server"`).
 
 pub mod admin_health;
+pub mod anchor;
 pub mod annotations;
 pub mod audiobook;
 pub mod auth;
@@ -73,6 +74,7 @@ pub mod worker;
 // Flatten the query layer so callers write `omnibus_db::list_books(...)`
 // instead of `omnibus_db::queries::list_books(...)`. Keeps callsites terse
 // and mirrors how `db.rs` looked before the extraction.
+pub use anchor::{AnchorError, AnchorIndex, AnchorPlacement, AnnotationOrder};
 pub use author_photos_data::*;
 pub use book_summary::{fetch_summary, summary_source_plan};
 pub use books::{

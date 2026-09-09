@@ -4,14 +4,14 @@
 //! `omnibus_frontend::rpc`.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::{IntoResponse, Response},
     Json,
 };
 use omnibus_db::{self as db, annotations::HighlightError};
 use omnibus_shared::{CreateHighlight, HighlightColor, UpdateHighlightNote};
 
-use super::{internal, AppState};
+use super::{internal, AnnotationOrderQuery, AppState};
 use crate::auth::AuthUser;
 
 /// Create a highlight annotation on a book.
@@ -47,13 +47,16 @@ pub(super) async fn post_highlight(
     }
 }
 
-/// List all highlights for a user on a specific book.
+/// List a user's highlights in a book, each placed in the book (spine
+/// index, chapter title, percent through the book) and ordered by that
+/// position. `?order=chronological` restores creation order.
 pub(super) async fn get_highlights(
     user: AuthUser,
     State(state): State<AppState>,
     Path(book_uuid): Path<String>,
+    Query(order): Query<AnnotationOrderQuery>,
 ) -> Response {
-    match db::annotations::list_highlights(&state.pool, user.id, &book_uuid).await {
+    match db::annotations::list_highlights(&state.pool, user.id, &book_uuid, order.into()).await {
         Ok(list) => Json(list).into_response(),
         Err(HighlightError::Sqlx(e)) => internal("list_highlights", e),
         Err(e) => internal("list_highlights", e),

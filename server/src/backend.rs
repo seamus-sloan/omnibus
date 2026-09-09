@@ -203,6 +203,22 @@ fn content_disposition_attachment(filename: &str) -> String {
     format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")
 }
 
+/// `?order=` on the annotation list routes. Shared by highlights and
+/// bookmarks so the two cannot drift apart on the accepted vocabulary.
+#[derive(Debug, Default, serde::Deserialize)]
+pub(super) struct AnnotationOrderQuery {
+    order: Option<String>,
+}
+
+impl From<AnnotationOrderQuery> for omnibus_db::AnnotationOrder {
+    fn from(q: AnnotationOrderQuery) -> Self {
+        q.order
+            .as_deref()
+            .map(omnibus_db::AnnotationOrder::parse)
+            .unwrap_or_default()
+    }
+}
+
 /// Shared axum router state — SQLite pool, worker handle, SSRF guard config.
 #[derive(Clone)]
 pub struct AppState {

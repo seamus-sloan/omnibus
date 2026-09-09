@@ -5,6 +5,7 @@
 use omnibus_shared::{Bookmark, CreateBookmark};
 use sqlx::{Row, SqlitePool};
 
+use crate::anchor::{AnchorIndex, AnnotationOrder};
 use crate::resolve_canonical_book_uuid;
 
 /// Hard cap on how many bookmarks `list_bookmarks` returns for a single
@@ -23,6 +24,14 @@ pub enum BookmarkError {
     NotFound,
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
+}
+
+impl From<crate::anchor::AnchorError> for BookmarkError {
+    fn from(e: crate::anchor::AnchorError) -> Self {
+        match e {
+            crate::anchor::AnchorError::Sqlx(inner) => Self::Sqlx(inner),
+        }
+    }
 }
 
 impl From<crate::books::BooksError> for BookmarkError {
@@ -89,11 +98,18 @@ pub async fn bookmark_id_for_client_id(
     )
 }
 
-/// List all bookmarks for a user + book, ordered by creation time (oldest first).
+/// List a user's bookmarks in a book, each placed in the book and ordered
+/// by that position.
+///
+/// A bookmark's `position` is an opaque token — a CFI for the reader, a
+/// timestamp for the player — so both are placed here rather than leaving
+/// each caller to work out which it holds. `chronological` restores
+/// creation order.
 pub async fn list_bookmarks(
     pool: &SqlitePool,
     user_id: i64,
     book_uuid: &str,
+    order: AnnotationOrder,
 ) -> Result<Vec<Bookmark>, BookmarkError> {
     let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
         return Ok(vec![]);
@@ -111,7 +127,25 @@ pub async fn list_bookmarks(
     .fetch_all(pool)
     .await?;
 
-    rows.iter().map(row_to_bookmark).collect()
+    let mut bookmarks: Vec<Bookmark> =
+        rows.iter().map(row_to_bookmark).collect::<Result<_, _>>()?;
+    let index = AnchorIndex::load(pool, &canonical).await?;
+    for b in &mut bookmarks {
+        let placed = index.locate(&b.position);
+        b.spine_index = placed.spine_index;
+        b.chapter_title = placed.chapter_title;
+        b.percent_through_book = placed.percent_through_book;
+    }
+    if matches!(order, AnnotationOrder::Position) {
+        // Percent is the key, not the spine index: an audio bookmark has no
+        // spine index but is just as placed, and both formats' bookmarks can
+        // sit in one list for a dual-format book. Spine index is the
+        // fallback for a CFI in a book whose stats were never extracted, and
+        // the two cases are mutually exclusive — both figures come from the
+        // same stored stats.
+        bookmarks.sort_by_key(bookmark_order_key);
+    }
+    Ok(bookmarks)
 }
 
 /// Set or clear the title/note on a bookmark owned by the user.
@@ -188,6 +222,17 @@ async fn get_bookmark_by_client_id(
     row_to_bookmark(&row)
 }
 
+/// Total order for the position sort. Rank first so unplaced bookmarks tail
+/// the list, then the placement itself as a sortable integer — percent is
+/// scaled rather than compared as a float so the key stays `Ord`.
+fn bookmark_order_key(b: &Bookmark) -> (u8, i64, i64, i64) {
+    match (b.percent_through_book, b.spine_index) {
+        (Some(percent), _) => (0, (percent * 1_000.0) as i64, b.created_at, b.id),
+        (None, Some(spine_index)) => (1, spine_index, b.created_at, b.id),
+        (None, None) => (2, 0, b.created_at, b.id),
+    }
+}
+
 fn row_to_bookmark(row: &sqlx::sqlite::SqliteRow) -> Result<Bookmark, BookmarkError> {
     Ok(Bookmark {
         id: row.try_get("id")?,
@@ -196,6 +241,11 @@ fn row_to_bookmark(row: &sqlx::sqlite::SqliteRow) -> Result<Bookmark, BookmarkEr
         title: row.try_get("title")?,
         client_id: row.try_get("client_id")?,
         created_at: row.try_get("created_at")?,
+        // Filled by `list_bookmarks`, which loads the book's structure once
+        // for the whole list; a single-row read leaves them unplaced.
+        spine_index: None,
+        chapter_title: None,
+        percent_through_book: None,
     })
 }
 

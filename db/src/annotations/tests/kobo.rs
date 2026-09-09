@@ -40,7 +40,9 @@ async fn ingest_kobo_annotations_creates_anchorless_rows_the_web_list_still_retu
     .await
     .unwrap();
 
-    let listed = list_highlights(&pool, user, &uuid).await.unwrap();
+    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(
         listed[0].epub_cfi_range, None,
@@ -71,7 +73,13 @@ async fn ingest_kobo_annotations_replay_of_the_same_upload_creates_no_duplicates
         .await
         .unwrap();
 
-    assert_eq!(list_highlights(&pool, user, &uuid).await.unwrap().len(), 1);
+    assert_eq!(
+        list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -98,7 +106,9 @@ async fn ingest_kobo_annotations_updates_color_note_and_text_for_an_existing_id(
         .await
         .unwrap();
 
-    let listed = list_highlights(&pool, user, &uuid).await.unwrap();
+    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].color, HighlightColor::Violet);
     assert_eq!(listed[0].note.as_deref(), Some("second thoughts"));
@@ -117,7 +127,9 @@ async fn ingest_kobo_annotations_stores_a_derived_cfi_alongside_the_kobo_anchor(
         .await
         .unwrap();
 
-    let listed = list_highlights(&pool, user, &uuid).await.unwrap();
+    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(
         listed[0].epub_cfi_range.as_deref(),
         Some("epubcfi(/6/2!/4/4,/1:0,/1:20)")
@@ -145,7 +157,9 @@ async fn ingest_kobo_annotations_keeps_an_existing_cfi_when_the_anchor_is_unchan
         .await
         .unwrap();
 
-    let listed = list_highlights(&pool, user, &uuid).await.unwrap();
+    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(listed[0].color, HighlightColor::Blue);
     assert_eq!(
         listed[0].epub_cfi_range.as_deref(),
@@ -172,7 +186,9 @@ async fn ingest_kobo_annotations_drops_a_stale_cfi_when_the_anchor_moves_underiv
         .await
         .unwrap();
 
-    let listed = list_highlights(&pool, user, &uuid).await.unwrap();
+    let listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(listed[0].epub_cfi_range, None);
 }
 
@@ -243,7 +259,9 @@ async fn ingest_kobo_annotations_applies_a_multi_row_batch_conflict_insert_and_d
     .await
     .unwrap();
 
-    let mut listed = list_highlights(&pool, user, &uuid).await.unwrap();
+    let mut listed = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     listed.sort_by(|a, b| a.client_id.cmp(&b.client_id));
     assert_eq!(listed.len(), 2, "kobo-3 deleted, kobo-1 and kobo-2 remain");
     assert_eq!(listed[0].client_id.as_deref(), Some("kobo-1"));
