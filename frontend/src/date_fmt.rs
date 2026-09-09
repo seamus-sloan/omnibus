@@ -20,6 +20,20 @@ pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Days since the unix epoch for a civil date — Howard Hinnant's
+/// `days_from_civil`, the inverse of [`civil_from_days`]. Lets a stored ISO
+/// timestamp be re-dated onto another calendar (the viewer's) without a date
+/// library.
+pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = i64::from(if m > 2 { m - 3 } else { m + 9 });
+    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 /// Format a unix-seconds timestamp as `YYYY-MM-DD HH:MM:SS UTC`.
 pub fn fmt_timestamp(unix_secs: i64) -> String {
     let days = unix_secs.div_euclid(86_400);
@@ -33,7 +47,7 @@ pub fn fmt_timestamp(unix_secs: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_from_days, fmt_timestamp};
+    use super::{civil_from_days, days_from_civil, fmt_timestamp};
 
     #[test]
     fn fmt_timestamp_formats_a_known_epoch_second() {
@@ -48,5 +62,13 @@ mod tests {
     #[test]
     fn civil_from_days_round_trips_the_epoch() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
+    }
+
+    #[test]
+    fn days_from_civil_round_trips_civil_from_days() {
+        for day in [0_i64, 1, 19_675, -1, 20_000] {
+            let (y, m, d) = civil_from_days(day);
+            assert_eq!(days_from_civil(y, m, d), day, "day {day}");
+        }
     }
 }

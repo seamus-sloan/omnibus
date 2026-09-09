@@ -21,6 +21,26 @@ either must set the preference first
 (`POST /api/account/book-detail-scroll-stops`) and put it back afterwards; the
 dot rail (`bdmq-dots`, six rows) is the one control common to both.
 
+**"From the same hand" has three states, not two.** The author block fetches
+after the page renders, so `from-same-hand-loading` (a quiet note, no count)
+precedes either `from-same-hand` or `from-same-hand-empty` — it used to assert
+"the only book by X" while still fetching (#2478). Playwright's auto-wait
+handles the settled assertions, but a spec that wants the *loading* state must
+hold the request open rather than racing it — and the route to hold is the
+**server function**, `POST /api/rpc/author`, not the REST `GET
+/api/authors/{id}` the mobile client uses; a spec that routes the latter
+catches nothing on web. Holding it also means `networkidle` never arrives, so
+use a plain `page.goto`, not `gotoReady`. A spec asserting "no other books"
+must target
+`from-same-hand-empty`, never the mere absence of tiles.
+
+**A saved passage's locator is a chapter title, not "Chapter N".** Once the
+book's structure loads, `highlight-meta` reads `Chapter 12: Inej · saved …`;
+until then it falls back to `Section N` off the raw CFI spine step (#2356,
+#2463). Both are valid for the same position and which one a spec sees depends
+on fetch timing, so match the shape (`/^.+ · saved /`) rather than either
+branch.
+
 **A landing *table* row is not a `button`.** The row (`landing/table/row.rs`)
 used to be `<tr role="button">` with an "Open details for …" name, but it
 wraps interactive editable cells (invalid ARIA), so that was dropped (#2350).

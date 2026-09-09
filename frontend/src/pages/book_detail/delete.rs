@@ -14,19 +14,41 @@ use crate::components::DeleteBookDialog;
 #[cfg(not(feature = "mobile"))]
 use crate::Route;
 
-/// Build the "Delete files…" rail button. Admin-only on web; never present on mobile.
+/// The rail button's label. "Delete files…" is a promise about the
+/// filesystem, and a wishlist entry or paper-only book has no files to make it
+/// about — the dialog behind it says so outright ("This book has no files on
+/// disk"), which is the tell that the *label* was wrong, not the control
+/// (#2471).
+///
+/// The control itself stays on a fileless record, because it is that record's
+/// only removal: the dialog's PHYSICAL COPIES section is how a paper-only book
+/// is un-recorded, and deleting its last item deletes the record. Gating the
+/// button away took that path with it.
+#[cfg(not(feature = "mobile"))]
+fn delete_label(has_files: bool) -> &'static str {
+    if has_files {
+        "Delete files\u{2026}"
+    } else {
+        "Delete record\u{2026}"
+    }
+}
+
+/// Build the delete rail button. Admin-only on web; never present on mobile.
 #[cfg(not(feature = "mobile"))]
 pub(super) fn build_delete_button(
     is_admin_flag: bool,
     mut delete_open: Signal<bool>,
+    has_files: bool,
 ) -> Option<Element> {
     is_admin_flag.then(|| {
         rsx! {
             button {
                 class: "btn ghost sm bd-rail-edit bd-rail-delete",
+                // Testid unchanged across the relabel: it names the control,
+                // and every spec reaching the delete dialog goes through it.
                 "data-testid": "delete-files",
                 onclick: move |_| delete_open.set(true),
-                "Delete files\u{2026}"
+                {delete_label(has_files)}
             }
         }
     })
@@ -36,6 +58,19 @@ pub(super) fn build_delete_button(
 #[cfg(feature = "mobile")]
 pub(super) fn build_delete_button(_is_admin_flag: bool) -> Option<dioxus::prelude::Element> {
     None
+}
+
+#[cfg(all(test, not(feature = "mobile")))]
+mod label_tests {
+    use super::delete_label;
+
+    // Regression for #2471: a record with nothing on disk was offering to
+    // delete files.
+    #[test]
+    fn delete_label_promises_files_only_when_there_are_files() {
+        assert_eq!(delete_label(true), "Delete files\u{2026}");
+        assert_eq!(delete_label(false), "Delete record\u{2026}");
+    }
 }
 
 /// Build the delete dialog block. Web-only.

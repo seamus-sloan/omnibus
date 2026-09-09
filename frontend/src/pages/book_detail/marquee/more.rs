@@ -21,7 +21,7 @@ use super::MarqueeViewFacts;
 #[derive(Clone, PartialEq, Props)]
 pub(super) struct MoreStopCtx {
     pub series: Option<SeriesDetail>,
-    pub author_books: Vec<EbookMetadata>,
+    pub author_books: Option<Vec<EbookMetadata>>,
     pub suggestions: Option<SuggestionsResponse>,
     pub page: BdPageCtx,
     /// The viewer's wishlist entry for this book, shared with the hero so the

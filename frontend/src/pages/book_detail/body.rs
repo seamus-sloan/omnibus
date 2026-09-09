@@ -23,11 +23,17 @@ pub(super) struct BdPageCtx {
 }
 
 /// The "from the same hand" author cluster: name, id, and other books.
+///
+/// `author_books` is `None` until the author fetch settles — not an empty
+/// list. The distinction is the whole point: an empty list is the claim "this
+/// is the only book by them in your library", and asserting that before
+/// asking made a three-book author read as a one-book author for the first
+/// second of every page load (#2478).
 #[derive(Clone, PartialEq, Props)]
 pub(super) struct BdAuthorCluster {
     pub primary_author: String,
     pub author_id: Option<i64>,
-    pub author_books: Vec<EbookMetadata>,
+    pub author_books: Option<Vec<EbookMetadata>>,
 }
 
 /// "From the same hand" — an author-lead card heading a spreading cover stack
@@ -44,17 +50,16 @@ pub(super) fn BdSameHand(author: BdAuthorCluster) -> Element {
     } = author;
     // Only books with a real uuid can be linked; drop the rest so a tile never
     // emits a `/books/` route or an empty-uuid thumbnail URL.
-    let author_books: Vec<EbookMetadata> = author_books
-        .into_iter()
-        .filter(|ab| {
-            ab.unique_identifier
-                .as_deref()
-                .is_some_and(|u| !u.is_empty())
-        })
-        .collect();
-    let owned = author_books.len() + 1;
-    let shown = author_books.len().min(4);
-    let rest = author_books.len() - shown;
+    let author_books: Option<Vec<EbookMetadata>> = author_books.map(|books| {
+        books
+            .into_iter()
+            .filter(|ab| {
+                ab.unique_identifier
+                    .as_deref()
+                    .is_some_and(|u| !u.is_empty())
+            })
+            .collect()
+    });
     let kicker = if primary_author.is_empty() {
         "More to read".to_string()
     } else {
@@ -67,6 +72,20 @@ pub(super) fn BdSameHand(author: BdAuthorCluster) -> Element {
             Link { to: route, class: "btn ghost sm", "Author page \u{2192}" }
         }
     });
+    // Nothing past here may state a count, so the unsettled fetch returns
+    // first — the sibling series shelf says "loading the shelf…" at the same
+    // instant, and this said "the only book by them" (#2478).
+    let Some(author_books) = author_books else {
+        return rsx! {
+            BdSectionHead { kicker, title: "From the same hand".to_string(), action }
+            div { class: "mono bdmq-quiet-hint", "data-testid": "from-same-hand-loading",
+                "looking for more by {author_label}\u{2026}"
+            }
+        };
+    };
+    let owned = author_books.len() + 1;
+    let shown = author_books.len().min(4);
+    let rest = author_books.len() - shown;
 
     rsx! {
         BdSectionHead { kicker, title: "From the same hand".to_string(), action }
@@ -275,4 +294,45 @@ fn SuggestionsConnectCard(is_admin: bool) -> Element {
             }
         }
     }
+}
+
+// SSR render coverage for the same-hand section's three states. Needs the
+// `server` feature (`dioxus::ssr`); under `web` it would be dead code and CI
+// lints with `-D warnings`.
+#[cfg(all(test, feature = "server"))]
+mod render_tests {
+    use super::*;
+    use crate::test_support::render;
+
+    fn cluster(author_books: Option<Vec<EbookMetadata>>) -> BdAuthorCluster {
+        BdAuthorCluster {
+            primary_author: "Taylor".to_string(),
+            author_id: Some(7),
+            author_books,
+        }
+    }
+
+    // Regression for #2478: before the author fetch landed this asserted
+    // "1 book in your library / this is the only book by Taylor", then
+    // corrected itself to 3 a second later.
+    #[test]
+    fn same_hand_states_no_count_before_the_author_fetch_settles() {
+        let html = render(rsx! { BdSameHand { author: cluster(None) } });
+        assert!(html.contains("from-same-hand-loading"), "{html}");
+        assert!(!html.contains("only book by"), "{html}");
+        assert!(!html.contains("from-same-hand-empty"), "{html}");
+    }
+
+    #[test]
+    fn same_hand_states_the_only_book_once_the_fetch_returns_nothing() {
+        let html = render(rsx! { BdSameHand { author: cluster(Some(Vec::new())) } });
+        assert!(html.contains("from-same-hand-empty"), "{html}");
+        assert!(html.contains("only book by Taylor"), "{html}");
+        assert!(!html.contains("from-same-hand-loading"), "{html}");
+    }
+
+    // The populated branch renders router `Link` tiles, which panic outside a
+    // `Router` — it is covered by `book_detail.spec.ts` instead. What matters
+    // here is that "loading" and "no others" are distinguishable states, which
+    // is exactly what #2478 collapsed.
 }

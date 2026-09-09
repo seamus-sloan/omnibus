@@ -10,6 +10,47 @@
 //! bridge, so its answer is pushed into [`set_local_zone`] by
 //! `crate::use_mobile_zone_capture` and read back synchronously here.
 
+/// Whether the client is past its post-mount hydration pass, and it is
+/// therefore safe to read the browser's real UTC offset. Starts `false` so
+/// SSR and the first client paint match (rule 07 — [`local_date_offset`]
+/// returns `0` until this flips); reconciles to `true` in a post-mount effect
+/// on web. Hoist this call once per list and thread the returned signal down
+/// to each row — calling it per-row would cost one signal + one effect per
+/// row.
+#[cfg(feature = "web")]
+pub fn use_local_dates_ready() -> dioxus::prelude::ReadSignal<bool> {
+    use dioxus::prelude::*;
+    let mut ready = use_signal(|| false);
+    use_effect(move || {
+        ready.set(true);
+    });
+    ReadSignal::new(ready)
+}
+
+/// Non-web fallback for [`use_local_dates_ready`] — mobile's clock carries no
+/// zone info and SSR has no browser to ask, so [`local_utc_offset_secs`] is
+/// always `0` there regardless of readiness; starting `true` skips the
+/// pointless post-mount flip.
+#[cfg(not(feature = "web"))]
+pub fn use_local_dates_ready() -> dioxus::prelude::ReadSignal<bool> {
+    use dioxus::prelude::*;
+    ReadSignal::new(use_signal(|| true))
+}
+
+/// The offset to render a specific `unix_secs` timestamp against, given
+/// whether the client is past hydration (see [`use_local_dates_ready`]). `0`
+/// (UTC) before mount so the render matches SSR; otherwise this timestamp's
+/// *own* historical local offset — computed fresh per call, since a stamp
+/// from before a DST change and one from after it don't share an offset even
+/// though both render in the same list.
+pub fn local_date_offset(ready: bool, unix_secs: i64) -> i64 {
+    if ready {
+        local_utc_offset_secs(unix_secs)
+    } else {
+        0
+    }
+}
+
 /// Current unix time in seconds.
 pub fn now_unix() -> i64 {
     #[cfg(feature = "web")]

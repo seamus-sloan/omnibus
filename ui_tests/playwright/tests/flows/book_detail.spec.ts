@@ -393,6 +393,43 @@ test("From the same hand shows empty state for single-book authors", async ({
   await expect(page.getByTestId("from-same-hand")).toHaveCount(0);
 });
 
+// Regression for #2478: while the author fetch was in flight the block read
+// "1 book in your library · this is the only book by <author> so far", then
+// corrected itself once the real count arrived. Holding the request open makes
+// that window the whole test rather than a race.
+test("the author block states no count until its fetch has landed", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, WIRTH_LEAD.title);
+
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // Web fetches the author through the server function, not the REST route.
+  await page.route("**/api/rpc/author", async (route) => {
+    await held;
+    await route.continue();
+  });
+
+  // Plain `goto`, not `gotoReady`: the held request means the page never
+  // reaches `networkidle`, which is the state this test exists to inspect.
+  await page.goto(`/books/${uuid}`);
+
+  // The section is up, and says it is still looking — not that this is the
+  // only book by them.
+  await expect(page.getByTestId("from-same-hand-loading")).toBeVisible();
+  await expect(page.getByTestId("from-same-hand-empty")).toHaveCount(0);
+  await expect(page.getByText(/only book by/)).toHaveCount(0);
+
+  release?.();
+
+  // And once it lands, the real row replaces the note.
+  await expect(page.getByTestId("from-same-hand")).toBeVisible();
+  await expect(page.getByTestId("from-same-hand-loading")).toHaveCount(0);
+});
+
 // ---------------------------------------------------------------------------
 // Pre-existing coverage — kept so the spec remains a single source of truth
 // for the book detail page. These post-date the original landing-row entry
@@ -993,12 +1030,13 @@ test("lists a saved passage with its locator, note and date, then deletes it", a
   await expect(card.getByTestId("highlight-note")).toHaveText(
     "the line that stuck",
   );
-  // The locator names the reader's chapter once the book's chapter structure
-  // is known, and falls back to the CFI's raw spine step (/14 → section 7)
-  // until then (#2356) — either is a valid locator for the same position. The
-  // date comes from the server-assigned created_at.
+  // The locator names the chapter's own TOC title once the book's structure
+  // is known (#2463), and falls back to the CFI's raw spine step
+  // (/14 → section 7) until then (#2356) — either is a valid locator for the
+  // same position, so assert the shape rather than one of the two. The date
+  // comes from the server-assigned created_at.
   await expect(card.getByTestId("highlight-meta")).toContainText(
-    /(?:Chapter|Section) \d+/,
+    /^.+ · saved /,
   );
   await expect(card.getByTestId("highlight-meta")).toContainText("saved ");
 

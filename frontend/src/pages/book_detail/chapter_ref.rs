@@ -29,7 +29,7 @@ pub(super) fn cfi_spine_ordinal(cfi: &str) -> Option<u32> {
 }
 
 /// Index of the chapter a CFI sits in: the last chapter whose 0-based spine
-/// item is at or before the CFI's spine item. `spine_indices` is each
+/// item is at or before the CFI's spine item. `spine_indices` yields each
 /// chapter's `spine_index` in TOC order (ascending). `None` when the CFI
 /// carries no readable spine step, letting the caller fall back to the
 /// percent-based estimate.
@@ -38,9 +38,17 @@ pub(super) fn cfi_spine_ordinal(cfi: &str) -> Option<u32> {
 /// spine item resolves exactly, and the percent-rounding off-by-one across a
 /// chapter boundary can no longer occur. Multiple chapters sharing a spine
 /// item resolve to the last of them — still within the reader's open document.
-pub(super) fn chapter_index_for_cfi(spine_indices: &[i64], cfi: &str) -> Option<usize> {
+///
+/// Takes an iterator rather than a slice so a caller holding
+/// `[AlignmentEbookChapter]` can project the field in place: both call sites
+/// hold chapters, not spine indices, and collecting a `Vec` per call put an
+/// allocation on the saved-passage card's render path.
+pub(super) fn chapter_index_for_cfi(
+    mut spine_indices: impl DoubleEndedIterator<Item = i64> + ExactSizeIterator,
+    cfi: &str,
+) -> Option<usize> {
     let cfi_spine_0 = i64::from(cfi_spine_ordinal(cfi)?) - 1;
-    spine_indices.iter().rposition(|s| *s <= cfi_spine_0)
+    spine_indices.rposition(|s| s <= cfi_spine_0)
 }
 
 #[cfg(test)]
@@ -68,14 +76,20 @@ mod tests {
         // close the whole-book percents of the neighbours round.
         let spines = [2, 4, 6];
         assert_eq!(
-            chapter_index_for_cfi(&spines, "epubcfi(/6/10!/4/2:0)"),
+            chapter_index_for_cfi(spines.iter().copied(), "epubcfi(/6/10!/4/2:0)"),
             Some(1)
         );
         // A CFI past the last chapter's spine stays on the last chapter.
-        assert_eq!(chapter_index_for_cfi(&spines, "epubcfi(/6/20!/4)"), Some(2));
+        assert_eq!(
+            chapter_index_for_cfi(spines.iter().copied(), "epubcfi(/6/20!/4)"),
+            Some(2)
+        );
         // A CFI before the first chapter's spine resolves to nothing (the
         // caller keeps the percent fallback / chapter 1).
-        assert_eq!(chapter_index_for_cfi(&spines, "epubcfi(/6/2!/4)"), None);
+        assert_eq!(
+            chapter_index_for_cfi(spines.iter().copied(), "epubcfi(/6/2!/4)"),
+            None
+        );
     }
 
     #[test]
@@ -83,6 +97,9 @@ mod tests {
         // Two TOC entries inside one spine document (both spine_index 3): a CFI
         // in that spine lands on the later of the two — still the open document.
         let spines = [0, 3, 3, 5];
-        assert_eq!(chapter_index_for_cfi(&spines, "epubcfi(/6/8!/4)"), Some(2));
+        assert_eq!(
+            chapter_index_for_cfi(spines.iter().copied(), "epubcfi(/6/8!/4)"),
+            Some(2)
+        );
     }
 }

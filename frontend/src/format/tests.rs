@@ -265,3 +265,71 @@ fn facet_query_collapses_surrounding_and_repeated_whitespace() {
     );
     assert_eq!(facet_query("tag", "   "), "");
 }
+
+// --- instants vs calendar dates (#2464) ---------------------------------
+
+#[test]
+fn format_instant_short_opt_matches_the_plain_render_at_utc() {
+    // Offset 0 is the SSR / pre-hydration path (rule 07), so the two must
+    // agree glyph for glyph or hydration would swap the row.
+    let raw = "2026-09-08T03:36:00Z";
+    assert_eq!(
+        format_instant_short_opt(raw, 0).as_deref(),
+        format_date_short_opt(raw).as_deref()
+    );
+}
+
+// Regression for #2464: "Added Sep 8th" on a page whose every other stamp
+// read Sep 7, because 03:36 UTC is the previous evening in Detroit.
+#[test]
+fn format_instant_short_opt_dates_an_instant_on_the_viewers_day() {
+    assert_eq!(
+        format_instant_short_opt("2026-09-08T03:36:00Z", -4 * 3600).as_deref(),
+        Some("Sep 7th, 2026")
+    );
+    // And forward across midnight the other way.
+    assert_eq!(
+        format_instant_short_opt("2026-09-07T22:10:00Z", 4 * 3600).as_deref(),
+        Some("Sep 8th, 2026")
+    );
+}
+
+#[test]
+fn format_instant_short_opt_reads_the_sqlite_datetime_shape() {
+    assert_eq!(
+        format_instant_short_opt("2024-01-02 03:04:05", -5 * 3600).as_deref(),
+        Some("Jan 1st, 2024")
+    );
+}
+
+#[test]
+fn format_instant_short_opt_leaves_a_bare_calendar_date_unshifted() {
+    // A publication date carries no time of day and belongs to no zone;
+    // shifting it would move a book's publication a day for half the world.
+    for offset in [-12 * 3600, 0, 12 * 3600] {
+        assert_eq!(
+            format_instant_short_opt("2016-05-02", offset).as_deref(),
+            Some("May 2nd, 2016"),
+            "offset {offset}"
+        );
+    }
+}
+
+#[test]
+fn format_instant_short_opt_keeps_the_sentinel_and_unparseable_gates() {
+    // Calibre's UNDEFINED_DATE, and a string that names no year at all.
+    assert_eq!(
+        format_instant_short_opt("0101-01-01T00:00:00+00:00", 0),
+        None
+    );
+    assert_eq!(format_instant_short_opt("", 0), None);
+    assert_eq!(format_instant_short_opt("not a date", 0), None);
+}
+
+#[test]
+fn instant_secs_resolves_a_timestamp_and_declines_a_bare_date() {
+    assert_eq!(instant_secs("1970-01-01T00:00:00Z"), Some(0));
+    assert_eq!(instant_secs("2023-11-14T22:13:20Z"), Some(1_700_000_000));
+    // No time of day: there is no instant here to resolve.
+    assert_eq!(instant_secs("2023-11-14"), None);
+}

@@ -3,48 +3,11 @@
 //! viewer's local calendar day rather than UTC, staying SSR/hydration-safe
 //! per rule 07 — see the function docs below for how.
 
-use dioxus::prelude::*;
-
 use crate::date_fmt::civil_from_days;
 
-/// Whether the client is past its post-mount hydration pass, and it is
-/// therefore safe to read the browser's real UTC offset. Starts `false` so
-/// SSR and the first client paint match (rule 07, [`local_date_offset`]
-/// returns `0` until this flips); reconciles to `true` in a post-mount effect
-/// on web. Hoist this call once at the list level and thread the returned
-/// signal down to each row — calling it per-row would cost one signal + one
-/// effect per highlight/journal entry.
-#[cfg(feature = "web")]
-pub(super) fn use_local_dates_ready() -> ReadSignal<bool> {
-    let mut ready = use_signal(|| false);
-    use_effect(move || {
-        ready.set(true);
-    });
-    ReadSignal::new(ready)
-}
-
-/// Non-web fallback for [`use_local_dates_ready`] — mobile's clock carries no
-/// zone info and SSR has no browser to ask, so [`crate::time::local_utc_offset_secs`]
-/// is always `0` there regardless of readiness; starting `true` skips the
-/// pointless post-mount flip.
-#[cfg(not(feature = "web"))]
-pub(super) fn use_local_dates_ready() -> ReadSignal<bool> {
-    ReadSignal::new(use_signal(|| true))
-}
-
-/// The offset to pass [`fmt_long_date`] for a specific `unix_secs` timestamp,
-/// given whether the client is past hydration (see [`use_local_dates_ready`]).
-/// `0` (UTC) before mount so the render matches SSR; otherwise this
-/// timestamp's *own* historical local offset — computed fresh per call, since
-/// a highlight from before a DST change and one from after it don't share an
-/// offset even though both render in the same list.
-pub(super) fn local_date_offset(ready: bool, unix_secs: i64) -> i64 {
-    if ready {
-        crate::time::local_utc_offset_secs(unix_secs)
-    } else {
-        0
-    }
-}
+// The hydration-readiness pair lives in `crate::time` because the session log
+// (a shared component, not a book-detail page module) needs the same guard.
+pub(super) use crate::time::{local_date_offset, use_local_dates_ready};
 
 /// Format a unix-seconds timestamp as e.g. "May 17, 2026", after shifting it
 /// by `offset_secs` (pass [`local_date_offset`]'s result for the viewer's
