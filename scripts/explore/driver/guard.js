@@ -60,9 +60,17 @@
     // `driver.sh guard`, and every agent kept the pre-fix rules because of an
     // early return here. The pristine fetch is parked on `window` so a later
     // install can restore it before wrapping again.
-    if (window.__omnibusGuardInstalled) {
-      if (window.__omnibusGuardOriginalFetch) window.fetch = window.__omnibusGuardOriginalFetch;
+    // A page guarded by a *previous* version of this file parked no pristine
+    // fetch, so there is nothing to restore and wrapping again would stack a
+    // new wrapper on the old one — the old refusals would still win while the
+    // command reported success, which is the false sense of safety this
+    // replacement exists to remove. Refuse instead, and say what fixes it.
+    if (window.__omnibusGuardInstalled && !window.__omnibusGuardOriginalFetch) {
+      window.__omnibusGuardStale = true;
+      return { installed: false, reason: "stale-guard-cannot-be-replaced" };
     }
+    if (window.__omnibusGuardInstalled) window.fetch = window.__omnibusGuardOriginalFetch;
+    window.__omnibusGuardStale = false;
     window.__omnibusGuardInstalled = true;
 
     // Endpoints that destroy or restructure a book. Anything book-scoped is
@@ -175,5 +183,6 @@
   };
 
   await page.addInitScript(install, { owned, actor });
-  await page.evaluate(install, { owned, actor });
+  const result = await page.evaluate(install, { owned, actor });
+  return result && result.installed === false ? result.reason : "installed";
 })()

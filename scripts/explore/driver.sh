@@ -235,8 +235,18 @@ src = open(sys.argv[1]).read()
 print(src.replace("__OWNED__", sys.argv[2]).replace("__ACTOR__", sys.argv[3]))' \
       "$DRIVER/guard.js" "$owned_json" "$actor")"
     body="$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "await $js")"
-    curl -sS --max-time 60 -X POST "http://127.0.0.1:$port/run" \
-      -H 'Content-Type: application/json' -d "$body" >/dev/null
+    out="$(curl -sS --max-time 60 -X POST "http://127.0.0.1:$port/run" \
+      -H 'Content-Type: application/json' -d "$body")"
+    # A page still carrying a guard from an older build of guard.js cannot be
+    # re-wrapped — the old rules would keep winning while this reported
+    # success. Say so loudly and name the one thing that clears it.
+    case "$out" in
+      *stale-guard-cannot-be-replaced*)
+        echo "agent-$n still runs a guard from an older guard.js and cannot be re-guarded in place." >&2
+        echo "Run 'driver.sh restart $n', then guard it again — the agent will need to log in." >&2
+        exit 1
+        ;;
+    esac
     echo "  agent-$n guarded: $(printf '%s' "$owned_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))') owned book(s)"
     ;;
 
