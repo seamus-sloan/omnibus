@@ -225,7 +225,12 @@ test("deletes a physical-only book by un-recording its copy", async ({
   const uuid = await createPhysicalOnlyBook(request, "Deletable Physical Copy");
   await gotoReady(page, `/books/${uuid}`);
 
-  await page.getByTestId("delete-files").click();
+  // The control stays — it is this record's only removal — but it stops
+  // promising to delete files it hasn't got (#2471).
+  const deleteControl = page.getByTestId("delete-files");
+  await expect(deleteControl).toHaveText(/Delete record/);
+
+  await deleteControl.click();
   // No files, but the physical copy is a deletable item in its own section.
   const dialog = page.getByTestId("delete-book-dialog");
   await expect(dialog).toContainText("PHYSICAL COPIES");

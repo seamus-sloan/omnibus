@@ -308,16 +308,18 @@ fn render_book_shell(
     // returns `false` during SSR and for non-admins on every platform.
     let is_admin_flag = is_admin();
 
-    // Both rail controls act on files: "Delete files…" removes them, and
-    // "Merge with…" folds this record's files into another book. A wishlist
-    // entry or a paper-only book has none, so it is offered neither (#2471) —
-    // its removal is "Remove from wishlist" / "Remove copy" in the physical
-    // panel, and the delete dialog's own "this book has no files on disk"
-    // admission was the tell that the control should never have been there.
-    let file_admin = is_admin_flag && !b.formats.is_empty();
-    let (merge_button, merge_ui) = build_merge_pieces(file_admin, merge, &server_url, &b);
+    // "Merge with…" folds this record's files into another book, so a wishlist
+    // entry or paper-only book — which has none — is not offered it (#2471).
+    //
+    // Delete is deliberately *not* gated the same way, only relabelled: on a
+    // paper-only book its dialog is the one place a copy can be un-recorded,
+    // and deleting the last item deletes the record. Hiding the button would
+    // have removed that record's only removal.
+    let has_files = !b.formats.is_empty();
+    let (merge_button, merge_ui) =
+        build_merge_pieces(is_admin_flag && has_files, merge, &server_url, &b);
     let (delete_button, delete_ui) =
-        build_delete_pieces(file_admin, delete_open, merge.refresh, &b);
+        build_delete_pieces(is_admin_flag, delete_open, merge.refresh, &b, has_files);
 
     let body = render_loaded(
         b,
@@ -401,11 +403,16 @@ fn build_delete_pieces(
     delete_open: Signal<bool>,
     refresh: Signal<u32>,
     b: &EbookMetadata,
+    has_files: bool,
 ) -> (Option<Element>, Option<Element>) {
     #[cfg(not(feature = "mobile"))]
-    let delete_button: Option<Element> = delete::build_delete_button(is_admin_flag, delete_open);
+    let delete_button: Option<Element> =
+        delete::build_delete_button(is_admin_flag, delete_open, has_files);
     #[cfg(feature = "mobile")]
-    let delete_button: Option<Element> = delete::build_delete_button(is_admin_flag);
+    let delete_button: Option<Element> = {
+        let _ = has_files;
+        delete::build_delete_button(is_admin_flag)
+    };
 
     #[cfg(not(feature = "mobile"))]
     let delete_ui: Option<Element> = delete::build_delete_ui(
