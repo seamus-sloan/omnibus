@@ -780,3 +780,66 @@ test("surfaces an error on the entry card when the owner's delete fails", async 
     page.getByTestId("journal-entry").filter({ hasText: marker }),
   ).toHaveCount(0);
 });
+
+// ---------------------------------------------------------------------------
+// Reading an entry from a scrolled page (#2529)
+// ---------------------------------------------------------------------------
+
+test("opens a readable entry after the flow layout has been scrolled", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const marker = `scrolled-open-${Date.now()}`;
+  await publish(
+    page,
+    `Reading this one back from halfway down the page. ${marker}`,
+  );
+
+  // The bug this guards is only reachable once the flow scroller has actually
+  // scrolled: `.bdmq-flowscroll` used to carry the scrim's `backdrop-filter`,
+  // which makes an element the containing block for its `position: fixed`
+  // descendants — so the overlay was laid out against the scroller's own
+  // scrolled content and rendered `scrollTop` pixels above the viewport. The
+  // journal stop sits far enough down that it was never readable in practice.
+  const row = page
+    .getByTestId("journal-ladder-row")
+    .filter({ hasText: marker });
+  await row.scrollIntoViewIfNeeded();
+  const scrolled = await page.evaluate(
+    () => document.querySelector("#bdmq-flow")?.scrollTop ?? 0,
+  );
+  expect(
+    scrolled,
+    "the flow scroller must have scrolled for this to bite",
+  ).toBeGreaterThan(0);
+
+  await row.click();
+
+  // `toBeVisible` is not enough here: an element positioned entirely outside
+  // the viewport still satisfies it, which is why the existing coverage
+  // passed while the entry was unreadable. Assert it is actually on screen.
+  const card = page.getByTestId("journal-entry").filter({ hasText: marker });
+  await expect(card).toBeInViewport();
+  await expect(page.getByTestId("journal-overlay-close")).toBeInViewport();
+
+  // The backdrop covers the viewport in *both* axes, not one scrolled-away
+  // column: the bug constrained it horizontally to the 57%-wide flow column
+  // as well as carrying it off the top, so a vertical-only assertion would
+  // let a column-sized overlay pass.
+  const overlay = page.getByTestId("journal-overlay");
+  const box = await overlay.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box, "the overlay must have a box").not.toBeNull();
+  expect(viewport, "the test needs a viewport size").not.toBeNull();
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeGreaterThan(viewport!.height / 2);
+  // Spans the full width, starting at the left edge rather than at the
+  // column seam.
+  expect(box!.x).toBeLessThanOrEqual(1);
+  expect(box!.width).toBeGreaterThan(viewport!.width * 0.95);
+
+  await deleteEntry(page, marker);
+});

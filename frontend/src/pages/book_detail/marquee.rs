@@ -289,6 +289,8 @@ pub(super) fn MarqueeStage(
                     }
                 }
             } else {
+                // A filter on the scroller would capture every fixed overlay inside it.
+                div { class: "bdmq-flowscrim", aria_hidden: "true" }
                 div { class: "bdmq-flowscroll", id: "bdmq-flow",
                     div { class: "bdmq-flow",
                         for (i, (no, name)) in MARQUEE_SECTIONS.iter().enumerate() {
