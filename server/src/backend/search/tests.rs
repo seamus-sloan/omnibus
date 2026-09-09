@@ -772,6 +772,153 @@ async fn api_get_search_content_leaves_hits_unmarked_under_spoiler_filter_none()
     assert!(results.withheld_ahead.is_none());
 }
 
+/// Give the seeded book the spine stats the spoiler boundary measures
+/// against: four equal documents, so spine `n` begins at `25 * n` percent.
+/// Written directly rather than extracted from an archive — the boundary
+/// reads these rows, not the file.
+async fn seed_spine_stats(pool: &sqlx::SqlitePool, uuid: &str) {
+    let book_id = db::resolve_book_id_by_uuid(pool, uuid)
+        .await
+        .unwrap()
+        .unwrap();
+    let (file_id, _) = db::book_file_with_id(pool, book_id, "EPUB")
+        .await
+        .unwrap()
+        .expect("the seeded book has an EPUB file");
+    for spine_index in 0..4i64 {
+        sqlx::query(
+            "INSERT INTO epub_spine_stats (book_file_id, spine_index, href, visible_chars, chars_before)
+             VALUES (?, ?, ?, 1000, ?)",
+        )
+        .bind(file_id)
+        .bind(spine_index)
+        .bind(format!("c{spine_index}.xhtml"))
+        .bind(spine_index * 1000)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
+
+/// Put the reader at a whole-book percent, the figure the boundary compares
+/// each hit against.
+async fn save_reader_percent(pool: &sqlx::SqlitePool, user_id: i64, uuid: &str, percent: i64) {
+    db::progress::upsert_progress(
+        pool,
+        user_id,
+        &omnibus_shared::ProgressUpdate {
+            book_uuid: uuid.to_string(),
+            format: omnibus_shared::ProgressFormat::Epub,
+            epub_cfi: None,
+            audio_position_seconds: None,
+            progress_percent: Some(percent),
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: Some(1),
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Seed one book whose only indexed text sits at spine 2 — the halfway mark —
+/// and put the reader at `reader_percent`.
+async fn fixture_with_reader_at(reader_percent: i64) -> (axum::Router, sqlx::SqlitePool, String) {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let uuid = seed_content_chapter(&pool, "The lighthouse keeper counted the waves.").await;
+    seed_spine_stats(&pool, &uuid).await;
+    save_reader_percent(&pool, user.id, &uuid, reader_percent).await;
+    (app, pool, token)
+}
+
+async fn content_search(
+    app: axum::Router,
+    query: &str,
+    token: &str,
+) -> omnibus_shared::ContentSearchResults {
+    let response = app
+        .oneshot(get_with_bearer(query, token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn api_get_search_content_annotates_a_hit_ahead_of_the_reader_with_its_distance() {
+    // Reader at 30%, the only hit at the 50% mark: ahead, by 20 points.
+    let (app, _pool, token) = fixture_with_reader_at(30).await;
+
+    let results = content_search(
+        app,
+        "/api/search/content?q=lighthouse&spoiler_filter=annotate",
+        &token,
+    )
+    .await;
+
+    assert_eq!(results.hits.len(), 1);
+    assert_eq!(results.hits[0].ahead_of_reader, Some(true));
+    assert_eq!(results.hits[0].position_delta_percent, Some(20.0));
+    assert!(
+        results.withheld_ahead.is_none(),
+        "annotate reports the distance; it withholds nothing"
+    );
+}
+
+#[tokio::test]
+async fn api_get_search_content_annotates_a_hit_the_reader_has_passed_as_behind_them() {
+    // Reader at 60%, past the 50% mark the hit sits at: behind, by 10 points.
+    let (app, _pool, token) = fixture_with_reader_at(60).await;
+
+    let results = content_search(
+        app,
+        "/api/search/content?q=lighthouse&spoiler_filter=annotate",
+        &token,
+    )
+    .await;
+
+    assert_eq!(results.hits.len(), 1);
+    assert_eq!(results.hits[0].ahead_of_reader, Some(false));
+    assert_eq!(results.hits[0].position_delta_percent, Some(-10.0));
+}
+
+#[tokio::test]
+async fn api_get_search_content_excludes_a_hit_ahead_of_the_reader_and_counts_it() {
+    let (app, _pool, token) = fixture_with_reader_at(30).await;
+
+    let results = content_search(
+        app,
+        "/api/search/content?q=lighthouse&spoiler_filter=exclude",
+        &token,
+    )
+    .await;
+
+    assert!(results.hits.is_empty(), "the payoff is ahead of the reader");
+    assert_eq!(
+        results.withheld_ahead,
+        Some(1),
+        "the count is what lets a caller say an answer exists without showing it"
+    );
+}
+
+#[tokio::test]
+async fn api_get_search_content_exclude_keeps_a_hit_the_reader_has_already_passed() {
+    let (app, _pool, token) = fixture_with_reader_at(60).await;
+
+    let results = content_search(
+        app,
+        "/api/search/content?q=lighthouse&spoiler_filter=exclude",
+        &token,
+    )
+    .await;
+
+    assert_eq!(results.hits.len(), 1, "setup the reader has read is safe");
+    assert_eq!(results.withheld_ahead, Some(0));
+}
+
 /// The uuid of the one seeded book.
 async fn sole_uuid(pool: &sqlx::SqlitePool) -> String {
     sqlx::query_scalar("SELECT uuid FROM books LIMIT 1")
