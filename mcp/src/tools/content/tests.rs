@@ -76,12 +76,28 @@ async fn chapter_text(
         total_chars: 5_000,
         truncated: true,
         next_offset: Some(offset + limit),
+        truncated_by_progress: false,
     }))
 }
 
 async fn content_search(
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> AxumJson<ContentSearchResults> {
+    // The scoping params are echoed into `hint` so a test can prove they
+    // reached the wire in the shape the server parses.
+    if q.get("q").map(String::as_str) == Some("echo") {
+        return AxumJson(ContentSearchResults {
+            hits: Vec::new(),
+            withheld_ahead: None,
+            hint: Some(format!(
+                "book_uuid={} book_uuids={} limit={} spoiler_filter={}",
+                q.get("book_uuid").cloned().unwrap_or_default(),
+                q.get("book_uuids").cloned().unwrap_or_default(),
+                q.get("limit").cloned().unwrap_or_default(),
+                q.get("spoiler_filter").cloned().unwrap_or_default(),
+            )),
+        });
+    }
     if q.get("q").map(String::as_str) == Some("dreary night") {
         AxumJson(ContentSearchResults {
             hits: vec![ContentSearchHit {
@@ -89,7 +105,12 @@ async fn content_search(
                 spine_index: 1,
                 title: "Frankenstein".into(),
                 snippet: "It was on a [dreary] [night] of November…".into(),
+                chapter_title: Some("Chapter Four".into()),
+                ahead_of_reader: None,
+                position_delta_percent: None,
             }],
+            withheld_ahead: None,
+            hint: None,
         })
     } else {
         AxumJson(ContentSearchResults::default())
@@ -203,6 +224,7 @@ async fn read_chapter_text_sends_the_window_and_surfaces_the_truncation_boundary
             spine_index: 1,
             offset: Some(200),
             limit: Some(50),
+            stop_at_progress: None,
         }))
         .await
         .unwrap();
@@ -226,6 +248,7 @@ async fn read_chapter_text_reports_an_out_of_range_spine_index() {
                 spine_index: 9,
                 offset: None,
                 limit: None,
+                stop_at_progress: None,
             }))
             .await,
     );
@@ -239,6 +262,10 @@ async fn search_book_content_returns_chapter_cited_hits() {
     let results = service
         .search_book_content(Parameters(ContentSearchParams {
             query: "dreary night".into(),
+            book_uuid: None,
+            book_uuids: None,
+            limit: None,
+            spoiler_filter: None,
         }))
         .await
         .unwrap();
@@ -256,6 +283,10 @@ async fn search_book_content_answers_no_match_with_an_empty_hit_list() {
     let results = service
         .search_book_content(Parameters(ContentSearchParams {
             query: "phrase in no book".into(),
+            book_uuid: None,
+            book_uuids: None,
+            limit: None,
+            spoiler_filter: None,
         }))
         .await
         .unwrap();
@@ -274,6 +305,7 @@ async fn read_chapter_text_rejects_a_negative_spine_index_locally() {
                 spine_index: -1,
                 offset: None,
                 limit: None,
+                stop_at_progress: None,
             }))
             .await,
     );
@@ -296,6 +328,7 @@ async fn read_chapter_text_rejects_a_uuid_that_is_not_one_path_segment() {
                 spine_index: 1,
                 offset: None,
                 limit: None,
+                stop_at_progress: None,
             }))
             .await,
     );
@@ -304,4 +337,81 @@ async fn read_chapter_text_rejects_a_uuid_that_is_not_one_path_segment() {
         "message: {}",
         err.message
     );
+}
+
+#[tokio::test]
+async fn search_book_content_forwards_scope_limit_and_spoiler_filter() {
+    let service = stub_service().await;
+    let results = service
+        .search_book_content(Parameters(ContentSearchParams {
+            query: "echo".into(),
+            book_uuid: Some("uuid-frank".into()),
+            book_uuids: Some(vec!["uuid-a".into(), "uuid-b".into()]),
+            limit: Some(7),
+            spoiler_filter: Some(omnibus_shared::SpoilerFilter::Exclude),
+        }))
+        .await
+        .expect("search should succeed");
+    assert_eq!(
+        results.0.hint.as_deref(),
+        Some("book_uuid=uuid-frank book_uuids=uuid-a,uuid-b limit=7 spoiler_filter=exclude")
+    );
+}
+
+#[tokio::test]
+async fn search_book_content_sends_no_scope_params_when_none_are_given() {
+    let service = stub_service().await;
+    let results = service
+        .search_book_content(Parameters(ContentSearchParams {
+            query: "echo".into(),
+            book_uuid: None,
+            book_uuids: None,
+            limit: None,
+            spoiler_filter: None,
+        }))
+        .await
+        .expect("search should succeed");
+    assert_eq!(
+        results.0.hint.as_deref(),
+        Some("book_uuid= book_uuids= limit= spoiler_filter=")
+    );
+}
+
+#[tokio::test]
+async fn search_book_content_surfaces_the_chapter_title_on_each_hit() {
+    let service = stub_service().await;
+    let results = service
+        .search_book_content(Parameters(ContentSearchParams {
+            query: "dreary night".into(),
+            book_uuid: None,
+            book_uuids: None,
+            limit: None,
+            spoiler_filter: None,
+        }))
+        .await
+        .expect("search should succeed");
+    assert_eq!(
+        results.0.hits[0].chapter_title.as_deref(),
+        Some("Chapter Four"),
+        "a caller must not have to join spine_index back to a chapter itself"
+    );
+}
+
+#[tokio::test]
+async fn read_chapter_text_forwards_stop_at_progress_only_when_asked() {
+    let service = stub_service().await;
+    // The stub echoes `limit` into `next_offset`, so an unchanged response
+    // proves the extra param did not disturb the existing query.
+    let text = service
+        .read_chapter_text(Parameters(ChapterTextParams {
+            book_uuid: "uuid-frank".into(),
+            spine_index: 1,
+            offset: Some(10),
+            limit: Some(5),
+            stop_at_progress: Some(true),
+        }))
+        .await
+        .expect("read should succeed");
+    assert_eq!(text.0.offset, 10);
+    assert!(!text.0.truncated_by_progress, "the stub reports no cut");
 }

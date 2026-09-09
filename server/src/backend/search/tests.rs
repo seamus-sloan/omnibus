@@ -621,3 +621,161 @@ async fn api_get_search_content_returns_429_after_budget_exceeded() {
         "request beyond SEARCH_RATE_LIMIT_MAX must return 429",
     );
 }
+
+/// Add a second content chapter to an existing book, so a scope/limit test
+/// has more than one row to narrow.
+async fn seed_extra_chapter(pool: &sqlx::SqlitePool, uuid: &str, spine_index: i64, text: &str) {
+    sqlx::query(
+        "INSERT INTO book_content_chapters (book_uuid, spine_index, mtime_epoch, size_bytes, text) \
+         VALUES (?, ?, 7, 9, ?)",
+    )
+    .bind(uuid)
+    .bind(spine_index)
+    .bind(text)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn api_get_search_content_scopes_to_one_book_and_honours_limit() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let uuid = seed_content_chapter(&pool, "The lighthouse keeper counted the waves.").await;
+    seed_extra_chapter(&pool, &uuid, 4, "Another lighthouse, another shore.").await;
+
+    let response = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/api/search/content?q=lighthouse&book_uuid={uuid}&limit=1"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let results: omnibus_shared::ContentSearchResults = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(results.hits.len(), 1, "limit caps the hit list");
+    assert_eq!(results.hits[0].book_uuid, uuid);
+
+    // A uuid that matches nothing scopes the search to nothing, rather than
+    // being ignored and searching the whole library.
+    let response = app
+        .oneshot(get_with_bearer(
+            "/api/search/content?q=lighthouse&book_uuid=no-such-book",
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let results: omnibus_shared::ContentSearchResults = serde_json::from_slice(&bytes).unwrap();
+    assert!(results.hits.is_empty());
+}
+
+#[tokio::test]
+async fn api_get_search_content_hints_when_a_multi_term_query_matches_nothing() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    seed_content_chapter(&pool, "The lighthouse keeper counted the waves.").await;
+
+    // Both words are in the book, in different chapters — the index ANDs
+    // them, so the phrase matches nothing and the caller needs telling why.
+    seed_extra_chapter(&pool, &sole_uuid(&pool).await, 5, "A whiskey at dusk.").await;
+    let response = app
+        .oneshot(get_with_bearer(
+            "/api/search/content?q=lighthouse%20whiskey",
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let results: omnibus_shared::ContentSearchResults = serde_json::from_slice(&bytes).unwrap();
+    assert!(results.hits.is_empty());
+    let hint = results
+        .hint
+        .expect("an empty multi-term search explains itself");
+    assert!(
+        hint.contains("lighthouse") && hint.contains("whiskey"),
+        "the hint names the terms that matched on their own: {hint}"
+    );
+}
+
+#[tokio::test]
+async fn api_get_search_content_gives_no_hint_for_a_single_term_that_is_simply_absent() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    seed_content_chapter(&pool, "The lighthouse keeper counted the waves.").await;
+
+    let response = app
+        .oneshot(get_with_bearer("/api/search/content?q=pangolin", &token))
+        .await
+        .expect("request should succeed");
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let results: omnibus_shared::ContentSearchResults = serde_json::from_slice(&bytes).unwrap();
+    assert!(results.hits.is_empty());
+    assert!(
+        results.hint.is_none(),
+        "one term cannot be an AND problem; a hint here would misdirect"
+    );
+}
+
+#[tokio::test]
+async fn api_get_search_content_excludes_withhold_hits_it_cannot_place() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    seed_content_chapter(&pool, "The lighthouse keeper counted the waves.").await;
+
+    // No reading position and no extracted spine stats: the hit cannot be
+    // shown to be behind the reader, so `exclude` must withhold it rather
+    // than treat "can't tell" as "safe".
+    let response = app
+        .oneshot(get_with_bearer(
+            "/api/search/content?q=lighthouse&spoiler_filter=exclude",
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let results: omnibus_shared::ContentSearchResults = serde_json::from_slice(&bytes).unwrap();
+    assert!(results.hits.is_empty());
+    assert_eq!(
+        results.withheld_ahead,
+        Some(1),
+        "the count is how a caller says 'there is an answer ahead of you'"
+    );
+}
+
+#[tokio::test]
+async fn api_get_search_content_leaves_hits_unmarked_under_spoiler_filter_none() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    seed_content_chapter(&pool, "The lighthouse keeper counted the waves.").await;
+
+    let response = app
+        .oneshot(get_with_bearer(
+            "/api/search/content?q=lighthouse&spoiler_filter=none",
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let results: omnibus_shared::ContentSearchResults = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(results.hits.len(), 1);
+    assert!(results.hits[0].ahead_of_reader.is_none());
+    assert!(results.withheld_ahead.is_none());
+}
+
+/// The uuid of the one seeded book.
+async fn sole_uuid(pool: &sqlx::SqlitePool) -> String {
+    sqlx::query_scalar("SELECT uuid FROM books LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}

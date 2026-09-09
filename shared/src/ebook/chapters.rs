@@ -59,4 +59,12 @@ pub struct ChapterTextResponse {
     pub total_chars: i64,
     pub truncated: bool,
     pub next_offset: Option<i64>,
+    /// Set when the slice was cut short at the reader's own furthest
+    /// position rather than at [`CHAPTER_TEXT_MAX_CHARS`] — the
+    /// `?stop_at_progress=true` contract. `truncated` stays `false` in that
+    /// case and `next_offset` is absent: paging past the reader's position
+    /// is precisely what the parameter was asked to prevent, so there is no
+    /// cursor to continue from.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated_by_progress: bool,
 }

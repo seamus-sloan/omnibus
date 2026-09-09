@@ -90,7 +90,10 @@ pub use books::{
 };
 pub use browse::*;
 pub use cleanup::*;
-pub use content_fts::{search_content_for_paths, ContentFtsError};
+pub use content_fts::{
+    annotate_spoilers, explain_empty_content_search, search_content_for_paths, ContentFtsError,
+    ContentSearchScope,
+};
 pub use covers::{cover_mime_hint, covers_dir, get_cover, get_last_modified_epoch, CoversError};
 pub use deletion::{
     book_deletion_manifest, delete_book_items, DeleteError, DeleteOutcome, DeletionImpact,
