@@ -101,6 +101,9 @@ async fn drain_remaps_temp_bookmark_id_after_create() {
             title: Some("Draft".into()),
             client_id: None,
             created_at: 100,
+            spine_index: None,
+            chapter_title: None,
+            percent_through_book: None,
         }],
     );
     enqueue_raw(&Op::CreateBookmark {
@@ -174,6 +177,9 @@ async fn drain_remaps_temp_highlight_id_after_create() {
             text: Some("a passage".into()),
             client_id: None,
             created_at: 100,
+            spine_index: None,
+            chapter_title: None,
+            percent_through_book: None,
         }],
     );
     enqueue_raw(&Op::CreateHighlight {

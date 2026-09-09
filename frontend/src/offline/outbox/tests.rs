@@ -356,6 +356,9 @@ async fn bookmark_remapped_replaces_the_temp_record_with_the_server_copy() {
         title: None,
         created_at: 1,
         client_id: None,
+        spine_index: None,
+        chapter_title: None,
+        percent_through_book: None,
     };
     apply::bookmark_created(&temp).await;
 
@@ -366,6 +369,9 @@ async fn bookmark_remapped_replaces_the_temp_record_with_the_server_copy() {
         title: Some("Server title".into()),
         created_at: 2,
         client_id: None,
+        spine_index: None,
+        chapter_title: None,
+        percent_through_book: None,
     };
     apply::bookmark_remapped(-11, &real).await;
 
@@ -395,6 +401,9 @@ async fn highlight_remapped_replaces_the_temp_record_with_the_server_copy() {
         text: None,
         created_at: 1,
         client_id: None,
+        spine_index: None,
+        chapter_title: None,
+        percent_through_book: None,
     };
     apply::highlight_created(&temp).await;
 
