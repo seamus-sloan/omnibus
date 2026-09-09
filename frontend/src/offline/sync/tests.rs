@@ -220,6 +220,8 @@ async fn mock_server() -> String {
                         client_id: input.client_id,
                         created_at: 444,
                         updated_at: 444,
+                        created_at_iso: None,
+                        updated_at_iso: None,
                     })
                 },
             ),
@@ -242,6 +244,8 @@ async fn mock_server() -> String {
                         client_id: None,
                         created_at: 444,
                         updated_at: 555,
+                        created_at_iso: None,
+                        updated_at_iso: None,
                     })
                 },
             )
@@ -864,6 +868,8 @@ async fn drain_remaps_temp_journal_id_after_create() {
             client_id: None,
             created_at: 100,
             updated_at: 100,
+            created_at_iso: None,
+            updated_at_iso: None,
         }],
     );
     enqueue_raw(&Op::CreateJournal {

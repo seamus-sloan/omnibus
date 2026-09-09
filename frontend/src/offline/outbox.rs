@@ -634,6 +634,8 @@ pub(crate) async fn queue_create_journal(input: &CreateJournalEntry) -> Option<J
         client_id: None,
         created_at: now,
         updated_at: now,
+        created_at_iso: None,
+        updated_at_iso: None,
     };
     let queued = enqueue(Op::CreateJournal {
         temp_id: temp,

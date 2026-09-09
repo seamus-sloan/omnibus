@@ -2,7 +2,7 @@
 //! read-status filtering, plus the duration / chapter / audio-file
 //! enrichment `resume_points` layers on top.
 
-use omnibus_shared::{ChapterInfo, ProgressUpdate};
+use omnibus_shared::ProgressUpdate;
 use sqlx::SqlitePool;
 
 use crate::init_db;

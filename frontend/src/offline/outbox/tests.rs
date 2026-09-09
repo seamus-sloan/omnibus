@@ -713,6 +713,8 @@ async fn journal_remapped_replaces_the_temp_record_with_the_server_copy() {
         status: omnibus_shared::JournalStatus::Published,
         created_at: 1,
         updated_at: 1,
+        created_at_iso: None,
+        updated_at_iso: None,
         client_id: None,
     };
     apply::journal_created(&temp).await;

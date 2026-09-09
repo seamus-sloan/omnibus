@@ -104,6 +104,7 @@ mod tests {
                 isbn: None,
                 added_by_user_id: None,
                 checked_in_at: 0,
+                checked_in_at_iso: None,
                 note: None,
             }],
             ..Default::default()

@@ -44,7 +44,9 @@ fn record_from_row(
         status: ReadStatus::from_db(row.try_get::<String, _>("status")?.as_str()),
         updated_at: row.try_get::<i64, _>("updated_at")?,
         finished_at: row.try_get::<Option<i64>, _>("finished_at")?,
-    })
+        updated_at_iso: None,
+    }
+    .with_iso())
 }
 
 /// Upsert the read state for `(user, book)` and return the new

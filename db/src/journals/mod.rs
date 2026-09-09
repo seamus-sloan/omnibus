@@ -311,5 +311,8 @@ fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<JournalEntry, JournalEr
         client_id: row.try_get("client_id")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
-    })
+        created_at_iso: None,
+        updated_at_iso: None,
+    }
+    .with_iso())
 }

@@ -391,6 +391,7 @@ fn copy(note: Option<String>) -> PhysicalCopy {
         isbn: Some("9781111111111".into()),
         added_by_user_id: Some(1),
         checked_in_at: 1_700_000_000,
+        checked_in_at_iso: None,
         note,
     }
 }
