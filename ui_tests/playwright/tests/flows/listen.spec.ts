@@ -922,7 +922,10 @@ async function parkAtStart(
     .poll(async () =>
       page.evaluate(() => {
         const el = document.querySelector("audio") as HTMLAudioElement | null;
-        return el?.currentTime ?? -1;
+        // Infinity, not -1: a missing element must FAIL the poll below. A
+        // sentinel that satisfies the assertion would let this helper skip
+        // the precondition it exists to establish.
+        return el ? el.currentTime : Number.POSITIVE_INFINITY;
       }),
     )
     .toBeLessThan(0.5);

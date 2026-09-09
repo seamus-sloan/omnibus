@@ -46,11 +46,16 @@ struct RateAdjustedTimeTests {
         let offset = 1200.0
         let rate = 2.0
 
+        // The position formatter takes no rate at all — that is the design,
+        // and it cannot be demonstrated by feeding rates to a function that
+        // does not accept one. Pin it by contrast instead: the rate-adjusted
+        // helper the transport used to apply here really does move, so
+        // reaching for the plain formatter is a choice with consequences.
         #expect(Format.duration(offset) == "20:00")
-        // The position does not move with the rate. This is the whole point.
-        #expect(Format.duration(offset) == Format.duration(offset))
-        for anyRate in [1.0, 1.2, 1.5, 2.0] {
-            #expect(Format.duration(offset) == "20:00", "position moved at \(anyRate)x")
+        for anyRate in [1.2, 1.5, 2.0] {
+            #expect(
+                Format.duration(Format.atRate(offset, rate: anyRate)) != "20:00",
+                "atRate must move the position at \(anyRate)x, or this proves nothing")
         }
 
         // The time left is rate-adjusted, and says so.
