@@ -10973,13 +10973,28 @@ html {
      hand the gesture to the document behind the fixed stage. */
   overscroll-behavior: contain;
   z-index: 1;
+  /* The scrim — background, blur and seam — lives on `.bdmq-flowscrim`
+     below, and must not come back here. See there for why. */
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--accent) 60%, var(--bg-3)) transparent;
+}
+/* The blur behind the flow column, on its own non-scrolling layer.
+   `backdrop-filter` makes an element the containing block for its
+   `position: fixed` descendants, so while it lived on the scroller the
+   journal overlay was laid out against the scroller's *scrolled* content and
+   rendered `scrollTop` pixels above the viewport — far enough up, by the time
+   a reader reached the journal stop, that an entry could not be read at all
+   (#2529). Keep every filter off `.bdmq-flowscroll` for that reason; this
+   layer sits behind it and blurs the cover just the same. */
+.bdmq-flowscrim {
+  position: absolute; top: 0; bottom: 0; right: 0; width: 57%;
   /* Same scrim as `.bdmq-panel`: the cover's right edge reads dissolved
-     behind the panel rather than cut off at the seam. */
+     behind the column rather than cut off at the seam. */
   background: color-mix(in oklch, var(--bg-0) 70%, transparent);
   backdrop-filter: blur(12px);
   border-left: 1px solid var(--line-2);
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklch, var(--accent) 60%, var(--bg-3)) transparent;
+  pointer-events: none;
+  z-index: 0;
 }
 .bdmq-flowscroll::-webkit-scrollbar { width: 6px; }
 .bdmq-flowscroll::-webkit-scrollbar-thumb {
