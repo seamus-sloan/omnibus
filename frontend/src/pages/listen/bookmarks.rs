@@ -171,6 +171,9 @@ mod tests {
             title: None,
             client_id: None,
             created_at: 0,
+            spine_index: None,
+            chapter_title: None,
+            percent_through_book: None,
         }
     }
 
