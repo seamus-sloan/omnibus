@@ -182,22 +182,41 @@ final class LibraryModel {
         isOnline && !isLoading && !isLoadingMore && !hasPaginated
     }
 
-    /// What the landing rail shows: your own shelves, minus a wishlist you have
-    /// never put anything on.
+    /// What the landing rail shows: your own shelves, plus the ones other
+    /// readers deliberately made public.
     ///
-    /// `GET /api/shelves` answers with every shelf you are *allowed* to see —
-    /// other people's public ones, and for an admin everyone's. Those are still
-    /// reachable through All; the rail is yours. A nil id means the identity
-    /// hasn't confirmed yet (`setServer` reaches `.ready` before it does), and
-    /// showing the superset for that moment beats blanking a rail that is about
-    /// to be right.
+    /// `GET /api/shelves` answers with every shelf you are *allowed* to see,
+    /// which is a wider set than belongs here, so three things are dropped:
+    ///
+    /// - **Someone else's private shelf.** An admin's read carries every
+    ///   account's, private ones included. The rail is a browse surface, not a
+    ///   moderation one.
+    /// - **Someone else's wishlist.** Every account is provisioned one whether
+    ///   or not it is ever used, so carrying other people's fills the rail with
+    ///   shelves nobody chose to make — which is what `isSystem` marks. Yours
+    ///   stays, because you are the one who would be filling it.
+    /// - **An unused wishlist**, including your own: a card that says nothing.
+    ///
+    /// Narrowing this to shelves you *own* is the tempting simplification and
+    /// the wrong one: on a shared instance it hides the only real shelf on the
+    /// box from every reader who hasn't made one.
+    ///
+    /// A nil id means the identity hasn't confirmed yet (`setServer` reaches
+    /// `.ready` before it does), and for that moment nothing counts as yours:
+    /// the rail shows the public shelves alone and your own fill in behind
+    /// them. Counting everything as yours instead would flash another
+    /// account's private shelf to an admin for exactly as long as the
+    /// confirmation takes, and the widened rule means the rail is no longer
+    /// blank while it waits — which is what that used to buy.
     nonisolated static func railShelves(
         _ previews: [ShelfPreview], userId: Int64?
     ) -> [ShelfPreview] {
         previews.filter { preview in
-            let isOwn = userId.map { preview.shelf.ownerUserId == $0 } ?? true
-            let isUnusedWishlist = preview.shelf.kind == .wishlist && preview.shelf.bookCount == 0
-            return isOwn && !isUnusedWishlist
+            let shelf = preview.shelf
+            let isOwn = userId.map { shelf.ownerUserId == $0 } ?? false
+            let isSharedByAnother = shelf.visibility == .public && !shelf.kind.isSystem
+            let isUnusedWishlist = shelf.kind == .wishlist && shelf.bookCount == 0
+            return (isOwn || isSharedByAnother) && !isUnusedWishlist
         }
     }
 
@@ -384,10 +403,14 @@ struct LibraryView: View {
                     )
                 }
 
-                if !railShelves.isEmpty {
-                    ShelvesRail(previews: Array(railShelves.prefix(8))) {
-                        path.append(Destination.shelves)
-                    }
+                // Unconditional: the rail carries its own New-shelf tile, and
+                // hiding the section when it is empty takes that away from the
+                // one reader who has never made a shelf.
+                ShelvesRail(
+                    previews: Array(railShelves.prefix(8)),
+                    viewerId: app.user?.id
+                ) {
+                    path.append(Destination.shelves)
                 }
 
                 VStack(alignment: .leading, spacing: Spacing.md) {
