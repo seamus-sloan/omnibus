@@ -83,8 +83,11 @@ curl -sS "$KOBO/v1/library/<uuid>/state" | python3 -m json.tool
 ```
 
 The `CurrentBookmark` must now carry a percent **ahead** of the one written in
-Part 2, and a `Location` — the device-side anchor derived from the browser's
-position. Journal what came back. Then run the sync once more: the book
+Part 2. It carries **no `Location`**: the server stores a Kobo location
+verbatim when a *device* sends one and derives a CFI from it, and nothing
+synthesises a location in the other direction, so a browser position reaches
+the device as a whole-book percent alone. Do not file its absence. Journal what
+came back. Then run the sync once more: the book
 should come back as a `ChangedReadingState`, not as a new entitlement.
 
 Finally, ask the agent to untick the Kobo opt-in on the shelf and sync once
@@ -128,4 +131,16 @@ existing under the name it carries; the opt-in itself is not audited.
 - The shelf half sends only opted-in shelves. A book in the library but on no
   synced shelf is correctly absent from the device.
 - The device token is per device and persists. Remove the device from the
-  account page at the end of the scenario, and journal that you did.
+  account page at the end of the scenario, and journal that you did —
+  **after** the final sync of Part 4, never before. The token is the only way
+  into the device endpoint, so removing it first makes the last Pass criterion
+  permanently unobservable. Journal the registration as `device.add` and the
+  removal as `device.remove`; neither is audited.
+- The **Kobo opt-in is not on the create form**, only on Edit shelf — so a
+  shelf made for a Kobo has to be created and then immediately reopened. The
+  opt-in is also offered on a hand-picked shelf, which the web can fill only at
+  creation, so a reader can opt in a shelf they cannot later add to.
+- The wishlist offers no opt-in because it has **no edit affordance at all**,
+  which is a stronger thing than the form omitting the toggle. Check an empty
+  hand-picked shelf of your own to be sure you are seeing system-ness rather
+  than emptiness.

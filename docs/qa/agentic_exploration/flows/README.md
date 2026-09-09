@@ -72,3 +72,24 @@ finds itself on one of them has wandered off a flow.
 - **Password and Kindle-email changes.** On the account page beside the
   profile, and off-limits for the reasons `updating_profile.md` gives: a
   changed password locks the agent out of the rest of its run.
+
+## Telling data damage from a defect
+
+The instance is long-lived and carries state earlier runs left behind, some of
+it wrong — books whose titles, authors or series were cross-wired by a merge
+that lost a side, and rows with no files and no copies. Several flows' fail
+criteria fire on that state as readily as on a real fault, so a run can spend
+its whole budget re-filing damage.
+
+The test, which an agent worked out in run r-20260908-02:
+
+> **Compare a book's own renderings against each other, not against your idea
+> of the truth.** If every surface that names a fact agrees — the eyebrow, the
+> block that repeats it, the link that follows it, the table cell that lists it
+> — the app is faithfully rendering whatever is stored, and a wrong value is a
+> data question for the runner. Only when those surfaces disagree with *one
+> another* is it a defect.
+
+The runner tells you in your brief which books are known to be damaged. If you
+meet something that looks wrong on one of them, apply the test before reporting
+it, and say which way it came out.

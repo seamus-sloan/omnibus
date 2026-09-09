@@ -47,6 +47,11 @@ yours. The runner picks `stale` only for a book you have read before.
 3. Compare against what the runner told you. Under `newer`, you should be at
    the phantom position, give or take a page; under `stale`, at your own.
 4. Read on for a few pages, past the phantom position if you are near it.
+   **If step 2 failed, the phantom is already gone** — it was overwritten by
+   the open — so there is nothing left to read past and the `newer`/`stale`
+   variant can no longer be evaluated. Read forward normally anyway and record
+   that you never passed it: steps 5 and 6 still prove whether the reader
+   keeps a position *it* wrote, which is what localises the fault.
 5. Leave the reader, come back to the detail page, and confirm the position
    shown is now **yours** — the phantom is superseded by your reading, not
    restored over it.
@@ -102,3 +107,13 @@ already in the journal as `progress.set` under your actor with `surface`
   whether it set the status too.
 - The phantom position is stored against the **ebook** axis. If the book also
   has an audiobook, the listening position is untouched, which is correct.
+
+## Per-surface notes
+
+- The detail page resolves the percent to a chapter on the web ("Ch. 18 ·
+  Chapter 12"); **on iOS it shows a bare percent and no chapter**, so the
+  placeability test in the sharp edges cannot be applied there.
+- Run this subflow **before** any other subflow of `reading_a_book`. Its step 2
+  is the first-open observation, and `adding_highlight` requires being in the
+  reader, so opening the book for the highlight destroys the very thing this
+  flow exists to measure.

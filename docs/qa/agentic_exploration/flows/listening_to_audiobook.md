@@ -15,10 +15,13 @@ position, is written constantly and missed immediately when lost.
 ## Preconditions
 
 A book with an audiobook format. Multi-file audiobooks are more interesting
-than single-file ones, but **the library gives you no way to tell before you
-open the player** — the FORMATS column shows only `M4B`, and the file count
-appears nowhere until you are inside. Open one, see what you got, and say which
-in the journal. A single-file M4B can still expose many chapter markers, so
+than single-file ones. The FORMATS column shows only `M4B`, but **the detail
+page's THE FILES section lists every file** — one `Audiobook · 298.2 MB` row
+for a single-file book — so read the count there before you open the player.
+Do not try to read it from inside: the Chapters panel lists chapter names, and
+on a book whose chapters are named "Odyssey - 1 … 22" that reads exactly like
+22 files when it is one. An agent in run r-20260908-02 reported crossing file
+boundaries it could not have crossed for precisely that reason. A single-file M4B can still expose many chapter markers, so
 chapter seams are testable even when file seams are not.
 
 ## Steps
@@ -89,3 +92,16 @@ position, file, and rate.
 - A book that exists as both an ebook and an audiobook keeps **separate**
   positions for each. Reading position not moving because you listened is
   correct.
+
+## Two corrections from run r-20260908-02
+
+- **The speed and sleep panels have no Close button.** Only Chapters and
+  Bookmarks do. The scrim is the only way out of those two, and their own
+  trigger sits underneath it, so it cannot toggle them shut either. Three
+  agents lost time to the sharp edge that says otherwise.
+- **The shortest *timed* sleep option is 15 minutes**, so no timed sleep can
+  be watched to fire inside a session's budget. "End of chapter" is the only
+  candidate, and on the web it is currently broken (#2494) while on iOS it
+  works — so a web agent's step 5 is expected to fail and an iOS agent's is
+  not. The sleep panel also offers a **Fade out volume** option this document
+  never mentioned, and the fade runs whether or not you choose it.

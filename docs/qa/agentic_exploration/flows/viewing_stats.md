@@ -52,7 +52,9 @@ than one that errors or spins.
    confirm the goal ring or bar appears with the right target. An unset goal
    shows the bare figure and no ring, which is correct.
 8. Open a window tile's drill-in. Each tile opens a fixed sheet — a trend, a
-   "vs last …" line, and a Close button; Escape does not close it. There is
+   "vs last …" line, and a Close button. **Escape closes it too** — that was
+   fixed by #2491, and this document previously said the opposite, so an agent
+   trusting the old text would file a working control. There is
    no chart builder, so do not look for one.
 
 ## Journal

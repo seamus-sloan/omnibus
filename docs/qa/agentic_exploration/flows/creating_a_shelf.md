@@ -15,23 +15,27 @@ its name as something you would be content to leave behind.
 
 ## ⚠️ Read this before you start
 
-**On the web you can create a shelf but you cannot put books on it.** There is
-no add-to-shelf control anywhere in the web UI — not on a grid tile, not in the
-table's bulk bar (its "Edit" is metadata only), not on a book's detail page, not
-in **Edit shelf** (visibility and Kobo sync only), and not in the command
-palette (which searches content, not actions). Shelf *membership* lives only on
-the iOS shelf screen.
+**On the web, membership is set at creation and never afterwards.** Choosing
+**Hand-picked** in the New-shelf form replaces the rule builder with a picker —
+a "Search your library…" box, a selectable cover grid, an "On this shelf · N"
+counter, and a Create button that becomes `Create · N`. Fill it there if you
+make a hand-picked shelf.
 
-So a hand-picked shelf created on the web can only ever be empty. That is the
-current design, not a bug, and **you must not spend the flow hunting for a
-control that does not exist.** If you are on web, create the shelf, confirm it
-selects, and end the flow — do not go looking.
+What genuinely does not exist on the web is a way to change membership *later*:
+**Edit shelf** has no picker, and there is no add-to-shelf control on a grid
+tile, in the table's bulk bar (its "Edit" is metadata only), on a book's detail
+page, or in the command palette. So a hand-picked web shelf can be filled once
+and never edited, and **you must not spend the flow hunting for the missing
+later-add control.** Shelf membership *editing* lives only on the iOS shelf
+screen.
 
 **On iOS, membership is where the web's missing control went.** You are the
 agent expected to fill a shelf, so here is exactly where it lives:
 
-- Shelves are at **You → Shelves**, a grid of shelf cards — not a rail above
-  the library, and not on the Library tab at all.
+- Shelves are at **You → Shelves**, a grid of shelf cards. The **Library tab
+  also carries a Shelves rail** — an "All ›" link, shelf cards, and a **New
+  shelf** tile that is a second create entry point — so either route reaches
+  them.
 - **Create** with the `+` in the navigation bar of that Shelves screen.
 - **Open** a shelf by tapping its card; it *pushes its own screen*. It does not
   filter the library, and there is no "All Books" to go back to — you leave a
@@ -61,7 +65,7 @@ control as missing when you are on iOS.
    the two must agree exactly. Do not reuse a name you have already used.
 4. Choose its visibility — **Private** or **Public** — and note whether you are
    making a hand-picked shelf or a **Smart** one (a smart shelf fills itself
-   from a rule; a hand-picked one does not). **Make it Smart at least every
+   from a rule; a hand-picked one is filled from the picker at creation). **Make it Smart at least every
    other time on the web**, because that is the only shelf the web can fill:
    write a rule a reader would — an author you saw in the index, a genre from
    a book page — and read the **preview** the form shows before you create.
@@ -83,7 +87,11 @@ control as missing when you are on iOS.
 5. Click **Create**.
 6. **(web)** Confirm it appears in the rail, with the name, visibility, and kind
    you chose — a public shelf says PUBLIC and a private one carries no marker,
-   on the web as on iOS, so Private is confirmed by absence. **(iOS)** Confirm the card appears on the Shelves grid; open it
+   on the rail chip, on the web as on iOS — but selecting the shelf shows a facet
+   row that says **Private** in words, so on the web the visibility *is*
+   decidable and need not be recorded `uncertain`. The chip likewise carries no
+   kind marker for a hand-picked shelf, where a smart one is prefixed "Smart
+   shelf" in its accessible name. **(iOS)** Confirm the card appears on the Shelves grid; open it
    and read the name and meta line on its own screen.
 7. **(web only)** Select it and confirm the library narrows to it. A brand-new
    hand-picked shelf will be empty, and its count should say so. **This step
@@ -180,3 +188,17 @@ edit, and the delete are what the audit reconciles.
 - Your display name is denormalised into the wishlist shelf's name. It has been
   observed updating in the same render as a profile save, so a *stale* name
   there is worth journalling as a real observation rather than shrugging off.
+
+## The Create button's label
+
+`Create` reads bare on an empty form and gains a count — `Create · N` — once a
+name and a rule or members exist. Four agents have reported the plain label as
+though it disagreed with the documentation; it is one control in two states.
+
+## What the New-shelf form carries that this document did not mention
+
+A **description** field, on both surfaces. It round-trips and renders under the
+meta line on the shelf's own screen. On iOS the grid *card* omits "Manual"
+entirely — a hand-picked shelf reads "2 books · Public" where a smart one reads
+"3 books · Smart · Public" — so on a card, manual is confirmed by absence the
+same way private is.

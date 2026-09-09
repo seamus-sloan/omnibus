@@ -15,6 +15,27 @@ the entry that later authorises you, and only you, to merge or delete it.
 that book is lost forever.** Journal it before you do anything else with the
 book.
 
+## If the runner briefed you as a reader
+
+Read this before the preconditions, because they do not apply to you. A reader
+whose upload permission has been turned off runs this flow to meet the
+**refusal**, and that is the whole flow:
+
+- The **pass** is that every route to an upload ends at "You don't have
+  permission to add books to this library." — no file input, no drop zone, no
+  upload-type selector, no Add-to-library button.
+- The **fail** is a screen that lets you upload anyway.
+- **A hidden entry point is not a failure to reach the refusal.** The desktop
+  nav has no Add books item for you at all; the phone-width tab bar still
+  offers one, and its sheet still advertises "Upload a file", which is #2526.
+  Reaching the refusal by either route is a pass; say which routes exist.
+- Skip the corpus requirement and the file-chooser caveat below — you upload
+  nothing, so neither applies, and stopping at them would report `uncertain`
+  for a flow that reached a clean refusal.
+- Journal the attempt `refused`, with `source_filename` and the target left
+  null. The journal contract below assumes an upload happened; a refusal has
+  no filename and no uuid.
+
 ## Preconditions
 
 **You need a browser tool that can actually put a file into a file input.** The
@@ -136,3 +157,20 @@ upload is as interesting as an accepted one.
   it. Journal it as a finding with the file named.
 - A file the app legitimately does not support should be refused with a clear
   message. A clear refusal is a pass; a silent one is a fail.
+
+## Correction from run r-20260908-02
+
+Step 7 previously said the detail page shows no page count, no chapter count
+and no publication-date row. It does show `Published`, and a chapter count on
+the progress line once the reader has been opened; only the page count is
+absent.
+
+## When the file names an extra creator
+
+The review form lists any creator beyond the first beneath the Author field,
+and they are not always people. A great many EPUBs carry a Calibre producer
+stamp — `calibre (3.48.0) [https://calibre-ebook.com]` — as a `dc:contributor`,
+and it is imported as an author: it appears in the grid author line, the
+detail-page byline and the Authors index, and the review form offers no way to
+drop it. **That is a finding, not an expected artifact** (#2501). Journal the
+extra creator verbatim and say whether it looks like a person or a toolchain.

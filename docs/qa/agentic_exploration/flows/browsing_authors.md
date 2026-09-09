@@ -67,3 +67,14 @@ with the name, the book count shown, and the count you actually saw.
   faithfully.
 - Another agent may be editing an author's books as you read. Counts shifting
   between two visits is expected.
+
+## Two corrections from run r-20260908-02
+
+- **The Fail list misses the case this flow actually finds.** It covers a book
+  naming an author with no index entry; the inverse also happens and is a
+  defect — an author row reachable from *search*, opening to a page reading
+  "IN YOUR LIBRARY 0", that the index correctly omits (#2502). Add it.
+- **A fileless book counts in both places.** The sharp edge says a paper-only
+  or wishlist book "counts on an author's page but may not in the index"; it
+  counted in both, so the hint sends an agent looking for a mismatch that does
+  not exist.

@@ -29,28 +29,42 @@ here, never against the baseline corpus.
    alone, as [wishlist.md](wishlist.md) says.
 3. Read the candidates. The lookup checks your library first, then external
    services, and the outcome it offers depends on what it found:
-   - **"In your physical collection"** — you already filed this one. Correct;
-     journal it and pick another book.
-   - **"Check in this copy"** (iOS: **"I already have this book"**) — the book
-     exists digitally and this adds the print copy. An **"Is this the book?"**
-     interstitial comes first, because print and digital editions carry
-     different ISBNs; the app asks before filing against the wrong book. Take
-     this path for a book **you uploaded**. An edition note can be written
-     here as well as later.
-   - **"I own it"** (iOS: **"Add as physical book"**) with no digital match —
-     creates a paper-only book and its first copy. Take this path for a real
-     book that is not in the library.
+   The web's no-match screen offers three buttons — **"I own it — add to my
+   collection"**, **"I already have this book"** and **"Add to my wishlist"**.
+   "Check in this copy" is the *heading of the confirm screen*, not an option.
+   - **Recognition** — the book already carries your copy. The web says
+     nothing and navigates straight to it; there is no "In your physical
+     collection" screen on this surface. Journal it and pick another book.
+   - **"Check in this copy"** — the confirm screen for a book that exists
+     digitally, reached from a title match or an exact-edition ISBN. An
+     **"Is this the book?"** interstitial comes first only when the ISBN you
+     entered is on no book in the library; a matching edition goes straight
+     through. This path offers an **Edition note** at file time. A reader
+     whose upload permission is off cannot reach it without breaking the
+     corpus rule, so the paper-only path below is their only route to a copy
+     they can note and remove.
+   - **"I own it — add to my collection"** with no digital match — creates a
+     paper-only book and its first copy. Take this path for a real book that
+     is not in the library. This path offers **no note field**; the note is
+     reachable only from the copy card afterwards.
      **Journal `book.add` for the result with its uuid**: a book you created
      here is one you own, exactly as an upload would be, and without that
      entry nobody can ever remove it.
-   - **On your wishlist** — the book is a wishlist entry; checking a copy in
-     should turn it into a real entry. Only try this on a book *you*
-     wishlisted earlier.
+   - **"I already have this book"** — not iOS-only; it is one of the web's
+     three buttons, and it opens a **"Which book is this?"** library picker
+     that files the copy against a book already in the library with no new
+     row. Say what you find there; the path past its search is uncovered.
+   There is **no "On your wishlist" outcome on the web**. A book on your own
+   wishlist cannot currently be checked in at all — see #2505 — so do not
+   report its absence as a new finding.
 4. Confirm. Watch for the confirmation naming the right book.
 5. Open the book's detail page and confirm the physical copy is shown — on
-   the web a **Physical copy** card under THE FILES with an "In your physical
-   collection" marker; on iOS a Physical copy row and an "On your shelf —
-   physical copy" bar. Then confirm the library shows it: the web **table**
+   the web a **Physical copy** card under THE FILES reading "Physical copy /
+   Checked in N minutes ago / ISBN …". The phrase "In your physical
+   collection" is the *confirmation dialog's* heading and is not visible text
+   on this page — it exists only as a `title` on the format badge and an
+   `aria-label` on the physical pill, so do not hunt for it. On iOS, a
+   Physical copy row and an "On your shelf — physical copy" bar. Then confirm the library shows it: the web **table**
    view's Formats cell carries PHYS; grid tiles carry no badge on either
    surface.
 6. If the copy card offers a note — where it lives, its condition — write
@@ -58,13 +72,19 @@ here, never against the baseline corpus.
    sticks after a reload. iOS offers no note.
 7. Re-run the same lookup. The web navigates straight to the book with no
    message; iOS shows an "Already on your shelf" card. Both are recognition.
-8. Occasionally, on a book **you own**, remove the copy — the web's control
-   is labelled "I sold it" — and confirm the card and badge go. Removing the
-   **last** copy of a paper-only book removes the book, after a dialog that
-   offers to move it to the wishlist instead; that is correct. iOS has no
-   remove control, so the book stays; say so. On a book you do not own the guard will refuse with a `403`
-   carrying `ownership_guard`; journal that `refused` and do not look for
-   another route.
+8. Occasionally, on a book **you own**, remove the copy and confirm the card
+   and badge go. There are two dialogs, and which you get depends on the
+   copy: a **non-last** copy asks "Remove this copy?" with Cancel / **I sold
+   it**; the **last** copy of a paper-only book asks "Remove your last copy"
+   with Cancel / Move to wishlist / **Remove from library**, and removing it
+   removes the book. Both are correct. iOS has no remove control, so the book
+   stays; say so.
+   **Remove only a copy you filed yourself.** The ownership guard does not
+   cover this route — a copy note or delete names a copy id and no book uuid,
+   so the guard cannot check it and lets it through (#2516) — and the server
+   does not check either (#2509). A removal on someone else's copy will
+   therefore *succeed*, not be refused. If you are offered the control on a
+   copy you did not file, that is the finding: report it and do not click.
 
 ## Journal
 
