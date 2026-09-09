@@ -238,32 +238,71 @@ fn format_date_month_year_opt_is_none_for_absent_and_sentinel_dates() {
     );
 }
 
+// Regression for #2504: `Science Fiction & Fantasy` used to become four
+// facets — `tag:Science tag:Fiction tag:& tag:Fantasy` — AND-ed, which is a
+// different question from the one the reader clicked.
 #[test]
-fn facet_query_scopes_every_word_of_a_multi_word_name() {
-    // The bug this replaced: `format!("tag:{name}")` scoped only "Dark" and
-    // let "academia" fall through to `build_fts_match`'s free-text arm, so a
-    // chip click matched books merely titled something with "academia".
-    assert_eq!(facet_query("tag", "Dark academia"), "tag:Dark tag:academia");
+fn facet_query_quotes_a_multi_word_name_into_one_facet() {
+    assert_eq!(facet_query("tag", "Dark academia"), "tag:\"Dark academia\"");
     assert_eq!(
-        facet_query("genre", "Hard Science Fiction"),
-        "genre:Hard genre:Science genre:Fiction"
+        facet_query("genre", "Science Fiction & Fantasy"),
+        "genre:\"Science Fiction & Fantasy\""
     );
 }
 
 #[test]
-fn facet_query_passes_a_single_word_through_unchanged() {
+fn facet_query_passes_a_single_word_through_unquoted() {
+    // Nothing to protect, and the shorter URL is the one a reader may edit.
     assert_eq!(facet_query("genre", "Horror"), "genre:Horror");
 }
 
 #[test]
-fn facet_query_collapses_surrounding_and_repeated_whitespace() {
-    // `split_whitespace` drops empties, so no `tag:` token is ever emitted
-    // bare — `build_fts_match` would silently discard one.
+fn facet_query_escapes_an_embedded_quote_rather_than_ending_the_value() {
     assert_eq!(
-        facet_query("tag", "  Dark   academia  "),
-        "tag:Dark tag:academia"
+        facet_query("tag", "the \"good\" parts"),
+        "tag:\"the \"\"good\"\" parts\""
     );
+}
+
+#[test]
+fn facet_query_collapses_surrounding_whitespace_and_declines_an_empty_name() {
+    assert_eq!(facet_query("tag", "  Horror  "), "tag:Horror");
     assert_eq!(facet_query("tag", "   "), "");
+    assert_eq!(facet_query("tag", ""), "");
+}
+
+// --- the inverse, for the results heading -------------------------------
+
+#[test]
+fn single_facet_value_reads_back_what_facet_query_wrote() {
+    for (prefix, name) in [
+        ("tag", "Science Fiction & Fantasy"),
+        ("genre", "Horror"),
+        ("author", "Ursula K. Le Guin"),
+        ("series", "The Broken Earth"),
+        ("tag", "the \"good\" parts"),
+    ] {
+        assert_eq!(
+            single_facet_value(&facet_query(prefix, name)).as_deref(),
+            Some(name),
+            "{prefix}:{name}"
+        );
+    }
+}
+
+#[test]
+fn single_facet_value_declines_anything_that_is_not_one_lone_facet() {
+    // Free text is the reader's own words — echo them, don't rewrite them.
+    assert_eq!(single_facet_value("science fiction"), None);
+    // Two facets, or a facet plus text, are not "the name they clicked".
+    assert_eq!(single_facet_value("tag:Horror genre:Fiction"), None);
+    assert_eq!(single_facet_value("tag:Horror ghosts"), None);
+    assert_eq!(single_facet_value("tag:\"Dark academia\" more"), None);
+    // An unknown prefix is not a facet at all.
+    assert_eq!(single_facet_value("http://example.com"), None);
+    // And an empty value names nothing.
+    assert_eq!(single_facet_value("tag:"), None);
+    assert_eq!(single_facet_value("tag:\"\""), None);
 }
 
 // --- instants vs calendar dates (#2464) ---------------------------------

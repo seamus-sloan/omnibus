@@ -119,6 +119,14 @@ test("renders the /search results page layout", async ({ page }) => {
 
   // "On this page" jump rail is present.
   await expect(page.getByText("On this page")).toBeVisible();
+
+  // Regression for #2453: the head carried Relevance / Grid / Table buttons
+  // with no handlers — they swallowed the click and changed nothing.
+  await expect(page.getByRole("button", { name: "Relevance ↓" })).toHaveCount(
+    0,
+  );
+  await expect(page.getByRole("button", { name: "Table" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Grid" })).toHaveCount(0);
 });
 
 test("search back link returns to the library", async ({ page }) => {

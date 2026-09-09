@@ -1,7 +1,8 @@
 //! Authors arm of the search palette: substring `LIKE` match scoped to the
 //! visible books, ordered by an override-aware effective book count.
-//! Visibility still requires at least one canonical link so override-only
-//! authors (no navigable id) don't appear.
+//! Visibility is the rule `browse::list_authors` uses — membership in that
+//! same effective set — so the palette cannot offer an author the Authors
+//! index rejects.
 
 use std::sync::OnceLock;
 
@@ -45,12 +46,11 @@ pub(super) fn search_authors_sql() -> &'static str {
     static SQL: OnceLock<String> = OnceLock::new();
     SQL.get_or_init(|| {
         let vis = visible_book_sql("b", "l2", "?1");
-        let vis_lead = visible_book_sql("b3", "l3", "?1");
-        let vis_exists = visible_book_sql("b", "l", "?1");
         format!(
             r"
         WITH effective AS (
-          SELECT bal.author AS author_id, NULL AS author_name, bal.book AS book_id
+          -- (1) Canonical authorship on a book with no creators override.
+          SELECT bal.author AS author_id, bal.book AS book_id
             FROM books_authors_link bal
             JOIN books b ON b.id = bal.book
             JOIN scan_roots l2 ON l2.id = b.library_id
@@ -59,36 +59,41 @@ pub(super) fn search_authors_sql() -> &'static str {
              AND (mo.book_uuid IS NULL
                   OR json_type(mo.overrides, '$.creators') IS NULL)
           UNION
-          SELECT NULL AS author_id,
-                 json_extract(je.value, '$.name') AS author_name,
-                 b.id AS book_id
+          -- (2) Override creators resolved (NOCASE) to an authors row, so the
+          -- credit lands on the id the reader's links point at. Migration
+          -- 0096 and `materialize_author_rows` guarantee the row exists.
+          SELECT a2.id AS author_id, b.id AS book_id
             FROM books b
             JOIN scan_roots l2 ON l2.id = b.library_id
             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
             JOIN json_each(mo.overrides, '$.creators') je
+            JOIN authors a2
+              ON a2.name = json_extract(je.value, '$.name') COLLATE NOCASE
            WHERE {vis}
              AND json_type(mo.overrides, '$.creators') IS NOT NULL
+        ),
+        counts AS (
+          SELECT author_id, COUNT(*) AS book_count
+            FROM effective
+           GROUP BY author_id
         )
         SELECT a.id, a.name,
-          (SELECT COUNT(*) FROM effective e
-            WHERE e.author_id = a.id OR e.author_name = a.name) AS book_count,
+          -- `JOIN counts` below is what enforces book_count > 0: a bare
+          -- canonical-link EXISTS kept a scanned row whose books had all been
+          -- re-credited, and it opened onto an empty author page (#2502).
+          c.book_count AS book_count,
+          -- The lead title comes off the effective set too: reading it from
+          -- `books_authors_link` is what let a dead row advertise `incl. Six
+          -- of Crows` for a book it no longer credits.
           (SELECT COALESCE(json_extract(mo3.overrides, '$.title'), b3.title)
-             FROM books_authors_link bal3
-             JOIN books b3 ON b3.id = bal3.book
-             JOIN scan_roots l3 ON l3.id = b3.library_id
+             FROM effective e3
+             JOIN books b3 ON b3.id = e3.book_id
              LEFT JOIN metadata_overrides mo3 ON mo3.book_uuid = b3.uuid
-            WHERE bal3.author = a.id
-              AND {vis_lead}
+            WHERE e3.author_id = a.id
             ORDER BY b3.sort, b3.id LIMIT 1) AS lead_book_title
         FROM authors a
+        JOIN counts c ON c.author_id = a.id
         WHERE a.name LIKE ?2 ESCAPE '\'
-          AND EXISTS (
-            SELECT 1 FROM books_authors_link bal
-              JOIN books b ON b.id = bal.book
-              JOIN scan_roots l ON l.id = b.library_id
-             WHERE bal.author = a.id
-               AND {vis_exists}
-          )
         ORDER BY book_count DESC, a.name
         LIMIT ?3
         "
@@ -156,18 +161,32 @@ pub async fn count_authors_for_paths(
     if library_paths.is_empty() {
         return Ok(0);
     }
-    let visible = visible_book_sql("b", "l", "?1");
+    let vis = visible_book_sql("b", "l2", "?1");
     Ok(sqlx::query_scalar::<_, i64>(&format!(
         r"
+        WITH effective AS (
+          SELECT bal.author AS author_id, bal.book AS book_id
+            FROM books_authors_link bal
+            JOIN books b ON b.id = bal.book
+            JOIN scan_roots l2 ON l2.id = b.library_id
+            LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+           WHERE {vis}
+             AND (mo.book_uuid IS NULL
+                  OR json_type(mo.overrides, '$.creators') IS NULL)
+          UNION
+          SELECT a2.id AS author_id, b.id AS book_id
+            FROM books b
+            JOIN scan_roots l2 ON l2.id = b.library_id
+            JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+            JOIN json_each(mo.overrides, '$.creators') je
+            JOIN authors a2
+              ON a2.name = json_extract(je.value, '$.name') COLLATE NOCASE
+           WHERE {vis}
+             AND json_type(mo.overrides, '$.creators') IS NOT NULL
+        )
         SELECT COUNT(*) FROM authors a
         WHERE a.name LIKE ?2 ESCAPE '\'
-          AND EXISTS (
-            SELECT 1 FROM books_authors_link bal
-              JOIN books b ON b.id = bal.book
-              JOIN scan_roots l ON l.id = b.library_id
-             WHERE bal.author = a.id
-               AND {visible}
-          )
+          AND EXISTS (SELECT 1 FROM effective e WHERE e.author_id = a.id)
         "
     ))
     .bind(library_paths_json(library_paths))

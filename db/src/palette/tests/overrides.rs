@@ -169,9 +169,13 @@ async fn search_palette_author_count_reflects_overrides() {
     // (override-aware) view, not the raw `books_authors_link` count.
     // Repro of the "Sanderson, Brandon still says 4 books" report:
     // every canonical book for an author was reassigned to a
-    // differently-named author through the metadata edit form, so the
-    // palette must report 0 books for the source name and the full
-    // count for the destination name.
+    // differently-named author through the metadata edit form.
+    //
+    // #2502 tightened what happens to the *source* row. This test used to
+    // assert it stayed listed reporting 0 books; that is the dead end the
+    // issue is about — the row opens onto an author page reading IN YOUR
+    // LIBRARY 0 — so it is now required to be absent, and only the
+    // destination count survives as the F5.1 assertion.
     let _covers = CoversTempDir::new("palette_author_count_overrides");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
@@ -217,16 +221,12 @@ async fn search_palette_author_count_reflects_overrides() {
 
     let results = search_palette(&pool, "/lib", "Last").await.unwrap();
 
-    // Source author still visible (canonical anchor remains), but
-    // count must reflect the effective view: 0 books.
-    let source = results
-        .authors
-        .iter()
-        .find(|a| a.name == "Last, First")
-        .expect("source author still appears in palette");
-    assert_eq!(
-        source.book_count, 0,
-        "renamed-away author must report effective count 0, got {results:?}",
+    // The source row is credited with nothing now, so it is not offered at
+    // all (#2502) — a canonical link the file still carries is not a reason
+    // to advertise an author the library no longer shows.
+    assert!(
+        !results.authors.iter().any(|a| a.name == "Last, First"),
+        "renamed-away author must not be offered, got {results:?}",
     );
 
     // Destination author picks up the override-renamed books on top
@@ -434,4 +434,96 @@ async fn search_palette_series_author_display_reflects_override() {
         Some("New Name"),
         "palette author line must follow override.creators, got {results:?}",
     );
+}
+
+// --- dead scanned author rows (#2502) -----------------------------------
+
+/// Seed one book whose scanned creator is the file's inverted "Last, First"
+/// form and whose displayed creator is an override, then return the pool.
+/// This is the shape that leaves a scanned `authors` row credited with
+/// nothing.
+async fn seed_recredited_book(covers: &str) -> sqlx::SqlitePool {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed(
+            "crows.epub",
+            Some("Six of Crows"),
+            &["Bardugo, Leigh"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    let uuid = list_books(&pool, "/lib").await.unwrap()[0]
+        .unique_identifier
+        .clone()
+        .unwrap();
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            creators: Some(vec![Contributor {
+                name: "Leigh Bardugo".into(),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+    let _ = covers;
+    pool
+}
+
+// Regression for #2502: the scanned "Bardugo, Leigh" row survived on a bare
+// canonical-link EXISTS and was offered as `0 books · incl. Six of Crows`,
+// opening onto an author page reading IN YOUR LIBRARY 0.
+#[tokio::test]
+async fn search_palette_authors_arm_drops_a_row_credited_with_no_books() {
+    let _covers = CoversTempDir::new("palette_dead_author_row");
+    let pool = seed_recredited_book("palette_dead_author_row").await;
+
+    let palette = search_palette(&pool, "/lib", "Bardugo").await.unwrap();
+
+    // Exactly one author, the one the book detail page links to, and it is
+    // credited with the book.
+    assert_eq!(
+        palette.authors.len(),
+        1,
+        "expected only the credited author, got {:?}",
+        palette.authors
+    );
+    assert_eq!(palette.authors[0].name, "Leigh Bardugo");
+    assert_eq!(palette.authors[0].book_count, 1);
+    assert_eq!(
+        palette.authors[0].lead_book_title.as_deref(),
+        Some("Six of Crows")
+    );
+}
+
+// AC2's other half: the uncapped total behind the 5-hit cap has to count the
+// same rows the list returns, or the rail promises hits that don't exist.
+#[tokio::test]
+async fn count_authors_agrees_with_the_rows_the_authors_arm_returns() {
+    let _covers = CoversTempDir::new("palette_dead_author_count");
+    let pool = seed_recredited_book("palette_dead_author_count").await;
+
+    let total = count_authors(&pool, "/lib", "%Bardugo%").await.unwrap();
+    let hits = search_authors(&pool, "/lib", "%Bardugo%", 10)
+        .await
+        .unwrap();
+
+    assert_eq!(total, 1);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(i64::try_from(hits.len()).unwrap(), total);
 }

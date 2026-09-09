@@ -11,7 +11,7 @@ use omnibus_shared::{
     PaletteTagHit,
 };
 
-use crate::format::{facet_query, plural};
+use crate::format::{facet_query, plural, single_facet_value};
 use crate::{data, use_server_url, Route};
 
 /// Renders the full-page search results for the given query.
@@ -144,24 +144,23 @@ fn SearchResults(results: PaletteResults, query: String) -> Element {
 
     let (order, tag_match) = section_order(&r, &q);
     let result_word = if total == 1 { "result" } else { "results" };
+    // A one-facet query is headed by the name the reader clicked, not by the
+    // `tag:"…"` string the link was built from (#2504). Anything else keeps
+    // the raw query, which is what they actually typed.
+    let heading = single_facet_value(&q).unwrap_or_else(|| q.clone());
 
     rsx! {
+        // No sort/view controls: one ordering, one rendering, and a button
+        // without a handler is worse than no button (#2453).
         div { class: "search-head",
             div {
                 div { class: "label", "Search results" }
                 h1 { class: "search-title",
                     span { class: "search-title-n", "{total}" }
                     " {result_word} for \u{201c}"
-                    {highlight(&q, &q)}
+                    {highlight(&heading, &heading)}
                     "\u{201d}"
                 }
-            }
-            div { class: "search-controls",
-                span { class: "label", "Sort" }
-                button { class: "btn sm", "Relevance \u{2193}" }
-                span { class: "label", "View" }
-                button { class: "btn sm search-view-active", "Grid" }
-                button { class: "btn ghost sm", "Table" }
             }
         }
         p { class: "search-summary mono", "data-testid": "search-result-count",
@@ -186,13 +185,16 @@ fn SearchResults(results: PaletteResults, query: String) -> Element {
 
 /// Empty-state header + zero-count summary for a query with no hits.
 fn empty_results(r: &PaletteResults, q: &str) -> Element {
+    // Same naming rule as the populated head — a reader who clicked a tag and
+    // found nothing should still be told which tag (#2504).
+    let heading = single_facet_value(q).unwrap_or_else(|| q.to_string());
     rsx! {
         div { class: "search-head",
             div {
                 div { class: "label", "Search results" }
                 h1 { class: "search-title",
                     "No results for \u{201c}"
-                    {highlight(q, q)}
+                    {highlight(&heading, &heading)}
                     "\u{201d}"
                 }
             }
