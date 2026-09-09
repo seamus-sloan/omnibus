@@ -402,12 +402,16 @@ struct PlayerView: View {
 
             // Chapter elapsed, book remaining, chapter remaining — all three at
             // once. The middle one is the whole-book context that a
-            // chapter-scoped bar would otherwise cost you. All three are
-            // rate-adjusted wall-clock: an elapsed readout left at 1x book-time
-            // disagrees with its own row's remaining labels the moment the
-            // speed leaves 1x.
+            // chapter-scoped bar would otherwise cost you.
+            //
+            // The position is BOOK time; only the two "left" figures are
+            // rate-adjusted wall clock. That is the convention #2344 settled
+            // on the web (superseding #2246, which had rescaled positions
+            // too), and iOS was still on the old one: at 1.5x this readout
+            // said 22:57 into a chapter its own contents panel called
+            // 1:16:11, and disagreed with every bookmark stamp (#2521).
             HStack(spacing: Spacing.sm) {
-                Text(Format.duration(Format.atRate(displayedOffset, rate: player.rate)))
+                Text(Format.duration(displayedOffset))
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 if player.hasChapters {
@@ -445,7 +449,9 @@ struct PlayerView: View {
         // not the 1x runtime of the rest of the chapter.
         let left = Format.atRate(max(0, player.chapterDuration - displayedOffset), rate: player.rate)
         // No sign at the end of a chapter: "-0:00" reads as a broken clock.
-        return left < 1 ? "0:00" : "- " + Format.duration(left)
+        // Named, not just signed: it sits beside a book-time position, and a
+        // bare "- 27:51" gives a listener no way to tell the two apart.
+        return left < 1 ? "0:00 left" : Format.duration(left) + " left"
     }
 
     /// Five slots: chapter back, skip back, play/pause, skip forward, chapter

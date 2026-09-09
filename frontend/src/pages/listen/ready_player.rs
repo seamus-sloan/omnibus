@@ -439,8 +439,9 @@ pub(super) struct ChapterNavData {
     pub chapters: Vec<ChapterInfo>,
     pub current_chapter_index: usize,
     pub elapsed: f64,
-    /// Current playback rate, threaded to the chapters drawer's duration
-    /// labels so they share the transport's clock (#2246).
+    /// Current playback rate, threaded to the chapters drawer for the
+    /// playing row's "time left" alone — the row durations beside it stay
+    /// book time (#2344, #2521).
     pub rate: f64,
     pub on_seek: EventHandler<f64>,
 }

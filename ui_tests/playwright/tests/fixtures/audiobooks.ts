@@ -132,6 +132,17 @@ export const AUDIOBOOK_BOOKS: readonly ExpectedAudiobook[] = [
     source: "generated",
   },
 
+  // Sleep-seam-only book — see SLEEP_SEAM_BOOK below. Two ~12s chapters so an
+  // end-of-chapter timer can be armed just before a real seam.
+  {
+    title: "The Seamful Suite",
+    author: "Jean Bartik",
+    format: "MP3",
+    parts: 2,
+    hasCover: true,
+    source: "generated",
+  },
+
   // Resume-paint-only book — see RESUME_BOOK below. ~30s so a saved position
   // is meaningful; appended last for the same reason as the scrub book.
   {
@@ -197,6 +208,25 @@ export const SCRUB_BOOK = requireAudiobook("The Scrubbable Saga");
  * which a stray saved position would falsify.
  */
 export const RESUME_BOOK = requireAudiobook("The Resumable Reverie");
+
+/**
+ * The audiobook reserved for the end-of-chapter sleep-timer regression test
+ * (#2494): an armed timer must pause the book at the chapter seam instead of
+ * silently re-arming to the next chapter and playing on.
+ *
+ * That spec PLAYS the book across a seam, so it writes a listening position
+ * and flips read status — both per-(user, book) server state that outlives
+ * it. Like {@link SCRUB_BOOK} and {@link RESUME_BOOK}, nothing else may read
+ * it.
+ *
+ * Its two ~12s chapters are the point: the race needs the playhead to cross
+ * the seam while the `ceil`ed countdown is still above zero, and a 2s
+ * generated chapter is too short to arrange that.
+ */
+export const SLEEP_SEAM_BOOK = requireAudiobook("The Seamful Suite");
+
+/** Book-time position of the seam between its two chapters, in seconds. */
+export const SLEEP_SEAM_SECONDS = 460 * (1152 / 44100);
 
 /**
  * Titles the reader specs must exclude when they pick "some generated MP3".

@@ -56,11 +56,9 @@ pub(super) fn sleep_toolbar_label(remaining: Option<i32>) -> String {
 }
 
 /// Mini-dock Sleep-chip label: bare "Sleep" when off, the live countdown for
-/// a duration preset, and a fixed "End of ch." tag for the chapter option.
-/// The chapter timer's *pause point* now follows the playhead
-/// ([`reanchored_end_of_chapter`]), but its countdown is only corrected
-/// while the position is moving — a paused player's would still drift down,
-/// so the tag stays a tag.
+/// a duration preset, and a fixed "End of ch." tag for the chapter option —
+/// which fires on the playhead reaching its boundary, not on a countdown, so
+/// there is no single wall-clock number the chip could honestly show for it.
 pub(super) fn sleep_chip_label(remaining: Option<i32>, choice: SleepChoice) -> String {
     match (choice, remaining) {
         (SleepChoice::EndOfChapter, Some(s)) if s > 0 => "Sleep \u{00b7} End of ch.".to_string(),
@@ -69,50 +67,31 @@ pub(super) fn sleep_chip_label(remaining: Option<i32>, choice: SleepChoice) -> S
     }
 }
 
-/// Wall-clock seconds left until the end of the current chapter, for the
-/// "End of chapter" option. The countdown ticks in real time while the book
-/// plays at `rate`, so the book-time remainder is divided by the rate —
-/// otherwise a 2x listener's timer fires long after the chapter has ended.
-/// `None` when `idx` is out of range (empty/stale list).
-pub(super) fn end_of_chapter_seconds(
-    chapters: &[ChapterInfo],
-    idx: usize,
-    elapsed: f64,
-    rate: f64,
-) -> Option<i32> {
+/// The book-time position an end-of-chapter timer armed at `elapsed` must
+/// pause at: the end of the chapter the playhead is currently inside.
+///
+/// `None` when the chapter list can't place the playhead, or when the
+/// playhead is already at or past that end — arming a boundary that is
+/// behind the listener is what paused instantly instead of at the seam.
+pub(super) fn end_of_chapter_anchor(chapters: &[ChapterInfo], elapsed: f64) -> Option<f64> {
+    let idx = super::chapter_nav::chapter_index_for_elapsed(chapters, elapsed);
     let ch = chapters.get(idx)?;
     let end = ch.start_seconds + ch.duration_seconds;
-    let rem =
-        super::helpers::remaining_at_rate((end - elapsed).max(0.0), rate).min(f64::from(i32::MAX));
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    Some(rem.ceil() as i32)
+    (end > elapsed).then_some(end)
 }
 
-/// How far the countdown may sit from the true remainder before it is
-/// treated as pointing at the wrong chapter. Ordinary playback keeps the two
-/// within a second of each other (both advance one wall-clock second per
-/// tick); only a seek, a chapter jump or a speed change opens a real gap.
-const REANCHOR_TOLERANCE_SECONDS: i32 = 3;
-
-/// The countdown an armed end-of-chapter timer should be showing, given where
-/// the playhead now is — or `None` to leave the tick alone.
+/// Wall-clock seconds until the playhead reaches `anchor` at `rate`.
 ///
-/// The timer is a plain countdown seeded once at arming, so a listener who
-/// jumps to a different chapter (or skips within one, or changes speed) is
-/// left counting toward a boundary that is no longer the one ahead of them,
-/// and playback runs straight through the seam. Correcting the countdown on
-/// divergence rather than re-deriving it on every position report is what
-/// keeps a *paused* player counting down exactly as it did before: `elapsed`
-/// stops moving there, so this never runs.
-pub(super) fn reanchored_end_of_chapter(
-    chapters: &[ChapterInfo],
-    counting_down_from: i32,
-    elapsed: f64,
-    rate: f64,
-) -> Option<i32> {
-    let idx = super::chapter_nav::chapter_index_for_elapsed(chapters, elapsed);
-    let fresh = end_of_chapter_seconds(chapters, idx, elapsed, rate)?;
-    ((fresh - counting_down_from).abs() > REANCHOR_TOLERANCE_SECONDS).then_some(fresh)
+/// Display only. The timer fires on the playhead reaching `anchor`, never on
+/// this reaching zero: a countdown cannot tell "the boundary arrived" from
+/// "the listener jumped", and guessing between them is what re-armed an
+/// armed timer at every seam and let the book play on for hours (#2494).
+pub(super) fn seconds_until_anchor(anchor: f64, elapsed: f64, rate: f64) -> i32 {
+    let rem = super::helpers::remaining_at_rate((anchor - elapsed).max(0.0), rate)
+        .min(f64::from(i32::MAX));
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let secs = rem.ceil() as i32;
+    secs
 }
 
 /// Sleep-timer handle returned by [`use_sleep_timer`]. Cheap to copy; the
@@ -134,6 +113,10 @@ pub(crate) struct SleepController {
     chapters: Signal<Vec<ChapterInfo>>,
     elapsed: Signal<f64>,
     rate: Signal<f64>,
+    /// Book-time position an armed end-of-chapter timer pauses at. The
+    /// timer's authority: `remaining` is a readout derived from it, never
+    /// the thing that decides.
+    anchor_end: Signal<Option<f64>>,
 }
 
 impl SleepController {
@@ -144,6 +127,8 @@ impl SleepController {
         let mut token = self.token;
         let next_token = (*token.peek()).wrapping_add(1);
         token.set(next_token);
+        let mut anchor_end = self.anchor_end;
+        anchor_end.set(None);
         if secs <= 0 {
             remaining.set(None);
             choice.set(SleepChoice::Off);
@@ -169,19 +154,57 @@ impl SleepController {
     /// when the chapter list can't place the playhead — arming a countdown
     /// off a stale or empty list would pause at an arbitrary moment.
     pub fn select_end_of_chapter(&self) {
-        let chs = self.chapters.peek().clone();
         let now = *self.elapsed.peek();
-        let idx = super::chapter_nav::chapter_index_for_elapsed(&chs, now);
-        let Some(secs) = end_of_chapter_seconds(&chs, idx, now, *self.rate.peek()) else {
+        let Some(anchor) = end_of_chapter_anchor(&self.chapters.peek(), now) else {
             return;
         };
+        self.arm_at(anchor, now);
+    }
+
+    /// Point the timer at `anchor` (a book-time position) and refresh the
+    /// readout. Shared by arming and by the seek re-anchor, which must set
+    /// exactly the same state.
+    fn arm_at(&self, anchor: f64, now: f64) {
         let mut remaining = self.remaining;
         let mut choice = self.choice;
         let mut token = self.token;
+        let mut anchor_end = self.anchor_end;
         let next_token = (*token.peek()).wrapping_add(1);
         token.set(next_token);
-        remaining.set(Some(secs.max(1)));
+        anchor_end.set(Some(anchor));
+        remaining.set(Some(
+            seconds_until_anchor(anchor, now, *self.rate.peek()).max(1),
+        ));
         choice.set(SleepChoice::EndOfChapter);
+    }
+
+    /// Pause playback, restore the listener's volume, and disarm. The one
+    /// place the timer fires, so the fade can never complete without the
+    /// stop it was ramping toward (#2494).
+    fn expire(&self) {
+        let restore_to = *self.volume.peek();
+        #[cfg(feature = "web")]
+        {
+            super::helpers::audio_call("pause", "");
+            super::helpers::audio_call("setVolume", &restore_to.to_string());
+        }
+        let _ = restore_to;
+        let mut remaining = self.remaining;
+        let mut choice = self.choice;
+        let mut anchor_end = self.anchor_end;
+        remaining.set(None);
+        anchor_end.set(None);
+        choice.set(SleepChoice::Off);
+    }
+
+    /// Undo a partial fade. Called whenever the timer stops counting toward
+    /// the boundary it was ramping into — a re-anchor after a seek — so a
+    /// listener is never left at 3% volume with a full-looking readout.
+    fn restore_volume(&self) {
+        let restore_to = *self.volume.peek();
+        #[cfg(feature = "web")]
+        super::helpers::audio_call("setVolume", &restore_to.to_string());
+        let _ = restore_to;
     }
 
     /// Toggle the volume-fade preference. Turning it off restores the
@@ -217,41 +240,66 @@ pub(crate) fn use_sleep_timer(playback: &crate::PlaybackState) -> SleepControlle
     let chapters = playback.chapters;
     let elapsed = playback.elapsed;
     let rate = playback.rate;
+    let seek_epoch = playback.seek_epoch;
     let remaining = use_signal(|| None::<i32>);
     let choice = use_signal(|| SleepChoice::Off);
     let fade = use_signal(|| true);
     let token = use_signal(|| 0u32);
+    let anchor_end = use_signal(|| None::<f64>);
+    let ctl = SleepController {
+        remaining,
+        choice,
+        fade,
+        token,
+        volume,
+        chapters,
+        elapsed,
+        rate,
+        anchor_end,
+    };
 
-    // Keep the end-of-chapter countdown pointed at the chapter that is
-    // actually playing. Armed, it was a fixed countdown seeded from the
-    // chapter under the playhead at that instant: jumping to another chapter
-    // left it counting toward a boundary the listener had already left, and
-    // playback ran straight through the new chapter's end.
+    // The end-of-chapter timer fires on POSITION, not on a countdown
+    // reaching zero. `elapsed` reports several times a second while the
+    // countdown ticks once, so the playhead crosses the seam while the
+    // countdown still reads 1 or 2 — which is why deriving the boundary
+    // from wherever the playhead happens to be re-armed the timer to the
+    // next chapter forever instead of stopping the book (#2494).
     use_effect(move || {
         let now = elapsed();
         let rate_now = rate();
-        // Read (not clone) the chapter list: this runs on every position
-        // report, several times a second, for a timer that is usually off.
-        // The read is unconditional so the effect keeps its subscription.
-        let fresh = {
-            let chs = chapters.read();
-            if !matches!(*choice.peek(), SleepChoice::EndOfChapter) {
-                return;
-            }
-            // A countdown at or below zero is mid-expiry, and the playhead is
-            // at the seam: re-anchoring here would hand the timer the *next*
-            // chapter's length instead of letting it pause.
-            let Some(cur) = *remaining.peek() else {
-                return;
-            };
-            if cur <= 0 {
-                return;
-            }
-            reanchored_end_of_chapter(&chs, cur, now, rate_now)
+        if !matches!(*choice.peek(), SleepChoice::EndOfChapter) {
+            return;
+        }
+        let Some(anchor) = *anchor_end.peek() else {
+            return;
         };
-        if let Some(fresh) = fresh {
-            let mut remaining = remaining;
-            remaining.set(Some(fresh));
+        if now >= anchor {
+            ctl.expire();
+            return;
+        }
+        let mut remaining = remaining;
+        remaining.set(Some(seconds_until_anchor(anchor, now, rate_now)));
+    });
+
+    // A seek is the only thing that legitimately moves the boundary, and
+    // the only thing that can be told apart from playback. Re-anchor to the
+    // chapter the listener landed in, and undo any fade already under way —
+    // the stop it was ramping toward is no longer the next thing to happen.
+    use_effect(move || {
+        let _ = seek_epoch();
+        let now = *elapsed.peek();
+        if !matches!(*choice.peek(), SleepChoice::EndOfChapter) {
+            return;
+        }
+        match end_of_chapter_anchor(&chapters.peek(), now) {
+            Some(anchor) => {
+                ctl.arm_at(anchor, now);
+                ctl.restore_volume();
+            }
+            // Seeked past the last chapter's end: nothing left to play to,
+            // so honour the timer rather than leaving it armed at a
+            // boundary behind the playhead.
+            None => ctl.expire(),
         }
     });
 
@@ -260,14 +308,26 @@ pub(crate) fn use_sleep_timer(playback: &crate::PlaybackState) -> SleepControlle
             return;
         };
         let fade_on = fade();
+        // The chapter timer is owned by the position effect above: it fires
+        // when the playhead reaches the anchor, and its readout is derived,
+        // so it must neither expire on this countdown nor tick itself down
+        // (a paused book reaches no boundary, and its timer should wait).
+        let positional = matches!(*choice.peek(), SleepChoice::EndOfChapter);
 
-        // Final-stretch volume ramp.
+        // Final-stretch volume ramp, scaled to the listener's own level —
+        // ramping to an absolute 1.0 raised the volume of anyone not at
+        // full before fading them out.
         #[cfg(feature = "web")]
         if fade_on && (0..=FADE_SECONDS).contains(&secs) {
-            let v = (f64::from(secs) / f64::from(FADE_SECONDS)).clamp(0.0, 1.0);
+            let target = *volume.peek();
+            let v = target * (f64::from(secs) / f64::from(FADE_SECONDS)).clamp(0.0, 1.0);
             super::helpers::audio_call("setVolume", &v.to_string());
         }
         let _ = fade_on;
+
+        if positional {
+            return;
+        }
 
         if secs <= 0 {
             // Expiry: pause playback and restore the user's target volume
@@ -305,16 +365,7 @@ pub(crate) fn use_sleep_timer(playback: &crate::PlaybackState) -> SleepControlle
         }
     });
 
-    SleepController {
-        remaining,
-        choice,
-        fade,
-        token,
-        volume,
-        chapters,
-        elapsed,
-        rate,
-    }
+    ctl
 }
 
 #[cfg(test)]
@@ -382,75 +433,58 @@ mod tests {
         );
     }
 
-    #[test]
-    fn end_of_chapter_seconds_returns_remaining_in_current_chapter() {
-        let chs = vec![ch(0.0, 300.0), ch(300.0, 600.0)];
-        // 120 s into chapter 2 (start 300, dur 600 → ends 900); elapsed 420 → 480 left.
-        assert_eq!(end_of_chapter_seconds(&chs, 1, 420.0, 1.0), Some(480));
-    }
-
-    #[test]
-    fn end_of_chapter_seconds_scales_to_wall_clock_at_playback_rate() {
-        let chs = vec![ch(0.0, 300.0), ch(300.0, 600.0)];
-        // 480 book-seconds left plays out in 240 wall-seconds at 2x.
-        assert_eq!(end_of_chapter_seconds(&chs, 1, 420.0, 2.0), Some(240));
-        // A non-positive rate falls back to the unscaled remainder.
-        assert_eq!(end_of_chapter_seconds(&chs, 1, 420.0, 0.0), Some(480));
-    }
-
-    #[test]
-    fn end_of_chapter_seconds_floors_at_zero_past_end() {
-        let chs = vec![ch(0.0, 300.0)];
-        assert_eq!(end_of_chapter_seconds(&chs, 0, 999.0, 1.0), Some(0));
-    }
-
-    #[test]
-    fn end_of_chapter_seconds_none_for_out_of_range_index() {
-        let chs = vec![ch(0.0, 300.0)];
-        assert_eq!(end_of_chapter_seconds(&chs, 5, 10.0, 1.0), None);
-    }
-
     // Three chapters: 0..300, 300..900, 900..1500.
     fn three_chapters() -> Vec<ChapterInfo> {
         vec![ch(0.0, 300.0), ch(300.0, 600.0), ch(900.0, 600.0)]
     }
 
     #[test]
-    fn reanchored_end_of_chapter_follows_a_jump_to_an_earlier_chapter() {
+    fn end_of_chapter_anchor_is_the_end_of_the_chapter_under_the_playhead() {
         let chs = three_chapters();
-        // Armed 250 s from the end of chapter 3, then sent back to 27 s
-        // before chapter 1's end. The timer must now count to *that* seam.
-        assert_eq!(reanchored_end_of_chapter(&chs, 250, 273.0, 1.0), Some(27));
+        assert_eq!(end_of_chapter_anchor(&chs, 120.0), Some(300.0));
+        assert_eq!(end_of_chapter_anchor(&chs, 420.0), Some(900.0));
+        assert_eq!(end_of_chapter_anchor(&chs, 1000.0), Some(1500.0));
     }
 
     #[test]
-    fn reanchored_end_of_chapter_follows_a_skip_inside_the_same_chapter() {
+    fn end_of_chapter_anchor_never_names_a_boundary_behind_the_playhead() {
+        // Arming past the last chapter's end would otherwise pause instantly
+        // at the arming position instead of at a seam (#2494 AC5).
         let chs = three_chapters();
-        // Still in chapter 2, but 400 s further along than the countdown
-        // believes — a skip forward is as stale as a chapter jump.
-        assert_eq!(reanchored_end_of_chapter(&chs, 480, 820.0, 1.0), Some(80));
+        assert_eq!(end_of_chapter_anchor(&chs, 1500.0), None);
+        assert_eq!(end_of_chapter_anchor(&chs, 9999.0), None);
     }
 
     #[test]
-    fn reanchored_end_of_chapter_leaves_ordinary_playback_alone() {
-        let chs = three_chapters();
-        // One tick on from a countdown of 480: the true remainder is 479,
-        // inside the jitter band, so the tick keeps the countdown.
-        assert_eq!(reanchored_end_of_chapter(&chs, 480, 421.0, 1.0), None);
-        assert_eq!(reanchored_end_of_chapter(&chs, 480, 423.0, 1.0), None);
+    fn end_of_chapter_anchor_is_none_when_the_chapter_list_cannot_place_the_playhead() {
+        assert_eq!(end_of_chapter_anchor(&[], 420.0), None);
     }
 
     #[test]
-    fn reanchored_end_of_chapter_follows_a_speed_change() {
+    fn end_of_chapter_anchor_does_not_move_as_the_chapter_plays_out() {
+        // The whole regression in one assertion: the boundary is fixed at
+        // arming and re-derived only on a seek, so every position inside the
+        // chapter names the same seam. Deriving it per position report is
+        // what walked the timer into the next chapter at the seam.
         let chs = three_chapters();
-        // The same 480 book-seconds play out in 240 wall-seconds at 2x, so
-        // a countdown armed at 1x is twice as long as the wait really is.
-        assert_eq!(reanchored_end_of_chapter(&chs, 480, 420.0, 2.0), Some(240));
+        for now in [301.0, 500.0, 880.0, 899.9] {
+            assert_eq!(end_of_chapter_anchor(&chs, now), Some(900.0));
+        }
     }
 
     #[test]
-    fn reanchored_end_of_chapter_is_none_when_the_chapter_list_cannot_place_the_playhead() {
-        assert_eq!(reanchored_end_of_chapter(&[], 480, 420.0, 1.0), None);
+    fn seconds_until_anchor_counts_wall_time_at_the_playback_rate() {
+        assert_eq!(seconds_until_anchor(900.0, 420.0, 1.0), 480);
+        // The same 480 book-seconds play out in 240 wall-seconds at 2x.
+        assert_eq!(seconds_until_anchor(900.0, 420.0, 2.0), 240);
+        // A non-positive rate falls back to the unscaled remainder.
+        assert_eq!(seconds_until_anchor(900.0, 420.0, 0.0), 480);
+    }
+
+    #[test]
+    fn seconds_until_anchor_floors_at_zero_once_the_playhead_arrives() {
+        assert_eq!(seconds_until_anchor(900.0, 900.0, 1.0), 0);
+        assert_eq!(seconds_until_anchor(900.0, 901.0, 1.0), 0);
     }
 
     #[test]

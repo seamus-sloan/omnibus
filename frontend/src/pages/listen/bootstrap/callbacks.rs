@@ -27,6 +27,7 @@ pub(super) fn register_js_callbacks(
     loaded_file_id: Signal<Option<i64>>,
     mut duration: Signal<f64>,
     elapsed: Signal<f64>,
+    seek_epoch: Signal<u32>,
     playing: Signal<bool>,
     mut playback_failed: Signal<bool>,
     file_sig: Signal<Option<i64>>,
@@ -35,7 +36,8 @@ pub(super) fn register_js_callbacks(
     let Some(window) = web_sys::window() else {
         return;
     };
-    let (on_time, on_seeked) = position_callbacks(uuid_cb.clone(), loaded_file_id, elapsed);
+    let (on_time, on_seeked) =
+        position_callbacks(uuid_cb.clone(), loaded_file_id, elapsed, seek_epoch);
     let on_duration = Closure::<dyn FnMut(f64)>::new(move |d: f64| {
         duration.set(d);
     });
@@ -108,6 +110,7 @@ fn position_callbacks(
     uuid_cb: String,
     loaded_file_id: Signal<Option<i64>>,
     mut elapsed: Signal<f64>,
+    mut seek_epoch: Signal<u32>,
 ) -> PositionCallbacks {
     let uuid_for_save = uuid_cb;
     let last_saved = std::rc::Rc::new(std::cell::Cell::new(0.0_f64));
@@ -141,6 +144,10 @@ fn position_callbacks(
         let uuid_for_seek = uuid_for_save;
         Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
             elapsed.set(secs);
+            // The one place a user seek is distinguishable from playback.
+            // The end-of-chapter sleep timer re-anchors on this (#2494).
+            let next_epoch = (*seek_epoch.peek()).wrapping_add(1);
+            seek_epoch.set(next_epoch);
             last_saved.set(secs);
             crate::audiobook_progress::save(&uuid_for_seek, secs);
             post_audio_progress(uuid_for_seek.clone(), *loaded_file_id.peek(), secs);

@@ -3355,6 +3355,11 @@ a.idx-letter-on:focus-visible {
   font-size: 11px; color: var(--ink-3);
 }
 .lp-drawer-row.current .lp-drawer-dur { color: var(--accent); }
+/* The playing row's "time left" rides alongside its book-time duration, so
+   it needs to read as the secondary of the pair rather than a second
+   duration (#2521). Opacity, not a colour token: it must stay legible on
+   the accent the current row already paints. */
+.lp-drawer-left { opacity: 0.75; }
 
 /* Transport row */
 .lp-transport {
