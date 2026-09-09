@@ -113,12 +113,13 @@ fn remaining_at_rate_falls_back_unscaled_for_invalid_rates() {
     assert!((remaining_at_rate(600.0, f64::INFINITY) - 600.0).abs() < f64::EPSILON);
 }
 
-// Issue #2246 (AC1): the chapter list and the transport total are the same
-// scaling applied to the same book seconds, so the parts still sum to the
-// whole at any speed — a chapter list that stayed at 1x summed to a
-// different book than the total beside it.
+// The helper is linear, so scaled parts sum to the scaled whole. This is a
+// property of `remaining_at_rate` itself, NOT of anything on screen: #2246
+// once rendered every chapter row through it and relied on this, and #2344
+// repealed that — the rows are book time now and only "time left" is
+// scaled. Keep the test, read it as arithmetic.
 #[test]
-fn remaining_at_rate_keeps_chapter_durations_summing_to_the_total() {
+fn remaining_at_rate_is_linear_so_scaled_parts_sum_to_the_scaled_whole() {
     let chapters = [1800.0, 1500.0, 300.0];
     let duration: f64 = chapters.iter().sum();
     for rate in [0.5, 1.0, 1.5, 2.0, 3.0] {

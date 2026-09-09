@@ -4,6 +4,8 @@ import {
   MERGE_ONLY_TITLES,
   RESUME_BOOK,
   SCRUB_BOOK,
+  SLEEP_SEAM_BOOK,
+  SLEEP_SEAM_SECONDS,
 } from "../fixtures/audiobooks";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
@@ -895,6 +897,40 @@ test("scrubs to an arbitrary position and seeks only on release", async ({
 // 10. Chapters drawer
 // ---------------------------------------------------------------------------
 
+/**
+ * Park the player at the very start of the book, through the same shim call a
+ * user seek takes.
+ *
+ * Both tests below need chapter 1 to be the current one, and they share
+ * MULTIPART_MP3_BOOK with each other — the #1897 test seeks it to chapter 2
+ * and persists that immediately, which is the behaviour it exists to prove.
+ * The saved position then follows the book into the next test. That used to
+ * go unnoticed because the transport painted 0:00 until the media metadata
+ * landed, so the drawer rendered as though the book were at zero; #2458 made
+ * the transport paint the restored position instead, which turned an
+ * accidental precondition into a visible order dependency. State it outright.
+ */
+async function parkAtStart(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  await page.evaluate(() => {
+    (
+      window as unknown as { OmnibusAudio: { seek(s: number): void } }
+    ).OmnibusAudio.seek(0);
+  });
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const el = document.querySelector("audio") as HTMLAudioElement | null;
+        // Infinity, not -1: a missing element must FAIL the poll below. A
+        // sentinel that satisfies the assertion would let this helper skip
+        // the precondition it exists to establish.
+        return el ? el.currentTime : Number.POSITIVE_INFINITY;
+      }),
+    )
+    .toBeLessThan(0.5);
+}
+
 test("opens chapters drawer and shows played/current/upcoming row states", async ({
   page,
   request,
@@ -906,6 +942,7 @@ test("opens chapters drawer and shows played/current/upcoming row states", async
   const uuid = await fetchBookUuidByTitle(request, MULTIPART_MP3_BOOK.title);
   await gotoReady(page, `/listen/${uuid}`);
   await waitForPlayerReady(page);
+  await parkAtStart(page);
 
   // Open the chapters drawer via the toolbar button.
   await page.getByRole("button", { name: /^chapters/i }).click();
@@ -918,6 +955,23 @@ test("opens chapters drawer and shows played/current/upcoming row states", async
   // and at least one upcoming row.
   await expect(page.getByTestId("chapter-row-current").first()).toBeVisible();
   await expect(page.getByTestId("chapter-row-upcoming").first()).toBeVisible();
+
+  // #2521: the playing row keeps its own book-time duration and adds the
+  // time left beside it. It used to replace one with the other, leaving a
+  // rate-adjusted figure unmarked in a column of book-time ones.
+  const current = page.getByTestId("chapter-row-current").first();
+  await expect(current).toContainText("left");
+  const upcoming = page.getByTestId("chapter-row-upcoming").first();
+  const upcomingDuration = (await upcoming.innerText()).match(
+    /\d+(?::\d\d)+/,
+  )?.[0];
+  expect(
+    upcomingDuration,
+    "an upcoming row should carry a duration",
+  ).toBeTruthy();
+  // Both rows carry a duration stamp; only the playing one names a "left".
+  await expect(current).toHaveText(/\d+(?::\d\d)+/);
+  await expect(upcoming).not.toContainText("left");
 });
 
 // ---------------------------------------------------------------------------
@@ -933,6 +987,9 @@ test("shows the target time immediately after a paused chapter-list seek (#1897)
   const uuid = await fetchBookUuidByTitle(request, MULTIPART_MP3_BOOK.title);
   await gotoReady(page, `/listen/${uuid}`);
   await waitForPlayerReady(page);
+
+  // Chapter 1 must be current for an "upcoming" row to exist to click.
+  await parkAtStart(page);
 
   // The player boots paused — the regression only reproduces on a seek
   // issued while paused, so pin that precondition before seeking.
@@ -1035,6 +1092,98 @@ test("paints the saved position before the media element seeks (#2458)", async (
       message: "the element's own seek must not move the painted position",
     })
     .toBe(savedSeconds);
+});
+
+// ---------------------------------------------------------------------------
+// 8c. End-of-chapter sleep timer stops at the seam (#2494)
+// ---------------------------------------------------------------------------
+
+/**
+ * The book position and paused state, read off the media element.
+ *
+ * A multi-part book swaps `el.src` at a part boundary and `currentTime`
+ * restarts from zero inside the new part, so the element's own clock is NOT
+ * the book position — the shim's cumulative offsets are. Reading
+ * `currentTime` alone makes a timer that fired at the seam look like one
+ * that reset to zero.
+ */
+async function audioState(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    const el = document.querySelector("audio") as HTMLAudioElement | null;
+    if (!el) return null;
+    const shim = (
+      window as unknown as {
+        OmnibusAudio?: { _cumOffsets?: number[]; _index?: number };
+      }
+    ).OmnibusAudio;
+    const base = shim?._cumOffsets?.[shim?._index ?? 0] ?? 0;
+    return {
+      paused: el.paused,
+      position: base + el.currentTime,
+      volume: el.volume,
+    };
+  });
+}
+
+test("an armed end-of-chapter timer stops the book at the seam (#2494)", async ({
+  page,
+  request,
+}) => {
+  // SLEEP_SEAM_BOOK is reserved for this test: it plays the book across a
+  // seam, which writes a position and flips read status.
+  const uuid = await fetchBookUuidByTitle(request, SLEEP_SEAM_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  // Park 2.1s before the seam, through the same shim call a user seek takes.
+  // The fractional offset is the whole point: `ceil` gives a 3s countdown
+  // while the playhead needs only 2.1s, so the crossing happens with the
+  // countdown still above zero. That is the race the timer used to lose —
+  // it read the chapter under the playhead, found the *next* one, and
+  // re-armed to its full length instead of pausing.
+  const armAt = SLEEP_SEAM_SECONDS - 2.1;
+  await page.evaluate((t) => {
+    (
+      window as unknown as { OmnibusAudio: { seek(s: number): void } }
+    ).OmnibusAudio.seek(t);
+  }, armAt);
+  await expect
+    .poll(async () => (await audioState(page))?.position ?? 0)
+    .toBeGreaterThan(armAt - 1);
+
+  await page.getByTestId("listen-sleep").click();
+  await page.getByRole("button", { name: "End of chapter" }).click();
+  // The panel's scrim covers the transport; clicking it dismisses the panel.
+  await page.locator(".lp-scrim").click();
+  await expect(page.locator(".lp-scrim")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Play", exact: true }).click();
+
+  await expect
+    .poll(async () => (await audioState(page))?.paused ?? null, {
+      message: "the timer must pause the book at the chapter seam",
+      timeout: 20_000,
+      intervals: [150, 250, 500],
+    })
+    .toBe(true);
+
+  const stopped = await audioState(page);
+  // AC1: it stopped AT the seam, not deep inside the next chapter. Before the
+  // fix this read ~13s past it, still playing.
+  expect(stopped?.position).toBeGreaterThan(SLEEP_SEAM_SECONDS - 1);
+  expect(stopped?.position).toBeLessThan(SLEEP_SEAM_SECONDS + 1);
+  // AC3/AC4: the fade ran on the way in, so the stop must put the volume
+  // back. It used to strand the element at 0.033 with the readout at 100%.
+  expect(stopped?.volume).toBeGreaterThan(0.9);
+
+  // AC2: it stays stopped and does not re-arm to the following chapter.
+  await page.waitForTimeout(2500);
+  const later = await audioState(page);
+  expect(later?.paused, "must not re-arm and play on").toBe(true);
+  expect(later?.position).toBeLessThan(SLEEP_SEAM_SECONDS + 1);
+
+  // And it disarmed itself.
+  await expect(page.getByTestId("listen-sleep")).toContainText(/off/i);
 });
 
 // ---------------------------------------------------------------------------

@@ -355,20 +355,18 @@ pub(super) fn format_hms(seconds: f64) -> String {
 /// duration; falls back to `seconds` unscaled when `rate` is non-finite or
 /// non-positive.
 ///
-/// **Every displayed span in the player goes through this.** A 2x listener
-/// is told the half-hour a one-hour book actually costs them, and no clock
-/// on screen reads 1x time while the rate is not 1x: the transport row and
-/// its drag bubble, the chapter lists' durations, both mini docks, the
-/// mobile player, the landing resume card, and the sleep timer's
-/// end-of-chapter countdown. A 1x label beside a rate-adjusted one
-/// disagrees with it the moment the speed leaves 1x — first as a mixed
-/// scrubber row (#2108), then as a transport total that described a
-/// different book than the chapter list under it (#2246).
+/// **Only figures that say "left" or "remaining" go through this.** #2246
+/// once sent every span through it, so a speed change moved the elapsed
+/// readout and the totals too; #2344 repealed that, because a rescaled
+/// *position* disagrees with the bookmark stamps and the detail page that
+/// name the same spot. What survives of #2246 is the labelling rule it was
+/// reaching for: a wall-clock figure never sits unmarked beside a book-time
+/// one (#2108, and #2521 for the chapter panel and the iOS transport).
 ///
-/// The deliberate cost, accepted by the maintainer on #2246: a mid-book
-/// 1x→2x switch halves the elapsed readout, so it jumps backwards. Positions
-/// that *name a place* — bookmark stamps, chapter start times — are seek
-/// coordinates rather than clocks and stay 1x.
+/// So: durations and positions are book time — the transport's elapsed and
+/// total, every chapter row's length, bookmark stamps, chapter starts. Wall
+/// clock is for what the listener will actually wait through, and it says
+/// so on screen.
 pub(crate) fn remaining_at_rate(seconds: f64, rate: f64) -> f64 {
     if !rate.is_finite() || rate <= 0.0 {
         return seconds;

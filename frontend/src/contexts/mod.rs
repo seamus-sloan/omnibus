@@ -332,6 +332,15 @@ pub struct PlaybackState {
     /// the reader's own mount — losing the race left the player closed or
     /// the reader stuck loading (#1972 follow-up).
     pub reload_epoch: Signal<u32>,
+    /// Bumped once per *user* seek — the scrubber, a chapter row, the ±30s
+    /// buttons — all of which funnel through the shim's `seek()` and its
+    /// `__omnibusOnAudioSeeked` callback. Deliberately not bumped by the
+    /// boot restore or a part swap, which move `currentTime` without the
+    /// listener asking. The end-of-chapter sleep timer re-anchors on this
+    /// and nothing else: it is the only signal that separates "the playhead
+    /// jumped" from "the playhead is playing", and inferring one from the
+    /// other is what made an armed timer re-arm at every seam (#2494).
+    pub seek_epoch: Signal<u32>,
 }
 
 #[cfg(not(feature = "mobile"))]
@@ -356,6 +365,7 @@ impl PlaybackState {
             playback_failed: Signal::new(false),
             volume: Signal::new(1.0),
             reload_epoch: Signal::new(0),
+            seek_epoch: Signal::new(0),
         }
     }
 }

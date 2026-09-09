@@ -179,6 +179,7 @@ fn boot_new_book(
         playback.loaded_file_id,
         playback.duration,
         playback.elapsed,
+        playback.seek_epoch,
         playback.playing,
         playback.playback_failed,
         playback.file_id,

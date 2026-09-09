@@ -42,13 +42,17 @@ fn chapter_row(
         "chapter-row-upcoming"
     };
 
+    // Every row leads with the chapter's own length in book time, the
+    // playing one included. It used to *replace* its duration with the
+    // rate-adjusted time left, putting a wall-clock figure in a column of
+    // book-time ones with nothing to mark the difference — at 1.5x a
+    // listener read "15:23 remaining" above a neighbouring "59:16" and had
+    // no way to tell they were different clocks (#2521). Splitting them
+    // matches the transport, which already reads book · wall · book.
     let dur_label = format_hms(ch.duration_seconds);
     let remaining_in_ch = if is_current {
         let r = (ch.start_seconds + ch.duration_seconds - elapsed).max(0.0);
-        Some(format!(
-            "{} remaining",
-            format_hms(remaining_at_rate(r, rate))
-        ))
+        Some(format!("{} left", format_hms(remaining_at_rate(r, rate))))
     } else {
         None
     };
@@ -79,10 +83,9 @@ fn chapter_row(
             }
             span { class: "lp-drawer-title", "{title}" }
             span { class: "lp-drawer-dur",
+                "{dur_label}"
                 if let Some(rem) = remaining_in_ch {
-                    "{rem}"
-                } else {
-                    "{dur_label}"
+                    span { class: "lp-drawer-left", " \u{00b7} {rem}" }
                 }
             }
         }
@@ -173,22 +176,54 @@ mod render_tests {
     #[test]
     fn chapter_rows_read_book_time_at_1x() {
         let html = render_in_vdom(at_1x);
-        // Current chapter: 10:00 of book time left. Upcoming: its full 30:00.
-        assert!(html.contains("10:00 remaining"), "{html}");
+        // The playing row carries both: its own 30:00 of book time, then
+        // the 10:00 of wall time left in it. Upcoming: its full 30:00.
         assert!(html.contains("30:00"), "{html}");
+        assert!(html.contains("10:00 left"), "{html}");
     }
 
     // Regression for issue #2344: chapter durations show real book-time at any
     // speed (matching bookmark stamps + the detail page), while only the
-    // current chapter's "remaining" is rate-adjusted.
+    // current chapter's time left is rate-adjusted.
     #[test]
     fn chapter_rows_keep_book_time_durations_but_scale_the_remaining() {
         let html = render_in_vdom(at_2x);
         // The upcoming chapter's 30:00 duration is unchanged from 1x book-time...
         assert!(html.contains("30:00"), "{html}");
-        // ...while the current chapter's remaining halves at 2x.
-        assert!(html.contains("5:00 remaining"), "{html}");
+        // ...while the current chapter's time left halves at 2x.
+        assert!(html.contains("5:00 left"), "{html}");
         // No rate-scaled duration (15:00) appears.
         assert!(!html.contains("15:00"), "{html}");
+    }
+
+    // #2521: the playing row used to *replace* its duration with the
+    // rate-adjusted time left, so one wall-clock figure sat unmarked in a
+    // column of book-time ones. Both must be present, and the duration must
+    // be the same string at every rate.
+    #[test]
+    fn the_playing_row_shows_its_book_time_duration_beside_the_time_left() {
+        let one_x = render_in_vdom(at_1x);
+        let two_x = render_in_vdom(at_2x);
+        for html in [&one_x, &two_x] {
+            let row = html
+                .split(r#"data-testid="chapter-row-current""#)
+                .nth(1)
+                .and_then(|rest| rest.split("</button>").next())
+                .unwrap_or_default();
+            assert!(
+                row.contains("30:00"),
+                "playing row lost its duration: {row}"
+            );
+            assert!(
+                row.contains("left"),
+                "playing row lost its time left: {row}"
+            );
+        }
+        // The duration a listener budgets from does not move with the rate.
+        assert_eq!(
+            one_x.matches("30:00").count(),
+            two_x.matches("30:00").count(),
+            "a book-time duration changed with the playback rate"
+        );
     }
 }

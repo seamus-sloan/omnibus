@@ -136,6 +136,31 @@ const FIXTURES: AudiobookInput[] = [
     track: 1,
     frames: 1150,
   },
+  // Sleep-seam-only book, reserved for the end-of-chapter timer regression
+  // test (#2494). Two parts -> two chapters, each ~12s: long enough that the
+  // timer can be armed a fractional 2.1s before the seam, so its `ceil`ed 3s
+  // countdown is still above zero when the playhead crosses. That is the race
+  // the old code lost, and a 2s generated chapter cannot express it. The spec
+  // PLAYS this book, so it writes progress and flips read status — nothing
+  // else may read it. Author absent from every other fixture, here and in
+  // make_epub.ts, so there is no auto-attach and no author-scoped count shift.
+  {
+    filename: "jean_bartik_series/the_seamful_suite/chapter01.mp3",
+    title: "The Seamful Suite",
+    artist: "Jean Bartik",
+    album: "The Seamful Suite",
+    track: 1,
+    frames: 460,
+  },
+  {
+    filename: "jean_bartik_series/the_seamful_suite/chapter02.mp3",
+    title: "The Seamful Suite",
+    artist: "Jean Bartik",
+    album: "The Seamful Suite",
+    track: 2,
+    frames: 460,
+  },
+
   // Resume-paint-only book, reserved for the "opens at the saved position"
   // test. That spec WRITES a per-(user,book) audio position, which is
   // globally visible on the shared server and would break every other
