@@ -263,6 +263,18 @@ fn build_fts_match_treats_an_unclosed_quote_as_running_to_the_end() {
     );
 }
 
+// Regression for the #2504 review: `facet_query` escapes an embedded quote
+// as `""`, so the tokenizer has to fold that pair back into one literal
+// quote. Toggling on every `"` swallowed it and searched a different value
+// from the one the heading names.
+#[test]
+fn build_fts_match_folds_a_doubled_quote_back_into_the_value() {
+    assert_eq!(
+        build_fts_match(r#"tag:"the ""good"" parts""#).as_deref(),
+        Some(r#"{tags} : ("the ""good"" parts")"#)
+    );
+}
+
 #[test]
 fn build_fts_match_drops_an_empty_quoted_facet_value() {
     assert!(build_fts_match("tag:\"\"").is_none());

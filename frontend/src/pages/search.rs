@@ -150,11 +150,8 @@ fn SearchResults(results: PaletteResults, query: String) -> Element {
     let heading = single_facet_value(&q).unwrap_or_else(|| q.clone());
 
     rsx! {
-        // No sort/view controls here: the page ships one ordering and one
-        // rendering, and the Relevance/Grid/Table buttons that used to sit in
-        // this head had no handlers at all — a control that swallows the click
-        // is worse than no control (#2453). They come back with behaviour or
-        // not at all.
+        // No sort/view controls: one ordering, one rendering, and a button
+        // without a handler is worse than no button (#2453).
         div { class: "search-head",
             div {
                 div { class: "label", "Search results" }

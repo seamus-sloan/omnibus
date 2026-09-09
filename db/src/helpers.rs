@@ -300,8 +300,17 @@ fn split_query_tokens(raw: &str) -> Vec<QueryToken> {
     let mut started = false;
     let mut quoted = false;
     let mut in_quotes = false;
-    for c in raw.chars() {
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
         match c {
+            // `""` inside a quoted run is one literal quote — the escape
+            // `format::facet_query` writes. Toggling on both halves instead
+            // swallowed the character, so a tag whose name contains a quote
+            // was searched for under a different name than the heading shows.
+            '"' if in_quotes && chars.peek() == Some(&'"') => {
+                chars.next();
+                current.push('"');
+            }
             '"' => {
                 in_quotes = !in_quotes;
                 // A quote opens a token even when what it wraps is empty, so

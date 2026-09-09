@@ -1,13 +1,8 @@
 //! Authors arm of the search palette: substring `LIKE` match scoped to the
 //! visible books, ordered by an override-aware effective book count.
-//!
-//! Visibility is **the rule the Authors index uses** — membership in the
-//! effective (override-aware) set, which carries `book_count > 0` as an
-//! invariant. Anything looser offers rows the index rejects: the scanned
-//! `authors` row a file left behind in "Last, First" form, whose books have
-//! since been re-credited to the displayed name, survived a bare
-//! canonical-link EXISTS and was offered as `0 books · incl. Six of Crows`,
-//! opening onto an author page reading IN YOUR LIBRARY 0 (#2502).
+//! Visibility is the rule `browse::list_authors` uses — membership in that
+//! same effective set — so the palette cannot offer an author the Authors
+//! index rejects.
 
 use std::sync::OnceLock;
 
@@ -83,6 +78,9 @@ pub(super) fn search_authors_sql() -> &'static str {
            GROUP BY author_id
         )
         SELECT a.id, a.name,
+          -- `JOIN counts` below is what enforces book_count > 0: a bare
+          -- canonical-link EXISTS kept a scanned row whose books had all been
+          -- re-credited, and it opened onto an empty author page (#2502).
           c.book_count AS book_count,
           -- The lead title comes off the effective set too: reading it from
           -- `books_authors_link` is what let a dead row advertise `incl. Six
