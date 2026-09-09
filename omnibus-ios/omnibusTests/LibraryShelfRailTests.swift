@@ -3,8 +3,11 @@
 //
 //  `GET /api/shelves` answers with everything the caller may *see*, not
 //  everything they own — a public shelf from another account, and for an admin
-//  every account's. The rail was rendering that list verbatim, so the shelves
-//  section on the landing screen filled up with other people's.
+//  every account's private ones too. Rendering that verbatim filled the rail
+//  with other people's; restricting it to shelves you own emptied it for
+//  everyone who had never made one, hiding the only real shelf on a shared
+//  instance. The line that holds is *deliberate and shared*: an auto-issued
+//  wishlist is neither.
 
 import Testing
 
@@ -12,12 +15,12 @@ import Testing
 
 private func preview(
     id: Int64 = 1, owner: Int64 = 7, kind: ShelfKind = .manual, name: String = "Reread",
-    books: Int64 = 3
+    books: Int64 = 3, visibility: ShelfVisibility = .public
 ) -> ShelfPreview {
     ShelfPreview(
         shelf: ShelfSummary(
             id: id, ownerUserId: owner, ownerUsername: "owner-\(owner)", kind: kind,
-            name: name, visibility: .public, accent: nil, bookCount: books
+            name: name, visibility: visibility, accent: nil, bookCount: books
         ),
         covers: []
     )
@@ -31,25 +34,55 @@ struct LibraryShelfRailTests {
         #expect(LibraryModel.railShelves([mine], userId: 7).map(\.id) == [1])
     }
 
-    @Test("drops another account's public shelf")
-    func dropsOtherUsersShelves() {
-        // Visible, and browsable behind All — but not "yours", which is what
-        // the rail claims to be.
+    @Test("keeps another account's public shelf")
+    func keepsOtherUsersPublicShelves() {
+        // The report this rule exists for: on a shared instance one reader's
+        // public shelf was the only real shelf on the box, and everyone else
+        // saw an empty rail.
         let mine = preview(id: 1, owner: 7)
         let theirs = preview(id: 2, owner: 9, name: "Someone else's")
         let rail = LibraryModel.railShelves([mine, theirs], userId: 7)
-        #expect(rail.map(\.id) == [1])
+        #expect(rail.map(\.id) == [1, 2])
     }
 
-    @Test("an admin sees only their own, not the whole server's")
-    func dropsEveryOtherAccountForAnAdmin() {
-        // An admin's read carries every account's shelves; the landing screen
-        // is not the place that inventory belongs.
+    @Test("keeps another account's public shelf when you own none")
+    func keepsOtherUsersPublicShelfWithNoneOfYourOwn() {
+        // The exact shape of the report: your only shelf is the wishlist you
+        // were issued and never used, so the old rule left nothing at all.
+        let mine = preview(id: 1, owner: 7, kind: .wishlist, name: "Wishlist", books: 0)
+        let theirs = preview(id: 2, owner: 9, kind: .smart, name: "Someone else's")
+        let rail = LibraryModel.railShelves([mine, theirs], userId: 7)
+        #expect(rail.map(\.id) == [2])
+    }
+
+    @Test("drops another account's private shelf")
+    func dropsOtherUsersPrivateShelves() {
+        // An admin's read carries every account's private shelves. The rail is
+        // a browse surface, not a moderation one.
         let rail = LibraryModel.railShelves(
-            [preview(id: 1, owner: 1), preview(id: 2, owner: 2), preview(id: 3, owner: 3)],
+            [
+                preview(id: 1, owner: 1),
+                preview(id: 2, owner: 2, visibility: .private),
+                preview(id: 3, owner: 3, visibility: .private),
+            ],
             userId: 1
         )
         #expect(rail.map(\.id) == [1])
+    }
+
+    @Test("keeps your own private shelf")
+    func keepsYourOwnPrivateShelf() {
+        // Private means private *from other people*, not from you.
+        let mine = preview(id: 1, owner: 7, visibility: .private)
+        #expect(LibraryModel.railShelves([mine], userId: 7).map(\.id) == [1])
+    }
+
+    @Test("drops another account's wishlist even when it is stocked")
+    func dropsOtherUsersWishlists() {
+        // Every account is issued one, so carrying other people's is how the
+        // rail filled with shelves nobody chose to make.
+        let theirs = preview(id: 2, owner: 9, kind: .wishlist, name: "owner-9's Wishlist", books: 12)
+        #expect(LibraryModel.railShelves([theirs], userId: 7).isEmpty)
     }
 
     @Test("drops a wishlist nothing has been added to")
@@ -93,6 +126,6 @@ struct LibraryShelfRailTests {
             [preview(id: 3, owner: 7), preview(id: 1, owner: 9), preview(id: 2, owner: 7)],
             userId: 7
         )
-        #expect(rail.map(\.id) == [3, 2])
+        #expect(rail.map(\.id) == [3, 1, 2])
     }
 }

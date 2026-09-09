@@ -5,6 +5,9 @@ import SwiftUI
 
 struct ShelvesView: View {
     @Environment(\.palette) private var palette
+    // The index is unfiltered — other people's public shelves and wishlists
+    // reach it — so it needs the viewer to attribute them.
+    @Environment(AppState.self) private var app
     @State private var previews: [ShelfPreview] = []
     @State private var isLoading = true
     @State private var error: String?
@@ -33,7 +36,7 @@ struct ShelvesView: View {
                     LazyVGrid(columns: columns, spacing: 26) {
                         ForEach(Array(previews.enumerated()), id: \.element.id) { index, preview in
                             NavigationLink(value: Destination.shelf(id: preview.shelf.id)) {
-                                ShelfCard(preview: preview)
+                                ShelfCard(preview: preview, viewerId: app.user?.id)
                             }
                             .buttonStyle(BookPressStyle())
                             .cascadeIn(index: index)

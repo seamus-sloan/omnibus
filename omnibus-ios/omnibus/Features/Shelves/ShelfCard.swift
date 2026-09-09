@@ -105,11 +105,28 @@ struct ShelfMosaic: View {
 /// the landing rail.
 struct ShelfCard: View {
     let preview: ShelfPreview
+    /// Who is looking. Only used to decide attribution — see
+    /// ``showsOwnerAttribution(viewerId:ownerUserId:kind:)``.
+    var viewerId: Int64?
     var width: CGFloat?
 
     @Environment(\.palette) private var palette
 
     private var shelf: ShelfSummary { preview.shelf }
+
+    /// Whether a card should carry `by <owner>`: the shelf isn't the viewer's
+    /// own (and only once the viewer is known — `nil` withholds attribution
+    /// rather than guessing), and it isn't a wishlist, whose name already opens
+    /// with the owner so the suffix would repeat it.
+    ///
+    /// Mirrors `shows_owner_attribution` on the web rail; the two surfaces
+    /// describe the same shelves and must not disagree about whose they are.
+    nonisolated static func showsOwnerAttribution(
+        viewerId: Int64?, ownerUserId: Int64, kind: ShelfKind
+    ) -> Bool {
+        guard let viewerId else { return false }
+        return viewerId != ownerUserId && kind != .wishlist
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -153,6 +170,11 @@ struct ShelfCard: View {
         var parts = ["\(shelf.bookCount) book\(shelf.bookCount == 1 ? "" : "s")"]
         if shelf.kind == .smart { parts.append("Smart") }
         if shelf.visibility == .public { parts.append("Public") }
+        if Self.showsOwnerAttribution(
+            viewerId: viewerId, ownerUserId: shelf.ownerUserId, kind: shelf.kind
+        ) {
+            parts.append("by \(shelf.ownerUsername)")
+        }
         return parts.joined(separator: " · ")
     }
 }
