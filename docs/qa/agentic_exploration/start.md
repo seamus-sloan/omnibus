@@ -271,3 +271,13 @@ the flow document. The document is wrong, not you.
 Journal what you saw, end the flow `uncertain`, and take the next one. Do not
 improvise a recovery that puts the library in a state nobody can explain
 afterwards, and do not retry a destructive action that was refused.
+
+## Where the corpus is
+
+Several flows ask for a file from the corpus — `adding_book` for a book to
+upload, `adding_journal` and `updating_profile` for a `cover.jpg` sidecar to
+use as an image. **The corpus root is whatever the runner names in your brief,
+and the brief must name it**; two agents in run r-20260908-02 had to recover
+the path by reading other agents' journals because no document stated it. If
+your brief does not give you a corpus path and a flow asks for one, say so and
+journal the step `uncertain` rather than going to look for one.

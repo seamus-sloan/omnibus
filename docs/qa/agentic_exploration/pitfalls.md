@@ -119,12 +119,9 @@ Each of these is intended, and each has been mistaken for a defect before:
 
 - **Opening a reader or starting a player changes your read status by itself —
   on the web.** Unread becomes reading on open; reaching the end marks
-  finished. You did not do that, and it is not a bug. **This does not currently
-  hold on the iOS native reader** (#2289): a book read there comes back with no
-  read status at all, while the Library's continue card still shows it as
-  Reading, so the two surfaces disagree. On iOS, treat an unchanged status as
-  that known bug rather than a new finding — and do not rely on the transition
-  to put a book into a status you need, because it will not.
+  finished. You did not do that, and it is not a bug. **It holds on the iOS
+  native reader too** — #2289 is fixed, and two agents in run r-20260908-02
+  watched the transition happen and survive a relaunch.
 - **Read status filters the continue surface** on the home page. A book you
   just marked finished vanishing from it is correct.
 - **The continue surface is an overlapping fan**, not a carousel — cards sit on
@@ -169,3 +166,47 @@ Each of these is intended, and each has been mistaken for a defect before:
 - **Tag and genre chips on a detail page are not links.** They are inert on the
   page, and editable only through the `+` control beside them. Clicking one
   and going nowhere is correct.
+
+## Driving the surfaces — added after run r-20260908-02
+
+- **Shift-click does not extend a selection in the epub iframe.** The earlier
+  guidance here said a click plus a shift-click produces a correct highlight;
+  three agents found it either leaves the selection unchanged or empties it.
+  **Triple-click on a paragraph is the only reliable way to select text**, and
+  a drag still hangs the driver.
+- **The reader lays a whole spine item out in one iframe about 74,000 px wide,
+  shifted left.** Any `getBoundingClientRect` or `caretRangeFromPoint` reading
+  must add the iframe's own `left` offset, or it reports the front matter
+  wherever you actually are. One agent nearly filed "page turns don't advance
+  the content" off that before checking the geometry.
+- **Expanding a journal entry covers only one column.** `read →` opens
+  `.bdmq-overlay` — fixed, `z-index: 8`, a 55% black backdrop — over the
+  right-hand content column and *not* the viewport. Clicks on Export and the
+  read-status buttons then land on the backdrop and do nothing, while a control
+  in the strip above the overlay still works, which reads as randomly dead
+  controls. Close the entry with **✕ Close** before touching anything else.
+- **The dot rail does not tell the two book-detail layouts apart.**
+  `bdmq-dot-0…5` render in both; the container does — `#bdmq-flow` with
+  `.bdmq-flowlab` rules for the continuous layout, `#bdmq-snap` with
+  `.bdmq-sec` screens for the snapped one. Rule 04a already said so.
+- **The shelf name input has two different testids** — `shelf-name-input` on
+  the create form, `edit-shelf-name` on the edit form — and the Kobo opt-in is
+  a segmented pair of buttons (`edit-shelf-kobo-off` / `-on`) carrying
+  `aria-pressed`, not a checkbox. The New-shelf and Edit-shelf forms are a
+  modal overlay with **no** `role="dialog"` and no accessible name, so
+  `getByRole("dialog")` matches nothing.
+- **A series card carries two overlapping anchors** with the same href and the
+  same accessible name, so `getByRole("link", {name}).first().click()` times
+  out with a pointer-interception error. A person clicking the card navigates
+  fine.
+- **On iOS, a SwiftUI switch ignores a zero-duration tap.** Use a drag, or a
+  tap with `duration: 0.2`. Buttons, segmented controls, star ratings and menu
+  items all answer a zero-duration tap normally.
+- **On iOS, the `text` action drops non-ASCII.** To type an accented query, put
+  it on the pasteboard with `xcrun simctl pbcopy` and long-press → Paste —
+  and note that `simctl pbcopy` decodes its input as MacRoman, so the bytes
+  need pre-encoding.
+- **An identifier row labelled ISBN-10 holding a 13-digit value is the file's
+  own claim**, not a rendering bug: the row's label comes from the OPF scheme.
+  Two runs have now reported it. What *is* a defect is that a saved ISBN
+  override never reaches that table at all (#2496).

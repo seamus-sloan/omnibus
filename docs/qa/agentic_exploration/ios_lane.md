@@ -36,12 +36,14 @@ from the text you sent. A tap lands on whatever is *under* it, so after a
 swipe let the sheet stop moving before you aim.
 
 The surface has less than the web in a few places, and each is a known gap
-rather than a finding: no metadata editor page (a shelf tile's long-press
-menu does offer **Edit metadata**, the provider-backed fetch of #2127); no
-Edit shelf control; no copy note and no
+rather than a finding: no Edit shelf control (a shelf card's long-press menu
+offers only Delete shelf), and no member sort control on a shelf screen —
+that one belongs to the Android web shell's `/shelves/:id`, not here; no copy note and no
 remove-copy control for a physical copy; no delete for any book; no
-rating-clear control; no toast on a profile save (the sheet closes and the
-header updates); "reload" is `ios.sh relaunch`; and after sign-out the
+rating-clear control (re-tapping the same star does not clear it); no recolour
+and no note edit for a highlight, only create and delete; no image control in
+the journal composer; no Genres section in Search; no toast on a profile save
+(the sheet closes and the header updates); "reload" is `ios.sh relaunch`; and after sign-out the
 **Welcome back** screen keeps the server, with the connect step behind "Use a
 different server". The You tab's **Book details → Use scroll stops** toggle
 exists, as on the web.
@@ -218,12 +220,9 @@ content, and a duplicate is two server rows carrying it.
 - The reader and the player are *meant* to write read status on their own —
   opening a book marks it `reading`, finishing marks it `finished`. Where it
   happens, do not journal it as a write you made, and do not call it unexpected
-  when the audit sees it. **On this surface it currently does not happen**
-  (#2289): a book read in the native reader comes back with no read status at
-  all, while the Library's continue card still shows it as Reading. Treat an
-  unchanged status on iOS as that known bug rather than a fresh finding, and do
-  not lean on the transition to set up a status you need — set it by hand from
-  the detail screen's status control.
+  when the audit sees it. This **does** happen on iOS: #2289 is fixed, and two
+  agents in run r-20260908-02 watched Unread become Reading on open and hold
+  across a relaunch. If you find it not happening, that is a fresh finding.
 - A drained position answer can come back *different* from what you sent. The
   server resolves position conflicts, so another device's newer position
   winning is correct behaviour.

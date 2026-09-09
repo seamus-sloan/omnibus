@@ -81,8 +81,21 @@ your wishlist shelf; without it the entry is journalled but not checked.
 - The lookup checks your library first, but only once you pick a candidate:
   the candidate list itself does not mark owned books. Being told you already
   own a book you do own is correct.
-- A wishlist entry has no files, so its page offering "Delete files…" is
-  worth journalling as a low observation, not a fail.
+- A wishlist entry has no files, and its page offers **"Delete record…"**,
+  not "Delete files…" — the wording this document used to name does not
+  appear. A non-admin reader is offered no delete of any kind there.
 - Adding to the wishlist requires a connection — it needs the server's lookup
   before it has anything to save. **The iOS agent must not attempt this while
   offline.**
+
+## Three things this document did not say
+
+- **The wishlist shelf does not exist on the rail until your first add**, and
+  the rail's chip and count stay stale after an add until a full reload
+  (#2523). Confirm the entry from its own book page, not from the chip.
+- **Removing an entry navigates away** to the library home.
+- **"Check in when acquired"** is the entry page's most prominent action and
+  the natural next step for this flow's own framing. It does not currently
+  work — a book on your own wishlist cannot be checked in by any route
+  (#2505) — so exercise it and record what happens rather than treating the
+  dead end as your own mistake.

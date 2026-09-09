@@ -4,7 +4,7 @@
 |---|---|
 | **Runs** | inside browsing_book_details |
 | **Owner-only** | **no** — but see below |
-| **Surfaces** | web |
+| **Surfaces** | web, iOS |
 | **Actions** | `metadata.open`, `metadata.save`, `cover.replace`, `genre.edit`, `tag.edit` |
 
 Metadata edits are **library-wide**: every user sees them, and they outlive
@@ -115,5 +115,8 @@ own record of what it found and what it left.
 - The description accepts a paragraph of prose. Editing it is fine; blanking
   it is not, and a description that arrived as raw HTML from the file is a
   finding about the file's import, not something to fix by hand.
-- On iOS there is no editor of any kind; this subflow is web-only, and the
-  runner will not hand it to the iOS agent.
+- **iOS has an editor**, on the book detail screen's `…` overflow menu. It
+  offers the same fields, and it is the only door on that surface — there
+  are no chip editors on the iOS detail page and no table view. It reports
+  no edited-field count and no save confirmation; the only feedback is an
+  orange dot beside each changed field while you are editing.

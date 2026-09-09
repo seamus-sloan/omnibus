@@ -90,3 +90,30 @@ entry with an empty result list.
 - The command palette searches content, not actions. Typing "add a shelf"
   into it finds nothing, and that is correct.
 - On iOS search is its own tab; the sections are the same.
+
+## Corrections from run r-20260908-02
+
+- **Step 8 presumes an edit that replaced a value.** `editing_metadata` permits
+  additions only, so there is usually a new value to search for and no old one.
+  Read the step as "if your edit replaced a value, search for the old one
+  too", and say plainly when it did not. Its precondition — that some agent has
+  edited metadata at all — is only checkable in the run journal, not in the
+  app: look for a `metadata.save` by another actor before deciding the step is
+  not runnable.
+- **Step 9 should open a tag and a genre as well as a book, an author and a
+  series.** Step 1 names five sections and step 9 names three, and the missing
+  two are where #2504 lives.
+- **Step 5 cannot be answered from inside the app.** Nothing distinguishes a
+  tag a reader added from one that came out of the file's subject list; the
+  chips render identically. Add a tag yourself first, or ask the runner which
+  is which.
+- **The Sort and View controls on the results page are known to be inert**
+  (#2514's sibling finding). Note whether they respond and move on; three
+  agents have now proved it in turn.
+- **The palette's empty state is a bare "0 results"**; only the full results
+  page says "No results for …". Step 6's criterion is about the page.
+- **On iOS**, search is its own tab, results render live under the field with
+  no Enter and no results page, an overflowing section carries an `All N ›`
+  link rather than a count you can page through, and there is **no Genres
+  section at all** (#2515). Sort, view, the "On this page" rail and the
+  keyboard steps have no iOS surface — mark them `uncertain`, not failed.

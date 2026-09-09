@@ -55,16 +55,37 @@
   const install = ({ owned, actor }) => {
     window.__omnibusGuardOwned = new Set(owned);
     window.__omnibusGuardActor = actor;
-    if (window.__omnibusGuardInstalled) return;
+    // A re-guard must *replace* the wrapper, not return early leaving the old
+    // one in place: run r-20260908-02 patched this file mid-run, re-ran
+    // `driver.sh guard`, and every agent kept the pre-fix rules because of an
+    // early return here. The pristine fetch is parked on `window` so a later
+    // install can restore it before wrapping again.
+    if (window.__omnibusGuardInstalled) {
+      if (window.__omnibusGuardOriginalFetch) window.fetch = window.__omnibusGuardOriginalFetch;
+    }
     window.__omnibusGuardInstalled = true;
 
     // Endpoints that destroy or restructure a book. Anything book-scoped is
     // gated on the owned set; author and series deletion is refused outright,
     // because start.md forbids it for every agent regardless of ownership.
-    // `physical/` matches both the REST `/api/physical/…` routes and the
-    // server-function `/api/rpc/physical/copies/delete` — run r-20260908-01
-    // found copy removals sailing past a pattern anchored on `/api/physical/`.
-    const BOOK_SCOPED = /\/api\/(rpc\/(books\/delete-files|merge-books)$|(rpc\/)?physical\/)/;
+    // Only the calls that name a book uuid and destroy something can be
+    // ownership-checked, so only they belong here: file deletion, merge, and
+    // the two routes that delete a fileless book. A blanket `physical/` — run
+    // r-20260908-01's fix for copy removals slipping past — refused the whole
+    // surface instead, reads included, because no copy route carries a uuid.
+    const BOOK_SCOPED =
+      /\/api\/(rpc\/(books\/delete-files|merge-books|physical\/book\/delete)$|physical\/[0-9a-f-]{36}$)/;
+    // Reads wearing POST, plus the wishlist. The wishlist is per-user state on
+    // any book in the library, so gating it on the owned set would stop an
+    // agent wishlisting a book somebody else uploaded — which every reader may
+    // do.
+    const PHYSICAL_ALLOWED = /\/api\/rpc\/physical\/(copies|wishlist\/(get|add|remove))$/;
+    // A copy note or removal names a copy id and no book uuid, and the check-in
+    // response carries no copy id either, so ownership cannot be read from the
+    // request or learned from an earlier one. Allowed rather than refused — the
+    // alternative loses the flow's last two steps entirely — and recorded as an
+    // unverified allowance so the runner can see what went through unchecked.
+    const COPY_SCOPED = /\/api\/(rpc\/physical\/copies\/(note|delete)$|physical\/copies\/\d+$)/;
     const ALWAYS_REFUSED = /\/api\/rpc\/(author\/delete|cleanup\/delete-entity)/;
     // Undo is destructive and owner-only, but its payload carries a merge_log_id
     // and no uuid, so ownership cannot be read from the request. Refusing it
@@ -92,6 +113,7 @@
     };
 
     const originalFetch = window.fetch;
+    window.__omnibusGuardOriginalFetch = originalFetch;
     window.fetch = async function (input, init) {
       const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const url = new URL(raw, location.href).href;
@@ -120,6 +142,19 @@
       };
 
       if (ALWAYS_REFUSED.test(url)) return refuse("author and series deletion are forbidden by the rails", []);
+      if (PHYSICAL_ALLOWED.test(url)) return originalFetch.call(this, input, init);
+      if (COPY_SCOPED.test(url)) {
+        const note = {
+          actor: window.__omnibusGuardActor,
+          url,
+          method,
+          allowed: true,
+          why: "copy-scoped call carries a copy id and no book uuid — allowed unverified",
+          targets: [],
+        };
+        Promise.resolve(window.__omnibusGuardRefused(note)).catch(() => {});
+        return originalFetch.call(this, input, init);
+      }
       if (MERGE_READ.test(url)) return originalFetch.call(this, input, init);
       if (UNDO.test(url)) {
         if (await window.__omnibusGuardMerge("spend")) return originalFetch.call(this, input, init);

@@ -15,7 +15,7 @@ worth hunting here.
 
 1. Open the list of series. Try both sorts (A–Z and most books) and the
    name/author filter, including a filter that matches nothing. The header
-   count stays at the library total while filtered — that is how it is
+   count does not narrow while filtered — that is how it is
    built, not a finding — and the sort should survive a reload.
 2. Scan it for duplicates, empty names, and series with an implausible number
    of entries.
@@ -68,3 +68,22 @@ name, the entries in the order shown, and each one's number.
   markdown, not the app.
 - Another agent may be editing series metadata as you read it, since that is a
   free-for-all edit. A name or number changing between visits is expected.
+
+## Telling data damage from a defect
+
+This flow's fail criteria — "a book appearing in a series it does not belong
+to", "a number disagreeing with the book's own detail page" — fire just as
+readily on cross-wired *stored* metadata as on a rendering fault, and this
+instance carries some. The discriminator, which an agent worked out in run
+r-20260908-02 and which belongs here:
+
+**Compare the book's own renderings against each other, not against your idea
+of the truth.** If the eyebrow, the MORE block's count and sibling list, the
+`series page →` target and the library table's SERIES cell all say the same
+thing, the app is faithfully rendering whatever is stored, and a wrong
+membership is a data question. Only when those four disagree with *one another*
+is it a defect — which is how #2500's sibling finding was separated from the
+damage sitting on the same book.
+
+Note also that the index header is series-scoped (`N series · M books across
+them`) and is never the library's own book total.

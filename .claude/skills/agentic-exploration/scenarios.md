@@ -54,7 +54,12 @@ may pick the same one and the second silently attaches to the first.
 ## Re-guard after every upload, and hand the destructive subflows separately
 
 `driver.sh guard` bakes the owned set into the browser when it runs, and it
-never re-reads the journal. A book uploaded mid-run is therefore **not** in
+never re-reads the journal. **This is not only `adding_book`'s problem**: any
+flow that mints a book mid-run hits it. A `checking_in_a_book` lookup that
+finds nothing creates a paper-only book, and the agent is then refused the
+delete of its *own* book — which leaves the copy-less row #2497 is about. If a
+flow can create a book, either split its hand-over the same way or re-guard as
+soon as the agent journals a `book.add`. A book uploaded mid-run is therefore **not** in
 its own agent's owned set, and `merging_books` and `deleting_a_book` — which
 always follow `adding_book` — are refused for exactly the book they exist to
 act on. So the hand-over is three steps, not one:
