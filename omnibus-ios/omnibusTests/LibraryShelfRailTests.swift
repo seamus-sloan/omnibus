@@ -107,15 +107,32 @@ struct LibraryShelfRailTests {
         #expect(LibraryModel.railShelves([empty], userId: 7).map(\.id) == [1])
     }
 
-    @Test("shows the superset while the identity is still unconfirmed")
-    func keepsEverythingWhenTheUserIsUnknown() {
+    @Test("shows the public shelves while the identity is still unconfirmed")
+    func keepsPublicShelvesWhenTheUserIsUnknown() {
         // `setServer` reaches `.ready` before `confirmIdentity` returns, so the
-        // library can render with no id in hand. Blanking a rail that is about
-        // to be right is worse than briefly showing one shelf too many.
+        // library can render with no id in hand. Nothing counts as yours for
+        // that moment, which leaves the public shelves — enough that the rail
+        // is never blank while it waits.
         let rail = LibraryModel.railShelves(
             [preview(id: 1, owner: 7), preview(id: 2, owner: 9)], userId: nil
         )
         #expect(rail.map(\.id) == [1, 2])
+    }
+
+    @Test("holds back private shelves while the identity is still unconfirmed")
+    func withholdsPrivateShelvesWhenTheUserIsUnknown() {
+        // Counting everything as yours until the id lands would flash another
+        // account's private shelf to an admin for the length of the
+        // confirmation. Yours reappears the moment the id resolves.
+        let rail = LibraryModel.railShelves(
+            [
+                preview(id: 1, owner: 7, visibility: .private),
+                preview(id: 2, owner: 9, kind: .wishlist, name: "owner-9's Wishlist", books: 4),
+                preview(id: 3, owner: 9),
+            ],
+            userId: nil
+        )
+        #expect(rail.map(\.id) == [3])
     }
 
     @Test("preserves the server's ordering")

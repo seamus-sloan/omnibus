@@ -202,14 +202,18 @@ final class LibraryModel {
     /// box from every reader who hasn't made one.
     ///
     /// A nil id means the identity hasn't confirmed yet (`setServer` reaches
-    /// `.ready` before it does), and showing the superset for that moment beats
-    /// blanking a rail that is about to be right.
+    /// `.ready` before it does), and for that moment nothing counts as yours:
+    /// the rail shows the public shelves alone and your own fill in behind
+    /// them. Counting everything as yours instead would flash another
+    /// account's private shelf to an admin for exactly as long as the
+    /// confirmation takes, and the widened rule means the rail is no longer
+    /// blank while it waits — which is what that used to buy.
     nonisolated static func railShelves(
         _ previews: [ShelfPreview], userId: Int64?
     ) -> [ShelfPreview] {
         previews.filter { preview in
             let shelf = preview.shelf
-            let isOwn = userId.map { shelf.ownerUserId == $0 } ?? true
+            let isOwn = userId.map { shelf.ownerUserId == $0 } ?? false
             let isSharedByAnother = shelf.visibility == .public && !shelf.kind.isSystem
             let isUnusedWishlist = shelf.kind == .wishlist && shelf.bookCount == 0
             return (isOwn || isSharedByAnother) && !isUnusedWishlist

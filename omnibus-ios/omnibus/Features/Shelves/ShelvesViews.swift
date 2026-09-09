@@ -5,8 +5,9 @@ import SwiftUI
 
 struct ShelvesView: View {
     @Environment(\.palette) private var palette
-    // The index is unfiltered — other people's public shelves and wishlists
-    // reach it — so it needs the viewer to attribute them.
+    // The index is unfiltered, so shelves the viewer does not own reach it and
+    // need attributing. (Wishlists reach it too and are never attributed —
+    // their names already carry the owner.)
     @Environment(AppState.self) private var app
     @State private var previews: [ShelfPreview] = []
     @State private var isLoading = true
