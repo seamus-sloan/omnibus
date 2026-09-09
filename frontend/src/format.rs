@@ -12,22 +12,63 @@ use omnibus_shared::BookFileInfo;
 /// Build a `<prefix>:`-scoped FTS query from a taxonomy name, so clicking a
 /// tag or genre narrows the search to the books carrying it.
 ///
-/// **Every whitespace word is scoped individually** — `tag:Dark tag:academia`,
-/// not `tag:Dark academia`. `db::helpers::build_fts_match` routes one token
-/// per `prefix:` marker and lets everything else fall through to free text,
-/// so a bare `format!("tag:{name}")` silently turns every word after the
-/// first into an unscoped term: it would match books merely *titled*
-/// something with "academia" in them, and drop the scoping the click
-/// promised.
+/// **A multi-word name is quoted, not split.** `tag:"Dark academia"` is one
+/// facet; the previous `tag:Dark tag:academia` was one facet *per word*,
+/// AND-ed, which is a different question — "Science Fiction & Fantasy"
+/// became four facets including `tag:&`, and the page then returned a count
+/// that disagreed with the row the reader clicked (#2504).
+/// `db::helpers::build_fts_match` keeps a quoted run whole, so the value
+/// arrives intact and matches as an FTS phrase.
+///
+/// A single-word value stays unquoted — it needs no quoting, and the shorter
+/// URL is the one a reader sees and might edit.
 ///
 /// One definition for the palette rows, the `/search` chips, and the mobile
 /// rows — three surfaces that each had their own copy and did not agree.
 pub fn facet_query(prefix: &str, value: &str) -> String {
-    value
-        .split_whitespace()
-        .map(|word| format!("{prefix}:{word}"))
-        .collect::<Vec<_>>()
-        .join(" ")
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    // Quote whenever the value isn't a single bare word: whitespace needs it
+    // to stay one facet, and an embedded quote needs it so the value can be
+    // escaped rather than terminating the run.
+    if trimmed.split_whitespace().count() > 1 || trimmed.contains('"') {
+        return format!("{prefix}:\"{}\"", trimmed.replace('"', "\"\""));
+    }
+    format!("{prefix}:{trimmed}")
+}
+
+/// The reader-facing name behind a query that is exactly one taxonomy facet,
+/// e.g. `tag:"Science Fiction"` → `Science Fiction`.
+///
+/// The inverse of [`facet_query`], and the reason the results heading can
+/// name what was clicked instead of echoing the constructed query string
+/// (#2504). `None` for anything else — free text, several facets, a facet
+/// plus text — where the raw query *is* what the reader asked and rewriting
+/// it would hide the query from them.
+pub fn single_facet_value(query: &str) -> Option<String> {
+    let q = query.trim();
+    let (prefix, rest) = q.split_once(':')?;
+    if !matches!(
+        prefix.to_ascii_lowercase().as_str(),
+        "author" | "series" | "tag" | "genre"
+    ) {
+        return None;
+    }
+    let value = match rest.strip_prefix('"') {
+        // Quoted: must close on the final character, or there is more to the
+        // query than this one facet.
+        Some(inner) => inner.strip_suffix('"')?.replace("\"\"", "\""),
+        // Bare: a space means a second token follows, so this isn't a lone facet.
+        None => {
+            if rest.split_whitespace().count() != 1 {
+                return None;
+            }
+            rest.to_string()
+        }
+    };
+    (!value.is_empty()).then_some(value)
 }
 
 /// Human-readable file size (`"3.1 MB"`), or `None` when the row carries no

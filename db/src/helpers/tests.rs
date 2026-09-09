@@ -211,6 +211,73 @@ fn build_fts_match_returns_none_when_only_empty_facets() {
     assert!(build_fts_match("genre:").is_none());
 }
 
+// Regression for #2504: a multi-word facet value must survive as one facet.
+// Split on whitespace, `tag:"Science Fiction"` became `tag:Science` plus a
+// free-text `Fiction"`, which matched books merely *titled* something with
+// "Fiction" in them.
+#[test]
+fn build_fts_match_keeps_a_quoted_facet_value_whole() {
+    assert_eq!(
+        build_fts_match("tag:\"Science Fiction\"").as_deref(),
+        // No trailing `*`: a clicked facet is an exact name, and the prefix
+        // star made this also match a book tagged "Science Fiction & Fantasy".
+        Some("{tags} : (\"Science Fiction\")")
+    );
+    // Punctuation inside the value is part of the value, not its own facet.
+    assert_eq!(
+        build_fts_match("genre:\"Science Fiction & Fantasy\"").as_deref(),
+        Some("{genres} : (\"Science Fiction & Fantasy\")")
+    );
+}
+
+// The prefix star is type-ahead, and an unquoted query is someone typing.
+#[test]
+fn build_fts_match_keeps_the_prefix_star_on_unquoted_input() {
+    assert_eq!(
+        build_fts_match("tag:sci").as_deref(),
+        Some("{tags} : (\"sci\"*)")
+    );
+    assert_eq!(
+        build_fts_match("harry pott").as_deref(),
+        Some("{title authors series} : (\"harry\" \"pott\"*)")
+    );
+}
+
+#[test]
+fn build_fts_match_still_splits_an_unquoted_multi_word_run() {
+    // Unquoted input is unchanged: two bare words after a facet are one
+    // facet term plus free text, exactly as before.
+    assert_eq!(
+        build_fts_match("tag:Science Fiction").as_deref(),
+        Some("{tags} : (\"Science\"*) AND {title authors series} : (\"Fiction\"*)")
+    );
+}
+
+#[test]
+fn build_fts_match_treats_an_unclosed_quote_as_running_to_the_end() {
+    // A reader mid-type has an unbalanced quote; searching what they have so
+    // far beats refusing to search.
+    assert_eq!(
+        build_fts_match("tag:\"Dark academia").as_deref(),
+        Some("{tags} : (\"Dark academia\")")
+    );
+}
+
+#[test]
+fn build_fts_match_drops_an_empty_quoted_facet_value() {
+    assert!(build_fts_match("tag:\"\"").is_none());
+}
+
+#[test]
+fn build_fts_match_reads_a_bare_quoted_phrase_as_one_free_text_phrase() {
+    // Not a facet, but the same tokenizer: quoting is how a reader asks for a
+    // phrase, and splitting it stranded the quote characters in the terms.
+    assert_eq!(
+        build_fts_match("\"the long way\"").as_deref(),
+        Some("{title authors series} : (\"the long way\")")
+    );
+}
+
 #[test]
 fn build_fts_match_emits_default_scope_for_free_text() {
     // Free-text falls into the same `{title authors series}` filter

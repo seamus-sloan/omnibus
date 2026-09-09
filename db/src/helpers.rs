@@ -264,6 +264,77 @@ pub(crate) fn join_names<'a, I: IntoIterator<Item = &'a str>>(iter: I) -> String
 /// one scan ranking on a stale tuple with nothing to signal it.
 pub(crate) const FTS_BM25_RANK: &str = "bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0, 1.0)";
 
+/// One token of a parsed query, and whether the reader (or a link the app
+/// built) wrote it inside double quotes.
+struct QueryToken {
+    text: String,
+    /// A quoted token is an **exact** value, so it gets no trailing `*`.
+    ///
+    /// The prefix star is type-ahead: it exists so `harry pott` finds
+    /// *Potter* while someone is still typing. A facet link carries a name
+    /// the app already knows in full, and prefix-matching it silently widens
+    /// the click — `tag:"Science fiction"` also matched a book tagged
+    /// "Science Fiction & Fantasy", so the page returned two books for a row
+    /// that said one (#2504). Quoting is what tells the two apart.
+    quoted: bool,
+}
+
+/// Split a query into logical tokens, keeping a double-quoted run together.
+///
+/// Whitespace separates tokens, except inside `"…"`: `tag:"Science Fiction"`
+/// is one token whose value carries the space, where a plain
+/// `split_whitespace` made it `tag:"Science` plus a stray `Fiction"`. That is
+/// what turned one multi-word tag into one facet per word, AND-ed, and
+/// answered a question the reader never asked (#2504).
+///
+/// Quotes are structural and dropped from the text — the value reaches
+/// [`sanitize_fts_tokens`], which does its own quoting and escaping, as the
+/// bare string — but *that it was quoted* is kept, because it is the one
+/// signal separating a name the app constructed from words a reader is
+/// typing. See [`QueryToken::quoted`]. An unclosed quote runs to the end of
+/// the input rather than erroring: the reader is mid-type, and refusing to
+/// search is worse than searching what they have so far.
+fn split_query_tokens(raw: &str) -> Vec<QueryToken> {
+    let mut out: Vec<QueryToken> = Vec::new();
+    let mut current = String::new();
+    let mut started = false;
+    let mut quoted = false;
+    let mut in_quotes = false;
+    for c in raw.chars() {
+        match c {
+            '"' => {
+                in_quotes = !in_quotes;
+                // A quote opens a token even when what it wraps is empty, so
+                // `tag:""` still parses as an empty-valued facet and is
+                // dropped by the caller rather than becoming free text.
+                started = true;
+                quoted = true;
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if started {
+                    out.push(QueryToken {
+                        text: std::mem::take(&mut current),
+                        quoted,
+                    });
+                    started = false;
+                    quoted = false;
+                }
+            }
+            c => {
+                current.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        out.push(QueryToken {
+            text: current,
+            quoted,
+        });
+    }
+    out
+}
+
 /// Parse a user-typed query into a single FTS5 MATCH expression.
 ///
 /// Recognises `author:foo`, `series:foo`, `tag:foo`, `genre:foo`
@@ -276,14 +347,14 @@ pub(crate) const FTS_BM25_RANK: &str = "bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0
 /// `author:` / `series:` / `tag:` / `genre:` tokens) so callers can
 /// short-circuit instead of submitting an empty `MATCH`.
 pub fn build_fts_match(raw: &str) -> Option<String> {
-    let mut author_tokens: Vec<&str> = Vec::new();
-    let mut series_tokens: Vec<&str> = Vec::new();
-    let mut tag_tokens: Vec<&str> = Vec::new();
-    let mut genre_tokens: Vec<&str> = Vec::new();
-    let mut free_tokens: Vec<&str> = Vec::new();
+    let mut author_tokens: Vec<QueryToken> = Vec::new();
+    let mut series_tokens: Vec<QueryToken> = Vec::new();
+    let mut tag_tokens: Vec<QueryToken> = Vec::new();
+    let mut genre_tokens: Vec<QueryToken> = Vec::new();
+    let mut free_tokens: Vec<QueryToken> = Vec::new();
 
-    for token in raw.split_whitespace() {
-        if let Some((prefix, value)) = token.split_once(':') {
+    for token in split_query_tokens(raw) {
+        if let Some((prefix, value)) = token.text.split_once(':') {
             let lower = prefix.to_ascii_lowercase();
             if value.is_empty() {
                 // `author:` with no value — drop silently rather than
@@ -294,19 +365,31 @@ pub fn build_fts_match(raw: &str) -> Option<String> {
             }
             match lower.as_str() {
                 "author" => {
-                    author_tokens.push(value);
+                    author_tokens.push(QueryToken {
+                        text: value.to_string(),
+                        quoted: token.quoted,
+                    });
                     continue;
                 }
                 "series" => {
-                    series_tokens.push(value);
+                    series_tokens.push(QueryToken {
+                        text: value.to_string(),
+                        quoted: token.quoted,
+                    });
                     continue;
                 }
                 "tag" => {
-                    tag_tokens.push(value);
+                    tag_tokens.push(QueryToken {
+                        text: value.to_string(),
+                        quoted: token.quoted,
+                    });
                     continue;
                 }
                 "genre" => {
-                    genre_tokens.push(value);
+                    genre_tokens.push(QueryToken {
+                        text: value.to_string(),
+                        quoted: token.quoted,
+                    });
                     continue;
                 }
                 _ => {}
@@ -316,19 +399,19 @@ pub fn build_fts_match(raw: &str) -> Option<String> {
     }
 
     let mut clauses: Vec<String> = Vec::new();
-    if let Some(s) = sanitize_fts_tokens(&author_tokens) {
+    if let Some(s) = sanitize_query_tokens(&author_tokens) {
         clauses.push(format!("{{authors}} : ({s})"));
     }
-    if let Some(s) = sanitize_fts_tokens(&series_tokens) {
+    if let Some(s) = sanitize_query_tokens(&series_tokens) {
         clauses.push(format!("{{series}} : ({s})"));
     }
-    if let Some(s) = sanitize_fts_tokens(&tag_tokens) {
+    if let Some(s) = sanitize_query_tokens(&tag_tokens) {
         clauses.push(format!("{{tags}} : ({s})"));
     }
-    if let Some(s) = sanitize_fts_tokens(&genre_tokens) {
+    if let Some(s) = sanitize_query_tokens(&genre_tokens) {
         clauses.push(format!("{{genres}} : ({s})"));
     }
-    if let Some(s) = sanitize_fts_tokens(&free_tokens) {
+    if let Some(s) = sanitize_query_tokens(&free_tokens) {
         // Default scope: title/authors/series (matches F0.4 design — keeps
         // short prefix queries from dragging in generic tag/genre/description
         // values).
@@ -358,9 +441,27 @@ pub fn sanitize_fts_query(raw: &str) -> Option<String> {
 }
 
 /// Per-token quoting/escaping shared by [`sanitize_fts_query`] and
-/// [`build_fts_match`]. Tokens are assumed to be whitespace-free (the
-/// callers split on whitespace first).
-fn sanitize_fts_tokens(tokens: &[&str]) -> Option<String> {
+/// [`build_fts_match`].
+///
+/// A token may carry internal whitespace — [`split_query_tokens`] keeps a
+/// quoted facet value whole — in which case the emitted `"…"` is an FTS5
+/// phrase, which is exactly the match a multi-word tag wants.
+fn sanitize_fts_tokens<S: AsRef<str>>(tokens: &[S]) -> Option<String> {
+    quote_tokens(tokens.iter().map(AsRef::as_ref), true)
+}
+
+/// [`sanitize_fts_tokens`] for parsed [`QueryToken`]s: identical, except the
+/// trailing prefix `*` is dropped when the last token was quoted, so a
+/// clicked facet matches the name exactly instead of everything starting
+/// with it (#2504).
+fn sanitize_query_tokens(tokens: &[QueryToken]) -> Option<String> {
+    let prefix_last = !tokens.last().is_some_and(|t| t.quoted);
+    quote_tokens(tokens.iter().map(|t| t.text.as_str()), prefix_last)
+}
+
+/// Quote and escape each token into an FTS5 phrase, optionally making the
+/// last one a prefix match.
+fn quote_tokens<'a>(tokens: impl Iterator<Item = &'a str>, prefix_last: bool) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     for token in tokens {
         // Double quotes inside a token would terminate the quoted phrase.
@@ -374,8 +475,10 @@ fn sanitize_fts_tokens(tokens: &[&str]) -> Option<String> {
     if parts.is_empty() {
         return None;
     }
-    let last = parts.len() - 1;
-    parts[last].push('*');
+    if prefix_last {
+        let last = parts.len() - 1;
+        parts[last].push('*');
+    }
     Some(parts.join(" "))
 }
 
