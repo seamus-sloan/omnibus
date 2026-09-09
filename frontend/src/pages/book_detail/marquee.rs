@@ -289,9 +289,7 @@ pub(super) fn MarqueeStage(
                     }
                 }
             } else {
-                // Non-scrolling blur layer behind the column: the filter
-                // cannot live on the scroller itself without capturing every
-                // `position: fixed` overlay inside it (#2529).
+                // A filter on the scroller would capture every fixed overlay inside it.
                 div { class: "bdmq-flowscrim", aria_hidden: "true" }
                 div { class: "bdmq-flowscroll", id: "bdmq-flow",
                     div { class: "bdmq-flow",

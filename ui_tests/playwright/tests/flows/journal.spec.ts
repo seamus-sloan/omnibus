@@ -818,7 +818,10 @@ test("opens a readable entry after the flow layout has been scrolled", async ({
   await expect(card).toBeInViewport();
   await expect(page.getByTestId("journal-overlay-close")).toBeInViewport();
 
-  // The backdrop covers the viewport rather than one scrolled-away column.
+  // The backdrop covers the viewport in *both* axes, not one scrolled-away
+  // column: the bug constrained it horizontally to the 57%-wide flow column
+  // as well as carrying it off the top, so a vertical-only assertion would
+  // let a column-sized overlay pass.
   const overlay = page.getByTestId("journal-overlay");
   const box = await overlay.boundingBox();
   const viewport = page.viewportSize();
@@ -826,6 +829,10 @@ test("opens a readable entry after the flow layout has been scrolled", async ({
   expect(viewport, "the test needs a viewport size").not.toBeNull();
   expect(box!.y).toBeGreaterThanOrEqual(0);
   expect(box!.y + box!.height).toBeGreaterThan(viewport!.height / 2);
+  // Spans the full width, starting at the left edge rather than at the
+  // column seam.
+  expect(box!.x).toBeLessThanOrEqual(1);
+  expect(box!.width).toBeGreaterThan(viewport!.width * 0.95);
 
   await deleteEntry(page, marker);
 });
