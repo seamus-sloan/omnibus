@@ -793,7 +793,10 @@ test("opens a readable entry after the flow layout has been scrolled", async ({
   await gotoReady(page, `/books/${uuid}`);
 
   const marker = `scrolled-open-${Date.now()}`;
-  await publish(page, `Reading this one back from halfway down the page. ${marker}`);
+  await publish(
+    page,
+    `Reading this one back from halfway down the page. ${marker}`,
+  );
 
   // The bug this guards is only reachable once the flow scroller has actually
   // scrolled: `.bdmq-flowscroll` used to carry the scrim's `backdrop-filter`,
@@ -801,13 +804,17 @@ test("opens a readable entry after the flow layout has been scrolled", async ({
   // descendants — so the overlay was laid out against the scroller's own
   // scrolled content and rendered `scrollTop` pixels above the viewport. The
   // journal stop sits far enough down that it was never readable in practice.
-  const row = page.getByTestId("journal-ladder-row").filter({ hasText: marker });
+  const row = page
+    .getByTestId("journal-ladder-row")
+    .filter({ hasText: marker });
   await row.scrollIntoViewIfNeeded();
   const scrolled = await page.evaluate(
     () => document.querySelector("#bdmq-flow")?.scrollTop ?? 0,
   );
-  expect(scrolled, "the flow scroller must have scrolled for this to bite")
-    .toBeGreaterThan(0);
+  expect(
+    scrolled,
+    "the flow scroller must have scrolled for this to bite",
+  ).toBeGreaterThan(0);
 
   await row.click();
 
