@@ -11,7 +11,7 @@ use axum::{
 };
 use omnibus_db::{self as db};
 
-use super::conditional::{content_etag, MEDIA_CACHE_CONTROL, MEDIA_VARY};
+use super::conditional::{content_etag, namespaced_content_etag, MEDIA_CACHE_CONTROL, MEDIA_VARY};
 use super::{internal, AppState};
 use crate::auth::MediaAuthUser;
 
@@ -75,6 +75,10 @@ pub(super) async fn get_cover(
 /// WebP is still generating. Short, because the real thumbnail is seconds
 /// away — and shared by that path's 200 and 304 so the two cannot drift.
 const THUMB_PENDING_CACHE_CONTROL: &str = "private, max-age=5";
+
+/// Namespace for the stand-in cover's validator, keeping it out of the value
+/// space `db::thumbs::thumb_etag` draws from.
+const STAND_IN_ETAG_PREFIX: &str = "cover-";
 
 /// Whether the request's `If-None-Match` already carries the current
 /// `etag` — i.e. the client's cached copy is still current and a 304 can
@@ -260,11 +264,13 @@ async fn thumb_cache_miss_response(
                 last_modified_epoch,
             });
             // The cover's own content hash, not `thumb_etag` — these are the
-            // cover bytes. That the two derivations can never agree is the
-            // point: once the WebP lands, the hit path publishes a different
-            // validator and the client fetches the real thumbnail instead of
-            // being told this stand-in is still current.
-            let etag = content_etag(&bytes);
+            // cover bytes — and namespaced so it cannot *collide* with one
+            // either. Both derivations render 16 hex digits, so without the
+            // prefix a chance equality would answer 304 to a client asking for
+            // the real WebP and leave it on the stand-in for good. The prefix
+            // is what makes "once the WebP lands you get the WebP" a guarantee
+            // rather than a very good bet.
+            let etag = namespaced_content_etag(STAND_IN_ETAG_PREFIX, &bytes);
             if if_none_match_hits(headers, &etag) {
                 tracing::debug!(
                     uuid,

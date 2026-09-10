@@ -619,6 +619,13 @@ async fn api_get_thumb_publishes_a_validator_for_the_stand_in_cover_on_cache_mis
         !etag.starts_with("W/"),
         "expected a strong entity-tag: {etag}"
     );
+    // Namespaced out of `thumb_etag`'s value space. Both render 16 hex digits,
+    // so without the prefix the two could collide by chance and a 304 would
+    // strand a client on the stand-in — see the sibling test below.
+    assert!(
+        etag.starts_with("\"cover-"),
+        "the stand-in's validator must be namespaced: {etag}"
+    );
     assert_eq!(
         res.headers().get(header::VARY).unwrap(),
         "Cookie, Authorization",
@@ -674,6 +681,8 @@ async fn api_get_thumb_returns_304_for_the_stand_in_cover_when_if_none_match_mat
 async fn api_get_thumb_stand_in_validator_never_matches_the_generated_thumbnail() {
     // The whole point of publishing one: a client holding the stand-in must
     // be handed the real WebP once it exists, not told its copy is current.
+    // The namespace is what makes this hold for *every* pair of inputs rather
+    // than for all but a vanishing few — the two hashes share an output width.
     let (app, _, pool) = fixture().await;
     let (id, uuid, _covers, _thumbs) = seed_uncovered_thumb(&pool, "thumb_miss_then_hit").await;
     let user = auth_test_support::create_user(&pool, "alice").await;
