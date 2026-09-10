@@ -16,8 +16,26 @@ pub struct PhysicalCopy {
     /// User who checked the copy in; `None` if that account was later deleted.
     pub added_by_user_id: Option<i64>,
     pub checked_in_at: i64,
+    /// [`Self::checked_in_at`] rendered as ISO 8601 UTC. When the copy was checked in.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and
+    /// sort on, the string is what a reader of the API can act on without
+    /// doing calendar arithmetic by hand. Populated by the server's read
+    /// paths; `None` on a payload a client built itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_in_at_iso: Option<String>,
+
     /// Free-text edition/publisher note until an edition-metadata provider exists.
     pub note: Option<String>,
+}
+
+impl PhysicalCopy {
+    /// Fill [`Self::checked_in_at_iso`] from the epoch already on the row.
+    #[must_use]
+    pub fn with_iso(mut self) -> Self {
+        self.checked_in_at_iso = Some(crate::to_iso8601(self.checked_in_at));
+        self
+    }
 }
 
 /// Where a wishlist entry was added from. Persisted as the `source` column.

@@ -355,10 +355,11 @@ async fn bookmark_remapped_replaces_the_temp_record_with_the_server_copy() {
         position: "epubcfi(/6/4!/4/2/1:0)".into(),
         title: None,
         created_at: 1,
-        client_id: None,
+        created_at_iso: None,
         spine_index: None,
         chapter_title: None,
         percent_through_book: None,
+        client_id: None,
     };
     apply::bookmark_created(&temp).await;
 
@@ -368,10 +369,11 @@ async fn bookmark_remapped_replaces_the_temp_record_with_the_server_copy() {
         position: "epubcfi(/6/4!/4/2/1:0)".into(),
         title: Some("Server title".into()),
         created_at: 2,
-        client_id: None,
+        created_at_iso: None,
         spine_index: None,
         chapter_title: None,
         percent_through_book: None,
+        client_id: None,
     };
     apply::bookmark_remapped(-11, &real).await;
 
@@ -400,10 +402,11 @@ async fn highlight_remapped_replaces_the_temp_record_with_the_server_copy() {
         note: None,
         text: None,
         created_at: 1,
-        client_id: None,
+        created_at_iso: None,
         spine_index: None,
         chapter_title: None,
         percent_through_book: None,
+        client_id: None,
     };
     apply::highlight_created(&temp).await;
 
@@ -710,6 +713,8 @@ async fn journal_remapped_replaces_the_temp_record_with_the_server_copy() {
         status: omnibus_shared::JournalStatus::Published,
         created_at: 1,
         updated_at: 1,
+        created_at_iso: None,
+        updated_at_iso: None,
         client_id: None,
     };
     apply::journal_created(&temp).await;

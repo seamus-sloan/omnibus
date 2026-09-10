@@ -73,6 +73,14 @@ pub struct Highlight {
     #[serde(default)]
     pub client_id: Option<String>,
     pub created_at: i64,
+    /// [`Self::created_at`] rendered as ISO 8601 UTC. When it was made.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and sort
+    /// on, the string is what a reader of the API can act on without doing
+    /// calendar arithmetic by hand. Populated by the server's read paths;
+    /// `None` on a payload a client built itself.
+    #[serde(default)]
+    pub created_at_iso: Option<String>,
     /// Spine document this anchor sits in, resolved from its CFI. `None`
     /// for a Kobo-origin anchor and anything else unparseable.
     #[serde(default)]
@@ -186,3 +194,12 @@ impl UpdateHighlightNote {
 
 #[cfg(test)]
 mod tests;
+
+impl Highlight {
+    /// Fill [`Self::created_at_iso`] from the epoch already on the row.
+    #[must_use]
+    pub fn with_iso(mut self) -> Self {
+        self.created_at_iso = Some(crate::to_iso8601(self.created_at));
+        self
+    }
+}

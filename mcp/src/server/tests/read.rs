@@ -15,7 +15,7 @@ use omnibus_shared::{EbookLibrary, EbookMetadata};
 use super::super::*;
 use super::offline_server;
 use crate::config::Config;
-use crate::tools::read::{BookRef, ListBooksParams};
+use crate::tools::read::{GetBookParams, ListBooksParams};
 
 /// Every read tool this issue ships, by MCP tool name.
 const EXPECTED_TOOLS: &[&str] = &[
@@ -151,21 +151,23 @@ async fn stub_service() -> OmnibusMcp {
 async fn get_book_tool_returns_the_shared_typed_book() {
     let service = stub_service().await;
     let book = service
-        .get_book(Parameters(BookRef {
+        .get_book(Parameters(GetBookParams {
             uuid: "uuid-frank".into(),
+            include: None,
         }))
         .await
         .unwrap();
-    assert_eq!(book.0.title.as_deref(), Some("Frankenstein"));
-    assert_eq!(book.0.unique_identifier.as_deref(), Some("uuid-frank"));
+    assert_eq!(book.0.book.title.as_deref(), Some("Frankenstein"));
+    assert_eq!(book.0.book.unique_identifier.as_deref(), Some("uuid-frank"));
 }
 
 #[tokio::test]
 async fn get_book_tool_reports_not_found_for_an_unknown_uuid() {
     let service = stub_service().await;
     let err = match service
-        .get_book(Parameters(BookRef {
+        .get_book(Parameters(GetBookParams {
             uuid: "uuid-missing".into(),
+            include: None,
         }))
         .await
     {

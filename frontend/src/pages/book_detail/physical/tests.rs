@@ -151,6 +151,7 @@ mod render_tests {
                     isbn: Some("978".to_string()),
                     added_by_user_id: None,
                     checked_in_at: 0,
+                    checked_in_at_iso: None,
                     note: Some("First edition".to_string()),
                 }]
             }),
@@ -187,6 +188,7 @@ mod render_tests {
                     isbn: Some("978".to_string()),
                     added_by_user_id: None,
                     checked_in_at: 0,
+                    checked_in_at_iso: None,
                     note: Some("First edition".to_string()),
                 }]
             }),

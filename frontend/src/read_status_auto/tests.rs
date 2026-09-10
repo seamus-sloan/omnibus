@@ -45,6 +45,7 @@ fn stub_record(status: ReadStatus) -> ReadStatusRecord {
         book_uuid: "ignored".to_string(),
         status,
         updated_at: 0,
+        updated_at_iso: None,
         finished_at: None,
     }
 }

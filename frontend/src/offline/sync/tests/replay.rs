@@ -101,6 +101,7 @@ async fn drain_remaps_temp_bookmark_id_after_create() {
             title: Some("Draft".into()),
             client_id: None,
             created_at: 100,
+            created_at_iso: None,
             spine_index: None,
             chapter_title: None,
             percent_through_book: None,
@@ -177,6 +178,7 @@ async fn drain_remaps_temp_highlight_id_after_create() {
             text: Some("a passage".into()),
             client_id: None,
             created_at: 100,
+            created_at_iso: None,
             spine_index: None,
             chapter_title: None,
             percent_through_book: None,
@@ -259,6 +261,8 @@ async fn drain_remaps_temp_journal_id_after_create() {
             client_id: None,
             created_at: 100,
             updated_at: 100,
+            created_at_iso: None,
+            updated_at_iso: None,
         }],
     );
     enqueue_raw(&Op::CreateJournal {

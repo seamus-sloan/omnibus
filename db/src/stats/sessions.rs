@@ -135,7 +135,10 @@ pub async fn session_log(
                 started_at: r.get("started_at"),
                 ended_at: r.get("ended_at"),
                 seconds: r.get("secs"),
+                started_at_iso: None,
+                ended_at_iso: None,
             }
+            .with_iso()
         })
         .collect();
     entries.truncate(usize::try_from(limit).unwrap_or(usize::MAX));

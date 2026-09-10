@@ -75,6 +75,7 @@ fn record_omits_null_finished_at_from_wire() {
         book_uuid: "abc".into(),
         status: ReadStatus::Reading,
         updated_at: 10,
+        updated_at_iso: None,
         finished_at: None,
     })
     .unwrap();

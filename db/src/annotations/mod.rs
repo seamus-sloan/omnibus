@@ -525,7 +525,9 @@ fn row_to_highlight(row: &sqlx::sqlite::SqliteRow) -> Result<Highlight, Highligh
         spine_index: None,
         chapter_title: None,
         percent_through_book: None,
-    })
+        created_at_iso: None,
+    }
+    .with_iso())
 }
 
 #[cfg(test)]

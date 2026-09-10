@@ -89,6 +89,24 @@ pub struct ReadStatusRecord {
     pub book_uuid: String,
     pub status: ReadStatus,
     pub updated_at: i64,
+    /// [`Self::updated_at`] rendered as ISO 8601 UTC. When the status last changed.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and
+    /// sort on, the string is what a reader of the API can act on without
+    /// doing calendar arithmetic by hand. Populated by the server's read
+    /// paths; `None` on a payload a client built itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at_iso: Option<String>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<i64>,
+}
+
+impl ReadStatusRecord {
+    /// Fill [`Self::updated_at_iso`] from the epoch already on the record.
+    #[must_use]
+    pub fn with_iso(mut self) -> Self {
+        self.updated_at_iso = Some(crate::to_iso8601(self.updated_at));
+        self
+    }
 }

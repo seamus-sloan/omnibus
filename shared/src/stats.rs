@@ -147,6 +147,13 @@ pub struct FinishedBook {
     pub title: String,
     pub author: Option<String>,
     pub finished_at: i64,
+    /// [`Self::finished_at`] rendered as ISO 8601 UTC.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and sort
+    /// on, the string is what a reader of the API can act on without doing
+    /// calendar arithmetic by hand. Populated by the server's read paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at_iso: Option<String>,
     /// `/api/covers/:uuid` when the book has a cover, `None` otherwise — same
     /// shape as `EbookMetadata::cover_url`, so the drill-in's finished-books
     /// list can hand it straight to `CoverTile`.
@@ -1216,9 +1223,33 @@ pub struct SessionLogEntry {
     pub ended_at: i64,
     /// Seconds recorded across the sitting.
     pub seconds: i64,
+    /// [`Self::started_at`] rendered as ISO 8601 UTC. When the sitting began.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and
+    /// sort on, the string is what a reader of the API can act on without
+    /// doing calendar arithmetic by hand. Populated by the server's read
+    /// paths; `None` on a payload a client built itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_iso: Option<String>,
+    /// [`Self::ended_at`] rendered as ISO 8601 UTC. When it ended.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and
+    /// sort on, the string is what a reader of the API can act on without
+    /// doing calendar arithmetic by hand. Populated by the server's read
+    /// paths; `None` on a payload a client built itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_iso: Option<String>,
 }
 
 impl SessionLogEntry {
+    /// Fill the ISO siblings from the epochs already on the entry.
+    #[must_use]
+    pub fn with_iso(mut self) -> Self {
+        self.started_at_iso = Some(crate::to_iso8601(self.started_at));
+        self.ended_at_iso = Some(crate::to_iso8601(self.ended_at));
+        self
+    }
+
     /// This entry's cursor — what a caller passes as `before` to fetch the
     /// page that continues after it.
     pub fn cursor(&self) -> SessionCursor {
@@ -1274,4 +1305,13 @@ pub struct SessionLogPage {
     /// knowing how the keyset is built.
     #[serde(default)]
     pub next_before: Option<String>,
+}
+
+impl FinishedBook {
+    /// Fill [`Self::finished_at_iso`] from the epoch already on the row.
+    #[must_use]
+    pub fn with_iso(mut self) -> Self {
+        self.finished_at_iso = Some(crate::to_iso8601(self.finished_at));
+        self
+    }
 }
