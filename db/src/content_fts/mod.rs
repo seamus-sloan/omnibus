@@ -295,7 +295,11 @@ async fn reader_position_percent(
                     })?,
             ) {
                 (Some(seconds), Some(total)) if total > 0.0 => {
-                    Some((seconds / total * 100.0).clamp(0.0, 100.0))
+                    // Floored, like the stored epub percent this is compared
+                    // against: a boundary that overstates where the reader is
+                    // classifies a hit ahead of them as behind, which is the
+                    // one direction `Exclude` must never round.
+                    Some((seconds / total * 100.0).clamp(0.0, 100.0).floor())
                 }
                 _ => None,
             }

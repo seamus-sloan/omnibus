@@ -9,6 +9,10 @@ import SwiftUI
 
 struct ShelvesRail: View {
     let previews: [ShelfPreview]
+    /// Who is looking, so a shelf someone else shared can say so. `nil` while
+    /// the identity is still confirming, which withholds attribution rather
+    /// than guessing it.
+    var viewerId: Int64?
     var onSeeAll: () -> Void
 
     @Environment(\.palette) private var palette
@@ -42,7 +46,7 @@ struct ShelvesRail: View {
                 HStack(alignment: .top, spacing: 14) {
                     ForEach(Array(previews.enumerated()), id: \.element.id) { index, preview in
                         NavigationLink(value: Destination.shelf(id: preview.shelf.id)) {
-                            ShelfCard(preview: preview, width: 108)
+                            ShelfCard(preview: preview, viewerId: viewerId, width: 108)
                         }
                         .buttonStyle(BookPressStyle())
                         .cascadeIn(index: index)
