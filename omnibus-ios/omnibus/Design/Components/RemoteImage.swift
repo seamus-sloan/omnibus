@@ -9,6 +9,23 @@ import CryptoKit
 import SwiftUI
 import UIKit
 
+/// What a cached entry's check-back with the server should be.
+///
+/// Split out of `ImageCache.revalidate` so the policy can be covered without a
+/// filesystem or a server standing behind it — the actor around it is neither.
+enum RevalidationPlan: Equatable {
+    /// Inside the freshness window. Asking again would cost one request per
+    /// visible cover, every time a grid scrolled it back into view.
+    case skip
+    /// Ask cheaply: the entry has a validator, so the server can answer 304
+    /// and send no body at all.
+    case conditional(etag: String)
+    /// Ask outright. The entry has no validator to offer, so this costs a
+    /// full body — once, because the answer carries the validator that puts
+    /// the entry back on the cheap path.
+    case unconditional
+}
+
 actor ImageCache {
     static let shared = ImageCache()
 
@@ -89,10 +106,8 @@ actor ImageCache {
     /// render that triggers it pays nothing — the newer art lands on the next
     /// one.
     ///
-    /// Skipped while offline, while the entry is younger than
-    /// `revalidateAfter`, while it carries no validator to offer (a
-    /// "revalidation" without one is a full refetch), and while another check
-    /// of the same key is already running.
+    /// Skipped while offline, while another check of the same key is already
+    /// running, and while [`plan`] says the entry is still fresh.
     func revalidate(_ key: String) async {
         // Reserved before the first `await`, not after. An actor suspends at
         // every suspension point and admits other callers, so checking the
@@ -107,12 +122,18 @@ actor ImageCache {
         guard await Connectivity.shared.isOnline else { return }
         let url = diskURL(for: key)
         guard let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey])
-            .contentModificationDate,
-            Date().timeIntervalSince(modified) >= Self.revalidateAfter,
-            let etag = try? String(contentsOf: etagURL(for: key), encoding: .utf8)
+            .contentModificationDate
         else { return }
-        guard let fresh = try? await APIClient.shared.conditionalData(for: key, ifNoneMatch: etag)
-        else { return }
+        let stored = try? String(contentsOf: etagURL(for: key), encoding: .utf8)
+        let ifNoneMatch: String?
+        switch Self.plan(age: Date().timeIntervalSince(modified), etag: stored) {
+        case .skip: return
+        case .conditional(let etag): ifNoneMatch = etag
+        case .unconditional: ifNoneMatch = nil
+        }
+        guard let fresh = try? await APIClient.shared.conditionalData(
+            for: key, ifNoneMatch: ifNoneMatch
+        ) else { return }
 
         guard let data = fresh.data, let decoded = UIImage(data: data) else {
             // A 304: the server confirming this copy is current, which is
@@ -125,6 +146,23 @@ actor ImageCache {
             return
         }
         store(decoded, data: data, for: key, etag: fresh.etag)
+    }
+
+    /// Whether an entry `age` seconds old, holding `etag` (or nothing), is due
+    /// a check-back — and whether that check can be a conditional one.
+    ///
+    /// A validator-less entry is checked anyway. Skipping those made "we
+    /// cannot ask cheaply" mean "we never ask", and nothing ever restored the
+    /// validator — so the entry stayed on those bytes for the life of the
+    /// install, however many times the cover behind it changed. That is how a
+    /// grid tile and the detail hero came to disagree about one book (#2539):
+    /// the hero's full-cover response always carried an ETag and healed, while
+    /// a tile fetched before its thumbnail existed was served the stand-in
+    /// cover, which carried none.
+    static func plan(age: TimeInterval, etag: String?) -> RevalidationPlan {
+        guard age >= revalidateAfter else { return .skip }
+        guard let etag, !etag.isEmpty else { return .unconditional }
+        return .conditional(etag: etag)
     }
 
     /// Restart an entry's freshness window without rewriting its bytes.

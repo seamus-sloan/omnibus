@@ -203,10 +203,22 @@ fn resolve_range(headers: &HeaderMap, validator: &Validator, len: u64) -> RangeO
 /// small) probability further, but isn't applied here since collisions
 /// self-heal on the next byte change anyway.
 pub(super) fn content_etag(bytes: &[u8]) -> String {
+    namespaced_content_etag("", bytes)
+}
+
+/// [`content_etag`] under a namespace, for a route that serves one
+/// representation standing in for another.
+///
+/// Every validator in this workspace renders as 16 hex digits — `content_etag`
+/// from a 64-bit hash, `db::thumbs::thumb_etag` from a truncated SHA-256 — so
+/// two tags derived from unrelated inputs can still come out equal, rarely but
+/// really. A prefix makes the two spaces disjoint by construction, which turns
+/// "this is not that representation" from a probability into a guarantee.
+pub(super) fn namespaced_content_etag(prefix: &str, bytes: &[u8]) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
-    format!("\"{:016x}\"", hasher.finish())
+    format!("\"{prefix}{:016x}\"", hasher.finish())
 }
 
 /// Build a `304 Not Modified` carrying the same `Cache-Control` / `Vary` a

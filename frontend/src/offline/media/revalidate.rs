@@ -33,15 +33,19 @@ pub(super) enum Fetched {
 /// [`super::IMG_REVALIDATE_AFTER_SECS`], and while another revalidation of
 /// the same path is already in flight — a grid scroll must not turn into
 /// one request per visible cover, repeatedly.
+///
+/// An entry with *no* validator is checked anyway, unconditionally. Skipping
+/// those made "we cannot ask cheaply" mean "we never ask", and nothing ever
+/// restored the validator — so the entry stayed pinned to those bytes until
+/// the cache was pruned, which is how a stale thumbnail outlived the cover it
+/// was made from (#2539). The refetch costs one full body, once, and stores
+/// the validator that makes every later check a 304.
 pub(super) fn revalidate_in_background(img_dir: PathBuf, path: String, cached: &CachedImage) {
     // Cheap pre-check so an in-window render doesn't spawn a task at all.
     // It is *not* the decision — that is re-taken under the write lock
     // below, because by the time this task runs the entry may have been
     // replaced by an explicit `?v=` bust.
-    if cached.age_secs < super::IMG_REVALIDATE_AFTER_SECS
-        || cached.etag.is_none()
-        || crate::offline::sync::is_offline()
-    {
+    if cached.age_secs < super::IMG_REVALIDATE_AFTER_SECS || crate::offline::sync::is_offline() {
         return;
     }
     if !claim_revalidation(&path) {
@@ -55,9 +59,9 @@ pub(super) fn revalidate_in_background(img_dir: PathBuf, path: String, cached: &
         // edit, so applying it would overwrite the new cover with the old.
         match super::cached_image(&img_dir, &path).await {
             Some(current) if current.age_secs >= super::IMG_REVALIDATE_AFTER_SECS => {
-                if let Some(etag) = current.etag.as_deref() {
-                    let _ = super::fetch_and_cache(&img_dir, &path, Some(etag)).await;
-                }
+                // `None` is a plain GET rather than a conditional one — the
+                // only question an entry with no validator can ask.
+                let _ = super::fetch_and_cache(&img_dir, &path, current.etag.as_deref()).await;
             }
             _ => {}
         }

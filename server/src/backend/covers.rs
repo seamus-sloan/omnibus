@@ -11,7 +11,7 @@ use axum::{
 };
 use omnibus_db::{self as db};
 
-use super::conditional::{content_etag, MEDIA_CACHE_CONTROL, MEDIA_VARY};
+use super::conditional::{content_etag, namespaced_content_etag, MEDIA_CACHE_CONTROL, MEDIA_VARY};
 use super::{internal, AppState};
 use crate::auth::MediaAuthUser;
 
@@ -70,6 +70,15 @@ pub(super) async fn get_cover(
         Err(error) => internal("read cover", error),
     }
 }
+
+/// `Cache-Control` for the stand-in cover the thumb miss path serves while the
+/// WebP is still generating. Short, because the real thumbnail is seconds
+/// away — and shared by that path's 200 and 304 so the two cannot drift.
+const THUMB_PENDING_CACHE_CONTROL: &str = "private, max-age=5";
+
+/// Namespace for the stand-in cover's validator, keeping it out of the value
+/// space `db::thumbs::thumb_etag` draws from.
+const STAND_IN_ETAG_PREFIX: &str = "cover-";
 
 /// Whether the request's `If-None-Match` already carries the current
 /// `etag` — i.e. the client's cached copy is still current and a 304 can
@@ -133,7 +142,7 @@ pub(super) async fn get_thumb(
         return resp;
     }
 
-    thumb_cache_miss_response(&state, &uuid, id, size, last_modified_epoch).await
+    thumb_cache_miss_response(&state, &uuid, id, size, last_modified_epoch, &headers).await
 }
 
 /// Parse the `sm`/`md`/`lg` size path segment. `None` on an unrecognized
@@ -230,30 +239,62 @@ fn spawn_touch_thumb(id: i64, size: db::ThumbSize) {
 /// queue generation when there's actually something to thumbnail. Queuing
 /// for a coverless book just produces a guaranteed `no cover for book …`
 /// worker error on every request, polluting the log.
+///
+/// The body is the full cover standing in for a thumbnail that does not exist
+/// yet, and it carries a validator like any other — a cacheable 200 without
+/// one is a dead end for a client that revalidates, because there is nothing
+/// to revalidate *with*. Both offline clients cache what this returns, so a
+/// validator-less answer here left a grid tile pinned to whatever cover was
+/// current at the moment of the miss, indefinitely (#2539).
 async fn thumb_cache_miss_response(
     state: &AppState,
     uuid: &str,
     id: i64,
     size: db::ThumbSize,
     last_modified_epoch: i64,
+    headers: &HeaderMap,
 ) -> Response {
     match db::get_cover(&state.pool, id).await {
         Ok(Some((mime, bytes))) => {
+            // Queued before the conditional answer, not after: a client that
+            // keeps revalidating this stand-in is precisely the one waiting on
+            // the WebP, so a 304 must still drive generation forward.
+            state.worker.post(db::worker::Task::GenerateThumbs {
+                book_id: id,
+                last_modified_epoch,
+            });
+            // The cover's own content hash, not `thumb_etag` — these are the
+            // cover bytes — and namespaced so it cannot *collide* with one
+            // either. Both derivations render 16 hex digits, so without the
+            // prefix a chance equality would answer 304 to a client asking for
+            // the real WebP and leave it on the stand-in for good. The prefix
+            // is what makes "once the WebP lands you get the WebP" a guarantee
+            // rather than a very good bet.
+            let etag = namespaced_content_etag(STAND_IN_ETAG_PREFIX, &bytes);
+            if if_none_match_hits(headers, &etag) {
+                tracing::debug!(
+                    uuid,
+                    book_id = id,
+                    ?size,
+                    "thumb: cache miss — stand-in cover not modified (304)"
+                );
+                return super::conditional::not_modified(
+                    &etag,
+                    THUMB_PENDING_CACHE_CONTROL,
+                    MEDIA_VARY,
+                );
+            }
             tracing::debug!(
                 uuid,
                 book_id = id,
                 ?size,
                 "thumb: cache miss — queuing generation, serving original cover"
             );
-            state.worker.post(db::worker::Task::GenerateThumbs {
-                book_id: id,
-                last_modified_epoch,
-            });
             (
                 [
                     (header::CONTENT_TYPE, mime.as_str()),
-                    // Short TTL: browser will re-fetch after ~5 s when the WebP is ready.
-                    (header::CACHE_CONTROL, "private, max-age=5"),
+                    (header::CACHE_CONTROL, THUMB_PENDING_CACHE_CONTROL),
+                    (header::ETAG, etag.as_str()),
                     (header::VARY, MEDIA_VARY),
                     (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
                 ],

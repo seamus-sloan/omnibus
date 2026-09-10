@@ -572,6 +572,159 @@ async fn api_get_thumb_returns_200_and_serves_original_cover_on_cache_miss() {
     assert_eq!(&bytes[..], TINY_PNG);
 }
 
+/// Seed a book with a cover on disk but no generated thumbnail — the state
+/// every freshly-covered book is in until the worker catches up, and the one
+/// that put a grid tile and the detail hero on different covers (#2539).
+async fn seed_uncovered_thumb(
+    pool: &sqlx::SqlitePool,
+    slug: &str,
+) -> (i64, String, CoversDirGuard, ThumbsDirGuard) {
+    let (id, uuid) = seed_book_with_uuid(pool, "/lib", "Thumb Miss Book").await;
+    sqlx::query("UPDATE books SET has_cover = 1, last_modified = 0 WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+    let covers_guard = CoversDirGuard::new(&format!("{slug}_cover"));
+    let thumbs_guard = ThumbsDirGuard::new(slug);
+    std::fs::write(db::covers_dir().join(format!("{uuid}.png")), TINY_PNG)
+        .expect("write cover fixture");
+    (id, uuid, covers_guard, thumbs_guard)
+}
+
+#[tokio::test]
+async fn api_get_thumb_publishes_a_validator_for_the_stand_in_cover_on_cache_miss() {
+    // A cacheable body with no validator is a dead end for a client that
+    // revalidates: it has nothing to ask with, so it never asks again and
+    // holds these bytes past every later cover change (#2539).
+    let (app, _, pool) = fixture().await;
+    let (_id, uuid, _covers, _thumbs) = seed_uncovered_thumb(&pool, "thumb_miss_validator").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .oneshot(get_with_bearer(&format!("/api/thumbs/{uuid}/md"), &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let etag = res
+        .headers()
+        .get(header::ETAG)
+        .expect("the stand-in cover must carry a validator")
+        .to_str()
+        .unwrap()
+        .to_string();
+    // Strong, like every other validator this server publishes — see rule 09a.
+    assert!(
+        !etag.starts_with("W/"),
+        "expected a strong entity-tag: {etag}"
+    );
+    // Namespaced out of `thumb_etag`'s value space. Both render 16 hex digits,
+    // so without the prefix the two could collide by chance and a 304 would
+    // strand a client on the stand-in — see the sibling test below.
+    assert!(
+        etag.starts_with("\"cover-"),
+        "the stand-in's validator must be namespaced: {etag}"
+    );
+    assert_eq!(
+        res.headers().get(header::VARY).unwrap(),
+        "Cookie, Authorization",
+        "an ETag on a multiply-authenticated route travels with its Vary"
+    );
+}
+
+#[tokio::test]
+async fn api_get_thumb_returns_304_for_the_stand_in_cover_when_if_none_match_matches() {
+    let (app, _, pool) = fixture().await;
+    let (_id, uuid, _covers, _thumbs) = seed_uncovered_thumb(&pool, "thumb_miss_304").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let first = app
+        .clone()
+        .oneshot(get_with_bearer(&format!("/api/thumbs/{uuid}/md"), &token))
+        .await
+        .unwrap();
+    let etag = first
+        .headers()
+        .get(header::ETAG)
+        .expect("etag")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let second = app
+        .oneshot(get_with_bearer_and_if_none_match(
+            &format!("/api/thumbs/{uuid}/md"),
+            &token,
+            &etag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(second.headers().get(header::ETAG).unwrap(), etag.as_str());
+    // The 304 repeats the 200's policy rather than drifting to the cache-hit
+    // path's — the real thumbnail is still seconds away, not indefinitely so.
+    assert_eq!(
+        second.headers().get(header::CACHE_CONTROL).unwrap(),
+        "private, max-age=5"
+    );
+    assert_eq!(
+        second.headers().get(header::VARY).unwrap(),
+        "Cookie, Authorization"
+    );
+    let bytes = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+    assert!(bytes.is_empty());
+}
+
+#[tokio::test]
+async fn api_get_thumb_stand_in_validator_never_matches_the_generated_thumbnail() {
+    // The whole point of publishing one: a client holding the stand-in must
+    // be handed the real WebP once it exists, not told its copy is current.
+    // The namespace is what makes this hold for *every* pair of inputs rather
+    // than for all but a vanishing few — the two hashes share an output width.
+    let (app, _, pool) = fixture().await;
+    let (id, uuid, _covers, _thumbs) = seed_uncovered_thumb(&pool, "thumb_miss_then_hit").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let first = app
+        .clone()
+        .oneshot(get_with_bearer(&format!("/api/thumbs/{uuid}/md"), &token))
+        .await
+        .unwrap();
+    let stand_in_etag = first
+        .headers()
+        .get(header::ETAG)
+        .expect("etag")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // The worker catches up: the WebP lands, so the hit path takes over.
+    std::fs::write(
+        db::thumb_path_for(id, db::ThumbSize::Md),
+        b"real-webp-bytes",
+    )
+    .expect("write thumb fixture");
+
+    let second = app
+        .oneshot(get_with_bearer_and_if_none_match(
+            &format!("/api/thumbs/{uuid}/md"),
+            &token,
+            &stand_in_etag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        second.status(),
+        StatusCode::OK,
+        "the stand-in's validator must not satisfy a request for the real thumbnail"
+    );
+    let bytes = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], b"real-webp-bytes");
+}
+
 #[tokio::test]
 async fn api_get_thumb_returns_500_when_books_table_is_missing_during_uuid_resolution() {
     let (app, _, pool) = fixture().await;

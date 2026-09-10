@@ -118,9 +118,32 @@ compare it against a later metadata refresh — `PlannedFile.source_etag` in
 
 Cached cover bytes carry their own `ETag` sibling and revalidate with
 `If-None-Match` *after* the cached image has been served, never before —
-skipped while offline, inside a fresh window, without a stored validator, or
-while a check of the same key is in flight. Without all four, a grid scroll
-becomes one conditional request per visible cover.
+skipped while offline, inside a fresh window, or while a check of the same key
+is in flight. Without all three, a grid scroll becomes one conditional request
+per visible cover.
+
+**A missing validator is not a fourth skip.** It once was, on both clients, and
+the reasoning looked sound: with nothing to offer as `If-None-Match` the check
+would be a full refetch, so why spend it. But nothing else ever *restored* the
+validator, so "cannot ask cheaply" became "never asks again" — the entry stayed
+on those bytes for as long as the cache kept them, however many times the cover
+behind them changed. That is how a library tile and the book detail hero came to
+show different covers for the same book (#2539): the hero reads the full-cover
+route, which always publishes an `ETag`, while a tile fetched before its
+thumbnail existed was served the stand-in cover, which did not. Such an entry
+refetches unconditionally once its window lapses, and the cost is paid once —
+the answer carries the validator that puts it back on the cheap path.
+
+The other half of that is a server rule: **a cacheable 200 from a byte-serving
+route publishes a validator, including the stand-in ones.** `/api/thumbs/*`
+answers a cache miss with the full cover while the WebP generates, and that body
+is cached by both offline clients like any other. Its validator is the cover's
+own content hash rather than `thumb_etag`, **and namespaced** (`"cover-…"`) so
+it cannot collide with one: every validator here renders as 16 hex digits, so
+two drawn from unrelated inputs can come out equal, and a chance equality would
+answer 304 to a client asking for the real WebP and strand it on the stand-in
+permanently. Prefixing is what makes "once the thumbnail exists you get the
+thumbnail" a guarantee rather than a very good bet.
 
 ## Asking about many files is one request
 
