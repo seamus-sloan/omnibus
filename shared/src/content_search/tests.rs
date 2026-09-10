@@ -1,3 +1,7 @@
+//! Wire-shape tests for content search: the spoiler-filter tokens,
+//! the optional per-hit annotations, and that a hit written before
+//! the enrichment still decodes.
+
 use super::*;
 
 #[test]
