@@ -587,8 +587,12 @@ struct MetadataFetchSheet: View {
             )
             // Every thumb size is regenerated server-side, so every cached one
             // is stale — including the sizes this screen isn't showing, which
-            // the grid behind it is. Unconditional: the write has landed, and
-            // those caches are wrong whatever the sheet is showing by now.
+            // the grid behind it is. The full cover goes with them: the detail
+            // hero reads that key, and leaving it behind left the screen this
+            // sheet returns to showing the replaced art until its revalidation
+            // window lapsed. Unconditional: the write has landed, and those
+            // caches are wrong whatever the sheet is showing by now.
+            await ImageCache.shared.invalidate("/api/covers/\(uuid)")
             for size in [ThumbSize.sm, .md, .lg] {
                 await ImageCache.shared.invalidate("/api/thumbs/\(uuid)/\(size.rawValue)")
             }

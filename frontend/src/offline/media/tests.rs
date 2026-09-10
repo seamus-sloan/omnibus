@@ -392,20 +392,50 @@ async fn img_does_not_revalidate_a_freshly_cached_image() {
 }
 
 #[tokio::test]
-async fn img_does_not_revalidate_an_entry_with_no_stored_validator() {
-    // Nothing to offer as `If-None-Match`, so a "revalidation" would be a
-    // full refetch — as expensive as not caching at all.
+async fn img_refetches_a_stale_entry_with_no_stored_validator_and_keeps_the_one_it_gets() {
+    // #2539: skipping these made "cannot ask cheaply" mean "never ask", and
+    // nothing restored the validator — so the entry stayed on those bytes for
+    // as long as the cache kept them, however many times the cover changed.
     let (base, token, dir) = boot(&[]).await;
     let img_dir = dir.path().join("imgcache");
     seed_cache_entry(&img_dir, "/api/covers/u1", b"legacy-cover", None);
-    let (hits, _seen) = spawn_upstream(axum::http::StatusCode::OK, b"new", "\"v2\"").await;
+    let (hits, seen) =
+        spawn_upstream(axum::http::StatusCode::OK, b"new-cover-bytes", "\"v2\"").await;
 
     let encoded = urlencode("/api/covers/u1");
-    let _ = reqwest::get(format!("{base}/img?path={encoded}&token={token}"))
+    let resp = reqwest::get(format!("{base}/img?path={encoded}&token={token}"))
         .await
         .expect("get");
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        resp.bytes().await.expect("body").as_ref(),
+        b"legacy-cover",
+        "the request that triggers the refetch still serves instantly"
+    );
+
+    assert!(
+        eventually(
+            || read_cached(&img_dir, "/api/covers/u1").as_deref() == Some(&b"new-cover-bytes"[..])
+        )
+        .await,
+        "an entry with no validator must still pick up a changed cover"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        seen.lock().expect("lock").as_deref(),
+        None,
+        "with nothing to offer, the check is a plain GET rather than a conditional one"
+    );
+    // The cost is paid once: the answer carries a validator, so the entry
+    // rejoins the cheap path and every later check-back is a 304.
+    let name = cache_file_name("/api/covers/u1");
+    assert!(
+        eventually(|| {
+            std::fs::read_to_string(img_dir.join(format!("{name}.etag")))
+                .is_ok_and(|s| s == "\"v2\"")
+        })
+        .await,
+        "the refetch must store the validator it was handed"
+    );
 }
 
 #[tokio::test]
