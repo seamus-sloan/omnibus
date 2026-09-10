@@ -118,6 +118,9 @@ fn apply_status(
         book_uuid: uuid.clone(),
         status,
         updated_at: now_unix(),
+        // Built client-side ahead of the server's answer, so there is no
+        // server-rendered stamp to carry.
+        updated_at_iso: None,
         finished_at: (status == ReadStatus::Finished).then(now_unix),
     }));
     spawn(async move {
@@ -187,6 +190,7 @@ mod tests {
             book_uuid: "b".into(),
             status,
             updated_at: 0,
+            updated_at_iso: None,
             finished_at,
         }
     }

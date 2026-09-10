@@ -21,6 +21,7 @@ fn copy(id: i64) -> PhysicalCopy {
         isbn: Some("9781635575637".into()),
         added_by_user_id: None,
         checked_in_at: 0,
+        checked_in_at_iso: None,
         note: Some("Hardback".into()),
     }
 }

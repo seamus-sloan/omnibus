@@ -26,7 +26,9 @@ fn map_copy(r: CopyRow) -> PhysicalCopy {
         added_by_user_id: r.3,
         checked_in_at: r.4,
         note: r.5,
+        checked_in_at_iso: None,
     }
+    .with_iso()
 }
 
 /// Check in a physical copy for a book, fulfilling every user's wishlist for it.

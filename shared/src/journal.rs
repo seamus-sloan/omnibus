@@ -86,6 +86,32 @@ pub struct JournalEntry {
     pub client_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// [`Self::created_at`] rendered as ISO 8601 UTC. When the entry was written.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and
+    /// sort on, the string is what a reader of the API can act on without
+    /// doing calendar arithmetic by hand. Populated by the server's read
+    /// paths; `None` on a payload a client built itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at_iso: Option<String>,
+    /// [`Self::updated_at`] rendered as ISO 8601 UTC. When it was last edited.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and
+    /// sort on, the string is what a reader of the API can act on without
+    /// doing calendar arithmetic by hand. Populated by the server's read
+    /// paths; `None` on a payload a client built itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at_iso: Option<String>,
+}
+
+impl JournalEntry {
+    /// Fill the ISO siblings from the epochs already on the entry.
+    #[must_use]
+    pub fn with_iso(mut self) -> Self {
+        self.created_at_iso = Some(crate::to_iso8601(self.created_at));
+        self.updated_at_iso = Some(crate::to_iso8601(self.updated_at));
+        self
+    }
 }
 
 /// Write payload: create a new journal entry on a book. `status` defaults to

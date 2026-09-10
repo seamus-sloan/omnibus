@@ -519,13 +519,15 @@ fn row_to_highlight(row: &sqlx::sqlite::SqliteRow) -> Result<Highlight, Highligh
         text: row.try_get("text")?,
         client_id: row.try_get("client_id")?,
         created_at: row.try_get("created_at")?,
+        created_at_iso: None,
         // Filled by `list_highlights`, which loads the book's structure
         // once for the whole list; a single-row read leaves them unplaced
         // rather than paying three queries to place one anchor.
         spine_index: None,
         chapter_title: None,
         percent_through_book: None,
-    })
+    }
+    .with_iso())
 }
 
 #[cfg(test)]

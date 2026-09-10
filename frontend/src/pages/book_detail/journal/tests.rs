@@ -49,6 +49,8 @@ mod render_tests {
             client_id: None,
             created_at: 1_779_019_200,
             updated_at: 1_779_019_200,
+            created_at_iso: None,
+            updated_at_iso: None,
         }
     }
 

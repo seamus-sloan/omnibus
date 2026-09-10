@@ -241,12 +241,14 @@ fn row_to_bookmark(row: &sqlx::sqlite::SqliteRow) -> Result<Bookmark, BookmarkEr
         title: row.try_get("title")?,
         client_id: row.try_get("client_id")?,
         created_at: row.try_get("created_at")?,
+        created_at_iso: None,
         // Filled by `list_bookmarks`, which loads the book's structure once
         // for the whole list; a single-row read leaves them unplaced.
         spine_index: None,
         chapter_title: None,
         percent_through_book: None,
-    })
+    }
+    .with_iso())
 }
 
 #[cfg(test)]
