@@ -265,7 +265,7 @@ fn iso_renders_every_epoch_so_a_stamp_is_never_missing() {
     // required epoch is always present. The `time`-backed version this
     // replaced declined outside its own range, and callers carried a branch
     // for a case that cannot arise.
-    assert_eq!(iso(i64::MAX), "292277026596-12-04T15:30:07Z");
+    assert_eq!(iso(i64::MAX), "+292277026596-12-04T15:30:07Z");
     assert_eq!(iso(i64::MIN), "-292277022657-01-27T08:29:52Z");
 }
 

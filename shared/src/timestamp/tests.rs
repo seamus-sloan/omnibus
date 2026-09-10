@@ -93,6 +93,14 @@ fn to_iso8601_renders_both_ends_of_the_i64_range_without_overflowing() {
     // believed it and got a panic would take the process down over a
     // corrupt timestamp. Extended years are absurd but well-formed, which
     // is the point — every epoch renders, so no caller needs a fallback.
-    assert_eq!(to_iso8601(i64::MAX), "292277026596-12-04T15:30:07Z");
+    assert_eq!(to_iso8601(i64::MAX), "+292277026596-12-04T15:30:07Z");
     assert_eq!(to_iso8601(i64::MIN), "-292277022657-01-27T08:29:52Z");
+}
+
+#[test]
+fn to_iso8601_signs_an_expanded_year_and_pads_a_small_negative_one() {
+    // `{year:04}` counted the sign in its width, so year -1 rendered as
+    // `-001`; and an unsigned five-digit year is not ISO 8601 at all.
+    assert_eq!(to_iso8601(-62_198_755_200), "-0001-01-01T00:00:00Z");
+    assert!(to_iso8601(i64::MAX).starts_with('+'));
 }

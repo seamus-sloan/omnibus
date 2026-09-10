@@ -147,6 +147,13 @@ pub struct FinishedBook {
     pub title: String,
     pub author: Option<String>,
     pub finished_at: i64,
+    /// [`Self::finished_at`] rendered as ISO 8601 UTC.
+    ///
+    /// Both forms travel together: the epoch is what clients compare and sort
+    /// on, the string is what a reader of the API can act on without doing
+    /// calendar arithmetic by hand. Populated by the server's read paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at_iso: Option<String>,
     /// `/api/covers/:uuid` when the book has a cover, `None` otherwise — same
     /// shape as `EbookMetadata::cover_url`, so the drill-in's finished-books
     /// list can hand it straight to `CoverTile`.
@@ -1298,4 +1305,13 @@ pub struct SessionLogPage {
     /// knowing how the keyset is built.
     #[serde(default)]
     pub next_before: Option<String>,
+}
+
+impl FinishedBook {
+    /// Fill [`Self::finished_at_iso`] from the epoch already on the row.
+    #[must_use]
+    pub fn with_iso(mut self) -> Self {
+        self.finished_at_iso = Some(crate::to_iso8601(self.finished_at));
+        self
+    }
 }

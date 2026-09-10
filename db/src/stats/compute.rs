@@ -520,7 +520,9 @@ pub(super) async fn finished_books(
                 title: r.get("title"),
                 author: r.get("author"),
                 finished_at: r.get("finished_at"),
+                finished_at_iso: None,
             }
+            .with_iso()
         })
         .collect())
 }

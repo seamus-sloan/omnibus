@@ -194,6 +194,7 @@ fn finished_book_as_ebook_carries_title_author_and_cover() {
         title: "Dune".to_string(),
         author: Some("Frank Herbert".to_string()),
         finished_at: 0,
+        finished_at_iso: None,
         cover_url: Some("/api/covers/u1".to_string()),
         rating: Some(4.5),
     };

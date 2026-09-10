@@ -1,22 +1,22 @@
-//! Render a unix timestamp as ISO 8601 UTC, with no date dependency.
+//! Render a unix timestamp as ISO 8601 UTC, with no calendar dependency.
 //!
-//! The wire carries machine timestamps as unix seconds — compact, unambiguous,
-//! and what SQLite stores. That is the wrong shape for a *reader* of the API,
-//! who otherwise does epoch arithmetic by hand to answer "when was this?", so
-//! the read surfaces publish both forms.
-//!
-//! `shared` is deliberately dependency-light (serde and thiserror), and a
-//! calendar crate would be a heavy addition for one formatting job, so the
-//! civil-date conversion is done here — the days-from-epoch algorithm, valid
-//! across the whole `i64` range this ever sees.
+//! `shared` carries only serde and thiserror, so the civil-date conversion is
+//! done here rather than pulling in a date crate for one formatting job. Used
+//! by every read surface that publishes a stamp beside its epoch.
 
 #[cfg(test)]
 mod tests;
 
 /// Format unix `seconds` as `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 ///
-/// Fixed-width, so the output sorts lexicographically in chronological
-/// order — the same property `books.last_interacted_at` relies on.
+/// Fixed-width for years `0000..=9999`, which is every timestamp this ever
+/// sees, so the output sorts lexicographically in chronological order — the
+/// same property `books.last_interacted_at` relies on.
+///
+/// Outside that range the year takes ISO 8601's expanded form with an
+/// explicit sign (`+292277026596-…`, `-0001-…`), which parsers accept but
+/// which is no longer fixed-width and no longer sorts. Only a corrupt stamp
+/// reaches it; rendering one honestly beats rendering it as a plausible date.
 pub fn to_iso8601(seconds: i64) -> String {
     // Floor division, so a pre-epoch timestamp borrows a day rather than
     // truncating toward zero and landing an hour into the wrong date.
@@ -28,7 +28,18 @@ pub fn to_iso8601(seconds: i64) -> String {
         (secs_of_day % 3_600) / 60,
         secs_of_day % 60,
     );
-    format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
+    let year = if (0..=9999).contains(&year) {
+        format!("{year:04}")
+    } else if year > 9999 {
+        // ISO 8601 expanded years are signed; without the `+` many parsers
+        // reject the string outright.
+        format!("+{year}")
+    } else {
+        // `{year:04}` counts the sign in its width, so year -1 rendered
+        // `-001`. Pad the magnitude instead.
+        format!("-{:04}", year.unsigned_abs())
+    };
+    format!("{year}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
 }
 
 /// Optional counterpart to [`to_iso8601`], for the wire fields that carry a
