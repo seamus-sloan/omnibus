@@ -5,14 +5,14 @@
 //! reader — `position` is seconds-as-string or an EPUB CFI respectively.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::{IntoResponse, Response},
     Json,
 };
 use omnibus_db::{self as db, bookmarks::BookmarkError};
 use omnibus_shared::{CreateBookmark, UpdateBookmark};
 
-use super::{internal, AppState};
+use super::{internal, AnnotationOrderQuery, AppState};
 use crate::auth::AuthUser;
 
 /// Create a bookmark on a book.
@@ -36,13 +36,16 @@ pub(super) async fn post_bookmark(
     }
 }
 
-/// List all bookmarks for a user on a specific book.
+/// List a user's bookmarks in a book, each placed in the book (spine index,
+/// chapter title, percent through the book) and ordered by that position.
+/// `?order=chronological` restores creation order.
 pub(super) async fn get_bookmarks(
     user: AuthUser,
     State(state): State<AppState>,
     Path(book_uuid): Path<String>,
+    Query(order): Query<AnnotationOrderQuery>,
 ) -> Response {
-    match db::bookmarks::list_bookmarks(&state.pool, user.id, &book_uuid).await {
+    match db::bookmarks::list_bookmarks(&state.pool, user.id, &book_uuid, order.into()).await {
         Ok(list) => Json(list).into_response(),
         Err(BookmarkError::Sqlx(e)) => internal("list_bookmarks", e),
         Err(e) => internal("list_bookmarks", e),

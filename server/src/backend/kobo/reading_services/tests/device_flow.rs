@@ -162,9 +162,10 @@ async fn patch_replay_of_the_same_body_creates_no_duplicate_rows() {
         assert_eq!(res.status(), StatusCode::NO_CONTENT);
     }
 
-    let listed = db::annotations::list_highlights(&pool, user, &uuid)
-        .await
-        .unwrap();
+    let listed =
+        db::annotations::list_highlights(&pool, user, &uuid, db::AnnotationOrder::Chronological)
+            .await
+            .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].color, omnibus_shared::HighlightColor::Blue);
 }
@@ -198,9 +199,10 @@ async fn patch_tolerates_garbage_and_variant_delete_shapes_without_500() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
 
-    let listed = db::annotations::list_highlights(&pool, user, &uuid)
-        .await
-        .unwrap();
+    let listed =
+        db::annotations::list_highlights(&pool, user, &uuid, db::AnnotationOrder::Chronological)
+            .await
+            .unwrap();
     assert_eq!(listed.len(), 1, "kobo-drop deleted, garbage skipped");
     assert_eq!(listed[0].client_id.as_deref(), Some("kobo-keep"));
 }
@@ -221,10 +223,15 @@ async fn patch_for_an_unknown_book_answers_204_without_ingesting() {
         .unwrap();
     // Device noise (sideloaded book) must not error-loop the sync.
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
-    assert!(db::annotations::list_highlights(&pool, user, &uuid)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(db::annotations::list_highlights(
+        &pool,
+        user,
+        &uuid,
+        db::AnnotationOrder::Chronological,
+    )
+    .await
+    .unwrap()
+    .is_empty());
 }
 
 #[tokio::test]
@@ -298,9 +305,10 @@ async fn patch_stores_a_derived_range_cfi_when_kepub_and_source_are_on_disk() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
 
-    let listed = db::annotations::list_highlights(&pool, user, &uuid)
-        .await
-        .unwrap();
+    let listed =
+        db::annotations::list_highlights(&pool, user, &uuid, db::AnnotationOrder::Chronological)
+            .await
+            .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(
         listed[0].epub_cfi_range.as_deref(),

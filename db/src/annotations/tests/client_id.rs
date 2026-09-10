@@ -29,7 +29,9 @@ async fn create_highlight_is_idempotent_on_client_id() {
         first.client_id.as_deref(),
         Some(input.client_id.as_deref().unwrap())
     );
-    let all = list_highlights(&pool, user, &uuid).await.unwrap();
+    let all = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(all.len(), 1, "replayed create must not duplicate");
 }
 
@@ -109,7 +111,13 @@ async fn create_highlight_without_client_id_still_allows_duplicates() {
     create_highlight(&pool, user, &input).await.unwrap();
     create_highlight(&pool, user, &input).await.unwrap();
 
-    assert_eq!(list_highlights(&pool, user, &uuid).await.unwrap().len(), 2);
+    assert_eq!(
+        list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]

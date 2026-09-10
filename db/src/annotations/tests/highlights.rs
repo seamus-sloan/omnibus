@@ -51,7 +51,9 @@ async fn list_highlights_returns_empty_when_none_exist() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
     let (_, uuid) = seed(&pool, "/lib", "Book A").await;
-    let list = list_highlights(&pool, user, &uuid).await.unwrap();
+    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert!(list.is_empty());
 }
 
@@ -81,13 +83,21 @@ async fn list_highlights_isolates_by_user_and_book() {
     create_highlight(&pool, alice, &input_b).await.unwrap();
     create_highlight(&pool, bob, &input_a).await.unwrap();
 
-    let alice_a = list_highlights(&pool, alice, &uuid_a).await.unwrap();
+    let alice_a = list_highlights(&pool, alice, &uuid_a, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(alice_a.len(), 1);
-    let alice_b = list_highlights(&pool, alice, &uuid_b).await.unwrap();
+    let alice_b = list_highlights(&pool, alice, &uuid_b, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(alice_b.len(), 1);
-    let bob_a = list_highlights(&pool, bob, &uuid_a).await.unwrap();
+    let bob_a = list_highlights(&pool, bob, &uuid_a, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(bob_a.len(), 1);
-    let bob_b = list_highlights(&pool, bob, &uuid_b).await.unwrap();
+    let bob_b = list_highlights(&pool, bob, &uuid_b, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert!(bob_b.is_empty());
 }
 
@@ -113,7 +123,9 @@ async fn update_highlight_color_changes_color() {
     update_highlight_color(&pool, user, h.id, HighlightColor::Violet)
         .await
         .unwrap();
-    let list = list_highlights(&pool, user, &uuid).await.unwrap();
+    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(list[0].color, HighlightColor::Violet);
 }
 
@@ -166,13 +178,17 @@ async fn update_highlight_note_sets_and_clears() {
     update_highlight_note(&pool, user, h.id, Some("important passage"))
         .await
         .unwrap();
-    let list = list_highlights(&pool, user, &uuid).await.unwrap();
+    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(list[0].note.as_deref(), Some("important passage"));
 
     update_highlight_note(&pool, user, h.id, None)
         .await
         .unwrap();
-    let list = list_highlights(&pool, user, &uuid).await.unwrap();
+    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert!(list[0].note.is_none());
 }
 
@@ -196,7 +212,9 @@ async fn delete_highlight_removes_row() {
     .unwrap();
 
     delete_highlight(&pool, user, h.id).await.unwrap();
-    let list = list_highlights(&pool, user, &uuid).await.unwrap();
+    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert!(list.is_empty());
 }
 
@@ -254,7 +272,9 @@ async fn list_highlights_caps_response_at_hard_limit() {
     let over_cap = LIST_HIGHLIGHTS_LIMIT + 500;
     seed_highlights_raw(&pool, user, &uuid, over_cap).await;
 
-    let list = list_highlights(&pool, user, &uuid).await.unwrap();
+    let list = list_highlights(&pool, user, &uuid, AnnotationOrder::Chronological)
+        .await
+        .unwrap();
     assert_eq!(
         list.len() as i64,
         LIST_HIGHLIGHTS_LIMIT,

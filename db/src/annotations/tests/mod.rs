@@ -5,6 +5,7 @@
 mod client_id;
 mod highlights;
 mod kobo;
+mod placement;
 
 use omnibus_shared::EbookMetadata;
 
@@ -46,4 +47,45 @@ async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
     .fetch_one(pool)
     .await
     .unwrap()
+}
+
+/// Give a book's EPUB the derived structure the anchor index reads: four
+/// equal spine documents and a TOC entry naming each of the last three.
+/// Written directly rather than extracted, so the test needs no archive.
+async fn seed_epub_structure(pool: &SqlitePool, book_id: i64) {
+    let file_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM book_files WHERE book_id = ? AND format = 'EPUB' ORDER BY id LIMIT 1",
+    )
+    .bind(book_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    for spine_index in 0..4i64 {
+        sqlx::query(
+            "INSERT INTO epub_spine_stats (book_file_id, spine_index, href, visible_chars, chars_before)
+             VALUES (?, ?, ?, 1000, ?)",
+        )
+        .bind(file_id)
+        .bind(spine_index)
+        .bind(format!("c{spine_index}.xhtml"))
+        .bind(spine_index * 1000)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    for (ordinal, title, spine_index) in [(0i64, "One", 1i64), (1, "Two", 2), (2, "Three", 3)] {
+        sqlx::query(
+            "INSERT INTO ebook_chapters (book_file_id, ordinal, title, href, spine_index, start_chars)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(file_id)
+        .bind(ordinal)
+        .bind(title)
+        .bind(format!("c{spine_index}.xhtml"))
+        .bind(spine_index)
+        .bind(spine_index * 1000)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
 }

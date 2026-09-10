@@ -96,6 +96,9 @@ async fn mock_server() -> String {
                         text: input.text,
                         client_id: input.client_id,
                         created_at: 222,
+                        spine_index: None,
+                        chapter_title: None,
+                        percent_through_book: None,
                     })
                 },
             ),
@@ -123,6 +126,9 @@ async fn mock_server() -> String {
                         title: input.title,
                         client_id: input.client_id,
                         created_at: 111,
+                        spine_index: None,
+                        chapter_title: None,
+                        percent_through_book: None,
                     })
                 },
             ),

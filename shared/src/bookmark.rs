@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::highlight::CreateHighlight;
 
 /// A persisted bookmark.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// `PartialEq` but not `Eq`: `percent_through_book` is a float.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Bookmark {
     pub id: i64,
@@ -20,6 +22,19 @@ pub struct Bookmark {
     #[serde(default)]
     pub client_id: Option<String>,
     pub created_at: i64,
+    /// Spine document this anchor sits in, resolved from its CFI. `None`
+    /// for a Kobo-origin anchor and anything else unparseable.
+    #[serde(default)]
+    pub spine_index: Option<i64>,
+    /// TOC title of the chapter it sits in, when the book's structure has
+    /// been extracted.
+    #[serde(default)]
+    pub chapter_title: Option<String>,
+    /// How far through the book it sits, 0..=100. Spine-granular — it
+    /// measures to the start of the containing spine document, which is what
+    /// the stored structure records.
+    #[serde(default)]
+    pub percent_through_book: Option<f64>,
 }
 
 /// Payload for creating a new bookmark.

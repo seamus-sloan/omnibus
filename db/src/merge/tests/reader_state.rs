@@ -138,9 +138,14 @@ async fn merge_moves_highlights_to_target() {
         .await
         .unwrap();
 
-    let on_target = crate::annotations::list_highlights(&pool, user, &target)
-        .await
-        .unwrap();
+    let on_target = crate::annotations::list_highlights(
+        &pool,
+        user,
+        &target,
+        crate::AnnotationOrder::Chronological,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         on_target.len(),
         1,

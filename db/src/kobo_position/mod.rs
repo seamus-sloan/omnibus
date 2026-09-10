@@ -5,7 +5,7 @@
 //! handlers; every failure degrades to "no derived position", never a wrong one.
 
 mod book;
-mod cfi;
+pub(crate) mod cfi;
 mod location;
 #[cfg(test)]
 mod tests;
