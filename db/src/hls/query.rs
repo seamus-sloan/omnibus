@@ -116,9 +116,15 @@ pub async fn book_runtime_seconds(
     let Some(resolved) = resolve_audiobook(pool, book_uuid).await? else {
         return Ok(None);
     };
-    let parts = get_parts(pool, resolved.book_file_id).await?;
-    let total: f64 = parts.iter().map(|p| p.duration_seconds).sum();
-    Ok((total > 0.0).then_some(total))
+    // Summed in SQL: this runs once per distinct book on the content-search
+    // path, and the part rows are not otherwise wanted.
+    let total: Option<f64> = sqlx::query_scalar(
+        "SELECT SUM(duration_seconds) FROM book_file_parts WHERE book_file_id = ?",
+    )
+    .bind(resolved.book_file_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(total.filter(|t| *t > 0.0))
 }
 
 /// Fetch chapter markers for a `book_file_id`. Always returns at least one
