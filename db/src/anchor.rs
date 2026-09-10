@@ -5,7 +5,7 @@
 //! Resolution is **spine-granular** and reads nothing but the structure
 //! tables: a CFI carries its spine step, `epub_spine_stats` turns that into
 //! a whole-book percent, and `ebook_chapters` names the chapter. No EPUB is
-//! opened, so placing sixteen highlights costs the same three queries as
+//! opened, so placing sixteen highlights costs the same structure reads as
 //! placing one — which is the point, since the alternative was sixteen
 //! round-trips of client-side CFI arithmetic.
 
@@ -89,26 +89,37 @@ impl AnchorIndex {
     /// Load the structure for one book. An unknown uuid, a book with no
     /// EPUB, or one whose structure has never been extracted all yield an
     /// index that places nothing — callers get empty placements, not errors.
-    pub async fn load(pool: &SqlitePool, book_uuid: &str) -> Result<Self, AnchorError> {
-        let mut index = Self {
+    /// The index for a book with no structure to place anything against.
+    fn empty() -> Self {
+        Self {
             spine: Vec::new(),
             chapters: Vec::new(),
             total_chars: 0,
             audio_seconds: None,
-        };
+        }
+    }
+
+    pub async fn load(pool: &SqlitePool, book_uuid: &str) -> Result<Self, AnchorError> {
         let Some(canonical) = crate::resolve_canonical_book_uuid(pool, book_uuid)
             .await
             .map_err(books_error)?
         else {
-            return Ok(index);
+            return Ok(Self::empty());
         };
-        index.audio_seconds = crate::hls::book_runtime_seconds(pool, &canonical)
+        Self::load_canonical(pool, &canonical).await
+    }
+
+    /// [`Self::load`] for a caller that has already resolved the uuid, so the
+    /// canonicalisation is not paid for twice.
+    pub async fn load_canonical(pool: &SqlitePool, canonical: &str) -> Result<Self, AnchorError> {
+        let mut index = Self::empty();
+        index.audio_seconds = crate::hls::book_runtime_seconds(pool, canonical)
             .await
             .map_err(|e| match e {
                 crate::hls::HlsError::Db(inner) => AnchorError::Sqlx(inner),
             })?;
 
-        let Some(book_id) = crate::resolve_book_id_by_uuid(pool, &canonical)
+        let Some(book_id) = crate::resolve_book_id_by_uuid(pool, canonical)
             .await
             .map_err(books_error)?
         else {

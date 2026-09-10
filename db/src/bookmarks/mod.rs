@@ -129,7 +129,7 @@ pub async fn list_bookmarks(
 
     let mut bookmarks: Vec<Bookmark> =
         rows.iter().map(row_to_bookmark).collect::<Result<_, _>>()?;
-    let index = AnchorIndex::load(pool, &canonical).await?;
+    let index = AnchorIndex::load_canonical(pool, &canonical).await?;
     for b in &mut bookmarks {
         let placed = index.locate(&b.position);
         b.spine_index = placed.spine_index;
