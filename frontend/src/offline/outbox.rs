@@ -394,6 +394,9 @@ pub(crate) async fn queue_create_highlight(input: &CreateHighlight) -> Option<Hi
         epub_cfi_range: Some(input.epub_cfi_range.clone()),
         color: input.color,
         note: None,
+        spine_index: None,
+        chapter_title: None,
+        percent_through_book: None,
         text: input.text.clone(),
         // Web addresses this row by its temp id and rewrites it on apply;
         // `client_id` is the mobile outbox's handle, not this one's.
@@ -474,6 +477,9 @@ pub(crate) async fn queue_create_bookmark(input: &CreateBookmark) -> Option<Book
         position: input.position.clone(),
         title: input.title.clone(),
         client_id: None,
+        spine_index: None,
+        chapter_title: None,
+        percent_through_book: None,
         created_at: store::now_secs(),
         created_at_iso: None,
         spine_index: None,

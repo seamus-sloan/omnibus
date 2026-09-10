@@ -28,20 +28,20 @@ pub struct Bookmark {
     /// on, the string is what a reader of the API can act on without doing
     /// calendar arithmetic by hand. Populated by the server's read paths;
     /// `None` on a payload a client built itself.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub created_at_iso: Option<String>,
     /// Spine document this anchor sits in, resolved from its CFI. `None`
     /// for a Kobo-origin anchor and anything else unparseable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub spine_index: Option<i64>,
     /// TOC title of the chapter it sits in, when the book's structure has
     /// been extracted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub chapter_title: Option<String>,
     /// How far through the book it sits, 0..=100. Spine-granular — it
     /// measures to the start of the containing spine document, which is what
     /// the stored structure records.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub percent_through_book: Option<f64>,
 }
 

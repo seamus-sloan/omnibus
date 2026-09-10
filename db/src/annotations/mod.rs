@@ -121,8 +121,8 @@ pub async fn highlight_id_for_client_id(
 /// through the text is the one that makes a run of highlights legible.
 /// `chronological` restores creation order for a caller that wants it.
 ///
-/// The placement costs three queries for the whole list ([`AnchorIndex`]),
-/// not three per highlight.
+/// The placement costs one fixed set of structure reads for the whole
+/// list ([`AnchorIndex`]), not a set per highlight.
 pub async fn list_highlights(
     pool: &SqlitePool,
     user_id: i64,
@@ -150,7 +150,7 @@ pub async fn list_highlights(
         .iter()
         .map(row_to_highlight)
         .collect::<Result<_, _>>()?;
-    let index = AnchorIndex::load(pool, &canonical).await?;
+    let index = AnchorIndex::load_canonical(pool, &canonical).await?;
     for h in &mut highlights {
         let Some(anchor) = h.epub_cfi_range.as_deref() else {
             continue;
@@ -519,13 +519,13 @@ fn row_to_highlight(row: &sqlx::sqlite::SqliteRow) -> Result<Highlight, Highligh
         text: row.try_get("text")?,
         client_id: row.try_get("client_id")?,
         created_at: row.try_get("created_at")?,
-        created_at_iso: None,
         // Filled by `list_highlights`, which loads the book's structure
         // once for the whole list; a single-row read leaves them unplaced
-        // rather than paying three queries to place one anchor.
+        // rather than paying a structure read to place one anchor.
         spine_index: None,
         chapter_title: None,
         percent_through_book: None,
+        created_at_iso: None,
     }
     .with_iso())
 }
