@@ -468,3 +468,132 @@ fn chapter_number_parses_bare_ordinals_and_noisy_audio_marks() {
     assert_eq!(chapter_number("Acknowledgements"), None);
     assert_eq!(chapter_number("Table of Contents"), None);
 }
+
+#[tokio::test]
+async fn anchoring_shifts_by_a_constant_offset_when_the_audio_numbers_front_matter() {
+    // The Way of Kings / GraphicAudio shape: the nav leaves the prelude and
+    // prologue unnumbered, the audio numbers them as chapters 1 and 2, so
+    // every audio mark runs two ahead of the chapter it shares a number
+    // with. Equality alone read audio "Chapter 5" as the book's chapter 5
+    // when it is really chapter 3 — and did it at full confidence.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[700.0]).await;
+    seed_epub_chapters(
+        &pool,
+        &[
+            ("Prelude to the Stormlight Archive", 0),
+            ("Prologue: To Kill", 100),
+            ("1: STORMBLESSED", 200),
+            ("2: HONOR IS DEAD", 300),
+            ("3: CITY OF BELLS", 400),
+            ("4: THE SHATTERED PLAINS", 500),
+            ("5: HERETIC", 600),
+        ],
+        100,
+    )
+    .await;
+    seed_audio_chapters(
+        &pool,
+        audio[0],
+        &[
+            ("Chapter 1", 0.0),
+            ("Chapter 2", 100.0),
+            ("Chapter 3", 200.0),
+            ("Chapter 4", 300.0),
+            ("Chapter 5", 400.0),
+            ("Chapter 6", 500.0),
+            ("Chapter 7", 600.0),
+        ],
+    )
+    .await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    // Listening at audio "Chapter 5" (400s), which narrates the book's
+    // chapter 3 — 400 of 700 chars, 57%.
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 400.0, Some(audio[0]), 2_000),
+    )
+    .await
+    .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap();
+    let c = r.candidate.unwrap();
+    assert_eq!(
+        c.confidence,
+        omnibus_shared::cross_format::MappingConfidence::ChapterAnchored,
+        "the offset pairing must still anchor, not degrade to linear"
+    );
+    let pct = c.percent.unwrap();
+    assert_eq!(
+        pct, 57,
+        "audio chapter 5 narrates the book's chapter 3 (57%); equality-only \
+         pairing put the reader at chapter 5 (85%)"
+    );
+}
+
+#[tokio::test]
+async fn anchoring_keeps_equality_when_the_audios_extra_numbers_are_back_matter() {
+    // Same numbering gap as the front-matter case (the audio's highest
+    // chapter number runs two past the book's) but here the extra marks are
+    // an epilogue and an afterword at the END, so equality is already
+    // right. The offset hypothesis has to lose on the front-of-book
+    // geometry — this is the test that the arbitration actually arbitrates.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[700.0]).await;
+    seed_epub_chapters(
+        &pool,
+        &[
+            ("1: Arrival", 0),
+            ("2: The Lantern", 100),
+            ("3: Low Water", 200),
+            ("4: The Turning", 300),
+            ("5: Landfall", 400),
+            ("Epilogue", 500),
+            ("Afterword", 600),
+        ],
+        100,
+    )
+    .await;
+    seed_audio_chapters(
+        &pool,
+        audio[0],
+        &[
+            ("Chapter 1", 0.0),
+            ("Chapter 2", 100.0),
+            ("Chapter 3", 200.0),
+            ("Chapter 4", 300.0),
+            ("Chapter 5", 400.0),
+            ("Chapter 6", 500.0),
+            ("Chapter 7", 600.0),
+        ],
+    )
+    .await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 400.0, Some(audio[0]), 2_000),
+    )
+    .await
+    .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap();
+    let c = r.candidate.unwrap();
+    assert_eq!(
+        c.percent.unwrap(),
+        57,
+        "audio chapter 5 is the book's chapter 5 here; a wrongly-applied \
+         offset would have placed the reader at chapter 3"
+    );
+}
