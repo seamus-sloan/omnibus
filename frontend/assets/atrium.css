@@ -223,10 +223,35 @@ html, body { overscroll-behavior: none; }
   font-family: var(--serif); font-weight: 600;
   letter-spacing: -0.005em; margin: 0; color: var(--ink-0);
 }
-.atrium h1 { font-size: 70px; line-height: 1.0; }
-.atrium h2 { font-size: 46px; line-height: 1.05; }
-.atrium h3 { font-size: 31px; line-height: 1.1;  }
-.atrium h4 { font-size: 22px; line-height: 1.2;  }
+/* Cormorant's content area is 1.211em tall (ascent .924 + descent .287) and its
+   deepest glyph — `j`, matched by `g`/`y` — reaches .283em below the baseline.
+   Any leading under 1.203 therefore gives the line box NEGATIVE half-leading and
+   the descenders paint outside the element: the box ends, the ink doesn't, and
+   whatever follows gets struck through. That is what the display title did to
+   its byline and the not-found hero to its subtitle.
+   Loosening to 1.203 would fix it and throw away the display calibration above,
+   so the box reserves the overflow instead — ink bottom minus the line box,
+   which falls out as `.6015em - leading / 2`. `max()` floors a leading past
+   1.203 (h4 is already there) at zero rather than dropping the declaration on a
+   negative length.
+   The list is display *typography*, not the `h1`–`h5` elements: `.lib-header-title`
+   is a `<p>` set at clamp(42px, 6vw, 70px)/1.0 — same face, same negative
+   half-leading, same escaping ink — so it takes the guard alongside them, the
+   way it already takes the upright-`em` arm below. A serif block that retunes
+   its own leading and is *not* on this list keeps escaping.
+   Each entry declares its leading as `--lh` and feeds `line-height` from that,
+   so the guard is derived from the same number and the two cannot drift apart;
+   anything that sets `line-height` another way gets the 1.203 fallback, which is
+   no guard at all. */
+.atrium h1, .atrium h2, .atrium h3, .atrium h4, .atrium h5,
+.lib-header-title {
+  --descender-guard: max(0px, calc((0.6015 - var(--lh, 1.203) / 2) * 1em));
+  padding-bottom: var(--descender-guard);
+}
+.atrium h1 { --lh: 1.0;  font-size: 70px; line-height: var(--lh); }
+.atrium h2 { --lh: 1.05; font-size: 46px; line-height: var(--lh); }
+.atrium h3 { --lh: 1.1;  font-size: 31px; line-height: var(--lh); }
+.atrium h4 { --lh: 1.2;  font-size: 22px; line-height: var(--lh); }
 /* `<em>` is italic by UA default, and headings use it to set one word of the
    name apart ("Every <em>author</em>", "<em>Frankenstein</em>"). That is
    naming a thing, not quoting a human, so it stays upright — genuine inline
@@ -475,7 +500,7 @@ html, body { overscroll-behavior: none; }
 }
 .search-title {
   font-family: var(--serif); font-weight: 600; color: var(--ink-0);
-  font-size: clamp(34px, 5vw, 56px); line-height: 1.0;
+  font-size: clamp(34px, 5vw, 56px); --lh: 1.0; line-height: var(--lh);
   margin: 10px 0 0; letter-spacing: -0.005em;
 }
 .search-hit { font-style: inherit; font-weight: 600; color: var(--accent); }
@@ -852,7 +877,7 @@ html, body { overscroll-behavior: none; }
 }
 .atrium .bd-title {
   font-size: clamp(46px, 7vw, 84px);
-  line-height: 0.95;
+  --lh: 0.95; line-height: var(--lh);
   margin-top: 0;
   font-family: var(--serif); font-weight: 600;
   letter-spacing: -0.005em;
@@ -1332,14 +1357,14 @@ html, body { overscroll-behavior: none; }
   font-family: inherit;
   font-size: 1.5em;
   font-weight: 700;
-  line-height: 1.3;
+  --lh: 1.3; line-height: var(--lh);
   letter-spacing: -0.01em;
 }
 .cm-h2 {
   font-family: inherit;
   font-size: 1.25em;
   font-weight: 700;
-  line-height: 1.35;
+  --lh: 1.35; line-height: var(--lh);
   letter-spacing: -0.01em;
 }
 .cm-quote {
@@ -1509,13 +1534,13 @@ html, body { overscroll-behavior: none; }
 .bd-journal-preview h1,
 .bd-journal-entry-body h1 {
   font-size: 1.5em;
-  line-height: 1.3;
+  --lh: 1.3; line-height: var(--lh);
   margin: 0 0 10px;
 }
 .bd-journal-preview h2,
 .bd-journal-entry-body h2 {
   font-size: 1.25em;
-  line-height: 1.35;
+  --lh: 1.35; line-height: var(--lh);
   margin: 0 0 10px;
 }
 /* h3–h6 too — the renderer emits every heading depth, and an unstyled one
@@ -1534,7 +1559,7 @@ html, body { overscroll-behavior: none; }
   letter-spacing: -0.01em;
   color: var(--ink-0);
   font-size: 1.1em;
-  line-height: 1.4;
+  --lh: 1.4; line-height: var(--lh);
   margin: 0 0 10px;
 }
 /* Block spacing — shared by the published body and the composer's preview
@@ -1712,7 +1737,7 @@ button.spoiler {
 .disc-hero-title {
   font-family: var(--serif); font-weight: 600;
   font-size: clamp(50px, 6vw, 90px);
-  line-height: 0.92;
+  --lh: 0.92; line-height: var(--lh);
   letter-spacing: -0.005em;
   margin: 8px 0 0;
   color: var(--ink-0);
@@ -1842,7 +1867,7 @@ button.spoiler {
   font-size: 24px;
   margin-top: 8px;
   color: var(--ink-0);
-  line-height: 1.2;
+  --lh: 1.2; line-height: var(--lh);
 }
 .series-card-title a {
   color: inherit;
@@ -2141,7 +2166,7 @@ a.idx-letter-on:focus-visible {
      the title at a size that reads as a second heading. */
   font-size: clamp(28px, 6.5vw, 42px);
   font-weight: 600;
-  line-height: 1.05;
+  --lh: 1.05; line-height: var(--lh);
   margin-top: 4px;
 }
 .me-page-title-author {
@@ -2764,7 +2789,7 @@ a.idx-letter-on:focus-visible {
 .author-photo-modal__title {
   font-family: var(--serif); font-weight: 600;
   font-size: 27px;
-  line-height: 1.1;
+  --lh: 1.1; line-height: var(--lh);
   margin: 0;
 }
 .author-photo-modal__section {
@@ -3177,7 +3202,7 @@ a.idx-letter-on:focus-visible {
 .lp-title {
   font-family: var(--serif); font-weight: 600;
   font-size: clamp(38px, 5vw, 70px);
-  line-height: 0.95; letter-spacing: -0.005em;
+  --lh: 0.95; line-height: var(--lh); letter-spacing: -0.005em;
   margin: 12px 0 0; color: var(--ink-0);
 }
 
@@ -4200,7 +4225,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .auth-shell-headline {
   font-family: var(--auth-serif);
   font-size: clamp(2.4rem, 5vw, 3.5rem);
-  line-height: 1;
+  --lh: 1; line-height: var(--lh);
   margin: 0;
 }
 .auth-shell-blurb {
@@ -4237,7 +4262,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   margin: 0.4rem 0 0;
   font-family: var(--auth-serif);
   font-size: 1.9rem;
-  line-height: 1.15;
+  --lh: 1.15; line-height: var(--lh);
 }
 .auth-shell-lede {
   margin-top: 0.7rem;
@@ -4649,7 +4674,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-head-lead { display: flex; align-items: center; gap: 10px; }
 .m-head-back { width: 32px; height: 32px; flex: 0 0 32px; font-size: 14px; text-decoration: none; }
 .m-head-title {
-  font-family: var(--serif); font-weight: 600; font-size: 32px; line-height: 1.02;
+  font-family: var(--serif); font-weight: 600; font-size: 32px; --lh: 1.02; line-height: var(--lh);
   letter-spacing: -0.005em; margin-top: 4px;
 }
 
@@ -4954,7 +4979,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .m-bd-cover { width: 150px; margin-top: 12px; }
 .m-bd-titlecol { text-align: center; padding: 14px 8px 4px; }
-.m-bd-title { font-family: var(--serif); font-weight: 600; font-size: 30px; line-height: 1.06; }
+.m-bd-title { font-family: var(--serif); font-weight: 600; font-size: 30px; --lh: 1.06; line-height: var(--lh); }
 .m-bd-meta { margin-top: 5px; font-size: 13px; color: var(--ink-2); }
 .m-bd-badges { margin-top: 12px; display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
 .m-bd-cta { display: flex; gap: 8px; padding: 16px 0 4px; }
@@ -5800,7 +5825,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   text-transform: uppercase;
   color: var(--ink-2);
   font-weight: 500;
-  line-height: 1.45;
+  --lh: 1.45; line-height: var(--lh);
   margin: 0;
 }
 .lib-header-row {
@@ -5813,7 +5838,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .lib-header-title {
   font-family: var(--serif); font-weight: 600;
   font-size: clamp(42px, 6vw, 70px);
-  line-height: 1.0;
+  --lh: 1.0; line-height: var(--lh);
   letter-spacing: -0.005em;
   margin: 0;
   color: var(--ink-0);
@@ -6682,7 +6707,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   box-shadow: 0 40px 90px -20px color-mix(in oklch, #000 70%, transparent), 0 0 0 1px var(--line-2); }
 .mg-head { padding: 26px 30px 0; }
 .mg-kicker { color: var(--accent); margin-bottom: 8px; }
-.mg-title { margin: 0; font-family: var(--serif); font-weight: 600; font-size: 40px; line-height: 1; }
+.mg-title { margin: 0; font-family: var(--serif); font-weight: 600; font-size: 40px; --lh: 1; line-height: var(--lh); }
 .mg-body { display: flex; flex-direction: column; gap: 16px; padding: 16px 30px 4px; overflow-y: auto; }
 .mg-intro { margin: 0; max-width: 540px; font-size: 15px; line-height: 1.5; color: var(--ink-1); }
 
@@ -6754,7 +6779,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
  * selected-row highlight is the accent, matching the design's checkbox. */
 .del-modal { width: min(560px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; }
 .del-body { display: flex; flex-direction: column; gap: 14px; padding: 26px 28px 24px; }
-.del-title { margin: 0; font-family: var(--serif); font-weight: 600; font-size: 23px; line-height: 1.2;
+.del-title { margin: 0; font-family: var(--serif); font-weight: 600; font-size: 23px; --lh: 1.2; line-height: var(--lh);
   color: var(--ink-0); }
 .del-copy { margin: 0; font-size: 14px; line-height: 1.55; color: var(--ink-2); }
 .del-losses { color: var(--ink-3); }
@@ -6970,7 +6995,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   margin: 0;
   font-family: var(--serif, inherit);
   font-size: 21px;
-  line-height: 1.25;
+  --lh: 1.25; line-height: var(--lh);
   color: var(--ink-0);
   overflow-wrap: anywhere;
 }
@@ -8508,7 +8533,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    phone viewport, and collapses the whole centered layout. */
 .atrium .m-player-title {
   font-family: var(--serif); font-weight: 600; font-size: 27px;
-  line-height: 1.05; margin-top: 10px;
+  --lh: 1.05; line-height: var(--lh); margin-top: 10px;
   overflow: hidden; white-space: nowrap;
 }
 .m-player-title-track { display: inline-flex; gap: 48px; }
@@ -9007,7 +9032,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .atrium .st-hero-figure {
   margin: 8px 0 0;
   font-family: var(--serif); font-weight: 600;
-  font-size: 88px; line-height: 0.95; letter-spacing: -0.01em;
+  font-size: 88px; --lh: 0.95; line-height: var(--lh); letter-spacing: -0.01em;
   color: var(--ink-0);
 }
 .st-hero-unit { font-size: 88px; }
@@ -10357,7 +10382,7 @@ html {
   font-family: var(--serif);
   font-weight: 600;
   font-size: 40px;
-  line-height: 1;
+  --lh: 1; line-height: var(--lh);
 }
 .al-kicker {
   font-size: 11px;
@@ -11115,11 +11140,15 @@ html {
 
 .bdmq h1.bdmq-title {
   font-family: var(--serif); font-weight: 600;
-  font-size: clamp(44px, 6vw, 86px); line-height: .98; letter-spacing: -0.005em;
+  font-size: clamp(44px, 6vw, 86px); --lh: .98; line-height: var(--lh);
+  letter-spacing: -0.005em;
   font-style: normal;
 }
 .bdmq-titlerow { display: flex; align-items: flex-start; gap: 14px; }
-.bdmq-by { margin-top: 12px; font-size: 16px; color: var(--ink-1); }
+/* `.atrium p { margin: 0 }` is (0,1,1) and outranks a bare `.bdmq-by`, so this
+   12px sat dead and the byline rode up under the title's descenders. Scoped to
+   (0,2,0) to actually land. */
+.atrium .bdmq-by { margin-top: 12px; font-size: 16px; color: var(--ink-1); }
 .bdmq-by .bd-author-link:hover { color: var(--accent); }
 
 /* Genres and tags each get their own line: run together on one wrapping row,
@@ -11649,7 +11678,7 @@ html {
 }
 .lmq .lmq-title {
   font-family: var(--serif); font-size: 38px; font-weight: 600;
-  line-height: 0.94; letter-spacing: -0.012em; color: var(--ink-0);
+  --lh: 0.94; line-height: var(--lh); letter-spacing: -0.012em; color: var(--ink-0);
   margin: 8px 0 0; text-wrap: pretty;
 }
 .lmq-title-link { color: inherit; text-decoration: none; }
@@ -11883,7 +11912,7 @@ html {
 }
 .lmq .lib-header-title {
   font-family: var(--serif); font-size: 44px; font-weight: 600;
-  line-height: 1; letter-spacing: -0.015em;
+  --lh: 1; line-height: var(--lh); letter-spacing: -0.015em;
 }
 .lmq .lib-header-count { color: var(--ink-2); }
 .lmq .lib-header-hidden { color: var(--ink-3); }
