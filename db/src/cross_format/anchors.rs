@@ -272,7 +272,7 @@ fn try_match_rungs(
 ) -> Option<Vec<Anchor>> {
     [
         match_by_title(text, audio),
-        match_by_chapter_number(text, audio),
+        match_chapter_numbers(text, audio, &passes),
         match_by_title_prefix(text, audio),
     ]
     .into_iter()
@@ -303,14 +303,106 @@ fn positional_fallback(
     passes(&m).then_some(m)
 }
 
+/// Largest numbering offset the chapter rung will entertain. An audiobook
+/// that numbers the book's front matter runs a handful of chapters ahead —
+/// a prelude, a prologue, four letters — never dozens.
+const MAX_CHAPTER_OFFSET: u32 = 12;
+
+/// How many of the earliest pairs arbitrate between the two numbering
+/// hypotheses. The offset is only *identifiable* at the front of the book:
+/// there the front matter's extent is measurable on both sides at once,
+/// whereas each axis being normalized to its own total turns a constant
+/// chapter offset into a shear, whose whole-book residual comes out nearly
+/// the same either way.
+const OFFSET_SCORE_ANCHORS: usize = 5;
+
+/// How much tighter the offset hypothesis must fit before it displaces
+/// plain equality. Equality is the overwhelmingly common case, so it keeps
+/// every tie and every close call.
+const OFFSET_SCORE_MARGIN: f64 = 3.0;
+
+/// The chapter-number rung: plain equality, or the same pairing shifted by
+/// a constant offset when the audio numbers front matter the book leaves
+/// unnumbered. Equality alone reads GraphicAudio's "Chapter 5" as the
+/// book's chapter 5 when it is really chapter 3, and does so at full
+/// `ChapterAnchored` confidence, because every pair it makes is
+/// self-consistent — the whole map is displaced, so nothing local looks
+/// wrong.
+fn match_chapter_numbers(
+    text: &[TextMark],
+    audio: &[AudioMark],
+    passes: impl Fn(&[Anchor]) -> bool,
+) -> Vec<Anchor> {
+    // Both hypotheses are scored on the sets a caller would really use, so
+    // the monotonic filter runs here as well as on the way out.
+    let base = monotonic(match_by_chapter_number(text, audio, 0));
+    let Some(offset) = chapter_number_offset(text, audio) else {
+        return base;
+    };
+    let shifted = monotonic(match_by_chapter_number(text, audio, offset));
+    // A hypothesis that can't clear the match bar isn't a candidate at
+    // all: swapping a passing map for a tighter-but-sparse one would drop
+    // the rung and fall to linear, which is worse than either.
+    if !passes(&shifted) {
+        return base;
+    }
+    if !passes(&base) {
+        return shifted;
+    }
+    match (front_residual(&shifted), front_residual(&base)) {
+        (Some(alt), Some(cur)) if alt * OFFSET_SCORE_MARGIN <= cur => shifted,
+        _ => base,
+    }
+}
+
+/// The offset hypothesis to test beside equality: how many more chapters
+/// the audio numbers than the book does. An audiobook that numbers the
+/// book's unnumbered front matter — Way of Kings' prelude and prologue,
+/// Frankenstein's four letters — runs exactly that far ahead, so its
+/// highest number exceeds the book's by the same amount. Highest number
+/// rather than a count of them: an ebook nav that reuses an ordinal
+/// (Stormlight files its interludes as "1-1", "1-2") has more numbered
+/// entries than chapters, while its maximum still names the last chapter.
+///
+/// `None` for a gap outside the plausible window, and for an audio side
+/// numbering *fewer* chapters than the book — that is an incomplete rip or
+/// a nav this rung can't read, and shifting the book forward against it is
+/// a guess with nothing behind it.
+fn chapter_number_offset(text: &[TextMark], audio: &[AudioMark]) -> Option<u32> {
+    let max_text = text.iter().filter_map(|t| t.chapter_no).max()?;
+    let max_audio = audio
+        .iter()
+        .filter(|a| !a.synthetic)
+        .filter_map(|a| a.chapter_no)
+        .max()?;
+    let offset = max_audio.checked_sub(max_text)?;
+    (1..=MAX_CHAPTER_OFFSET).contains(&offset).then_some(offset)
+}
+
+/// Mean distance from the diagonal over the earliest pairs — the score the
+/// two numbering hypotheses are compared on. `None` for an empty set.
+fn front_residual(anchors: &[Anchor]) -> Option<f64> {
+    let head = &anchors[..OFFSET_SCORE_ANCHORS.min(anchors.len())];
+    if head.is_empty() {
+        return None;
+    }
+    let sum: f64 = head
+        .iter()
+        .map(|a| (a.text_frac - a.audio_frac).abs())
+        .sum();
+    Some(sum / head.len() as f64)
+}
+
 /// Ordered pairing on parsed chapter numbers — the rung that survives
 /// subtitle decoration and numbering-style drift ("Chapter One: …" vs
-/// "Chapter 1").
-fn match_by_chapter_number(text: &[TextMark], audio: &[AudioMark]) -> Vec<Anchor> {
+/// "Chapter 1"). Text chapter `n` pairs with audio chapter `n + offset`.
+fn match_by_chapter_number(text: &[TextMark], audio: &[AudioMark], offset: u32) -> Vec<Anchor> {
     let mut anchors = Vec::new();
     let mut ai = 0usize;
     for t in text {
-        let Some(t_no) = t.chapter_no else { continue };
+        let Some(t_no) = t.chapter_no.and_then(|n| n.checked_add(offset)) else {
+            continue;
+        };
         let mut j = ai;
         while j < audio.len() {
             let a = &audio[j];
