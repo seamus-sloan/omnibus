@@ -41,12 +41,33 @@ actor ImageCache {
     /// Keys with a revalidation in flight, so a grid that draws the same
     /// cover in several places checks once.
     private var revalidating: Set<String> = []
+    /// How many times each key has been invalidated.
+    ///
+    /// A fetch carries the count it started under, and [`store`] refuses a
+    /// write whose count has moved — which is the only thing separating "these
+    /// bytes are current" from "these bytes were current when I asked". A cover
+    /// write invalidates the key while a fetch for the *previous* cover is
+    /// still in flight; without this the reply lands afterwards and re-creates
+    /// the entry the write just deleted, with the superseded art and a fresh
+    /// mtime that also restarts the revalidation window (#2547).
+    private var generations: [String: Int] = [:]
+    /// Bumped by [`clearDisk`], which invalidates every key at once including
+    /// the ones no per-key count has been kept for. Added to the per-key count
+    /// rather than replacing it, so a key's generation only ever rises.
+    private var globalGeneration = 0
 
-    init() {
+    /// `directory` is for tests, which need a cache of their own: several of
+    /// them invalidate and clear, and doing that to the one shared instance
+    /// would delete entries a sibling running in parallel is asserting on.
+    init(directory: URL? = nil) {
         memory.countLimit = 300
         memory.totalCostLimit = 96 * 1024 * 1024
-        directory = OfflineStore.dataDirectory.appendingPathComponent("covers-v2", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let resolved =
+            directory
+            ?? OfflineStore.dataDirectory.appendingPathComponent("covers-v2", isDirectory: true)
+        self.directory = resolved
+        try? FileManager.default.createDirectory(at: resolved, withIntermediateDirectories: true)
+        guard directory == nil else { return }
         // The v1 directory was keyed on `String.hashValue`, so nothing in it is
         // addressable from this process. Drop it rather than leak the space.
         try? FileManager.default.removeItem(
@@ -88,7 +109,29 @@ actor ImageCache {
             .contentModificationDate
     }
 
-    func store(_ image: UIImage, data: Data, for key: String, etag: String? = nil) {
+    /// What `key`'s bytes would have to have been fetched under to still be
+    /// current. Capture this *before* a fetch and hand it back to [`store`].
+    func generation(for key: String) -> Int {
+        globalGeneration + generations[key, default: 0]
+    }
+
+    /// Commit fetched bytes, unless the key was invalidated while they were in
+    /// flight.
+    ///
+    /// `generation` is what the caller captured before it asked. A write whose
+    /// generation has since moved describes a cover that has already been
+    /// replaced, and committing it would undo the invalidation the replacement
+    /// performed. Passing `nil` skips the check, and is only right for bytes
+    /// that cannot have raced one — a caller that did not fetch them.
+    @discardableResult
+    func store(
+        _ image: UIImage,
+        data: Data,
+        for key: String,
+        etag: String? = nil,
+        generation: Int? = nil
+    ) -> Bool {
+        if let generation, generation != self.generation(for: key) { return false }
         memory.setObject(image, forKey: key as NSString, cost: data.count)
         try? data.write(to: diskURL(for: key), options: .atomic)
         if let etag {
@@ -99,41 +142,53 @@ actor ImageCache {
             // never saw.
             try? FileManager.default.removeItem(at: etagURL(for: key))
         }
+        return true
     }
 
     /// Ask the server whether a cached cover has changed, and replace it when
     /// it has. Called *after* the cached image is already on screen, so the
-    /// render that triggers it pays nothing — the newer art lands on the next
-    /// one.
+    /// render that triggers it pays nothing.
+    ///
+    /// Returns the replacement when there is one, so the caller can swap it in
+    /// without waiting to be rebuilt. Returning nothing and leaving the caller
+    /// to find out later is what made a stale entry look permanent: the bytes
+    /// were corrected on disk while the view kept its decoded copy, so the fix
+    /// only became visible on the *next* view creation — indistinguishable
+    /// from never healing, to anyone checking once per launch (#2547).
     ///
     /// Skipped while offline, while another check of the same key is already
     /// running, and while [`plan`] says the entry is still fresh.
-    func revalidate(_ key: String) async {
+    @discardableResult
+    func revalidate(_ key: String) async -> UIImage? {
         // Reserved before the first `await`, not after. An actor suspends at
         // every suspension point and admits other callers, so checking the
         // set here and inserting past the connectivity hop let two callers
         // both pass the check and both fetch — the dedup this set exists for
         // never happened. `defer` releases on every exit, including the
         // early returns below.
-        guard !revalidating.contains(key) else { return }
+        guard !revalidating.contains(key) else { return nil }
         revalidating.insert(key)
         defer { revalidating.remove(key) }
 
-        guard await Connectivity.shared.isOnline else { return }
+        guard await Connectivity.shared.isOnline else { return nil }
         let url = diskURL(for: key)
         guard let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey])
             .contentModificationDate
-        else { return }
+        else { return nil }
         let stored = try? String(contentsOf: etagURL(for: key), encoding: .utf8)
         let ifNoneMatch: String?
         switch Self.plan(age: Date().timeIntervalSince(modified), etag: stored) {
-        case .skip: return
+        case .skip: return nil
         case .conditional(let etag): ifNoneMatch = etag
         case .unconditional: ifNoneMatch = nil
         }
+        // Captured before the request, like every other fetch here: a cover
+        // write during it invalidates the key, and both answers below describe
+        // the copy that write replaced.
+        let generation = generation(for: key)
         guard let fresh = try? await APIClient.shared.conditionalData(
             for: key, ifNoneMatch: ifNoneMatch
-        ) else { return }
+        ) else { return nil }
 
         guard let data = fresh.data, let decoded = UIImage(data: data) else {
             // A 304: the server confirming this copy is current, which is
@@ -141,11 +196,15 @@ actor ImageCache {
             // restarted or the entry stays permanently overdue and every
             // later appearance of the same cover asks again — the
             // in-flight set only collapses *overlapping* checks, not
-            // sequential ones.
-            if fresh.isNotModified { markChecked(key) }
-            return
+            // sequential ones. Unless the copy it vouched for is already gone,
+            // in which case there is nothing left to call fresh.
+            if fresh.isNotModified, generation == self.generation(for: key) { markChecked(key) }
+            return nil
         }
-        store(decoded, data: data, for: key, etag: fresh.etag)
+        guard store(decoded, data: data, for: key, etag: fresh.etag, generation: generation) else {
+            return nil
+        }
+        return decoded
     }
 
     /// Whether an entry `age` seconds old, holding `etag` (or nothing), is due
@@ -176,11 +235,12 @@ actor ImageCache {
     /// book is downloaded, so its art is already on disk when the network goes.
     func prefetch(_ key: String) async {
         guard image(for: key) == nil else { return }
+        let generation = generation(for: key)
         guard let fetched = try? await APIClient.shared.conditionalData(for: key, ifNoneMatch: nil),
               let data = fetched.data,
               let decoded = UIImage(data: data)
         else { return }
-        store(decoded, data: data, for: key, etag: fetched.etag)
+        store(decoded, data: data, for: key, etag: fetched.etag, generation: generation)
     }
 
     /// Fetch a provider-hosted image (an absolute URL outside the Omnibus
@@ -209,12 +269,16 @@ actor ImageCache {
     /// would otherwise not appear for up to five minutes. Other devices still
     /// wait for the normal window, same as covers.
     func invalidate(_ key: String) {
+        // Before the removals, so a fetch that resolves between them and the
+        // next `store` is already refused.
+        generations[key, default: 0] += 1
         memory.removeObject(forKey: key as NSString)
         try? FileManager.default.removeItem(at: diskURL(for: key))
         try? FileManager.default.removeItem(at: etagURL(for: key))
     }
 
     func clearDisk() {
+        globalGeneration += 1
         try? FileManager.default.removeItem(at: directory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         memory.removeAllObjects()
@@ -305,10 +369,13 @@ struct RemoteImage<Placeholder: View>: View {
         }
         if let cached = await ImageCache.shared.image(for: path) {
             image = cached
-            // Draw first, ask after: a cover replaced from another device
-            // arrives on the next render rather than costing this one a
-            // round-trip.
-            Task.detached(priority: .utility) { await ImageCache.shared.revalidate(path) }
+            // Draw first, ask after: the cached art is already on screen, so
+            // the check costs this render nothing. Awaited rather than
+            // detached so a replacement swaps in here instead of waiting for
+            // something to rebuild the view.
+            if let refreshed = await ImageCache.shared.revalidate(path), path == self.path {
+                withAnimation(Motion.page) { image = refreshed }
+            }
             return
         }
         // Draw another size of the same cover straight away if we have one, so
@@ -323,11 +390,17 @@ struct RemoteImage<Placeholder: View>: View {
         isLoading = true
         defer { isLoading = false }
 
+        // Captured before the request: a cover write landing during it
+        // invalidates this key, and these bytes are then the cover it
+        // replaced. Committing them would undo that invalidation.
+        let generation = await ImageCache.shared.generation(for: path)
         guard let fetched = try? await APIClient.shared.conditionalData(for: path, ifNoneMatch: nil),
               let data = fetched.data,
               let decoded = UIImage(data: data)
         else { return }
-        await ImageCache.shared.store(decoded, data: data, for: path, etag: fetched.etag)
+        guard await ImageCache.shared.store(
+            decoded, data: data, for: path, etag: fetched.etag, generation: generation
+        ) else { return }
         // Guard against a recycled cell resolving onto the wrong row.
         guard path == self.path else { return }
         withAnimation(Motion.page) { image = decoded }

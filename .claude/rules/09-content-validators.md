@@ -122,6 +122,16 @@ skipped while offline, inside a fresh window, or while a check of the same key
 is in flight. Without all three, a grid scroll becomes one conditional request
 per visible cover.
 
+**A reply may only commit what is still current.** A fetch issued *before* a
+cover write resolves after it, and storing that reply re-creates the entry the
+write deleted — superseded art, on a fresh timestamp that restarts the window.
+iOS keys each entry on a generation, captured before the request and rechecked
+before the write, refusing one whose generation moved (#2547); a 304 vouching
+for bytes already gone does not stamp the window either. Revalidation also
+*returns* its replacement rather than only writing it — a cache corrected behind
+a view holding its decoded copy heals one render late, which reads as never
+healing to anyone checking once per launch.
+
 **A missing validator is not a fourth skip.** It once was, on both clients, and
 the reasoning looked sound: with nothing to offer as `If-None-Match` the check
 would be a full refetch, so why spend it. But nothing else ever *restored* the
