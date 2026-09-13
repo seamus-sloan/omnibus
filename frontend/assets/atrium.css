@@ -222,24 +222,32 @@ html, body { overscroll-behavior: none; }
 .atrium h1, .atrium h2, .atrium h3, .atrium h4, .atrium h5 {
   font-family: var(--serif); font-weight: 600;
   letter-spacing: -0.005em; margin: 0; color: var(--ink-0);
-  /* Cormorant's content area is 1.211em tall (ascent .924 + descent .287) and
-     its deepest glyph — `j`, matched by `g`/`y` — reaches .283em below the
-     baseline. Any leading under 1.203 therefore gives the line box NEGATIVE
-     half-leading and the descenders paint outside the element: the box ends,
-     the ink doesn't, and whatever follows gets struck through. That is what the
-     display title did to its byline and the not-found hero to its subtitle.
-     Loosening to 1.203 would fix it and throw away the display calibration
-     above, so the box reserves the overflow instead — ink bottom minus the line
-     box, which falls out as `.6015em - leading / 2`. `max()` floors a leading
-     past 1.203 (h4 is already there) at zero rather than dropping the
-     declaration on a negative length. */
+}
+/* Cormorant's content area is 1.211em tall (ascent .924 + descent .287) and its
+   deepest glyph — `j`, matched by `g`/`y` — reaches .283em below the baseline.
+   Any leading under 1.203 therefore gives the line box NEGATIVE half-leading and
+   the descenders paint outside the element: the box ends, the ink doesn't, and
+   whatever follows gets struck through. That is what the display title did to
+   its byline and the not-found hero to its subtitle.
+   Loosening to 1.203 would fix it and throw away the display calibration above,
+   so the box reserves the overflow instead — ink bottom minus the line box,
+   which falls out as `.6015em - leading / 2`. `max()` floors a leading past
+   1.203 (h4 is already there) at zero rather than dropping the declaration on a
+   negative length.
+   The list is display *typography*, not the `h1`–`h5` elements: `.lib-header-title`
+   is a `<p>` set at clamp(42px, 6vw, 70px)/1.0 — same face, same negative
+   half-leading, same escaping ink — so it takes the guard alongside them, the
+   way it already takes the upright-`em` arm below. A serif block that retunes
+   its own leading and is *not* on this list keeps escaping.
+   Each entry declares its leading as `--lh` and feeds `line-height` from that,
+   so the guard is derived from the same number and the two cannot drift apart;
+   anything that sets `line-height` another way gets the 1.203 fallback, which is
+   no guard at all. */
+.atrium h1, .atrium h2, .atrium h3, .atrium h4, .atrium h5,
+.lib-header-title {
   --descender-guard: max(0px, calc((0.6015 - var(--lh, 1.203) / 2) * 1em));
   padding-bottom: var(--descender-guard);
 }
-/* Every rule that retunes a heading's leading declares it as `--lh` and feeds
-   `line-height` from that, so the guard above is derived from the same number
-   and the two cannot drift apart. A heading whose leading is set any other way
-   gets the 1.203 fallback — no guard — and its descenders escape again. */
 .atrium h1 { --lh: 1.0;  font-size: 70px; line-height: var(--lh); }
 .atrium h2 { --lh: 1.05; font-size: 46px; line-height: var(--lh); }
 .atrium h3 { --lh: 1.1;  font-size: 31px; line-height: var(--lh); }
@@ -5830,7 +5838,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .lib-header-title {
   font-family: var(--serif); font-weight: 600;
   font-size: clamp(42px, 6vw, 70px);
-  line-height: 1.0;
+  --lh: 1.0; line-height: var(--lh);
   letter-spacing: -0.005em;
   margin: 0;
   color: var(--ink-0);
@@ -11904,7 +11912,7 @@ html {
 }
 .lmq .lib-header-title {
   font-family: var(--serif); font-size: 44px; font-weight: 600;
-  line-height: 1; letter-spacing: -0.015em;
+  --lh: 1; line-height: var(--lh); letter-spacing: -0.015em;
 }
 .lmq .lib-header-count { color: var(--ink-2); }
 .lmq .lib-header-hidden { color: var(--ink-3); }
