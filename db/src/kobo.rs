@@ -40,22 +40,33 @@ const SELECT_COLS: &str = "b.id AS id,
                     WHERE bf.book_id = b.id AND bf.format = 'CBZ'
                     ORDER BY bf.ordinal ASC
                     LIMIT 1
+                ), (
+                    SELECT bf.size_bytes
+                    FROM book_files bf
+                    WHERE bf.book_id = b.id AND bf.format = 'PDF'
+                    ORDER BY bf.ordinal ASC
+                    LIMIT 1
                 ), 0) AS download_size_bytes,
                 EXISTS(
                     SELECT 1 FROM book_files bf
                     WHERE bf.book_id = b.id AND bf.format = 'EPUB'
-                ) AS has_epub";
+                ) AS has_epub,
+                EXISTS(
+                    SELECT 1 FROM book_files bf
+                    WHERE bf.book_id = b.id AND bf.format = 'CBZ'
+                ) AS has_cbz";
 
 /// A book only belongs in the sync set if the download route can actually
-/// serve it: `resources::download` resolves EPUB, else CBZ, else 404s.
+/// serve it: `resources::download` resolves EPUB, else CBZ, else PDF, else
+/// 404s.
 ///
 /// Without this an audiobook-only book on a `sync_to_kobo` shelf syncs as an
-/// entitlement advertising format `CBZ` with `download_size_bytes = 0`, and
-/// then 404s on every download the device attempts — which the device retries
+/// entitlement advertising a format with `download_size_bytes = 0`, and then
+/// 404s on every download the device attempts — which the device retries
 /// indefinitely rather than giving up.
 const DOWNLOADABLE_PREDICATE: &str = "EXISTS(
                     SELECT 1 FROM book_files bf
-                    WHERE bf.book_id = b.id AND bf.format IN ('EPUB', 'CBZ')
+                    WHERE bf.book_id = b.id AND bf.format IN ('EPUB', 'CBZ', 'PDF')
                 )";
 
 /// One book shaped for the Kobo sync endpoint: durable uuid, display title, a
@@ -71,14 +82,31 @@ pub struct KoboBookRow {
     pub author: String,
     pub last_modified_epoch: i64,
     /// Size of the file the download route would serve: the lowest-ordinal
-    /// EPUB, else the lowest-ordinal CBZ for a comic-only book, `0` when the
-    /// book has neither. Advertised on the download entitlement — a
-    /// best-effort figure (the served KEPUB differs slightly), consumed only
-    /// by device-side progress UI, never for validation.
+    /// EPUB, else CBZ, else PDF, `0` when the book has none. Advertised on
+    /// the download entitlement — a best-effort figure (the served KEPUB
+    /// differs slightly), consumed only by device-side progress UI, never
+    /// for validation.
     pub download_size_bytes: i64,
-    /// Whether the book has any EPUB file — decides the advertised download
-    /// format (`KEPUB` vs `CBZ`), mirroring the branch `download` takes.
+    /// Whether the book has any EPUB file — the first rung of the advertised
+    /// download format (`KEPUB`), mirroring the branch `download` takes.
     pub has_epub: bool,
+    /// Whether the book has any CBZ file — the second rung (`CBZ`); a book
+    /// with neither advertises `PDF`.
+    pub has_cbz: bool,
+}
+
+impl KoboBookRow {
+    /// The `DownloadUrl.Format` the entitlement advertises, on the same
+    /// ladder `resources::download` serves: KEPUB, else CBZ, else PDF.
+    pub fn download_format(&self) -> &'static str {
+        if self.has_epub {
+            "KEPUB"
+        } else if self.has_cbz {
+            "CBZ"
+        } else {
+            "PDF"
+        }
+    }
 }
 
 /// Failure space for the wireless-sync reads: a shelf-membership resolution
@@ -291,6 +319,7 @@ fn row_to_book(row: &sqlx::sqlite::SqliteRow) -> KoboBookRow {
         last_modified_epoch: row.get("last_modified_epoch"),
         download_size_bytes: row.get("download_size_bytes"),
         has_epub: row.get("has_epub"),
+        has_cbz: row.get("has_cbz"),
     }
 }
 

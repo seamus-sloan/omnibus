@@ -205,6 +205,13 @@ fn FormatRow(
                         {send_to_kindle_action(&uuid, None, epub_size_bytes.unwrap_or_default())}
                         {send_to_kobo_action(&uuid, &book_author, &book_title)}
                     },
+                    FormatKind::Pdf => rsx! {
+                        // A PDF ships to a Kindle as-is; the size gate reads
+                        // the same field, which falls back to the PDF's size
+                        // when the book has no EPUB. Reading it in the browser
+                        // is the web-reader follow-up.
+                        {send_to_kindle_action(&uuid, None, epub_size_bytes.unwrap_or_default())}
+                    },
                     FormatKind::M4b | FormatKind::Mp3 => rsx! {
                         // F2.3: web routes into the immersive player; mobile
                         // stays disabled (no `<audio>` binding in the Dioxus
@@ -291,6 +298,9 @@ fn MultiFileRow(
                                 // cfg gates out of rsx bodies).
                                 FormatKind::Epub => rsx! {
                                     {read_file_action(&uuid, file_id)}
+                                    {send_to_kindle_action(&uuid, Some(file_id), file_size)}
+                                },
+                                FormatKind::Pdf => rsx! {
                                     {send_to_kindle_action(&uuid, Some(file_id), file_size)}
                                 },
                                 FormatKind::M4b | FormatKind::Mp3 => rsx! {
@@ -425,10 +435,11 @@ fn listen_file_action(_uuid: &str, _file_id: i64) -> Element {
 
 /// One row in the switcher. `Other(String)` keeps the original casing of the
 /// raw `book_files.format` value so the badge displays whatever the schema
-/// stored (e.g. "PDF", "CBZ") without invoking a giant match.
+/// stored (e.g. "CBZ") without invoking a giant match.
 #[derive(Clone, PartialEq, Eq)]
 enum FormatKind {
     Epub,
+    Pdf,
     M4b,
     Mp3,
     Other(String),
@@ -438,6 +449,8 @@ impl FormatKind {
     fn from_raw(raw: &str) -> Self {
         if raw.eq_ignore_ascii_case("EPUB") {
             FormatKind::Epub
+        } else if raw.eq_ignore_ascii_case("PDF") {
+            FormatKind::Pdf
         } else if raw.eq_ignore_ascii_case("M4B") || raw.eq_ignore_ascii_case("M4A") {
             // M4A is the same MPEG-4 container as M4B with a different
             // extension; both flow through the F2.3 player and the
@@ -453,6 +466,7 @@ impl FormatKind {
     fn label(&self) -> &str {
         match self {
             FormatKind::Epub => "EPUB",
+            FormatKind::Pdf => "PDF",
             FormatKind::M4b => "M4B",
             FormatKind::Mp3 => "MP3",
             FormatKind::Other(s) => s.as_str(),
@@ -464,6 +478,7 @@ impl FormatKind {
     fn copy_name(&self) -> &str {
         match self {
             FormatKind::Epub => "Ebook",
+            FormatKind::Pdf => "PDF",
             FormatKind::M4b | FormatKind::Mp3 => "Audiobook",
             FormatKind::Other(s) => s.as_str(),
         }
@@ -473,7 +488,7 @@ impl FormatKind {
     /// draws, with the raw format code standing in for anything else.
     fn copy_glyph(&self) -> Element {
         match self {
-            FormatKind::Epub => book_glyph(15),
+            FormatKind::Epub | FormatKind::Pdf => book_glyph(15),
             FormatKind::M4b | FormatKind::Mp3 => headphones_glyph(15),
             FormatKind::Other(s) => rsx! { "{s}" },
         }
@@ -549,6 +564,7 @@ mod tests {
         // upper-cased known formats (EPUB, M4B) would always sort before
         // lower-cased unknown ones (cbz), which surprises users.
         let rows = prepare_rows(&["PDF".into(), "cbz".into(), "EPUB".into()]);
+        assert!(matches!(rows[2], FormatKind::Pdf), "PDF is a known row");
         assert_eq!(
             rows.iter()
                 .map(super::FormatKind::label)

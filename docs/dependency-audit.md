@@ -101,6 +101,21 @@ this list.
   yanked-not-vulnerable notice, and both parents are well-maintained.
   `deny.toml` sets `[advisories] yanked = "warn"` with a matching comment.
 
+## PDF crates (issue #2568)
+
+- `hayro` (Apache-2.0/MIT) — pure-Rust PDF parser + rasterizer behind
+  `db::pdf`: page count, the Info dict, and the page-1 cover render, with the
+  standard-14 fonts embedded (`embed-fonts`, the default) so no poppler or
+  mupdf is linked or shelled out to. Pulls the `vello_cpu`/`vello_common`
+  renderer family; check `cargo tree -d` on bumps, since `image`/`png` are
+  shared with the cover pipeline.
+- `pdf-extract` (MIT, over `lopdf`) — per-page text and the outline. It loads
+  whole documents, which is why `db::pdf::text_max_bytes` caps the file size
+  it sees; its font parsers can panic on real-world embedded fonts, so every
+  page runs under `catch_unwind`. Text quality is advisory (ligatures, CJK).
+- MuPDF (AGPL) and pdfium (prebuilt binary) were ruled out under the MIT
+  license allow-list in `deny.toml`.
+
 ## Policy
 
 - **Plain version-currency pins** (issue #1529): a dependency frozen behind

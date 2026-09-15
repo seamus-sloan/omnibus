@@ -408,10 +408,11 @@ pub fn book_metadata(base: &str, token: &str, book: &KoboBookRow) -> BookMetadat
         cover_image_id: uuid.clone(),
         slug: uuid.clone(),
         download_urls: vec![DownloadUrl {
-            // Mirrors the branch `download` takes: KEPUB (or its plain-EPUB
+            // Mirrors the ladder `download` takes: KEPUB (or its plain-EPUB
             // fallback) when the book has an EPUB, the raw archive for a
-            // CBZ-only book — Kobo firmware reads sideloaded CBZ natively.
-            format: if book.has_epub { "KEPUB" } else { "CBZ" },
+            // CBZ-only book, the PDF for a PDF-only one — Kobo firmware
+            // reads both sideloaded formats natively.
+            format: book.download_format(),
             // Best-effort: the source file's size (the served KEPUB differs
             // slightly). Only drives device-side progress UI.
             size: u64::try_from(book.download_size_bytes.max(0)).unwrap_or(0),

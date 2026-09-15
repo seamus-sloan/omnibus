@@ -792,4 +792,29 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     language: "en",
     hasCover: true,
   },
+
+  // Public-domain PDFs — two Gutenberg titles converted with Calibre (so
+  // they carry an Info dict, an outline, and real text), published in the
+  // fixtures release alongside the EPUBs above. Neither title exists as an
+  // EPUB fixture, so no (title, author) pair collides. A PDF carries no
+  // language or date, hence the empty cells. `time-machine` is reserved for
+  // the PDF reader specs (it takes every progress, read-status, and
+  // highlight write); `flatland` must stay pristine so a layout test can
+  // assert it opens on page 1 — no other spec may open either in a reader.
+  {
+    slug: "time-machine",
+    filename: "public_domain/time_machine.pdf",
+    title: "The Time Machine",
+    authors: ["H. G. Wells"],
+    language: "",
+    hasCover: true,
+  },
+  {
+    slug: "flatland",
+    filename: "public_domain/flatland.pdf",
+    title: "Flatland: A Romance of Many Dimensions",
+    authors: ["Edwin Abbott Abbott"],
+    language: "",
+    hasCover: true,
+  },
 ] as const;

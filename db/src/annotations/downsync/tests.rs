@@ -295,6 +295,37 @@ async fn downsync_book_annotations_counts_underivable_cfis_as_unresolved() {
 }
 
 #[tokio::test]
+async fn downsync_book_annotations_ignores_pdf_anchors() {
+    // A PDF highlight on a mixed EPUB+PDF book is not a CFI and can never
+    // derive a KoboSpan; it must not sit in `unresolved` on every pass.
+    let (pool, user, book_id, uuid, dir) = fixture("pdfanchor").await;
+    let _guard = kepub_cache(&dir, book_id);
+    create_highlight(
+        &pool,
+        user,
+        &web_highlight(
+            &uuid,
+            "pdf:2:72.0,710.2,172.0,710.2,72.0,700.2,172.0,700.2",
+            None,
+        ),
+    )
+    .await
+    .unwrap();
+
+    let stats = downsync_book_annotations(&pool, None, user, &uuid)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        stats,
+        DownsyncStats {
+            derived: 0,
+            unresolved: 0
+        }
+    );
+}
+
+#[tokio::test]
 async fn downsync_book_annotations_noops_when_nothing_is_pending() {
     let (pool, user, book_id, uuid, dir) = fixture("noop").await;
     let _guard = kepub_cache(&dir, book_id);

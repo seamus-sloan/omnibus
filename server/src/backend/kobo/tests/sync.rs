@@ -116,6 +116,35 @@ async fn library_sync_emits_new_entitlement_pointing_at_download() {
 }
 
 #[tokio::test]
+async fn library_sync_advertises_the_pdf_format_and_size_for_a_pdf_only_book() {
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "flatland.pdf", "Flatland", "Edwin Abbott Abbott").await;
+    sqlx::query(
+        "UPDATE book_files SET size_bytes = 555 \
+         WHERE book_id = (SELECT id FROM books WHERE uuid = ?)",
+    )
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = body_json(res).await;
+    let dl = &json.as_array().unwrap()[0]["NewEntitlement"]["BookMetadata"]["DownloadUrls"][0];
+    assert_eq!(
+        dl["Format"], "PDF",
+        "a PDF-only book advertises the format the download route serves"
+    );
+    assert_eq!(dl["Size"], 555, "size is the PDF file's bytes");
+}
+
+#[tokio::test]
 async fn library_sync_advertises_the_cbz_format_and_size_for_a_cbz_only_book() {
     let (app, pool, token, uid) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "berserk-v04.cbz", "Berserk v04", "Kentaro Miura").await;

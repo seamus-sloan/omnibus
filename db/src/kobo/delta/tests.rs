@@ -364,6 +364,7 @@ fn synthetic_book(n: usize, last_modified_epoch: i64) -> KoboBookRow {
         last_modified_epoch,
         download_size_bytes: 0,
         has_epub: true,
+        has_cbz: false,
     }
 }
 

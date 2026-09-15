@@ -59,14 +59,16 @@ pub async fn get_book(
     backfill_creator_ids(pool, std::slice::from_mut(&mut book)).await?;
 
     let files = get_book_files(pool, id).await?;
-    // Size of the EPUB the hero send would deliver (file_id None resolves the
-    // lowest-ordinal EPUB, same as `book_file_path`), so the export menu can
-    // gate the email button on Kindle's size cap.
-    book.epub_size_bytes = files
-        .iter()
-        .filter(|f| f.format.eq_ignore_ascii_case("EPUB"))
-        .min_by_key(|f| f.ordinal)
-        .map(|f| f.size_bytes);
+    // Size of the file the hero send would deliver — the lowest-ordinal
+    // EPUB, else the PDF (`kindle::send`'s own order) — so the export menu
+    // can gate the email button on Kindle's size cap.
+    book.epub_size_bytes = ["EPUB", "PDF"].iter().find_map(|format| {
+        files
+            .iter()
+            .filter(|f| f.format.eq_ignore_ascii_case(format))
+            .min_by_key(|f| f.ordinal)
+            .map(|f| f.size_bytes)
+    });
     // Always published, including for the single-file-per-format case this
     // used to omit. Each row carries the file's content validator, which is
     // what an offline client compares against its download snapshot — and a
@@ -435,6 +437,54 @@ pub async fn book_file_path(
         std::path::Path::new(&lib)
             .join(&dir)
             .join(format!("{stem}.{}", fmt.to_lowercase()))
+    }))
+}
+
+/// SQL ordering that ranks a book's text-bearing files the way the reader
+/// and every text surface serve them: the EPUB first, else the PDF. Shared
+/// by [`book_text_source`] and the content-index queries so "the file the
+/// server would serve" is one definition (rule 09), never re-derived.
+pub const TEXT_SOURCE_FORMAT_ORDER: &str =
+    "CASE UPPER(bf.format) WHEN 'EPUB' THEN 0 WHEN 'PDF' THEN 1 ELSE 2 END, bf.ordinal";
+
+/// The file a book's text is read from: its `book_files.id`, on-disk path,
+/// and uppercase format. See [`book_text_source`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextSource {
+    pub file_id: i64,
+    pub path: std::path::PathBuf,
+    pub format: String,
+}
+
+/// Resolve the file every text-addressed surface — chapter list, chapter
+/// text, content search, spoiler boundary, anchor placement, progress
+/// enrichment — reads for `id`: the lowest-ordinal EPUB, else the
+/// lowest-ordinal PDF ([`TEXT_SOURCE_FORMAT_ORDER`]). `Ok(None)` for a book
+/// with neither (audio-only, comic-only). A structure row keyed on the
+/// returned `file_id` therefore always describes the file the reader opens.
+pub async fn book_text_source(
+    pool: &SqlitePool,
+    id: i64,
+) -> Result<Option<TextSource>, super::BooksError> {
+    let sql = format!(
+        "SELECT bf.id, COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
+                bf.filename, bf.format \
+         FROM books b \
+         JOIN scan_roots l ON l.id = b.library_id \
+         JOIN book_files bf ON bf.book_id = b.id \
+         WHERE b.id = ? AND UPPER(bf.format) IN ('EPUB', 'PDF') \
+         ORDER BY {TEXT_SOURCE_FORMAT_ORDER} LIMIT 1"
+    );
+    let row = sqlx::query_as::<_, (i64, String, String, String, String)>(&sql)
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|(file_id, lib, dir, stem, fmt)| TextSource {
+        file_id,
+        path: std::path::Path::new(&lib)
+            .join(&dir)
+            .join(format!("{stem}.{}", fmt.to_lowercase())),
+        format: fmt.to_ascii_uppercase(),
     }))
 }
 

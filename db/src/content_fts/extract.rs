@@ -1,6 +1,8 @@
 //! Per-chapter text extraction for the content FTS index: walk an EPUB's
 //! spine, skip navigation documents, strip markup, and emit one collapsed
-//! plain-text string per spine position.
+//! plain-text string per spine position. A PDF's "spine" is its page list,
+//! so [`extract_texts`] dispatches it to `pdf::page_texts` and emits one
+//! entry per page that has any text.
 //!
 // TODO: unify with the chapter-text helper being extracted from
 // db/src/ebook/wordcount.rs (OMNI-2281). This walk deliberately duplicates
@@ -34,6 +36,37 @@ pub struct ChapterText {
     pub spine_index: i64,
     /// Markup-stripped, whitespace-collapsed chapter prose.
     pub text: String,
+}
+
+/// Extract the text the index stores for the file at `path`, by format:
+/// [`extract_chapter_texts`] for an EPUB, one entry per non-empty page for a
+/// PDF. `None` when the file cannot be read (the backfill retries next scan).
+pub fn extract_texts(path: &Path) -> Option<Vec<ChapterText>> {
+    if crate::pdf::is_pdf_path(path) {
+        return extract_page_texts(path);
+    }
+    extract_chapter_texts(path)
+}
+
+/// A PDF's pages as chapter rows, keyed by 0-based page. A textless page is
+/// dropped like an empty EPUB chapter; a document with no text at all (a
+/// scan) stores nothing and is re-tried each scan, the same as an EPUB whose
+/// every chapter is navigation.
+fn extract_page_texts(path: &Path) -> Option<Vec<ChapterText>> {
+    let pages = crate::pdf::page_texts(path).ok()?;
+    Some(
+        pages
+            .into_iter()
+            .enumerate()
+            .filter_map(|(page, text)| {
+                let text = collapse_whitespace(&text);
+                (!text.is_empty()).then_some(ChapterText {
+                    spine_index: page as i64,
+                    text,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Extract every readable chapter's plain text from the EPUB at `path`.

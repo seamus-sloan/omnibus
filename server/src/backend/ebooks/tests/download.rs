@@ -9,7 +9,7 @@ use crate::auth::test_support as auth_test_support;
 use crate::backend::test_support::*;
 
 use super::super::*;
-use super::{content_disposition, seed_epub_on_disk};
+use super::{content_disposition, seed_epub_on_disk, seed_pdf_on_disk};
 
 #[tokio::test]
 async fn api_get_ebook_kepub_returns_401_when_anonymous() {
@@ -231,6 +231,40 @@ async fn api_get_ebook_download_returns_200_with_attachment_disposition() {
     );
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     assert_eq!(&bytes[..], b"PK\x03\x04 fake-epub");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// A PDF-only book downloads its PDF as an attachment under the PDF mime —
+/// the override bake is an OPF rewrite, so the source ships as scanned.
+#[tokio::test]
+async fn api_get_ebook_download_serves_a_pdf_only_book_as_an_attachment() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, tmp) = seed_pdf_on_disk(&pool).await;
+    let pdf = std::fs::read(tmp.join("alpha.pdf")).unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/ebooks/{uuid}/download"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/pdf"),
+    );
+    let disposition = content_disposition(&res);
+    assert!(disposition.starts_with("attachment;"), "{disposition:?}");
+    assert!(disposition.contains("alpha.pdf"), "{disposition:?}");
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], &pdf[..]);
 
     std::fs::remove_dir_all(&tmp).ok();
 }

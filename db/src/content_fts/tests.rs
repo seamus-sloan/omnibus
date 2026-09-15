@@ -7,8 +7,9 @@ use sqlx::SqlitePool;
 
 use crate::ebook::test_support::copy_fixture_into;
 use crate::pool::init_db;
-use crate::test_support::{build_test_epub, count_rows, make_test_dir};
+use crate::test_support::{build_test_epub, build_test_pdf, count_rows, make_test_dir, TestPdf};
 
+use super::extract::extract_chapter_texts;
 use super::*;
 
 /// Seed one book backed by a real fixture EPUB on disk, with an explicit
@@ -200,6 +201,60 @@ async fn backfill_content_fts_indexes_fixture_epub_and_content_search_finds_body
         metadata_hits.is_empty(),
         "body text must not be reachable through books_fts"
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn backfill_content_fts_indexes_a_pdf_by_page_and_cites_its_outline() {
+    // A PDF's spine is its page list: one row per page that has text, so a
+    // hit cites the page, and the chapter named is the outline entry the
+    // page falls under.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("content-pdf");
+    let lib = dir.to_str().unwrap().to_string();
+    let spec = TestPdf {
+        pages: &["Opening remarks", "", "The lighthouse keeper waited"],
+        outline: &[("Part I", 0), ("Part II", 2)],
+        ..Default::default()
+    };
+    let bytes = build_test_pdf(&spec);
+    std::fs::write(dir.join("atlas.pdf"), &bytes).unwrap();
+    let book_id = seed_book_row(&pool, &dir, "atlas.pdf", "PDF", "uuid-p", "Atlas", 5, 6).await;
+    // The outline is read from the structure tables, the way a scanned
+    // library carries it after the structure backfill.
+    let file_id: i64 = sqlx::query_scalar("SELECT id FROM book_files WHERE book_id = ?")
+        .bind(book_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let structure = crate::pdf::extract_structure(&dir.join("atlas.pdf"))
+        .unwrap()
+        .unwrap();
+    crate::epub_structure::replace_structure(&pool, file_id, &structure)
+        .await
+        .unwrap();
+
+    backfill_content_fts(&pool, &lib, |_, _, _| {})
+        .await
+        .unwrap();
+
+    assert_eq!(
+        chapter_texts_of(&pool, "uuid-p").await,
+        vec![
+            "Opening remarks".to_string(),
+            "The lighthouse keeper waited".to_string()
+        ],
+        "the textless page stores no row"
+    );
+    let hits =
+        search_content_for_paths(&pool, &[&lib], "lighthouse", &ContentSearchScope::default())
+            .await
+            .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].book_uuid, "uuid-p");
+    assert_eq!(hits[0].spine_index, 2, "the 0-based page");
+    assert_eq!(hits[0].chapter_title.as_deref(), Some("Part II"));
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,8 +1,8 @@
 //! The EPUB path: the byte validators (magic, size cap, magic split
 //! across chunks), inspect for admins and `can_upload` users with its 415
-//! and 403, every declared creator surviving an author edit, and commit's
-//! library-path, oversized-field, read-only-library and non-EPUB
-//! rejections.
+//! and 403, every declared creator surviving an author edit, the PDF twin of
+//! inspect and commit, and commit's library-path, oversized-field,
+//! read-only-library and non-ebook rejections.
 
 use axum::{body::to_bytes, http::StatusCode};
 use tower::ServiceExt;
@@ -68,21 +68,42 @@ fn validate_file_bytes_rejects_oversize() {
 
 #[test]
 fn extend_and_validate_magic_accepts_epub_magic_split_across_chunks() {
-    let mut prefix = Vec::with_capacity(4);
+    let mut prefix = Vec::with_capacity(5);
 
-    assert!(!extend_and_validate_magic(&mut prefix, b"P").unwrap());
-    assert!(!extend_and_validate_magic(&mut prefix, b"K\x03").unwrap());
-    assert!(extend_and_validate_magic(&mut prefix, b"\x04rest").unwrap());
-    assert_eq!(prefix, b"PK\x03\x04");
+    assert_eq!(extend_and_validate_magic(&mut prefix, b"P").unwrap(), None);
+    assert_eq!(
+        extend_and_validate_magic(&mut prefix, b"K\x03").unwrap(),
+        None
+    );
+    assert_eq!(
+        extend_and_validate_magic(&mut prefix, b"\x04rest").unwrap(),
+        Some("epub")
+    );
+    assert_eq!(prefix, b"PK\x03\x04r");
+}
+
+#[test]
+fn extend_and_validate_magic_accepts_pdf_magic_split_across_chunks() {
+    let mut prefix = Vec::with_capacity(5);
+
+    assert_eq!(
+        extend_and_validate_magic(&mut prefix, b"%PD").unwrap(),
+        None
+    );
+    assert_eq!(
+        extend_and_validate_magic(&mut prefix, b"F-1.4").unwrap(),
+        Some("pdf")
+    );
 }
 
 #[test]
 fn extend_and_validate_magic_rejects_invalid_split_prefix() {
-    let mut prefix = Vec::with_capacity(4);
+    let mut prefix = Vec::with_capacity(5);
 
-    assert!(!extend_and_validate_magic(&mut prefix, b"NO").unwrap());
+    assert_eq!(extend_and_validate_magic(&mut prefix, b"NO").unwrap(), None);
+    assert_eq!(extend_and_validate_magic(&mut prefix, b"PE").unwrap(), None);
     assert!(matches!(
-        extend_and_validate_magic(&mut prefix, b"PE"),
+        extend_and_validate_magic(&mut prefix, b"!"),
         Err(UploadError::UnsupportedFormat)
     ));
 }
@@ -111,6 +132,116 @@ async fn inspect_returns_extracted_metadata_for_admin() {
     assert!(
         inspection.title.is_some(),
         "fixture should yield an embedded title"
+    );
+}
+
+/// A test PDF with an Info dict, the way a publisher's or Calibre's export
+/// carries one.
+fn fixture_pdf() -> Vec<u8> {
+    db::test_support::build_test_pdf(&db::test_support::TestPdf {
+        pages: &["Opening remarks", "Chapter two body"],
+        title: Some("The Test Book"),
+        author: Some("Ada Lovelace"),
+        ..Default::default()
+    })
+}
+
+#[tokio::test]
+async fn inspect_accepts_a_pdf_and_reports_its_info_dict() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let (ct, body) = multipart_body(&[("file", Some("book.pdf"), &fixture_pdf())]);
+    let res = app
+        .oneshot(post_multipart(
+            "/api/uploads/ebooks/inspect",
+            &token,
+            &ct,
+            body,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let inspection: UploadInspection = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(inspection.ext, "pdf");
+    assert_eq!(inspection.title.as_deref(), Some("The Test Book"));
+    assert_eq!(inspection.author.as_deref(), Some("Ada Lovelace"));
+    assert!(inspection.has_cover, "page 1 renders as the cover");
+}
+
+#[tokio::test]
+async fn inspect_rejects_a_truncated_pdf_with_415() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let (ct, body) = multipart_body(&[("file", Some("book.pdf"), b"%PDF-1.4\nnot really")]);
+    let res = app
+        .oneshot(post_multipart(
+            "/api/uploads/ebooks/inspect",
+            &token,
+            &ct,
+            body,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+#[tokio::test]
+async fn commit_files_a_pdf_on_its_canonical_path_and_indexes_it() {
+    let (app, _state, pool) = fixture().await;
+    let _covers = CoversDirGuard::new("upload_commit_pdf");
+    let library = tempfile::tempdir().expect("temp library dir");
+    let library_path = library.path().to_string_lossy().to_string();
+    db::set_settings(
+        &pool,
+        &Settings {
+            ebook_library_path: Some(library_path.clone()),
+            audiobook_library_path: None,
+            scan_interval_hours: None,
+        },
+    )
+    .await
+    .expect("set library path");
+
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let (ct, body) = multipart_body(&[
+        ("title", None, b"Flatland Notes"),
+        ("author", None, b"Edwin Abbott Abbott"),
+        ("file", Some("book.pdf"), &fixture_pdf()),
+    ]);
+    let res = app
+        .oneshot(post_multipart("/api/uploads/ebooks", &token, &ct, body))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let commit: UploadCommitResult = serde_json::from_slice(&bytes).unwrap();
+
+    let expected = library
+        .path()
+        .join("edwin-abbott-abbott")
+        .join("flatland-notes")
+        .join("flatland-notes.pdf");
+    assert!(expected.is_file(), "expected {}", expected.display());
+
+    let book = db::get_book_by_uuid(&pool, &commit.uuid)
+        .await
+        .unwrap()
+        .expect("uploaded PDF should be indexed");
+    assert_eq!(book.title.as_deref(), Some("Flatland Notes"));
+    assert_eq!(book.page_count, Some(2), "the scan counted the PDF's pages");
+    assert!(
+        book.formats.iter().any(|f| f.eq_ignore_ascii_case("pdf")),
+        "{:?}",
+        book.formats
     );
 }
 

@@ -8,7 +8,7 @@ use crate::auth::test_support as auth_test_support;
 use crate::backend::test_support::*;
 
 use super::super::*;
-use super::{seed_cbz_on_disk, seed_epub_on_disk};
+use super::{seed_cbz_on_disk, seed_epub_on_disk, seed_pdf_on_disk};
 
 // -------------------------------------------------------------------
 // /api/ebooks/{uuid}/file — raw EPUB byte serving
@@ -257,6 +257,110 @@ async fn api_get_ebook_file_prefers_epub_when_book_has_both_formats() {
     );
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     assert_eq!(&bytes[..], b"PK\x03\x04 fake-epub");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// The last rung of the ladder: a book with neither an EPUB nor a CBZ
+/// streams its PDF under the PDF mime — the bytes PDF.js range-fetches and
+/// the offline clients pull whole.
+#[tokio::test]
+async fn api_get_ebook_file_serves_pdf_when_book_has_neither_epub_nor_cbz() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, tmp) = seed_pdf_on_disk(&pool).await;
+    let pdf = std::fs::read(tmp.join("alpha.pdf")).unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(&format!("/api/ebooks/{uuid}/file"), &token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    let header = |name: axum::http::HeaderName| {
+        res.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    };
+    assert_eq!(header(axum::http::header::CONTENT_TYPE), "application/pdf");
+    assert_eq!(header(axum::http::header::ACCEPT_RANGES), "bytes");
+    let etag = header(axum::http::header::ETAG);
+    assert!(
+        etag.starts_with('"') && etag.ends_with('"'),
+        "strong entity-tag, got: {etag}"
+    );
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], &pdf[..]);
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// CBZ outranks PDF: a book scanned both ways is a comic, and the comic
+/// pipeline is the offline-verified one.
+#[tokio::test]
+async fn api_get_ebook_file_prefers_cbz_over_pdf_when_book_has_both() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, tmp) = seed_pdf_on_disk(&pool).await;
+    let archive = db::test_support::build_stored_zip(&[("p1.jpg", b"page-one")]);
+    std::fs::write(tmp.join("alpha.cbz"), &archive).unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES ((SELECT id FROM books WHERE uuid = ?), 'CBZ', 'alpha', 0)",
+    )
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(&format!("/api/ebooks/{uuid}/file"), &token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/vnd.comicbook+zip"),
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// `?file_id=` names a text edition — an EPUB or a PDF row — so a PDF row
+/// resolves the way a second EPUB edition does.
+#[tokio::test]
+async fn api_get_ebook_file_with_file_id_serves_a_pdf_row() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, tmp) = seed_pdf_on_disk(&pool).await;
+    let file_id: i64 = sqlx::query_scalar("SELECT id FROM book_files WHERE format = 'PDF'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/ebooks/{uuid}/file?file_id={file_id}"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/pdf"),
+    );
 
     std::fs::remove_dir_all(&tmp).ok();
 }

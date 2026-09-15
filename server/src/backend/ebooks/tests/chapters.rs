@@ -49,6 +49,50 @@ async fn seed_epub_with_bytes(
     (uuid, book_id, file_id, tmp)
 }
 
+/// Seed one PDF-only book whose on-disk file is the three-page test PDF
+/// (outline "Part I" → page 0, "Part II" → page 2). Returns
+/// `(uuid, book_id, book_file_id, tmp)`; caller removes `tmp`.
+async fn seed_pdf_with_outline(pool: &sqlx::SqlitePool) -> (String, i64, i64, std::path::PathBuf) {
+    let tmp = db::test_support::make_test_dir("chapter_routes_pdf");
+    let spec = db::test_support::TestPdf {
+        pages: &["Opening remarks", "Chapter two body", "Chapter three body"],
+        outline: &[("Part I", 0), ("Part II", 2)],
+        ..Default::default()
+    };
+    std::fs::write(
+        tmp.join("atlas.pdf"),
+        db::test_support::build_test_pdf(&spec),
+    )
+    .unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(tmp.to_str().unwrap())
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = "78787878-7878-7878-7878-787878787878".to_string();
+    let book_id =
+        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, 'Atlas')")
+            .bind(&uuid)
+            .bind(lib_id)
+            .bind(tmp.to_str().unwrap())
+            .execute(pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+    let file_id = sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'PDF', 'atlas', 0)",
+    )
+    .bind(book_id)
+    .execute(pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    (uuid, book_id, file_id, tmp)
+}
+
 /// A two-document EPUB with a nav TOC naming the second document.
 fn two_chapter_epub() -> Vec<u8> {
     db::test_support::build_test_epub_with_nav(
@@ -222,6 +266,121 @@ async fn api_get_ebook_chapters_extracts_on_the_fly_when_never_backfilled() {
     assert_eq!(body.chapters.len(), 1);
     assert_eq!(body.chapters[0].title, "Chapter Two");
     assert_eq!(body.chapters[0].spine_index, 1);
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[tokio::test]
+async fn api_get_ebook_chapters_lists_a_pdf_page_per_spine_step_with_its_outline() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, _, _, tmp) = seed_pdf_with_outline(&pool).await;
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/ebooks/{uuid}/chapters"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: ChapterListResponse = json_body(res).await;
+    assert!(body.has_text);
+    assert_eq!(body.spine_count, 3, "one spine step per page");
+    let chapters: Vec<(&str, i64)> = body
+        .chapters
+        .iter()
+        .map(|c| (c.title.as_str(), c.spine_index))
+        .collect();
+    assert_eq!(chapters, [("Part I", 0), ("Part II", 2)]);
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[tokio::test]
+async fn api_get_ebook_chapter_text_reads_a_pdf_page() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, _, _, tmp) = seed_pdf_with_outline(&pool).await;
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/ebooks/{uuid}/chapters/1/text"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: ChapterTextResponse = json_body(res).await;
+    assert!(body.has_text);
+    assert_eq!(body.spine_index, 1);
+    assert_eq!(body.text, "Chapter two body");
+    assert!(!body.truncated);
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[tokio::test]
+async fn api_get_ebook_chapter_text_stops_at_the_pdf_page_the_reader_reached() {
+    // Rule 11 on a page-based book: the page the reader is on is theirs to
+    // see, the one after it is withheld whole.
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, _, file_id, tmp) = seed_pdf_with_outline(&pool).await;
+    let structure = db::pdf::extract_structure(&tmp.join("atlas.pdf"))
+        .unwrap()
+        .unwrap();
+    db::epub_structure::replace_structure(&pool, file_id, &structure)
+        .await
+        .unwrap();
+    db::progress::upsert_progress(
+        &pool,
+        user.id,
+        &omnibus_shared::ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: omnibus_shared::ProgressFormat::Epub,
+            epub_cfi: Some(omnibus_shared::pdf_page_anchor(1)),
+            audio_position_seconds: None,
+            progress_percent: Some(67),
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: Some(100),
+        },
+    )
+    .await
+    .unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let on_page = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/api/ebooks/{uuid}/chapters/1/text?stop_at_progress=true"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let on_page: ChapterTextResponse = json_body(on_page).await;
+    assert!(
+        on_page.text.starts_with("Chapter two"),
+        "the reader's own page is shown: {:?}",
+        on_page.text
+    );
+
+    let ahead = app
+        .oneshot(get_with_bearer(
+            &format!("/api/ebooks/{uuid}/chapters/2/text?stop_at_progress=true"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let ahead: ChapterTextResponse = json_body(ahead).await;
+    assert_eq!(ahead.text, "", "the page ahead is withheld whole");
+    assert!(ahead.truncated_by_progress);
 
     std::fs::remove_dir_all(&tmp).ok();
 }

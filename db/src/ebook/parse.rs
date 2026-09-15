@@ -27,8 +27,8 @@ pub struct ParseTarget {
 }
 
 /// Phase B: parse the full metadata + cover for the subset of files the
-/// diff said are new or changed. CBZ targets route to [`crate::comic`];
-/// everything else takes the EPUB/OPF path. Each target carries the
+/// diff said are new or changed. CBZ targets route to [`crate::comic`], PDF
+/// targets to [`crate::pdf`]; everything else takes the EPUB/OPF path. Each target carries the
 /// absolute path so we don't re-walk, and the Phase-A stat values so the
 /// resulting `IndexedBook` ships them straight through to the writer.
 pub fn parse_ebook_targets(targets: Vec<ParseTarget>, opts: ScanOptions) -> Vec<IndexedBook> {
@@ -49,6 +49,8 @@ pub fn parse_ebook_targets_with_progress(
             on_file(&t);
             let mut book = if crate::comic::is_comic_path(&t.absolute) {
                 crate::comic::extract_comic(&t.absolute, t.filename, &opts)
+            } else if crate::pdf::is_pdf_path(&t.absolute) {
+                crate::pdf::extract_pdf(&t.absolute, t.filename, &opts)
             } else {
                 extract_metadata(&t.absolute, t.filename, &opts)
             };

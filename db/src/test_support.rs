@@ -129,6 +129,191 @@ pub fn build_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
+/// Inputs for [`build_test_pdf`]: one entry per page (each string becomes
+/// that page's text, `\n`-separated lines), optional Info-dict fields, an
+/// outline as `(title, 0-based page)` pairs, and an optional `/Rotate` for
+/// every page. All `Default`, so a test names only what it asserts on.
+#[derive(Debug, Default, Clone)]
+pub struct TestPdf<'a> {
+    pub pages: &'a [&'a str],
+    pub title: Option<&'a str>,
+    pub author: Option<&'a str>,
+    pub keywords: Option<&'a str>,
+    pub outline: &'a [(&'a str, usize)],
+    pub rotate: Option<u16>,
+}
+
+/// Hand-assemble a small but complete PDF (a computed xref, base-14
+/// Helvetica, one content stream per page) so the PDF paths can be tested
+/// without a fixture on disk — the sibling of [`build_stored_zip`]. Both
+/// parsers in use read it: the pure-Rust renderer for the cover and page
+/// count, and the text extractor for per-page prose and the outline. Kept
+/// byte-deterministic so an iOS port can pin the same bytes.
+pub fn build_test_pdf(spec: &TestPdf<'_>) -> Vec<u8> {
+    fn escape(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        for ch in text.chars() {
+            match ch {
+                '(' | ')' | '\\' => {
+                    out.push('\\');
+                    out.push(ch);
+                }
+                '\n' | '\r' => {}
+                c if c.is_ascii() => out.push(c),
+                // Base-14 WinAnsi can't spell it; the Info dict and outline
+                // titles carry non-ASCII separately below.
+                _ => out.push('?'),
+            }
+        }
+        out
+    }
+    /// PDF text-string with a UTF-16BE BOM so any Unicode survives.
+    fn utf16_string(text: &str) -> String {
+        let mut hex = String::from("<FEFF");
+        for unit in text.encode_utf16() {
+            hex.push_str(&format!("{unit:04X}"));
+        }
+        hex.push('>');
+        hex
+    }
+
+    let page_count = spec.pages.len().max(1);
+    // Object numbering: 1 catalog, 2 pages, 3 font, then (page, content)
+    // pairs, then info, then the outlines root and one item per entry.
+    let first_page_obj = 4usize;
+    let obj_for_page = |i: usize| first_page_obj + i * 2;
+    let info_obj = first_page_obj + page_count * 2;
+    let outlines_obj = info_obj + 1;
+    let item_obj = |i: usize| outlines_obj + 1 + i;
+    // Without an outline the root object is never emitted, so numbering
+    // ends at the Info dict.
+    let total_objs = if spec.outline.is_empty() {
+        info_obj
+    } else {
+        outlines_obj + spec.outline.len()
+    };
+
+    let mut objects: Vec<(usize, String)> = Vec::new();
+    let outlines_ref = if spec.outline.is_empty() {
+        String::new()
+    } else {
+        format!(" /Outlines {outlines_obj} 0 R")
+    };
+    objects.push((
+        1,
+        format!("<< /Type /Catalog /Pages 2 0 R{outlines_ref} >>"),
+    ));
+    let kids: Vec<String> = (0..page_count)
+        .map(|i| format!("{} 0 R", obj_for_page(i)))
+        .collect();
+    objects.push((
+        2,
+        format!(
+            "<< /Type /Pages /Kids [{}] /Count {page_count} >>",
+            kids.join(" ")
+        ),
+    ));
+    objects.push((
+        3,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"
+            .to_string(),
+    ));
+    for i in 0..page_count {
+        let text = spec.pages.get(i).copied().unwrap_or("");
+        let mut content = String::from("BT /F1 12 Tf 14 TL 72 720 Td ");
+        for (n, line) in text.split('\n').enumerate() {
+            if n > 0 {
+                content.push_str("T* ");
+            }
+            content.push_str(&format!("({}) Tj ", escape(line)));
+        }
+        content.push_str("ET");
+        let rotate = spec
+            .rotate
+            .map(|r| format!(" /Rotate {r}"))
+            .unwrap_or_default();
+        objects.push((
+            obj_for_page(i),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]{rotate} \
+                 /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>",
+                obj_for_page(i) + 1
+            ),
+        ));
+        objects.push((
+            obj_for_page(i) + 1,
+            format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            ),
+        ));
+    }
+    let mut info = String::from("<<");
+    if let Some(t) = spec.title {
+        info.push_str(&format!(" /Title {}", utf16_string(t)));
+    }
+    if let Some(a) = spec.author {
+        info.push_str(&format!(" /Author {}", utf16_string(a)));
+    }
+    if let Some(k) = spec.keywords {
+        info.push_str(&format!(" /Keywords {}", utf16_string(k)));
+    }
+    info.push_str(" /Producer (omnibus test_support) >>");
+    objects.push((info_obj, info));
+    if !spec.outline.is_empty() {
+        let last = spec.outline.len() - 1;
+        objects.push((
+            outlines_obj,
+            format!(
+                "<< /Type /Outlines /First {} 0 R /Last {} 0 R /Count {} >>",
+                item_obj(0),
+                item_obj(last),
+                spec.outline.len()
+            ),
+        ));
+        for (i, (title, page)) in spec.outline.iter().enumerate() {
+            let page = (*page).min(page_count - 1);
+            let mut item = format!(
+                "<< /Title {} /Parent {outlines_obj} 0 R /Dest [{} 0 R /XYZ 0 792 0]",
+                utf16_string(title),
+                obj_for_page(page)
+            );
+            if i > 0 {
+                item.push_str(&format!(" /Prev {} 0 R", item_obj(i - 1)));
+            }
+            if i < last {
+                item.push_str(&format!(" /Next {} 0 R", item_obj(i + 1)));
+            }
+            item.push_str(" >>");
+            objects.push((item_obj(i), item));
+        }
+    }
+    objects.sort_by_key(|(n, _)| *n);
+    debug_assert_eq!(objects.len(), total_objs);
+
+    let mut out: Vec<u8> = Vec::new();
+    out.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+    let mut offsets = vec![0usize; total_objs + 1];
+    for (num, body) in &objects {
+        offsets[*num] = out.len();
+        out.extend_from_slice(format!("{num} 0 obj\n{body}\nendobj\n").as_bytes());
+    }
+    let xref_at = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n", total_objs + 1).as_bytes());
+    out.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in offsets.iter().skip(1) {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R /Info {info_obj} 0 R >>\nstartxref\n{xref_at}\n%%EOF\n",
+            total_objs + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
+
 /// Minimal valid EPUB container around the given spine documents. Each
 /// `(href, xhtml)` pair becomes one manifest item + spine itemref, in
 /// order, so `href`s map to spine indices 0..n. The OCF-required stored

@@ -428,7 +428,7 @@ fn MarqueeCtaRow(
         (Some(at), true) => format!("Listen from {at}"),
         _ => "Listen".to_string(),
     };
-    let is_fileless = !view.has_ebook && !view.has_audio && !view.has_comic;
+    let is_fileless = !view.has_ebook && !view.has_audio && !view.has_comic && !view.has_pdf;
 
     rsx! {
         div { class: "bdmq-ctarow",
@@ -485,12 +485,13 @@ fn MarqueeCtaRow(
                 // Every item behind this trigger sends or downloads a file,
                 // so a fileless record (wishlist entry, paper-only book) gets
                 // no trigger at all rather than an empty menu (#2471).
-                if view.has_ebook || view.has_audio {
+                if view.has_ebook || view.has_audio || view.has_pdf {
                     BdExportMenu {
                     ctx: BdExportContext {
                         uuid: uuid.clone(),
                         has_ebook: view.has_ebook,
                         has_audio: view.has_audio,
+                        has_pdf: view.has_pdf,
                         book_author: book_author.clone(),
                         book_title: title.clone(),
                         epub_size_bytes: b.epub_size_bytes,

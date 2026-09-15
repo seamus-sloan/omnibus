@@ -21,18 +21,20 @@ enum UploadKind {
     Audiobook,
 }
 
-/// Extensions the ebook ingest takes (`/api/uploads/ebooks`).
-const EBOOK_EXTENSIONS: &[&str] = &["epub"];
+/// Extensions the ebook ingest takes (`/api/uploads/ebooks`), matching the
+/// server's `detect_ebook_format`.
+const EBOOK_EXTENSIONS: &[&str] = &["epub", "pdf"];
 /// Extensions the audiobook ingest takes (`/api/uploads/audiobooks`), matching
 /// the server's `audiobook_ext_of`.
 const AUDIOBOOK_EXTENSIONS: &[&str] = &["m4b", "m4a", "mp4", "mp3"];
 /// The picker's `accept` list: every extension above plus their MIME types,
 /// so a browser filters the dialog without the page having to.
-const ACCEPT: &str = ".epub,.m4b,.m4a,.mp4,.mp3,application/epub+zip,audio/mp4,audio/mpeg";
+const ACCEPT: &str =
+    ".epub,.pdf,.m4b,.m4a,.mp4,.mp3,application/epub+zip,application/pdf,audio/mp4,audio/mpeg";
 
 /// Decide which ingest a set of picked filenames goes to, or say why it can't.
 ///
-/// One EPUB is an ebook; any number of audiobook files is an audiobook (the
+/// One EPUB or PDF is an ebook; any number of audiobook files is an audiobook (the
 /// server still rejects two `.m4b`s or a mixed set of its own — this only
 /// routes). Everything else is refused here so the wrong endpoint is never
 /// asked: a mix of the two, several EPUBs, or an extension neither takes.
@@ -54,7 +56,7 @@ fn classify_pick(names: &[String]) -> Result<UploadKind, String> {
             audio += 1;
         } else {
             return Err(format!(
-                "{name} isn't a format Omnibus can add — pick an EPUB, an M4B/M4A/MP4 audiobook, or MP3 parts."
+                "{name} isn't a format Omnibus can add — pick an EPUB or PDF, an M4B/M4A/MP4 audiobook, or MP3 parts."
             ));
         }
     }

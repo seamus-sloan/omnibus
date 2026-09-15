@@ -229,6 +229,78 @@ async fn download_bakes_a_metadata_override_into_the_plain_epub_fallback() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// A PDF-only book downloads as the raw PDF — no conversion attempt, the
+/// PDF mime, and the #1647 bookkeeping — the same shape as the CBZ arm.
+#[tokio::test]
+async fn download_serves_the_pdf_as_is_for_a_pdf_only_book() {
+    let (app, pool, token, _uid) = fixture().await;
+    let device_id = db::kobo_devices::resolve_device_by_token(&pool, &token)
+        .await
+        .unwrap()
+        .unwrap()
+        .device_id;
+
+    let tmp = db::test_support::make_test_dir("kobo_dl_pdf");
+    let pdf = db::test_support::build_test_pdf(&db::test_support::TestPdf {
+        pages: &["Flatland"],
+        ..Default::default()
+    });
+    std::fs::write(tmp.join("flatland.pdf"), &pdf).unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(tmp.to_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = "67676767-6767-6767-6767-676767676767";
+    sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title, last_modified) \
+         VALUES (?, ?, ?, 'Flatland', 1)",
+    )
+    .bind(uuid)
+    .bind(lib_id)
+    .bind(tmp.to_str().unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES ((SELECT id FROM books WHERE uuid = ?), 'PDF', 'flatland', 0)",
+    )
+    .bind(uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/download/{uuid}")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/pdf"),
+    );
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], &pdf[..], "the PDF streams as-is");
+
+    let recorded: Option<i64> = sqlx::query_scalar(
+        "SELECT downloaded_at FROM kobo_annotations_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device_id)
+    .bind(uuid)
+    .fetch_optional(&pool)
+    .await
+    .unwrap()
+    .flatten();
+    assert!(recorded.is_some(), "a served PDF records the download");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// #1741: a CBZ-only book downloads as the raw archive (no conversion
 /// attempt, so no kepubify guard) and still runs the #1647 bookkeeping.
 #[tokio::test]

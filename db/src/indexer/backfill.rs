@@ -339,8 +339,8 @@ async fn fetch_word_count_candidates(
     Ok(rows)
 }
 
-/// Fill `books.page_count` for CBZ-backed books under `library_path` that
-/// have none yet (NULL `page_count`).
+/// Fill `books.page_count` for page-based (CBZ or PDF) books under
+/// `library_path` that have none yet (NULL `page_count`).
 ///
 /// Page counts were added after the initial comic indexer, so books indexed
 /// before that carry a NULL. The normal diff-based reindex only re-parses
@@ -367,38 +367,27 @@ pub(crate) async fn backfill_page_counts(
     let total = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
     tracing::info!(count = total, "backfilling page counts for existing comics");
 
-    // One batched path lookup up front (chunked internally), same pattern
-    // `backfill_word_counts` uses.
-    let ids: Vec<i64> = candidates.iter().map(|(id, _)| *id).collect();
-    let paths = crate::book_file_paths(pool, &ids, "CBZ").await?;
-
     let mut processed = 0u32;
     for chunk in candidates.chunks(250) {
         let mut tx = pool.begin().await?;
         let mut updates = Vec::with_capacity(chunk.len());
-        for (id, title) in chunk {
+        for (id, title, path) in chunk {
             let id = *id;
             processed = processed.saturating_add(1);
             on_progress(processed, total, title);
 
-            let Some(path) = paths.get(&id).cloned() else {
-                continue;
-            };
-            let count = tokio::task::spawn_blocking(move || {
-                crate::comic::list_pages(&path)
-                    .ok()
-                    .map(|pages| pages.len() as i64)
-            })
-            .await
-            .unwrap_or_else(|join_err| {
-                tracing::warn!(
-                    book_id = id,
-                    %join_err,
-                    is_panic = join_err.is_panic(),
-                    "page-count task failed; leaving page_count NULL"
-                );
-                None
-            });
+            let path = path.clone();
+            let count = tokio::task::spawn_blocking(move || page_count_for_path(&path))
+                .await
+                .unwrap_or_else(|join_err| {
+                    tracing::warn!(
+                        book_id = id,
+                        %join_err,
+                        is_panic = join_err.is_panic(),
+                        "page-count task failed; leaving page_count NULL"
+                    );
+                    None
+                });
 
             let Some(count) = count else { continue };
             updates.push((id, count));
@@ -413,25 +402,52 @@ pub(crate) async fn backfill_page_counts(
     Ok(())
 }
 
-/// `books.id` for every CBZ-backed book under `library_path` still missing a
-/// `page_count` — the [`backfill_page_counts`] work set. Scoped to the
-/// scanned library so the follow-up task's cost tracks that scan.
+/// The page count of the file a book's pager would serve: the archive's
+/// page list for a CBZ, the page tree for a PDF.
+fn page_count_for_path(path: &std::path::Path) -> Option<i64> {
+    if crate::pdf::is_pdf_path(path) {
+        crate::pdf::page_count(path).ok().map(|n| n as i64)
+    } else {
+        crate::comic::list_pages(path)
+            .ok()
+            .map(|pages| pages.len() as i64)
+    }
+}
+
+/// `(book id, display title, on-disk path)` for every page-based book
+/// (CBZ or PDF) under `library_path` still missing a `page_count` — the
+/// [`backfill_page_counts`] work set. Scoped to the scanned library so the
+/// follow-up task's cost tracks that scan. A book carrying both formats
+/// counts its CBZ, the file the pager and `/file` prefer.
 async fn fetch_page_count_candidates(
     pool: &SqlitePool,
     library_path: &str,
-) -> anyhow::Result<Vec<(i64, String)>> {
-    let rows: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT DISTINCT b.id, COALESCE(NULLIF(b.title, ''), b.scan_key) \
+) -> anyhow::Result<Vec<(i64, String, PathBuf)>> {
+    let rows: Vec<(i64, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT b.id, COALESCE(NULLIF(b.title, ''), b.scan_key), \
+                COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
+                bf.filename, bf.format \
          FROM books b \
          JOIN scan_roots l ON b.library_id = l.id \
-         JOIN book_files bf ON bf.book_id = b.id AND bf.format = 'CBZ' COLLATE NOCASE \
+         JOIN book_files bf ON bf.id = ( \
+             SELECT id FROM book_files \
+             WHERE book_id = b.id AND UPPER(format) IN ('CBZ', 'PDF') \
+             ORDER BY CASE UPPER(format) WHEN 'CBZ' THEN 0 ELSE 1 END, ordinal LIMIT 1) \
          WHERE l.path = ? AND b.page_count IS NULL \
          ORDER BY b.id",
     )
     .bind(library_path)
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+    Ok(rows
+        .into_iter()
+        .map(|(id, title, lib, dir, stem, fmt)| {
+            let path = std::path::Path::new(&lib)
+                .join(&dir)
+                .join(format!("{stem}.{}", fmt.to_lowercase()));
+            (id, title, path)
+        })
+        .collect())
 }
 
 /// Pre-generate all three WebP thumbnail sizes for every book under
@@ -595,7 +611,7 @@ async fn fetch_epub_structure_candidates(
          JOIN books b ON bf.book_id = b.id \
          JOIN scan_roots l ON b.library_id = l.id \
          WHERE l.path = ? \
-           AND bf.format = 'EPUB' COLLATE NOCASE \
+           AND UPPER(bf.format) IN ('EPUB', 'PDF') \
            AND NOT EXISTS (SELECT 1 FROM epub_spine_stats s WHERE s.book_file_id = bf.id) \
          ORDER BY bf.id",
     )
@@ -613,8 +629,20 @@ async fn fetch_epub_structure_candidates(
         .collect())
 }
 
-/// Fill `epub_spine_stats` + `ebook_chapters` for every EPUB file that has
-/// none. The NOT EXISTS predicate keys on the stats table, which extraction
+/// Structure extraction by format: the OPF spine + TOC for an EPUB, one
+/// entry per page + the outline for a PDF (`pdf::extract_structure`).
+fn extract_structure_for_path(path: &std::path::Path) -> Option<ebook::toc::EpubStructure> {
+    if crate::pdf::is_pdf_path(path) {
+        crate::pdf::extract_structure(path).ok().flatten()
+    } else {
+        epub::doc::EpubDoc::new(path)
+            .ok()
+            .and_then(|mut doc| ebook::toc::extract_structure(&mut doc))
+    }
+}
+
+/// Fill `epub_spine_stats` + `ebook_chapters` for every EPUB or PDF file
+/// that has none. The NOT EXISTS predicate keys on the stats table, which extraction
 /// always writes for a readable book — so an honestly TOC-less book stores
 /// stats plus zero chapters and is done, while an unreadable file stores
 /// nothing and is retried on the next scan (the `backfill_word_counts`
@@ -638,21 +666,17 @@ pub(crate) async fn backfill_epub_structure(
     for (book_file_id, title, path) in candidates {
         processed = processed.saturating_add(1);
         on_progress(processed, total, &title);
-        let structure = tokio::task::spawn_blocking(move || {
-            epub::doc::EpubDoc::new(&path)
-                .ok()
-                .and_then(|mut doc| ebook::toc::extract_structure(&mut doc))
-        })
-        .await
-        .unwrap_or_else(|join_err| {
-            tracing::warn!(
-                book_file_id,
-                %join_err,
-                is_panic = join_err.is_panic(),
-                "epub structure task failed; leaving unextracted"
-            );
-            None
-        });
+        let structure = tokio::task::spawn_blocking(move || extract_structure_for_path(&path))
+            .await
+            .unwrap_or_else(|join_err| {
+                tracing::warn!(
+                    book_file_id,
+                    %join_err,
+                    is_panic = join_err.is_panic(),
+                    "epub structure task failed; leaving unextracted"
+                );
+                None
+            });
         let Some(structure) = structure else { continue };
         crate::epub_structure::replace_structure(pool, book_file_id, &structure)
             .await
@@ -661,12 +685,12 @@ pub(crate) async fn backfill_epub_structure(
     Ok(())
 }
 
-/// `(book id, uuid, display title, on-disk path)` for every EPUB book under
-/// `library_path` the indexer left without an extracted cover — the
+/// `(book id, uuid, display title, on-disk path)` for every EPUB or PDF book
+/// under `library_path` the indexer left without an extracted cover — the
 /// [`backfill_covers`] work set.
 ///
-/// Joins the book's lowest-ordinal EPUB file, which is the one a scan would
-/// have parsed. `has_cover = 0` is the whole predicate: a book carrying only
+/// Joins the book's lowest-ordinal EPUB file (else its PDF), which is the one
+/// a scan would have parsed. `has_cover = 0` is the whole predicate: a book carrying only
 /// an uploaded override still qualifies, and gaining an extracted cover
 /// alongside it changes nothing a reader sees (the override wins in
 /// `covers::get_cover`) while restoring the "revert to scanned cover" path.
@@ -682,8 +706,8 @@ async fn fetch_cover_candidates(
          JOIN scan_roots l ON b.library_id = l.id \
          JOIN book_files bf ON bf.id = ( \
              SELECT id FROM book_files \
-             WHERE book_id = b.id AND format = 'EPUB' COLLATE NOCASE \
-             ORDER BY ordinal LIMIT 1) \
+             WHERE book_id = b.id AND UPPER(format) IN ('EPUB', 'PDF') \
+             ORDER BY CASE UPPER(format) WHEN 'EPUB' THEN 0 ELSE 1 END, ordinal LIMIT 1) \
          WHERE l.path = ? AND b.has_cover = 0 \
          ORDER BY b.id",
     )
@@ -750,7 +774,11 @@ pub(crate) async fn backfill_covers(
 async fn extract_one_cover(book_id: i64, uuid: &str, path: PathBuf) -> Option<Option<String>> {
     let uuid = uuid.to_string();
     let stored = tokio::task::spawn_blocking(move || {
-        let (mime, bytes) = ebook::extract_cover(&path)?;
+        let (mime, bytes) = if crate::pdf::is_pdf_path(&path) {
+            crate::pdf::extract_cover(&path)?
+        } else {
+            ebook::extract_cover(&path)?
+        };
         let accent = ebook::extract_accent(&bytes);
         match covers::write_cover_file(&uuid, &mime, &bytes) {
             Ok(()) => Some(accent),

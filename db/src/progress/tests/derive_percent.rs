@@ -158,6 +158,17 @@ async fn derive_epub_percent_returns_false_for_an_unparseable_cfi() {
 }
 
 #[tokio::test]
+async fn derive_epub_percent_returns_false_for_a_pdf_page_anchor() {
+    // The PDF reader writes its percent with every turn; there is no offset
+    // to walk, so the derivation declines before touching the file.
+    let (pool, user, uuid) = seed_epub_on_disk("pdf_anchor").await;
+    let derived = derive_epub_percent(&pool, user, &uuid, "pdf-page:3", 1_000)
+        .await
+        .unwrap();
+    assert!(!derived);
+}
+
+#[tokio::test]
 async fn derive_epub_percent_agrees_with_stored_spine_stats() {
     // Same two-identical-chapter book as the full-walk test, but with the
     // 0071 structure extracted first: the stats fast-path must land the

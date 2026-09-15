@@ -389,6 +389,25 @@ async fn book_for_sync_falls_back_to_the_cbz_size_for_a_cbz_only_book() {
 }
 
 #[tokio::test]
+async fn book_for_sync_advertises_the_pdf_for_a_pdf_only_book() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_synced_ebook(&pool, "flatland.pdf", "Flatland", "Edwin Abbott Abbott").await;
+    sqlx::query(
+        "UPDATE book_files SET size_bytes = 555 \
+         WHERE book_id = (SELECT id FROM books WHERE uuid = ?)",
+    )
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let row = book_for_sync(&pool, &uuid).await.unwrap().unwrap();
+
+    assert_eq!(row.download_format(), "PDF");
+    assert_eq!(row.download_size_bytes, 555, "the PDF's own size");
+}
+
+#[tokio::test]
 async fn book_for_sync_prefers_the_epub_size_when_the_book_has_both_formats() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let uuid = seed_synced_ebook(&pool, "dual.epub", "Dual", "A").await;
@@ -667,6 +686,22 @@ async fn sync_books_excludes_an_audiobook_only_member_the_download_route_cannot_
         vec![ebook.as_str()],
         "only the book with a Kobo-readable file belongs in the sync set"
     );
+}
+
+#[tokio::test]
+async fn sync_books_includes_a_pdf_only_book() {
+    // Kobo firmware reads sideloaded PDF natively and `download` streams the
+    // file as-is, so a PDF-only book is downloadable and joins the set.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let pdf = seed_synced_ebook(&pool, "flatland.pdf", "Flatland", "Edwin Abbott Abbott").await;
+    synced_manual_shelf(&pool, user, "Kobo", std::slice::from_ref(&pdf)).await;
+
+    let rows = sync_books(&pool, user).await.unwrap();
+
+    assert_eq!(rows.len(), 1, "got {rows:?}");
+    assert_eq!(rows[0].uuid, pdf);
+    assert_eq!(rows[0].download_format(), "PDF");
 }
 
 #[tokio::test]

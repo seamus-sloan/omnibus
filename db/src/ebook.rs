@@ -1,6 +1,6 @@
 //! Ebook metadata extraction (server-only). Walks the configured library
 //! directory, parses the OPF for each `.epub` (CBZ archives dispatch to
-//! [`crate::comic`]), and produces an [`IndexedBook`] per file — metadata plus
+//! [`crate::comic`], PDFs to [`crate::pdf`]), and produces an [`IndexedBook`] per file — metadata plus
 //! raw cover bytes. Parse failures surface per-book rather than hiding the rest
 //! of the library. Consumed by [`crate::indexer`], which writes the output.
 
@@ -32,7 +32,14 @@ pub use wordcount::estimate_word_count;
 /// (compared case-insensitively), so the diff's view and the walk can
 /// never disagree. Uppercased to match
 /// [`crate::helpers::split_filename`]'s output.
-pub const EBOOK_FORMATS: &[&str] = &["CBZ", "EPUB"];
+pub const EBOOK_FORMATS: &[&str] = &["CBZ", "EPUB", "PDF"];
+
+/// The same formats as lowercase extensions, in the order the settings-page
+/// library summary lists them. Kept beside [`EBOOK_FORMATS`] (and pinned
+/// to it by a test) so the count the settings page shows and what the
+/// indexer accepts cannot drift — the audiobook side does the same with
+/// `AUDIOBOOK_EXTENSIONS`.
+pub const EBOOK_EXTENSIONS: &[&str] = &["epub", "pdf", "cbz"];
 
 /// A single scanner output row — metadata plus the raw cover image bytes
 /// (and mime), if the epub included one. Consumed by [`crate::sync::sync_books`].

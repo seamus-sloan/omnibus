@@ -31,6 +31,17 @@ thiserror.workspace = true
 futures = "0.3"
 epub = "2"
 
+# PDF support (#2568): `hayro` is the pure-Rust PDF parser + rasterizer
+# (Apache-2.0/MIT) behind `db::pdf` — page count, the Info dict, and the
+# page-1 cover render, with the standard-14 fonts embedded so no system
+# poppler/mupdf is needed. `pdf-extract` (MIT, over `lopdf`) supplies
+# per-page text for the content index and the outline for the chapter
+# list; it loads whole documents, hence the `OMNIBUS_PDF_TEXT_MAX_BYTES`
+# cap in `db::pdf`. Both parse untrusted uploads, so both run under
+# `catch_unwind` there.
+hayro = "0.7"
+pdf-extract = "0.9"
+
 # PIN RATIONALE (#1529): frozen at v3 (current stable is several majors
 # ahead) pending a deliberate audit of the v4-v9 changelog against this
 # crate's untrusted-input parsing path — it reads user-uploaded EPUB and

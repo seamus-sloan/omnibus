@@ -101,12 +101,13 @@ async fn send_test_returns_not_configured_when_unset() {
 }
 
 #[test]
-fn build_epub_email_uses_filename_stem_as_subject_and_attaches_epub() {
-    let msg = build_epub_email(
+fn build_email_uses_filename_stem_as_subject_and_attaches_epub() {
+    let msg = build_email(
         "library@example.com",
         "reader@kindle.com",
         "The Great Gatsby.epub",
         b"epub-bytes".to_vec(),
+        "application/epub+zip",
     )
     .unwrap();
     let formatted = String::from_utf8(msg.formatted()).unwrap();
@@ -118,12 +119,31 @@ fn build_epub_email_uses_filename_stem_as_subject_and_attaches_epub() {
 }
 
 #[test]
-fn build_epub_email_rejects_malformed_address() {
-    let err = build_epub_email(
+fn build_email_attaches_a_pdf_under_its_own_content_type() {
+    // Amazon accepts PDF as-is, so a PDF-only book ships the PDF — under the
+    // PDF mime, with the same stem-as-subject rule.
+    let msg = build_email(
+        "library@example.com",
+        "reader@kindle.com",
+        "Flatland.pdf",
+        b"%PDF-1.4".to_vec(),
+        "application/pdf",
+    )
+    .unwrap();
+    let formatted = String::from_utf8(msg.formatted()).unwrap();
+    assert!(formatted.contains("Subject: Flatland"));
+    assert!(formatted.contains("application/pdf"));
+    assert!(formatted.contains("Flatland.pdf"));
+}
+
+#[test]
+fn build_email_rejects_malformed_address() {
+    let err = build_email(
         "not-an-email",
         "reader@kindle.com",
         "book.epub",
         b"x".to_vec(),
+        "application/epub+zip",
     )
     .unwrap_err();
     assert!(matches!(err, KindleError::Address(_)));
@@ -141,7 +161,7 @@ fn kindle_error_timeout_reports_the_overall_send_cap() {
 
 #[test]
 fn kindle_error_build_wraps_lettre_message_error() {
-    // The MIME builders (`build_epub_email` / `send_test`) surface a lettre
+    // The MIME builders (`build_email` / `send_test`) surface a lettre
     // message-assembly failure through `#[from] lettre::error::Error` as
     // `KindleError::Build`. Feeding a real lettre error through the `From`
     // bridge asserts that mapping (and its `{0}` message) without needing a
@@ -157,7 +177,7 @@ fn kindle_error_build_wraps_lettre_message_error() {
 
 #[test]
 fn kindle_error_content_type_wraps_lettre_header_error() {
-    // `build_epub_email` parses the attachment's MIME type via
+    // `build_email` parses the attachment's MIME type via
     // `ContentType::parse`, surfaced through `#[from] ContentTypeErr` as
     // `KindleError::ContentType`. Feeding a malformed MIME string through the
     // `From` bridge asserts that mapping without needing a live SMTP relay.
@@ -192,7 +212,7 @@ fn kindle_error_io_wraps_filesystem_error() {
     let err: KindleError = src.into();
     assert!(matches!(err, KindleError::Io(_)), "got {err:?}");
     assert!(
-        err.to_string().starts_with("failed to read the EPUB file"),
+        err.to_string().starts_with("failed to read the book file"),
         "got {err}"
     );
 }

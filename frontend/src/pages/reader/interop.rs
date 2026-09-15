@@ -60,7 +60,9 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
         status.set(ReaderStatus::Loading);
 
         let local_saved = crate::reader_progress::load(&uuid);
-        let deep_link_cfi = parse_cfi_from_url();
+        // `?cfi=` is a CFI only when it says so — a book-detail "open in
+        // book" link for a PDF highlight carries a `pdf:` anchor.
+        let deep_link_cfi = parse_cfi_from_url().filter(|c| omnibus_shared::is_epub_cfi(c));
         let size = *prefs.font_size.read();
         let theme_name = theme.read().as_attr();
         let file_url = match parse_file_id_from_url() {
@@ -350,7 +352,12 @@ async fn spawn_bootstrap_and_highlights(
                     });
                 }
             }
-            record.and_then(|r| r.epub_cfi).or(local_saved)
+            // A page anchor (a PDF's `pdf-page:N`) on a book that also has
+            // an EPUB is not a CFI and must never reach epub.js.
+            record
+                .and_then(|r| r.epub_cfi)
+                .filter(|cfi| omnibus_shared::is_epub_cfi(cfi))
+                .or(local_saved)
         }
     };
     let cfi_arg = json_literal(&chosen);
@@ -371,8 +378,13 @@ async fn spawn_bootstrap_and_highlights(
 
     if let Ok(list) = data::list_highlights("", &uuid).await {
         for h in &list {
-            // Kobo-origin highlights carry no CFI — nothing to paint.
-            if let Some(cfi) = &h.epub_cfi_range {
+            // Kobo-origin highlights carry no CFI, and a PDF highlight
+            // carries a `pdf:` anchor — nothing epub.js can paint either way.
+            if let Some(cfi) = h
+                .epub_cfi_range
+                .as_deref()
+                .filter(|c| omnibus_shared::is_epub_cfi(c))
+            {
                 reader_call_json2("addAnnotation", cfi, h.color.as_str());
             }
         }

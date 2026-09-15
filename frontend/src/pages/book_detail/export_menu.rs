@@ -48,8 +48,12 @@ pub(super) fn BdExportMenu(ctx: BdExportContext) -> Element {
 #[derive(Clone, PartialEq)]
 pub(super) struct BdExportContext {
     pub uuid: String,
+    /// An EPUB: the KEPUB conversion and the override bake need one.
     pub has_ebook: bool,
     pub has_audio: bool,
+    /// A PDF: downloads as-is and ships to a Kindle as-is, but has no Kobo
+    /// conversion.
+    pub has_pdf: bool,
     pub book_author: String,
     pub book_title: String,
     pub epub_size_bytes: Option<i64>,
@@ -67,6 +71,7 @@ fn BdExportPanel(ctx: BdExportContext, open: Signal<bool>) -> Element {
         uuid,
         has_ebook,
         has_audio,
+        has_pdf,
         book_author,
         book_title,
         epub_size_bytes,
@@ -88,17 +93,20 @@ fn BdExportPanel(ctx: BdExportContext, open: Signal<bool>) -> Element {
             onkeydown: on_keydown,
             onmounted: move |evt: MountedEvent| focus_after_paint(&evt),
 
-            if has_ebook {
+            if has_ebook || has_pdf {
                 // Plain anchor (not a router Link) so the browser performs a
                 // real download; the empty `download` attr defers the filename
-                // to the server's Content-Disposition.
+                // to the server's Content-Disposition. `/download` serves the
+                // EPUB, else the PDF — the label names which.
                 a {
                     class: "bd-export-item",
                     "data-testid": "export-download-epub",
                     href: "/api/ebooks/{uuid}/download",
                     download: "",
                     onclick: move |_| open.set(false),
-                    span { class: "bd-export-item-label", "Download EPUB" }
+                    span { class: "bd-export-item-label",
+                        if has_ebook { "Download EPUB" } else { "Download PDF" }
+                    }
                 }
             }
             if has_audio {
@@ -111,13 +119,14 @@ fn BdExportPanel(ctx: BdExportContext, open: Signal<bool>) -> Element {
                     span { class: "bd-export-item-label", "Download audiobook" }
                 }
             }
-            // Send-to-Kindle only applies to books with an EPUB (the backend
-            // errors with `NoEpub` otherwise). Reuses the interactive button,
-            // styled as a menu row; the menu stays open while it reports
-            // "Sending…" and raises its own toast. When the EPUB exceeds
-            // Kindle's email cap, the button can't work — swap in a disabled
-            // row that explains why and links to the web uploader instead.
-            if has_ebook {
+            // Send-to-Kindle applies to books with an EPUB or a PDF — Amazon
+            // takes both as-is (the backend errors with `NoEpub` otherwise).
+            // Reuses the interactive button, styled as a menu row; the menu
+            // stays open while it reports "Sending…" and raises its own toast.
+            // When the file exceeds Kindle's email cap, the button can't work
+            // — swap in a disabled row that explains why and links to the web
+            // uploader instead.
+            if has_ebook || has_pdf {
                 // `u64::try_from` over an `as` cast so a negative size (corrupt
                 // DB row / sentinel) can't wrap into a huge value and wrongly
                 // hide the email button.

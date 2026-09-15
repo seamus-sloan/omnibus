@@ -15,6 +15,8 @@ use super::entry_updated;
 /// not reachable from here. `pub(super)` so `opds::json_entries` can build
 /// the same acquisition link without duplicating the mime string.
 pub(super) const CBZ_MIME: &str = "application/vnd.comicbook+zip";
+/// Wire mime for a served PDF — mirrors `ebooks::PDF_MIME` for the same reason.
+pub(super) const PDF_MIME: &str = "application/pdf";
 
 /// Whether a `book_files` format string is one this catalog offers as a
 /// download — EPUB/CBZ, what the `/opds/ebooks/{uuid}/{file,download}`
@@ -100,9 +102,13 @@ pub(super) fn download_link(uuid: &str, book: &EbookMetadata) -> Option<(String,
         ));
     }
     if has("cbz") {
-        // `/download` is EPUB-only (see `ebooks::get_ebook_download`); a
-        // comic-only book's whole-file read lives at `/file` instead.
+        // `/download` serves text formats only (see
+        // `ebooks::get_ebook_download`); a comic-only book's whole-file read
+        // lives at `/file` instead.
         return Some((format!("/opds/ebooks/{uuid}/file"), CBZ_MIME));
+    }
+    if has("pdf") {
+        return Some((format!("/opds/ebooks/{uuid}/download"), PDF_MIME));
     }
     if has("m4b") || has("m4a") {
         return Some((format!("/opds/audiobooks/{uuid}/download"), "audio/mp4"));
@@ -111,4 +117,39 @@ pub(super) fn download_link(uuid: &str, book: &EbookMetadata) -> Option<(String,
         return Some((format!("/opds/audiobooks/{uuid}/download"), "audio/mpeg"));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn book(formats: &[&str]) -> EbookMetadata {
+        EbookMetadata {
+            formats: formats.iter().map(|f| f.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn download_link_offers_the_pdf_for_a_pdf_only_book() {
+        assert_eq!(
+            download_link("u", &book(&["PDF"])),
+            Some(("/opds/ebooks/u/download".to_string(), PDF_MIME))
+        );
+    }
+
+    #[test]
+    fn download_link_keeps_the_epub_ahead_of_a_pdf_and_the_cbz_ahead_too() {
+        assert_eq!(
+            download_link("u", &book(&["PDF", "EPUB"])),
+            Some((
+                "/opds/ebooks/u/download".to_string(),
+                "application/epub+zip"
+            ))
+        );
+        assert_eq!(
+            download_link("u", &book(&["PDF", "CBZ"])),
+            Some(("/opds/ebooks/u/file".to_string(), CBZ_MIME))
+        );
+    }
 }

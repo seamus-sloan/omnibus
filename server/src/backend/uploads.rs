@@ -18,6 +18,7 @@ use omnibus_db::{
 };
 use omnibus_shared::{
     detect_ebook_format, Contributor, MetadataOverrides, UploadCommitResult, UploadInspection,
+    EBOOK_MAGIC_LEN,
 };
 use tokio::io::AsyncWriteExt as _;
 
@@ -62,10 +63,10 @@ pub(super) enum UploadError {
     MissingFile,
     /// Title/author missing, so the file can't be placed → 400.
     MissingMetadata,
-    /// File isn't a recognizable EPUB → 415.
+    /// File isn't a recognizable EPUB or PDF → 415.
     UnsupportedFormat,
-    /// File can't be opened/parsed as an EPUB → 415 (carries the reason).
-    BadEpub(String),
+    /// File can't be opened/parsed as an ebook → 415 (carries the reason).
+    BadEbook(String),
     /// No audiobook library path configured → 400.
     AudiobookNotConfigured,
     /// Audiobook library root rejects writes → 400 with a remediation hint.
@@ -132,10 +133,10 @@ impl IntoResponse for UploadError {
                 .into_response(),
             UploadError::UnsupportedFormat => (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "file must be a valid EPUB",
+                "file must be a valid EPUB or PDF",
             )
                 .into_response(),
-            UploadError::BadEpub(msg) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, msg).into_response(),
+            UploadError::BadEbook(msg) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, msg).into_response(),
             UploadError::AudiobookNotConfigured => (
                 StatusCode::BAD_REQUEST,
                 "Configure an audiobook library path in Settings first",
@@ -214,16 +215,21 @@ fn validate_file_bytes(bytes: &[u8], cap: usize) -> Result<(), UploadError> {
     Ok(())
 }
 
-fn extend_and_validate_magic(prefix: &mut Vec<u8>, chunk: &[u8]) -> Result<bool, UploadError> {
-    let needed = 4usize.saturating_sub(prefix.len());
+/// Feed the next chunk into the magic prefix. `Ok(None)` while the prefix is
+/// still short of [`EBOOK_MAGIC_LEN`]; `Ok(Some(ext))` once the bytes settle
+/// the format — the extension the upload is filed under.
+fn extend_and_validate_magic(
+    prefix: &mut Vec<u8>,
+    chunk: &[u8],
+) -> Result<Option<&'static str>, UploadError> {
+    let needed = EBOOK_MAGIC_LEN.saturating_sub(prefix.len());
     prefix.extend_from_slice(&chunk[..chunk.len().min(needed)]);
-    if prefix.len() < 4 {
-        return Ok(false);
+    if prefix.len() < EBOOK_MAGIC_LEN {
+        return Ok(None);
     }
-    if detect_ebook_format(prefix).is_none() {
-        return Err(UploadError::UnsupportedFormat);
-    }
-    Ok(true)
+    detect_ebook_format(prefix)
+        .map(Some)
+        .ok_or(UploadError::UnsupportedFormat)
 }
 
 /// Trim and drop empty so blank form fields read as "no value".
@@ -237,27 +243,29 @@ fn norm(value: &Option<String>) -> Option<String> {
 
 // --- Streaming helper -------------------------------------------------------
 
-/// Stream a multipart `file` field to a newly-created tempfile, enforcing the
-/// byte cap incrementally and validating EPUB magic bytes across initial chunks.
-/// The payload is never fully buffered in RAM — only one chunk is held at a
-/// time while it is written to disk.
+/// A streamed upload: the tempfile holding the bytes, whose suffix is the
+/// sniffed format's extension so the parser dispatches on it the way a scan
+/// does, plus that extension for filing.
+struct StagedUpload {
+    tmp: tempfile::NamedTempFile,
+    ext: &'static str,
+}
+
+/// Stream a multipart `file` field to a tempfile, enforcing the byte cap
+/// incrementally and sniffing the format from the leading bytes. The
+/// tempfile is created once the magic settles the extension (the first
+/// chunk, in practice), so the payload is never fully buffered in RAM — only
+/// one chunk is held at a time while it is written to disk.
 async fn stream_upload_to_tempfile(
     mut field: Field<'_>,
     cap: usize,
-) -> Result<tempfile::NamedTempFile, UploadError> {
-    let tmp = tempfile::Builder::new()
-        .suffix(".epub")
-        .tempfile()
-        .map_err(|e| UploadError::internal("create upload tempfile", e))?;
-    let mut f = tokio::fs::OpenOptions::new()
-        .write(true)
-        .open(tmp.path())
-        .await
-        .map_err(|e| UploadError::internal("open upload tempfile", e))?;
-
+) -> Result<StagedUpload, UploadError> {
+    let mut staged: Option<(tempfile::NamedTempFile, tokio::fs::File, &'static str)> = None;
     let mut total = 0usize;
-    let mut format_validated = false;
-    let mut magic_prefix = Vec::with_capacity(4);
+    let mut magic_prefix = Vec::with_capacity(EBOOK_MAGIC_LEN);
+    // Bytes seen before the format settled — flushed into the tempfile the
+    // moment it exists. Bounded by EBOOK_MAGIC_LEN chunks, so tiny.
+    let mut pending: Vec<u8> = Vec::new();
 
     loop {
         let chunk = field
@@ -265,17 +273,43 @@ async fn stream_upload_to_tempfile(
             .await
             .map_err(|e| UploadError::internal("read upload chunk", e))?;
         let Some(chunk) = chunk else { break };
-        if !format_validated {
-            format_validated = extend_and_validate_magic(&mut magic_prefix, &chunk)?;
-        }
         total += chunk.len();
         if total > cap {
             return Err(UploadError::TooLarge(cap));
         }
-        f.write_all(&chunk)
-            .await
-            .map_err(|e| UploadError::internal("write upload chunk", e))?;
+        if staged.is_none() {
+            pending.extend_from_slice(&chunk);
+            let Some(ext) = extend_and_validate_magic(&mut magic_prefix, &chunk)? else {
+                continue;
+            };
+            let tmp = tempfile::Builder::new()
+                .suffix(&format!(".{ext}"))
+                .tempfile()
+                .map_err(|e| UploadError::internal("create upload tempfile", e))?;
+            let mut f = tokio::fs::OpenOptions::new()
+                .write(true)
+                .open(tmp.path())
+                .await
+                .map_err(|e| UploadError::internal("open upload tempfile", e))?;
+            f.write_all(&pending)
+                .await
+                .map_err(|e| UploadError::internal("write upload chunk", e))?;
+            pending = Vec::new();
+            staged = Some((tmp, f, ext));
+            continue;
+        }
+        if let Some((_, f, _)) = staged.as_mut() {
+            f.write_all(&chunk)
+                .await
+                .map_err(|e| UploadError::internal("write upload chunk", e))?;
+        }
     }
+    if magic_prefix.is_empty() {
+        return Err(UploadError::MissingFile);
+    }
+    let Some((tmp, mut f, ext)) = staged else {
+        return Err(UploadError::UnsupportedFormat);
+    };
 
     // Flush + fsync before the path is handed to a separate reader (`EpubDoc`
     // in a `spawn_blocking`, or `std::fs::copy` on commit). `tokio::fs::File`
@@ -292,13 +326,7 @@ async fn stream_upload_to_tempfile(
         .map_err(|e| UploadError::internal("sync upload tempfile", e))?;
     drop(f);
 
-    if magic_prefix.is_empty() {
-        return Err(UploadError::MissingFile);
-    }
-    if !format_validated {
-        return Err(UploadError::UnsupportedFormat);
-    }
-    Ok(tmp)
+    Ok(StagedUpload { tmp, ext })
 }
 
 /// Read a multipart text field incrementally, capping the bytes buffered
@@ -347,33 +375,36 @@ pub(super) async fn post_inspect_ebook(
             Err(e) => return Err(UploadError::internal("parse multipart", e)),
         }
     };
-    let tmp = stream_upload_to_tempfile(field, max_upload_bytes()).await?;
-    // Parsing opens a zip + reads the OPF — run it off the async runtime.
-    let inspection = tokio::task::spawn_blocking(move || inspect_ebook_tempfile(&tmp))
+    let staged = stream_upload_to_tempfile(field, max_upload_bytes()).await?;
+    // Parsing opens the archive / page tree — run it off the async runtime.
+    let inspection = tokio::task::spawn_blocking(move || inspect_ebook_tempfile(&staged))
         .await
         .map_err(|e| UploadError::internal("spawn_blocking(inspect ebook)", e))??;
     Ok(Json(inspection).into_response())
 }
 
-/// Parse the already-written `tmp` file as an EPUB and project the result into
-/// an [`UploadInspection`]. Parse failures map to 415; staging IO failures to
-/// 500.
-fn inspect_ebook_tempfile(tmp: &tempfile::NamedTempFile) -> Result<UploadInspection, UploadError> {
-    let size_bytes = std::fs::metadata(tmp.path())
+/// Parse the already-written upload with the indexer's own parser for its
+/// sniffed format and project the result into an [`UploadInspection`]. Parse
+/// failures map to 415; staging IO failures to 500.
+fn inspect_ebook_tempfile(staged: &StagedUpload) -> Result<UploadInspection, UploadError> {
+    let size_bytes = std::fs::metadata(staged.tmp.path())
         .map_err(|e| UploadError::internal("stat upload tempfile", e))?
         .len() as i64;
+    let label = staged.ext.to_ascii_uppercase();
     let targets = vec![db::ebook::ParseTarget {
-        filename: "upload.epub".to_string(),
-        absolute: tmp.path().to_path_buf(),
+        filename: format!("upload.{}", staged.ext),
+        absolute: staged.tmp.path().to_path_buf(),
         mtime_epoch: 0,
         size_bytes,
     }];
     let mut parsed = db::ebook::parse_ebook_targets(targets, db::ebook::ScanOptions::default());
     let book = parsed
         .pop()
-        .ok_or_else(|| UploadError::BadEpub("could not parse EPUB".to_string()))?;
+        .ok_or_else(|| UploadError::BadEbook(format!("could not parse {label}")))?;
     if let Some(err) = book.metadata.error {
-        return Err(UploadError::BadEpub(format!("could not parse EPUB: {err}")));
+        return Err(UploadError::BadEbook(format!(
+            "could not parse {label}: {err}"
+        )));
     }
     Ok(UploadInspection {
         title: book.metadata.title,
@@ -388,17 +419,17 @@ fn inspect_ebook_tempfile(tmp: &tempfile::NamedTempFile) -> Result<UploadInspect
         series_index: book.metadata.series_index,
         language: book.metadata.language,
         has_cover: book.cover.is_some(),
-        ext: "epub".to_string(),
+        ext: staged.ext.to_string(),
     })
 }
 
 // --- Commit ----------------------------------------------------------------
 
 /// The user's (possibly edited) metadata parsed from the commit multipart body,
-/// plus a tempfile holding the already-streamed EPUB bytes.
+/// plus the staged upload holding the already-streamed bytes.
 #[derive(Default)]
 struct CommitForm {
-    tmp_file: Option<tempfile::NamedTempFile>,
+    tmp_file: Option<StagedUpload>,
     title: Option<String>,
     author: Option<String>,
     series: Option<String>,
@@ -420,9 +451,10 @@ pub(super) fn edited_creators(first: String, embedded: &[Contributor]) -> Vec<Co
         .collect()
 }
 
-/// File the uploaded EPUB into the canonical library folder using the user's
-/// confirmed title/author, reindex so the indexer inserts the book, then layer
-/// any edits as metadata overrides. Returns 201 with the new book's uuid.
+/// File the uploaded EPUB or PDF into the canonical library folder using the
+/// user's confirmed title/author, reindex so the indexer inserts the book,
+/// then layer any edits as metadata overrides. Returns 201 with the new
+/// book's uuid.
 pub(super) async fn post_upload_ebook(
     user: AuthUser,
     State(state): State<AppState>,
@@ -430,7 +462,7 @@ pub(super) async fn post_upload_ebook(
 ) -> Result<Response, UploadError> {
     require_upload(&user)?;
     let mut form = parse_commit_multipart(multipart, max_upload_bytes()).await?;
-    let tmp = form.tmp_file.take().ok_or(UploadError::MissingFile)?;
+    let StagedUpload { tmp, ext } = form.tmp_file.take().ok_or(UploadError::MissingFile)?;
     let (Some(title), Some(author)) = (norm(&form.title), norm(&form.author)) else {
         return Err(UploadError::MissingMetadata);
     };
@@ -446,7 +478,7 @@ pub(super) async fn post_upload_ebook(
 
     // Allocate a non-colliding canonical path and copy the tempfile there.
     let root_path = PathBuf::from(&root);
-    let dest = library_layout::allocate_canonical_path(&root_path, &author, &title, "epub")
+    let dest = library_layout::allocate_canonical_path(&root_path, &author, &title, ext)
         .map_err(|e| UploadError::internal("allocate_canonical_path", e))?;
     copy_uploaded_ebook_to_library(&dest, tmp).await?;
 
@@ -465,7 +497,7 @@ pub(super) async fn post_upload_ebook(
     Ok((StatusCode::CREATED, Json(UploadCommitResult { uuid })).into_response())
 }
 
-/// Copy the streamed-to-tempfile upload to its final canonical `dest`,
+/// Copy the streamed-to-tempfile upload (EPUB or PDF) to its final canonical `dest`,
 /// creating parent directories as needed. The tempfile is deleted as a side
 /// effect of `tmp` dropping once the blocking closure returns.
 async fn copy_uploaded_ebook_to_library(

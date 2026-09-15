@@ -8,8 +8,10 @@ path and waits for the indexer to surface the same number of books listed in
 ## Contents
 
 ```
-generated/    — synthetic EPUBs produced by tools/make_epub.ts (committed)
-public_domain/ — real EPUBs from Project Gutenberg / Standard Ebooks
+generated/    — synthetic EPUBs + CBZs produced by tools/make_epub.ts and
+                tools/make_cbz.ts (committed)
+public_domain/ — real EPUBs from Project Gutenberg / Standard Ebooks, plus
+                 two PDFs converted from Gutenberg EPUBs with Calibre
                  (NOT committed — fetched, see below)
 ```
 
@@ -35,7 +37,16 @@ To add or update a public-domain fixture: drop the file into
 commit the pin bumps it prints (fetch script + CI cache keys) along with
 the expected-metadata updates in `db/tests/public_domain_epubs.rs` and
 `ui_tests/playwright/tests/fixtures/epubs.ts`. Old release tags are never
-deleted, so old commits keep fetching their pinned version.
+deleted, so old commits keep fetching their pinned version. The publish
+script tars **everything** under `public_domain/`, so move any personal,
+non-free files out of that directory first — only free-use titles belong in
+a release asset.
+
+The PDF fixtures were produced with Calibre's `ebook-convert` from Gutenberg
+EPUBs of titles that are *not* also EPUB fixtures, so no (title, author)
+pair collides with an existing book: `ebook-convert in.epub out.pdf
+--pdf-page-numbers --paper-size a5`. Calibre writes the Info dict and an
+outline from the TOC, which is what the PDF pins assert.
 
 ## Synthetic vs. public-domain
 

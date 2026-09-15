@@ -32,14 +32,14 @@ const PER_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 pub enum KindleError {
     #[error("email delivery is not configured on this server")]
     NotConfigured,
-    #[error("this book has no EPUB file to send")]
+    #[error("this book has no EPUB or PDF file to send")]
     NoEpub,
     #[error(
-        "this EPUB is larger than the 50 MB limit for emailing files to a Kindle; upload it on \
+        "this file is larger than the 50 MB limit for emailing files to a Kindle; upload it on \
          Amazon's Send to Kindle page (amazon.com/sendtokindle), which accepts files up to 200 MB"
     )]
     TooLarge,
-    #[error("failed to read the EPUB file: {0}")]
+    #[error("failed to read the book file: {0}")]
     Io(#[from] std::io::Error),
     #[error("invalid email address: {0}")]
     Address(#[from] lettre::address::AddressError),
@@ -57,10 +57,11 @@ pub enum KindleError {
     Books(#[from] crate::books::BooksError),
 }
 
-/// Send the EPUB for `book_id` (optionally a specific `book_file_id` for
-/// multi-EPUB books) to `to_email` via the effective SMTP config. Errors with
-/// [`KindleError::NotConfigured`] when no SMTP relay is set and
-/// [`KindleError::NoEpub`] when the book has no EPUB on disk.
+/// Send the EPUB — or, for a book without one, the PDF, which Amazon accepts
+/// as-is — for `book_id` (optionally a specific `book_file_id` for
+/// multi-file books) to `to_email` via the effective SMTP config. Errors
+/// with [`KindleError::NotConfigured`] when no SMTP relay is set and
+/// [`KindleError::NoEpub`] when the book has neither file on disk.
 pub async fn send(
     pool: &SqlitePool,
     book_id: i64,
@@ -72,10 +73,20 @@ pub async fn send(
         .ok_or(KindleError::NotConfigured)?;
 
     let path = match book_file_id {
-        Some(fid) => crate::book_file_path_by_id(pool, book_id, fid, Some("EPUB")).await?,
-        None => crate::book_file_path(pool, book_id, "EPUB").await?,
+        Some(fid) => match crate::book_file_path_by_id(pool, book_id, fid, Some("EPUB")).await? {
+            Some(path) => Some(path),
+            None => crate::book_file_path_by_id(pool, book_id, fid, Some("PDF")).await?,
+        },
+        None => crate::book_text_source(pool, book_id)
+            .await?
+            .map(|s| s.path),
     }
     .ok_or(KindleError::NoEpub)?;
+    let content_type = if crate::pdf::is_pdf_path(&path) {
+        "application/pdf"
+    } else {
+        "application/epub+zip"
+    };
 
     // Defense in depth: the UI disables the button for oversized EPUBs, but the
     // REST/RPC endpoints (and mobile) can still enqueue a send. Check the size
@@ -92,7 +103,7 @@ pub async fn send(
         .unwrap_or("book.epub")
         .to_string();
 
-    let email = build_epub_email(&config.from_email, to_email, &filename, bytes)?;
+    let email = build_email(&config.from_email, to_email, &filename, bytes, content_type)?;
     deliver(&build_transport(&config)?, email).await
 }
 
@@ -124,20 +135,26 @@ pub async fn send_test(pool: &SqlitePool, to_email: &str) -> Result<(), KindleEr
     deliver(&build_transport(&config)?, email).await
 }
 
-/// Build the MIME message: a short plain-text body plus the EPUB attached as
-/// `application/epub+zip`. Pure (no IO) so the message shape is unit-testable.
-fn build_epub_email(
+/// Build the MIME message: a short plain-text body plus the book attached
+/// under `content_type`. Pure (no IO) so the message shape is unit-testable.
+fn build_email(
     from: &str,
     to: &str,
     filename: &str,
     bytes: Vec<u8>,
+    content_type: &str,
 ) -> Result<Message, KindleError> {
-    let attachment = Attachment::new(filename.to_string())
-        .body(bytes, ContentType::parse("application/epub+zip")?);
+    let attachment =
+        Attachment::new(filename.to_string()).body(bytes, ContentType::parse(content_type)?);
+    let subject = filename
+        .strip_suffix(".epub")
+        .or_else(|| filename.strip_suffix(".pdf"))
+        .unwrap_or(filename)
+        .to_string();
     let message = Message::builder()
         .from(from.parse()?)
         .to(to.parse()?)
-        .subject(filename.trim_end_matches(".epub").to_string())
+        .subject(subject)
         .multipart(
             MultiPart::mixed()
                 .singlepart(SinglePart::plain(

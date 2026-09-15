@@ -8,6 +8,9 @@ import { audiobookFixturesDir, fixturesDir } from "../utils/seed";
 // A committed EPUB fixture to feed the file input. Any valid EPUB works — the
 // inspect endpoint parses its embedded metadata.
 const SAMPLE_EPUB = resolve(fixturesDir(), "generated", "beta.epub");
+// A public-domain PDF (fetched with the fixtures release) whose Info dict
+// carries a title and author for the form to pre-fill.
+const SAMPLE_PDF = resolve(fixturesDir(), "public_domain", "flatland.pdf");
 
 // The committed multi-part MP3 audiobook fixture — two chapters that the
 // inspect endpoint groups into one book.
@@ -43,6 +46,7 @@ test("renders the add-books layout", async ({ page }) => {
   // first; the extension of what you pick decides the ingest.
   await expect(fileInput(page)).toBeVisible();
   await expect(fileInput(page)).toHaveAttribute("accept", /\.epub/);
+  await expect(fileInput(page)).toHaveAttribute("accept", /\.pdf/);
   await expect(fileInput(page)).toHaveAttribute("accept", /\.m4b/);
   await expect(fileInput(page)).toHaveAttribute("multiple");
   await expect(page.getByTestId("add-books-formats")).toBeVisible();
@@ -72,6 +76,24 @@ test("auto-fills the editable form from an uploaded EPUB", async ({ page }) => {
   await expect(page.getByTestId("add-books-more-creators")).toContainText(
     "Margaret Hamilton",
   );
+});
+
+test("auto-fills the editable form from an uploaded PDF", async ({ page }) => {
+  await gotoReady(page, "/add-books");
+
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/uploads/ebooks/inspect", expectedStatus: 200 },
+    async () => fileInput(page).setInputFiles(SAMPLE_PDF),
+  );
+
+  await expect(page.getByTestId("add-books-submit")).toBeVisible();
+  // The Info dict fills both fields — a PDF is inspected by the same parser
+  // the scan uses, so what the form shows is what the library would index.
+  await expect(page.getByLabel("Title")).toHaveValue(
+    "Flatland: A Romance of Many Dimensions",
+  );
+  await expect(page.getByLabel("Author")).toHaveValue("Edwin Abbott Abbott");
 });
 
 test("surfaces an error when inspect fails", async ({ page }) => {

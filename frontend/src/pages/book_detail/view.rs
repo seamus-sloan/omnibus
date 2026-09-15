@@ -33,8 +33,12 @@ pub(super) struct LoadedBookView {
     pub(super) series: Option<String>,
     pub(super) accent_style: String,
     pub(super) has_audio: bool,
+    /// An EPUB — the format the epub.js reader opens. A PDF is `has_pdf`,
+    /// never this: routing a PDF into epub.js is how a PDF-only book used
+    /// to get a Read button that 404'd.
     pub(super) has_ebook: bool,
     pub(super) has_comic: bool,
+    pub(super) has_pdf: bool,
 }
 
 /// Compute the per-section display fields from the loaded book.
@@ -66,11 +70,9 @@ pub(super) fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
             || f.eq_ignore_ascii_case("m4a")
             || f.eq_ignore_ascii_case("mp3")
     });
-    let has_ebook = b
-        .formats
-        .iter()
-        .any(|f| f.eq_ignore_ascii_case("epub") || f.eq_ignore_ascii_case("pdf"));
+    let has_ebook = b.formats.iter().any(|f| f.eq_ignore_ascii_case("epub"));
     let has_comic = b.formats.iter().any(|f| f.eq_ignore_ascii_case("cbz"));
+    let has_pdf = b.formats.iter().any(|f| f.eq_ignore_ascii_case("pdf"));
     LoadedBookView {
         title,
         primary_author,
@@ -81,6 +83,7 @@ pub(super) fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
         has_audio,
         has_ebook,
         has_comic,
+        has_pdf,
     }
 }
 

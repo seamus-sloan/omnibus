@@ -166,6 +166,88 @@ async fn get_book_reports_epub_size_from_lowest_ordinal_epub() {
 }
 
 #[tokio::test]
+async fn get_book_reports_the_pdf_size_for_a_pdf_only_book() {
+    // The hero send delivers the PDF when there is no EPUB, so the size gate
+    // must see the PDF's bytes rather than nothing.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO scan_roots (id, path, display_name) VALUES (1, '/lib', 'Lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title) \
+         VALUES ('bk', 'b', 1, '/lib/bk', 'Book') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, ordinal) VALUES \
+         (?1, 'PDF', 'a', 333, 0), (?1, 'CBZ', 'c', 999, 0)",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let book = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(book.epub_size_bytes, Some(333));
+}
+
+#[tokio::test]
+async fn book_text_source_prefers_the_epub_and_falls_back_to_the_pdf() {
+    // The file every text surface reads: EPUB first (at its lowest ordinal),
+    // else the PDF — never the comic archive, which has no text.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO scan_roots (id, path, display_name) VALUES (1, '/lib', 'Lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title) \
+         VALUES ('bk', 'b', 1, 'dir', 'Book') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, ordinal) VALUES \
+         (?1, 'PDF', 'scan', 5, 0), (?1, 'EPUB', 'later', 1, 1), (?1, 'EPUB', 'first', 1, 0), \
+         (?1, 'CBZ', 'comic', 9, 0)",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let source = book_text_source(&pool, id).await.unwrap().unwrap();
+    assert_eq!(source.format, "EPUB");
+    assert_eq!(
+        source.path,
+        std::path::PathBuf::from("/lib/dir/first.epub"),
+        "lowest-ordinal EPUB, not the PDF at ordinal 0"
+    );
+
+    sqlx::query("DELETE FROM book_files WHERE format = 'EPUB'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let source = book_text_source(&pool, id).await.unwrap().unwrap();
+    assert_eq!(source.format, "PDF");
+    assert_eq!(source.path, std::path::PathBuf::from("/lib/dir/scan.pdf"));
+
+    sqlx::query("DELETE FROM book_files WHERE format = 'PDF'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        book_text_source(&pool, id).await.unwrap(),
+        None,
+        "a comic-only book has no text source"
+    );
+}
+
+#[tokio::test]
 async fn get_book_reports_no_epub_size_for_audio_only_book() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     sqlx::query("INSERT INTO scan_roots (id, path, display_name) VALUES (1, '/lib', 'Lib')")

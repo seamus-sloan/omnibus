@@ -55,6 +55,25 @@ fn locate_places_a_point_cfi_by_its_spine_step() {
 }
 
 #[test]
+fn locate_places_pdf_anchors_by_their_page() {
+    // Both PDF forms name the page outright, and a PDF's structure rows are
+    // one per page — so the page is the spine step, for a highlight's quads
+    // and a bookmark's position alike.
+    let placed = index().locate("pdf-page:1");
+    assert_eq!(placed.spine_index, Some(1));
+    assert_eq!(placed.chapter_title.as_deref(), Some("Two"));
+    assert_eq!(placed.percent_through_book, Some(20.0));
+
+    let placed = index().locate("pdf:2:0,0,1,0,0,1,1,1");
+    assert_eq!(placed.spine_index, Some(2));
+    assert_eq!(placed.chapter_title.as_deref(), Some("Two"));
+    assert_eq!(placed.percent_through_book, Some(80.0));
+
+    // A comic anchor still places nothing: comics have no structure rows.
+    assert_eq!(index().locate("comic-page:1").spine_index, None);
+}
+
+#[test]
 fn locate_names_the_chapter_a_shared_spine_document_opens_with() {
     // Two TOC entries in one spine document: only the first is defensible,
     // and every surface that places an anchor must agree on which.

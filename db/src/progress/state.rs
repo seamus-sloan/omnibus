@@ -142,6 +142,11 @@ pub async fn derive_epub_percent(
 ) -> anyhow::Result<bool> {
     use anyhow::Context;
 
+    // Only a CFI has an offset to walk; a page anchor (PDF, comic) arrives
+    // with its percent already computed by the reader.
+    if !omnibus_shared::is_epub_cfi(cfi) {
+        return Ok(false);
+    }
     let Some(book_id) = crate::resolve_book_id_by_uuid(pool, book_uuid).await? else {
         return Ok(false);
     };

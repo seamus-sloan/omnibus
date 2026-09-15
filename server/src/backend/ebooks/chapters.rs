@@ -36,7 +36,7 @@ pub(crate) struct ChapterTextQuery {
 }
 
 /// The `has_text: false` answer both endpoints share for a book with no
-/// EPUB to read.
+/// EPUB or PDF to read.
 fn no_text_list(uuid: &str) -> Response {
     Json(ChapterListResponse {
         book_uuid: uuid.to_string(),
@@ -45,6 +45,32 @@ fn no_text_list(uuid: &str) -> Response {
         chapters: Vec::new(),
     })
     .into_response()
+}
+
+/// Read-only structure extraction by format — the on-the-fly fallback for a
+/// file the backfill has not reached: the OPF spine + TOC for an EPUB, one
+/// entry per page + the outline for a PDF.
+fn structure_from_path(
+    path: &std::path::Path,
+) -> anyhow::Result<Option<db::ebook::toc::EpubStructure>> {
+    if db::pdf::is_pdf_path(path) {
+        db::pdf::extract_structure(path)
+    } else {
+        db::ebook::toc::extract_structure_from_path(path)
+    }
+}
+
+/// One spine document's plain text by format: an EPUB spine item, or a PDF
+/// page. `Ok(None)` past the end of the spine.
+fn chapter_text_from_path(
+    path: &std::path::Path,
+    spine_index: usize,
+) -> anyhow::Result<Option<String>> {
+    if db::pdf::is_pdf_path(path) {
+        db::pdf::page_text(path, spine_index)
+    } else {
+        extract_chapter_text(path, spine_index)
+    }
 }
 
 /// Chapter listing: TOC titles plus the spine index each text read is
@@ -61,10 +87,10 @@ pub(crate) async fn get_ebook_chapters(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return internal("resolve_book_id_by_uuid", e),
     };
-    let (file_id, path) = match db::book_file_with_id(&state.pool, id, "EPUB").await {
-        Ok(Some(resolved)) => resolved,
+    let (file_id, path) = match db::book_text_source(&state.pool, id).await {
+        Ok(Some(source)) => (source.file_id, source.path),
         Ok(None) => return no_text_list(&uuid),
-        Err(e) => return internal("book_file_with_id", e),
+        Err(e) => return internal("book_text_source", e),
     };
 
     let stats = match epub_structure::get_spine_stats(&state.pool, file_id).await {
@@ -74,9 +100,7 @@ pub(crate) async fn get_ebook_chapters(
     let (spine_count, chapters) = if stats.is_empty() {
         // Never extracted (the post-scan backfill hasn't reached it yet):
         // derive the same structure straight from the file.
-        let extracted =
-            tokio::task::spawn_blocking(move || db::ebook::toc::extract_structure_from_path(&path))
-                .await;
+        let extracted = tokio::task::spawn_blocking(move || structure_from_path(&path)).await;
         let structure = match extracted {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => return internal("extract_structure_from_path", e),
@@ -122,9 +146,10 @@ pub(crate) async fn get_ebook_chapters(
     .into_response()
 }
 
-/// Bounded plain-text read of one spine document. 404 covers an unknown
-/// uuid and an out-of-range spine index; a book with no EPUB answers
-/// `has_text: false`; an unreadable archive is a 500. The slice is char-
+/// Bounded plain-text read of one spine document — an EPUB spine item or a
+/// PDF page. 404 covers an unknown uuid and an out-of-range spine index; a
+/// book with no EPUB or PDF answers `has_text: false`; an unreadable file is
+/// a 500. The slice is char-
 /// addressed (`?offset=`, `?limit=`) and capped at
 /// [`CHAPTER_TEXT_MAX_CHARS`], with `truncated` / `next_offset` reporting
 /// the boundary.
@@ -139,8 +164,8 @@ pub(crate) async fn get_ebook_chapter_text(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return internal("resolve_book_id_by_uuid", e),
     };
-    let path = match db::book_file_path(&state.pool, id, "EPUB").await {
-        Ok(Some(p)) => p,
+    let path = match db::book_text_source(&state.pool, id).await {
+        Ok(Some(source)) => source.path,
         Ok(None) => {
             return Json(ChapterTextResponse {
                 book_uuid: uuid,
@@ -155,11 +180,11 @@ pub(crate) async fn get_ebook_chapter_text(
             })
             .into_response()
         }
-        Err(e) => return internal("book_file_path", e),
+        Err(e) => return internal("book_text_source", e),
     };
 
     let extracted =
-        tokio::task::spawn_blocking(move || extract_chapter_text(&path, spine_index)).await;
+        tokio::task::spawn_blocking(move || chapter_text_from_path(&path, spine_index)).await;
     let text = match extracted {
         Ok(Ok(Some(text))) => text,
         Ok(Ok(None)) => return StatusCode::NOT_FOUND.into_response(),
@@ -235,10 +260,10 @@ async fn progress_cutoff(
         // record resolved" — the conservative branch is the same.
         return Ok(Some(0));
     };
-    let Some((file_id, _)) = db::book_file_with_id(&state.pool, book_id, "EPUB").await? else {
+    let Some(source) = db::book_text_source(&state.pool, book_id).await? else {
         return Ok(Some(0));
     };
-    let stats = epub_structure::get_spine_stats(&state.pool, file_id).await?;
+    let stats = epub_structure::get_spine_stats(&state.pool, source.file_id).await?;
     let Some((reader_spine, reader_offset)) =
         epub_structure::position_at_fraction(&stats, percent as f64 / 100.0)
     else {

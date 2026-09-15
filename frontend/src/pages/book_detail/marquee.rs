@@ -101,7 +101,7 @@ pub(super) fn MarqueeStage(
     let mut load_seq = use_signal(|| 0u64);
     {
         let uuid = uuid.clone();
-        let has_text = view.has_ebook || view.has_comic;
+        let has_text = view.has_ebook || view.has_comic || view.has_pdf;
         let has_audio = view.has_audio;
         let series_id = b.series_id;
         let refresh = ctx.refresh;
@@ -204,7 +204,7 @@ pub(super) fn MarqueeStage(
                 uuid: uuid.clone(),
                 insights: insights(),
                 progress: MarqueeProgress { reading: reading(), listening: listening() },
-                audio_only: view.has_audio && !view.has_ebook && !view.has_comic,
+                audio_only: view.has_audio && !view.has_ebook && !view.has_comic && !view.has_pdf,
                 wish_mode,
             }
         },
@@ -338,6 +338,7 @@ pub(super) struct MarqueeViewFacts {
     pub has_ebook: bool,
     pub has_audio: bool,
     pub has_comic: bool,
+    pub has_pdf: bool,
 }
 
 impl MarqueeViewFacts {
@@ -351,6 +352,7 @@ impl MarqueeViewFacts {
             has_ebook: v.has_ebook,
             has_audio: v.has_audio,
             has_comic: v.has_comic,
+            has_pdf: v.has_pdf,
         }
     }
 }

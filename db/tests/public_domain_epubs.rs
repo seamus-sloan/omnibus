@@ -1,9 +1,10 @@
-//! Regression test for the public-domain Playwright EPUB fixtures.
+//! Regression test for the public-domain Playwright EPUB and PDF fixtures.
 //!
 //! These EPUBs come from third-party sources (Project Gutenberg / Standard
-//! Ebooks) so we don't control their OPFs. Pinning the metadata the parser
-//! extracts from each one means a parser change that subtly drops a field
-//! fails here before the Playwright suite gets to it.
+//! Ebooks) so we don't control their OPFs, and the PDFs are Calibre
+//! conversions of two more Gutenberg titles. Pinning the metadata the
+//! parsers extract from each one means a parser change that subtly drops a
+//! field fails here before the Playwright suite gets to it.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -232,6 +233,86 @@ const EXPECTED: &[Expected] = &[
         has_cover: true,
     },
 ];
+
+/// One row per PDF in `test_data/epubs/public_domain/`, mirrored by the
+/// `public_domain/*.pdf` entries in the Playwright fixture table. Both were
+/// converted from Gutenberg EPUBs with Calibre, which writes the Info dict
+/// and an outline from the TOC; neither title exists as an EPUB fixture, so
+/// no (title, author) collides with one.
+struct ExpectedPdf {
+    filename: &'static str,
+    title: &'static str,
+    authors: &'static [&'static str],
+    page_count: i64,
+}
+
+const EXPECTED_PDFS: &[ExpectedPdf] = &[
+    ExpectedPdf {
+        filename: "time_machine.pdf",
+        title: "The Time Machine",
+        authors: &["H. G. Wells"],
+        page_count: 220,
+    },
+    ExpectedPdf {
+        filename: "flatland.pdf",
+        title: "Flatland: A Romance of Many Dimensions",
+        authors: &["Edwin Abbott Abbott"],
+        page_count: 254,
+    },
+];
+
+#[test]
+fn public_domain_pdfs_parse_with_expected_metadata() {
+    let dir = fixtures_dir();
+    let result = omnibus_db::ebook::scan_ebook_library(Some(dir.to_str().unwrap()));
+    assert!(result.error.is_none(), "scan errored: {:?}", result.error);
+    let by_name: HashMap<&str, _> = result
+        .books
+        .iter()
+        .map(|b| (b.metadata.filename.as_str(), b))
+        .collect();
+    let pdf_count = by_name.keys().filter(|f| f.ends_with(".pdf")).count();
+    assert_eq!(
+        pdf_count,
+        EXPECTED_PDFS.len(),
+        "public-domain PDF fixture count drifted: scanner found {pdf_count}, EXPECTED_PDFS has {}",
+        EXPECTED_PDFS.len(),
+    );
+
+    for exp in EXPECTED_PDFS {
+        let book = by_name
+            .get(exp.filename)
+            .unwrap_or_else(|| panic!("fixture {} missing from scan", exp.filename));
+        let m = &book.metadata;
+        assert!(
+            m.error.is_none(),
+            "{} parse error: {:?}",
+            exp.filename,
+            m.error
+        );
+        assert_eq!(
+            m.title.as_deref(),
+            Some(exp.title),
+            "{} title",
+            exp.filename
+        );
+        let actual_authors: Vec<&str> = m.creators.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(actual_authors, exp.authors, "{} authors", exp.filename);
+        assert_eq!(
+            m.page_count,
+            Some(exp.page_count),
+            "{} page count",
+            exp.filename
+        );
+        assert!(book.cover.is_some(), "{} renders a cover", exp.filename);
+        assert!(
+            book.word_count.is_some_and(|n| n > 10_000),
+            "{} extracts its text ({:?} words)",
+            exp.filename,
+            book.word_count
+        );
+    }
+}
 
 #[test]
 fn public_domain_epubs_parse_with_expected_metadata() {

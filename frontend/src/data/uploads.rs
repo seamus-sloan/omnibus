@@ -32,6 +32,17 @@ pub struct AudiobookUploadMeta {
     pub series_index: String,
 }
 
+/// Multipart content-type for an ebook upload, keyed off its extension. The
+/// server re-derives the format from magic bytes, so this is advisory only.
+#[cfg(any(feature = "web", feature = "mobile"))]
+fn ebook_mime(filename: &str) -> &'static str {
+    if filename.to_ascii_lowercase().ends_with(".pdf") {
+        "application/pdf"
+    } else {
+        "application/epub+zip"
+    }
+}
+
 /// Multipart content-type for an audiobook part, keyed off its extension. The
 /// server re-derives the format from magic bytes, so this is advisory only.
 #[cfg(any(feature = "web", feature = "mobile"))]
@@ -48,14 +59,14 @@ fn audio_mime(filename: &str) -> &'static str {
 
 // Web (gloo-net + FormData).
 
-/// Build a one-shot `Blob` from raw bytes with the given MIME type.
+/// Build a one-shot `Blob` from raw bytes, typed by the file's extension.
 #[cfg(feature = "web")]
-fn ebook_blob(bytes: &[u8]) -> Result<web_sys::Blob, DataError> {
+fn ebook_blob(bytes: &[u8], filename: &str) -> Result<web_sys::Blob, DataError> {
     let u8 = js_sys::Uint8Array::from(bytes);
     let parts = js_sys::Array::new();
     parts.push(&u8);
     let opts = web_sys::BlobPropertyBag::new();
-    opts.set_type("application/epub+zip");
+    opts.set_type(ebook_mime(filename));
     web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts)
         .map_err(|e| DataError::Other(format!("Blob::new: {e:?}")))
 }
@@ -85,7 +96,7 @@ pub async fn inspect_ebook(
 
     let form =
         web_sys::FormData::new().map_err(|e| DataError::Other(format!("FormData::new: {e:?}")))?;
-    let blob = ebook_blob(bytes)?;
+    let blob = ebook_blob(bytes, &filename)?;
     form.append_with_blob_and_filename("file", &blob, &filename)
         .map_err(|e| DataError::Other(format!("FormData::append: {e:?}")))?;
 
@@ -128,7 +139,7 @@ pub async fn upload_ebook(
     if !meta.series_index.trim().is_empty() {
         append_str("series_index", &meta.series_index)?;
     }
-    let blob = ebook_blob(&bytes)?;
+    let blob = ebook_blob(&bytes, &filename)?;
     form.append_with_blob_and_filename("file", &blob, &filename)
         .map_err(|e| DataError::Other(format!("FormData::append: {e:?}")))?;
 
@@ -253,8 +264,8 @@ pub async fn inspect_ebook(
     crate::data::require_online()?;
     let endpoint = format!("{server_url}/api/uploads/ebooks/inspect");
     let part = reqwest::multipart::Part::bytes(bytes.to_vec())
-        .file_name(filename)
-        .mime_str("application/epub+zip")?;
+        .mime_str(ebook_mime(&filename))?
+        .file_name(filename);
     let form = reqwest::multipart::Form::new().part("file", part);
     let response = with_bearer(http_client().post(&endpoint))
         .multipart(form)
@@ -278,8 +289,8 @@ pub async fn upload_ebook(
     crate::data::require_online()?;
     let endpoint = format!("{server_url}/api/uploads/ebooks");
     let part = reqwest::multipart::Part::bytes(bytes)
-        .file_name(filename)
-        .mime_str("application/epub+zip")?;
+        .mime_str(ebook_mime(&filename))?
+        .file_name(filename);
     let mut form = reqwest::multipart::Form::new()
         .text("title", meta.title)
         .text("author", meta.author)

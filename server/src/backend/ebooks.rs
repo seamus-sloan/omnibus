@@ -274,34 +274,70 @@ pub(super) async fn get_ebook_by_uuid(
 /// the CBZ fallback) don't re-resolve uuid→id. On failure the error carries
 /// the id too, when it was resolved before the failure — `None` only when
 /// the uuid itself didn't match a book.
-async fn resolve_epub_path(
+/// Wire mime for a served PDF.
+pub(crate) const PDF_MIME: &str = "application/pdf";
+/// Wire mime for a served EPUB (and KEPUB).
+pub(crate) const EPUB_MIME: &str = "application/epub+zip";
+
+/// A resolved text-bearing file: its path, the book it belongs to, its
+/// uppercase `book_files.format`, and the mime the wire carries it under.
+struct TextFile {
+    path: std::path::PathBuf,
+    book_id: i64,
+    format: &'static str,
+    mime: &'static str,
+}
+
+/// Resolve the text-bearing file `/download` (and `?file_id=` on `/file`)
+/// serves: with a `file_id`, that row when it is an EPUB or a PDF — never a
+/// CBZ, which has no text and is read page by page; without one, the EPUB
+/// else the PDF (`db::book_text_source`'s order). `Err` carries the book id
+/// when the uuid resolved, so a caller can fall through to the comic archive
+/// without a second lookup.
+async fn resolve_text_path(
     state: &AppState,
     uuid: &str,
     file_id: Option<i64>,
-) -> Result<(std::path::PathBuf, i64), (Response, Option<i64>)> {
+) -> Result<TextFile, (Response, Option<i64>)> {
     let id = match db::resolve_book_id_by_uuid(&state.pool, uuid).await {
         Ok(Some(id)) => id,
         Ok(None) => return Err((axum::http::StatusCode::NOT_FOUND.into_response(), None)),
         Err(e) => return Err((internal("resolve_book_id_by_uuid", e), None)),
     };
-    // Carry the context alongside the chosen query so a 500 points at the
-    // call that actually failed rather than always blaming `book_file_path`.
-    let (resolved, ctx) = if let Some(file_id) = file_id {
-        (
-            db::book_file_path_by_id(&state.pool, id, file_id, Some("EPUB")).await,
-            "book_file_path_by_id",
-        )
-    } else {
-        (
-            db::book_file_path(&state.pool, id, "EPUB").await,
-            "book_file_path",
-        )
+    let Some(file_id) = file_id else {
+        return match db::book_text_source(&state.pool, id).await {
+            Ok(Some(source)) => {
+                let (format, mime) = if source.format == "PDF" {
+                    ("PDF", PDF_MIME)
+                } else {
+                    ("EPUB", EPUB_MIME)
+                };
+                Ok(TextFile {
+                    path: source.path,
+                    book_id: id,
+                    format,
+                    mime,
+                })
+            }
+            Ok(None) => Err((axum::http::StatusCode::NOT_FOUND.into_response(), Some(id))),
+            Err(e) => Err((internal("book_text_source", e), Some(id))),
+        };
     };
-    match resolved {
-        Ok(Some(p)) => Ok((p, id)),
-        Ok(None) => Err((axum::http::StatusCode::NOT_FOUND.into_response(), Some(id))),
-        Err(e) => Err((internal(ctx, e), Some(id))),
+    for (format, mime) in [("EPUB", EPUB_MIME), ("PDF", PDF_MIME)] {
+        match db::book_file_path_by_id(&state.pool, id, file_id, Some(format)).await {
+            Ok(Some(path)) => {
+                return Ok(TextFile {
+                    path,
+                    book_id: id,
+                    format,
+                    mime,
+                })
+            }
+            Ok(None) => continue,
+            Err(e) => return Err((internal("book_file_path_by_id", e), Some(id))),
+        }
     }
+    Err((axum::http::StatusCode::NOT_FOUND.into_response(), Some(id)))
 }
 
 /// Wire mime for a served CBZ archive. The registered comic-book zip type,
@@ -309,36 +345,45 @@ async fn resolve_epub_path(
 /// `application/zip` would not say what the bytes are.
 pub(crate) const CBZ_MIME: &str = "application/vnd.comicbook+zip";
 
-/// Resolve the file `/file` streams for `uuid`: the EPUB when the book has
-/// one, else its CBZ archive. The fallback is what lets a comic-only book be
-/// taken offline whole — the per-page endpoint answers reading, not
-/// downloading — while a dual-format book keeps serving the EPUB, matching
-/// the pager's rule that the EPUB stays the primary read. An explicit
-/// `?file_id=` stays EPUB-scoped: multi-file selection exists for
-/// multi-EPUB books and must not silently resolve to an archive.
+/// Resolve the file `/file` streams for `uuid` on the one precedence ladder
+/// every surface shares: the EPUB when the book has one, else its CBZ
+/// archive, else its PDF. The archive fallback is what lets a comic-only
+/// book be taken offline whole — the per-page endpoint answers reading, not
+/// downloading — and CBZ outranks PDF because a book carrying both is a
+/// comic scanned twice, and the comic pipeline is the one that is
+/// offline-verified. An explicit `?file_id=` names an EPUB or PDF row only:
+/// multi-file selection exists for text editions and must not silently
+/// resolve to an archive.
 async fn resolve_readable_path(
     state: &AppState,
     uuid: &str,
     file_id: Option<i64>,
 ) -> Result<(std::path::PathBuf, &'static str), Response> {
-    match resolve_epub_path(state, uuid, file_id).await {
-        Ok((path, _id)) => Ok((path, "application/epub+zip")),
-        // The uuid resolved to a book (we have `id`) but it has no EPUB —
-        // reuse that id rather than re-querying `resolve_book_id_by_uuid`.
-        Err((resp, Some(id))) if file_id.is_none() && resp.status() == StatusCode::NOT_FOUND => {
-            match db::book_file_path(&state.pool, id, "CBZ").await {
-                Ok(Some(path)) => Ok((path, CBZ_MIME)),
-                Ok(None) => Err(StatusCode::NOT_FOUND.into_response()),
-                Err(e) => Err(internal("book_file_path", e)),
-            }
-        }
-        Err((resp, _)) => Err(resp),
+    if file_id.is_some() {
+        return match resolve_text_path(state, uuid, file_id).await {
+            Ok(file) => Ok((file.path, file.mime)),
+            Err((resp, _)) => Err(resp),
+        };
     }
+    let id = match db::resolve_book_id_by_uuid(&state.pool, uuid).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return Err(StatusCode::NOT_FOUND.into_response()),
+        Err(e) => return Err(internal("resolve_book_id_by_uuid", e)),
+    };
+    for (format, mime) in [("EPUB", EPUB_MIME), ("CBZ", CBZ_MIME), ("PDF", PDF_MIME)] {
+        match db::book_file_path(&state.pool, id, format).await {
+            Ok(Some(path)) => return Ok((path, mime)),
+            Ok(None) => continue,
+            Err(e) => return Err(internal("book_file_path", e)),
+        }
+    }
+    Err(StatusCode::NOT_FOUND.into_response())
 }
 
-/// Streams the raw EPUB bytes — or, for a comic-only book, the CBZ archive
-/// (the whole-file download the offline clients pull). Accepts optional
-/// `?file_id=N` to target a specific `book_files` row for multi-EPUB books.
+/// Streams the raw EPUB bytes — or, for a comic-only book, the CBZ archive,
+/// or for a PDF-only book the PDF (the whole-file download the offline
+/// clients pull, and the bytes PDF.js range-fetches). Accepts optional
+/// `?file_id=N` to target a specific EPUB or PDF `book_files` row.
 ///
 /// Gated by [`MediaAuthUser`] rather than [`AuthUser`]: epub.js fetches this
 /// URL from inside the mobile WebView, which can carry neither a session
@@ -364,7 +409,7 @@ pub(super) async fn get_ebook_file(
     resp
 }
 
-/// Resolve the book's readable file (EPUB, else CBZ) and stream its bytes,
+/// Resolve the book's readable file (EPUB, else CBZ, else PDF) and stream its bytes,
 /// or report the resolution failure as a 404 / 500. CORS is layered on by
 /// the caller so it covers every arm uniformly.
 ///
@@ -572,10 +617,10 @@ fn download_response(bytes: Vec<u8>, filename: &str) -> Response {
     resp
 }
 
-/// Serves the raw EPUB as a browser download (`Content-Disposition:
-/// attachment`). Same path resolution as [`get_ebook_file`]; only the
-/// disposition differs, so the in-app reader keeps streaming inline via
-/// `/file` while the export menu drives a real save-to-disk via `/download`.
+/// Serves the EPUB — or, for a book without one, the PDF — as a browser
+/// download (`Content-Disposition: attachment`). Text formats only: a comic
+/// is taken whole via `/file`. The in-app reader keeps streaming inline via
+/// `/file` while the export menu drives a real save-to-disk here.
 pub(super) async fn get_ebook_download(
     user: AuthUser,
     State(state): State<AppState>,
@@ -586,19 +631,24 @@ pub(super) async fn get_ebook_download(
     if let Some(denied) = super::deny_without_download(&user) {
         return denied;
     }
-    let (source, id) = match resolve_epub_path(&state, &uuid, query.file_id).await {
-        Ok(resolved) => resolved,
+    let file = match resolve_text_path(&state, &uuid, query.file_id).await {
+        Ok(file) => file,
         Err((resp, _)) => return resp,
     };
     // A saved download must carry the user's metadata/cover edits (F5.8 #1372),
     // so serve the override-baked EPUB when the book has any; otherwise the
-    // source verbatim.
-    let path = rewritten_or_source(&state, id, source).await;
+    // source verbatim. The bake is an OPF rewrite, so a PDF is always the
+    // source as scanned.
+    let path = if file.format == "EPUB" {
+        rewritten_or_source(&state, file.book_id, file.path).await
+    } else {
+        file.path
+    };
     // The validator is taken from whichever file is actually sent. For an
     // override-having book that is the export-cache copy, whose own stat
     // moves when `books.last_modified` invalidates it — so it tracks the
     // bytes on the wire rather than the source they came from.
-    super::serve_download(req, &path, "application/epub+zip").await
+    super::serve_download(req, &path, file.mime).await
 }
 
 /// The override-baked export EPUB for `book_id` when the book has edits, else

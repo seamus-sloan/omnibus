@@ -350,6 +350,81 @@ async fn book_progress_resolves_a_comic_page_to_its_percent_and_no_chapter() {
 }
 
 #[tokio::test]
+async fn book_progress_resolves_a_pdf_page_onto_its_outline_chapter() {
+    // A PDF page anchor names its spine step outright — one structure row
+    // per page — so it places against the outline with no walk and no
+    // guessing, and the percent is the one the reader wrote.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed_named_file(&pool, "/lib", "Scan", "scan.pdf").await;
+    let file_id: i64 = sqlx::query_scalar("SELECT id FROM book_files WHERE book_id = ?")
+        .bind(book_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    crate::epub_structure::replace_structure(
+        &pool,
+        file_id,
+        &crate::ebook::toc::EpubStructure {
+            spine: (0..4)
+                .map(|page| crate::ebook::toc::SpineStat {
+                    spine_index: page,
+                    href: format!("page:{page}"),
+                    visible_chars: 100,
+                })
+                .collect(),
+            chapters: vec![
+                crate::ebook::toc::TocChapter {
+                    ordinal: 0,
+                    title: "Part I".into(),
+                    href: "page:0".into(),
+                    spine_index: 0,
+                    start_chars: 0,
+                },
+                crate::ebook::toc::TocChapter {
+                    ordinal: 1,
+                    title: "Part II".into(),
+                    href: "page:2".into(),
+                    spine_index: 2,
+                    start_chars: 200,
+                },
+            ],
+        },
+    )
+    .await
+    .unwrap();
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some(omnibus_shared::pdf_page_anchor(3)),
+            audio_position_seconds: None,
+            progress_percent: Some(100),
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: Some(100),
+        },
+    )
+    .await
+    .unwrap();
+
+    let progress = book_progress(&pool, user, &uuid, None)
+        .await
+        .unwrap()
+        .unwrap();
+    let resolved = progress.records[0].resolved.as_ref().unwrap();
+    assert_eq!(resolved.spine_index, Some(3));
+    assert_eq!(resolved.chapter_title.as_deref(), Some("Part II"));
+    assert_eq!(resolved.chapter_ordinal, Some(2));
+    assert_eq!(resolved.chapters_total, Some(2));
+    assert_eq!(resolved.percent_through_book, Some(100));
+    assert_eq!(resolved.percent_through_chapter, None);
+    assert_eq!(resolved.confidence, PositionConfidence::High);
+}
+
+#[tokio::test]
 async fn book_progress_leaves_the_resolved_block_absent_when_a_book_has_no_structure() {
     // Nothing to resolve against is a different answer from a coarse one, and
     // must not be dressed up as a chapter.

@@ -109,6 +109,7 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
         has_audio,
         has_ebook,
         has_comic,
+        has_pdf,
         ..
     } = derive_loaded_view(&b);
 
@@ -129,6 +130,7 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
                     has_ebook,
                     has_comic,
                     has_audio,
+                    has_pdf,
                 },
                 &epub_files,
                 &audio_files,
@@ -252,6 +254,10 @@ struct FormatAvailability {
     has_ebook: bool,
     has_comic: bool,
     has_audio: bool,
+    /// Read for the export menu's sake; the PDF reader is the web-reader
+    /// follow-up, so it opens nothing here yet.
+    #[allow(dead_code)]
+    has_pdf: bool,
 }
 
 /// Title column (title / meta line / format badges) plus the multi-file
@@ -269,6 +275,7 @@ fn title_and_cta_section(
         has_ebook,
         has_comic,
         has_audio,
+        ..
     } = availability;
     rsx! {
         div { class: "m-bd-titlecol",

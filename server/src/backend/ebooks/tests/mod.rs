@@ -126,6 +126,45 @@ async fn seed_cbz_on_disk(pool: &sqlx::SqlitePool) -> (String, std::path::PathBu
     (uuid, tmp)
 }
 
+/// Seed one PDF-only book whose on-disk file is a one-page test PDF.
+/// Returns `(uuid, tmp)`; caller removes `tmp`.
+async fn seed_pdf_on_disk(pool: &sqlx::SqlitePool) -> (String, std::path::PathBuf) {
+    let tmp = db::test_support::make_test_dir("ebook_pdf_route");
+    let pdf = db::test_support::build_test_pdf(&db::test_support::TestPdf {
+        pages: &["Flatland"],
+        ..Default::default()
+    });
+    std::fs::write(tmp.join("alpha.pdf"), pdf).unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(tmp.to_str().unwrap())
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = "5a5a5a5a-5a5a-5a5a-5a5a-5a5a5a5a5a5a".to_string();
+    let book_id = sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title, page_count) \
+         VALUES (?, ?, ?, 'Alpha', 1)",
+    )
+    .bind(&uuid)
+    .bind(lib_id)
+    .bind(tmp.to_str().unwrap())
+    .execute(pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'PDF', 'alpha', 0)",
+    )
+    .bind(book_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    (uuid, tmp)
+}
+
 #[tokio::test]
 async fn api_get_ebook_returns_200_with_metadata() {
     let (app, _state, pool) = fixture().await;

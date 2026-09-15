@@ -12,6 +12,7 @@ fn facts(has_ebook: bool, has_audio: bool, has_comic: bool) -> MarqueeViewFacts 
         has_ebook,
         has_audio,
         has_comic,
+        has_pdf: false,
     }
 }
 

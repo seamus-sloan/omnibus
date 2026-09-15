@@ -69,7 +69,7 @@ pub async fn downsync_book_annotations(
     let rows = sqlx::query_as::<_, (i64, String)>(
         "SELECT id, epub_cfi_range FROM annotations
          WHERE user_id = ? AND book_uuid = ?
-           AND epub_cfi_range IS NOT NULL AND kobo_location IS NULL",
+           AND epub_cfi_range LIKE 'epubcfi(%' AND kobo_location IS NULL",
     )
     .bind(user_id)
     .bind(book_uuid)
@@ -187,7 +187,7 @@ pub async fn downsync_all_kobo_annotations(
 ) -> anyhow::Result<DownsyncStats> {
     let pairs: Vec<(i64, String)> = sqlx::query_as(
         "SELECT DISTINCT user_id, book_uuid FROM annotations
-         WHERE epub_cfi_range IS NOT NULL AND kobo_location IS NULL",
+         WHERE epub_cfi_range LIKE 'epubcfi(%' AND kobo_location IS NULL",
     )
     .fetch_all(pool)
     .await?;
@@ -227,7 +227,7 @@ pub async fn downsync_book_id_annotations(
     };
     let user_ids: Vec<i64> = sqlx::query_scalar(
         "SELECT DISTINCT user_id FROM annotations
-         WHERE book_uuid = ? AND epub_cfi_range IS NOT NULL AND kobo_location IS NULL",
+         WHERE book_uuid = ? AND epub_cfi_range LIKE 'epubcfi(%' AND kobo_location IS NULL",
     )
     .bind(&book_uuid)
     .fetch_all(pool)

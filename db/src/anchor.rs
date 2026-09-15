@@ -125,14 +125,14 @@ impl AnchorIndex {
         else {
             return Ok(index);
         };
-        let Some((file_id, _)) = crate::book_file_with_id(pool, book_id, "EPUB")
+        let Some(source) = crate::book_text_source(pool, book_id)
             .await
             .map_err(books_error)?
         else {
             return Ok(index);
         };
-        index.spine = epub_structure::get_spine_stats(pool, file_id).await?;
-        index.chapters = epub_structure::get_chapters(pool, file_id).await?;
+        index.spine = epub_structure::get_spine_stats(pool, source.file_id).await?;
+        index.chapters = epub_structure::get_chapters(pool, source.file_id).await?;
         index.total_chars = index
             .spine
             .iter()
@@ -140,11 +140,15 @@ impl AnchorIndex {
         Ok(index)
     }
 
-    /// Place one anchor: an `epubcfi(…)` point or range, or a bare number of
-    /// seconds (an audiobook bookmark).
+    /// Place one anchor: an `epubcfi(…)` point or range, a PDF page or
+    /// highlight anchor (`pdf-page:N` / `pdf:N:…`, whose page is its spine
+    /// step), or a bare number of seconds (an audiobook bookmark).
     pub fn locate(&self, anchor: &str) -> AnchorPlacement {
         if let Some(spine_index) = spine_index_of(anchor) {
             return self.locate_spine(spine_index);
+        }
+        if let Some(page) = omnibus_shared::pdf_anchor_page(anchor) {
+            return self.locate_spine(page as i64);
         }
         // A bookmark's `position` is an opaque token: seconds for the
         // player, a CFI for the reader. Only a bare number can be the

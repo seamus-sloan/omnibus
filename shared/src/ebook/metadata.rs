@@ -149,9 +149,10 @@ pub struct EbookMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub book_files: Vec<BookFileInfo>,
 
-    /// On-disk size of the EPUB the hero "Send to Kindle" would deliver (the
-    /// lowest-ordinal EPUB). `None` when the book has no EPUB. Drives the
-    /// oversized-file gate on the email button — see `kindle_email_oversize`.
+    /// On-disk size of the file the hero "Send to Kindle" would deliver (the
+    /// lowest-ordinal EPUB, else the PDF). `None` when the book has neither.
+    /// Drives the oversized-file gate on the email button — see
+    /// `kindle_email_oversize`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub epub_size_bytes: Option<i64>,
 

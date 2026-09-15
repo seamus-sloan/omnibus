@@ -81,6 +81,12 @@ talk to the Kobo store. Shelves you opt in appear in the device's own library;
 reading position, read status, and highlights flow both directions on every
 sync.
 
+Books with an EPUB sync as KEPUB. A comic-only book (CBZ) and a PDF-only book
+sync as the file itself, which the device reads natively. For those two the
+reading position round-trips as a percent only, and highlights do not sync:
+Kobo firmware cannot annotate a CBZ or a PDF, and a PDF highlight made on the
+web or in the iOS app has no KEPUB position to translate to.
+
 You need:
 
 - **An Omnibus server the Kobo can reach on its own Wi-Fi** — a LAN address or

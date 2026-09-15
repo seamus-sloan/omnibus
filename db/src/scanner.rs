@@ -77,8 +77,9 @@ pub fn list_files(path: Option<&str>, extensions: &[&str]) -> LibrarySection {
     }
 }
 
-/// File extensions the ebook library walk accepts.
-pub const EBOOK_EXTENSIONS: &[&str] = &["epub", "pdf", "cbz"];
+/// File extensions the ebook library walk accepts — the indexer's own list,
+/// re-exported for the same no-drift reason as the audiobook one above.
+pub use crate::ebook::EBOOK_EXTENSIONS;
 
 /// Scan all configured library directories and return a combined `LibraryContents` with ebook and audiobook stat entries.
 pub fn scan_libraries(ebook_path: Option<&str>, audiobook_path: Option<&str>) -> LibraryContents {

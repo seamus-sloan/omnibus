@@ -522,15 +522,21 @@ pub fn resume_route(point: &omnibus_shared::ResumePoint) -> Route {
             uuid,
             file_id: point.record.book_file_id,
         },
-        // Comics reuse the Epub-format progress record (see
-        // `omnibus_shared::comic_page_anchor`), so the format alone can't
-        // pick the reader — a CBZ-only book resumes into the pager, while
-        // anything with a real EPUB keeps the epub.js reader.
+        // Comics and PDFs reuse the Epub-format progress record (see
+        // `omnibus_shared::comic_page_anchor` / `pdf_page_anchor`), so the
+        // format alone can't pick the reader — a CBZ-only book resumes into
+        // the pager, anything with a real EPUB keeps the epub.js reader, and
+        // a PDF-only book lands on its detail page until the PDF reader
+        // exists (a `pdf-page:` anchor must never reach epub.js).
         omnibus_shared::ProgressFormat::Epub => {
             let formats = &point.book.formats;
             let has = |ext: &str| formats.iter().any(|f| f.eq_ignore_ascii_case(ext));
-            if has("cbz") && !has("epub") {
+            if has("epub") {
+                Route::BookRead { uuid }
+            } else if has("cbz") {
                 Route::ComicRead { uuid }
+            } else if has("pdf") {
+                Route::BookDetail { uuid }
             } else {
                 Route::BookRead { uuid }
             }
@@ -618,6 +624,18 @@ mod tests {
         assert_eq!(
             resume_route(&p),
             Route::ComicRead {
+                uuid: "book-a".into()
+            }
+        );
+    }
+
+    #[test]
+    fn resume_route_sends_a_pdf_only_book_to_its_detail_page() {
+        let mut p = point(ProgressFormat::Epub, None);
+        p.book.formats = vec!["PDF".into()];
+        assert_eq!(
+            resume_route(&p),
+            Route::BookDetail {
                 uuid: "book-a".into()
             }
         );

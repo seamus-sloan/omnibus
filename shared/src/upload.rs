@@ -58,22 +58,31 @@ pub struct UploadCommitResult {
     pub uuid: String,
 }
 
+/// Number of leading bytes [`detect_ebook_format`] needs to classify an
+/// upload: the ZIP local-file-header magic is 4 bytes, a PDF's `%PDF-`
+/// signature is 5.
+pub const EBOOK_MAGIC_LEN: usize = 5;
+
 /// Detect an uploadable ebook format from magic bytes. Returns the canonical
 /// lowercase extension for accepted formats. Mirrors
 /// [`crate::image_format::detect_image_format`] — pure byte inspection, no
 /// parser dependency, so it compiles on every target.
 ///
 /// EPUB is a ZIP archive, so it carries the ZIP local-file-header magic
-/// `PK\x03\x04`. A successful parse in the inspect handler is the second gate;
-/// this sniff just rejects obviously-wrong uploads (text, images, truncated
-/// files) before the heavier parse runs.
+/// `PK\x03\x04`; a PDF opens with `%PDF-`. A successful parse in the inspect
+/// handler is the second gate; this sniff just rejects obviously-wrong
+/// uploads (text, images, truncated files) before the heavier parse runs.
+/// The extension decides where the file is filed and which parser reads it,
+/// the way `audiobook_ext_of` lets the magic gate the family for audio.
 pub fn detect_ebook_format(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.len() < 4 {
+    if bytes.len() < EBOOK_MAGIC_LEN {
         return None;
     }
     // ZIP local file header — every non-empty EPUB starts with this.
     if bytes.starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
         Some("epub")
+    } else if bytes.starts_with(b"%PDF-") {
+        Some("pdf")
     } else {
         None
     }
@@ -120,16 +129,22 @@ mod tests {
     }
 
     #[test]
-    fn detect_ebook_format_rejects_non_zip() {
-        assert_eq!(detect_ebook_format(b"%PDF-1.7"), None);
+    fn detect_ebook_format_accepts_pdf_signature() {
+        assert_eq!(detect_ebook_format(b"%PDF-1.7\n"), Some("pdf"));
+    }
+
+    #[test]
+    fn detect_ebook_format_rejects_other_bytes() {
         assert_eq!(detect_ebook_format(b"<html>"), None);
+        assert_eq!(detect_ebook_format(b"%PDX-1.7"), None);
         // Empty-archive end-of-central-directory magic is not a real EPUB.
-        assert_eq!(detect_ebook_format(b"PK\x05\x06"), None);
+        assert_eq!(detect_ebook_format(b"PK\x05\x06\x00\x00"), None);
     }
 
     #[test]
     fn detect_ebook_format_rejects_too_short_input() {
-        assert_eq!(detect_ebook_format(b"PK"), None);
+        assert_eq!(detect_ebook_format(b"PK\x03\x04"), None);
+        assert_eq!(detect_ebook_format(b"%PDF"), None);
     }
 
     #[test]

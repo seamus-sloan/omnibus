@@ -1,4 +1,4 @@
-//! Full-text index over EPUB chapter text (migration `0087`): the post-scan
+//! Full-text index over EPUB chapter text and PDF page text (migration `0087`): the post-scan
 //! worker pass that populates `book_content_chapters` / `book_content_fts`,
 //! and the bm25-ranked content-search read path. Populated by
 //! `worker::Task::BackfillContentFts` after each ebook scan; read by the
@@ -15,7 +15,7 @@ use sqlx::{Row, SqlitePool};
 
 use crate::helpers::{cap_query_len, library_paths_json, sanitize_fts_query, visible_book_sql};
 
-pub use extract::extract_chapter_texts;
+pub use extract::extract_texts;
 
 /// Cap on returned content hits — one chapter-level citation list, not a
 /// paginated browse surface. Also the ceiling on a caller-supplied `limit`.
@@ -80,6 +80,7 @@ pub async fn search_content_for_paths(
         format!("AND c.book_uuid IN ({placeholders})")
     };
     let visible = visible_book_sql("b", "l", "?");
+    let text_source_order = crate::books::TEXT_SOURCE_FORMAT_ORDER;
     let sql = format!(
         r"
         SELECT c.book_uuid,
@@ -91,8 +92,8 @@ pub async fn search_content_for_paths(
                  WHERE ec.book_file_id = (
                            SELECT bf.id FROM book_files bf
                             WHERE bf.book_id = b.id
-                              AND bf.format = 'EPUB' COLLATE NOCASE
-                            ORDER BY bf.ordinal LIMIT 1)
+                              AND UPPER(bf.format) IN ('EPUB', 'PDF')
+                            ORDER BY {text_source_order} LIMIT 1)
                    AND ec.spine_index <= c.spine_index
                  -- Highest spine index at or before the hit, then the FIRST
                  -- chapter at it: several TOC entries can share one spine
@@ -327,13 +328,13 @@ async fn chapter_start_percents(
     else {
         return Ok(Vec::new());
     };
-    let Some((file_id, _)) = crate::book_file_with_id(pool, book_id, "EPUB")
+    let Some(source) = crate::book_text_source(pool, book_id)
         .await
         .map_err(books_error)?
     else {
         return Ok(Vec::new());
     };
-    let stats = crate::epub_structure::get_spine_stats(pool, file_id)
+    let stats = crate::epub_structure::get_spine_stats(pool, source.file_id)
         .await
         .map_err(|e| match e {
             crate::epub_structure::EpubStructureError::Sqlx(inner) => ContentFtsError::Db(inner),
@@ -374,8 +375,8 @@ fn round1(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
 }
 
-/// A book whose content index is missing or stale: the lowest-ordinal EPUB
-/// file's current stat differs from the stored snapshot (or no rows exist —
+/// A book whose content index is missing or stale: the text source file's
+/// current stat differs from the stored snapshot (or no rows exist —
 /// a freshly Added book looks identical to a stale one here, which is the
 /// point: rule 09's derived-validator principle, one statement for both).
 struct Candidate {
@@ -386,34 +387,37 @@ struct Candidate {
     size_bytes: i64,
 }
 
-/// Every EPUB book under `library_path` needing (re)extraction. The compared
-/// file is the book's lowest-ordinal EPUB — the one `book_file_path` serves
-/// and the one a reader gets, matching rule 09's "the compared file is the
-/// one the server would serve". Non-EPUB books never join and are skipped
-/// silently (audiobooks and comics have no extractable text).
+/// Every EPUB or PDF book under `library_path` needing (re)extraction. The
+/// compared file is the book's text source — its lowest-ordinal EPUB, else
+/// its PDF (`books::TEXT_SOURCE_FORMAT_ORDER`) — the one the reader gets,
+/// matching rule 09's "the compared file is the one the server would serve".
+/// Other books never join and are skipped silently (audiobooks and comics
+/// have no extractable text).
 async fn fetch_candidates(pool: &SqlitePool, library_path: &str) -> anyhow::Result<Vec<Candidate>> {
     /// `(uuid, title, library root, dir, stem, format, mtime_epoch, size_bytes)`.
     type CandidateRow = (String, String, String, String, String, String, i64, i64);
-    let rows: Vec<CandidateRow> = sqlx::query_as(
+    let sql = format!(
         "SELECT b.uuid, COALESCE(NULLIF(b.title, ''), b.scan_key), \
                 COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
                 bf.filename, bf.format, bf.mtime_epoch, bf.size_bytes \
          FROM books b \
          JOIN scan_roots l ON b.library_id = l.id \
          JOIN book_files bf ON bf.id = ( \
-             SELECT id FROM book_files \
-             WHERE book_id = b.id AND format = 'EPUB' COLLATE NOCASE \
-             ORDER BY ordinal LIMIT 1) \
+             SELECT bf.id FROM book_files bf \
+             WHERE bf.book_id = b.id AND UPPER(bf.format) IN ('EPUB', 'PDF') \
+             ORDER BY {} LIMIT 1) \
          WHERE l.path = ? \
            AND NOT EXISTS (SELECT 1 FROM book_content_chapters c \
                            WHERE c.book_uuid = b.uuid \
                              AND c.mtime_epoch = bf.mtime_epoch \
                              AND c.size_bytes = bf.size_bytes) \
          ORDER BY b.id",
-    )
-    .bind(library_path)
-    .fetch_all(pool)
-    .await?;
+        crate::books::TEXT_SOURCE_FORMAT_ORDER
+    );
+    let rows: Vec<CandidateRow> = sqlx::query_as(&sql)
+        .bind(library_path)
+        .fetch_all(pool)
+        .await?;
     Ok(rows
         .into_iter()
         .map(
@@ -430,7 +434,7 @@ async fn fetch_candidates(pool: &SqlitePool, library_path: &str) -> anyhow::Resu
         .collect())
 }
 
-/// (Re)index chapter text for every EPUB book under `library_path` whose
+/// (Re)index chapter text for every EPUB or PDF book under `library_path` whose
 /// stored snapshot no longer matches the served file, and prune rows whose
 /// uuid no longer resolves to any book (deleted, or merged away — the
 /// cascade-free half of the migration's soft-reference choice).
@@ -468,7 +472,7 @@ pub async fn backfill_content_fts(
         processed = processed.saturating_add(1);
         on_progress(processed, total, &candidate.title);
         let path = candidate.path.clone();
-        let chapters = tokio::task::spawn_blocking(move || extract_chapter_texts(&path))
+        let chapters = tokio::task::spawn_blocking(move || extract_texts(&path))
             .await
             .unwrap_or_else(|join_err| {
                 tracing::warn!(

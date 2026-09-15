@@ -1,5 +1,5 @@
 //! Kobo per-book resources: book download (KEPUB, or the raw CBZ for a
-//! comic-only book), cover thumbnails, and the (currently empty) tags
+//! comic-only book, or the PDF for a PDF-only one), cover thumbnails, and the (currently empty) tags
 //! collection. `download` and `image` both resolve the book id from the
 //! path uuid before touching the filesystem/DB.
 
@@ -30,10 +30,11 @@ pub async fn library_tags(_auth: KoboAuthUser) -> Response {
 
 /// `GET download/<uuid>` — serve the book as KEPUB (converting via the worker,
 /// cached), falling back to plain EPUB when kepubify is absent, conversion
-/// fails, or it exceeds [`KEPUB_CONVERT_BUDGET`]. A CBZ-only book skips the
-/// conversion entirely and streams the archive as-is — Kobo firmware reads
-/// sideloaded CBZ natively, and the old EPUB-only path 404'd every attempt,
-/// looping the device on retries. Streamed with range support.
+/// fails, or it exceeds [`KEPUB_CONVERT_BUDGET`]. A CBZ-only or PDF-only
+/// book skips the conversion entirely and streams the file as-is — Kobo
+/// firmware reads both sideloaded formats natively, and the old EPUB-only
+/// path 404'd every attempt, looping the device on retries. Streamed with
+/// range support.
 pub async fn download(
     auth: KoboAuthUser,
     State(state): State<AppState>,
@@ -69,7 +70,11 @@ pub async fn download(
         }
         None => match db::book_file_path(state.pool(), id, "CBZ").await {
             Ok(Some(path)) => (path, crate::backend::ebooks::CBZ_MIME),
-            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Ok(None) => match db::book_file_path(state.pool(), id, "PDF").await {
+                Ok(Some(path)) => (path, crate::backend::ebooks::PDF_MIME),
+                Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+                Err(e) => return internal("kobo book_file_path", e),
+            },
             Err(e) => return internal("kobo book_file_path", e),
         },
     };
