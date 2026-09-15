@@ -379,6 +379,49 @@ async fn shelf_owner_attribution_uses_the_display_name_when_one_is_set() {
 }
 
 #[tokio::test]
+async fn shelf_owner_has_avatar_follows_the_owners_uploaded_avatar() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let owner = make_user(&pool, "alice", false).await;
+    let id = create_shelf(&pool, owner, &manual_req("Favourites", vec![]))
+        .await
+        .unwrap()
+        .id;
+    let listed_flag = |shelves: Vec<omnibus_shared::ShelfSummary>| {
+        shelves
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap()
+            .owner_has_avatar
+    };
+
+    assert!(
+        !get_shelf(&pool, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .owner_has_avatar
+    );
+    assert!(!listed_flag(
+        list_visible_shelves(&pool, owner, false).await.unwrap()
+    ));
+
+    crate::auth::upsert_user_avatar(&pool, owner, "image/png", b"\x89PNG\r\n\x1a\nfake")
+        .await
+        .unwrap();
+
+    assert!(
+        get_shelf(&pool, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .owner_has_avatar
+    );
+    assert!(listed_flag(
+        list_visible_shelves(&pool, owner, false).await.unwrap()
+    ));
+}
+
+#[tokio::test]
 async fn shelf_page_recently_interacted_orders_the_latest_signal_first() {
     let (pool, _covers) = seed_discovery_fixture().await;
     let owner = make_user(&pool, "owner", false).await;

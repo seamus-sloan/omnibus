@@ -177,6 +177,7 @@ mod tests {
             id: 3,
             owner_user_id: 1,
             owner_username: "elena".into(),
+            owner_has_avatar: false,
             kind: omnibus_shared::ShelfKind::Manual,
             name: "Space Operas".into(),
             visibility: omnibus_shared::Visibility::Private,

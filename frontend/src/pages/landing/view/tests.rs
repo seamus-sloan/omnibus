@@ -11,6 +11,7 @@ fn shelf(id: i64, name: &str, book_count: i64) -> ShelfSummary {
         id,
         owner_user_id: 1,
         owner_username: "elena".into(),
+        owner_has_avatar: false,
         kind: ShelfKind::Manual,
         name: name.into(),
         visibility: Visibility::Private,

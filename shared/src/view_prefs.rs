@@ -134,7 +134,7 @@ pub struct ViewPrefs {
     pub filters_open: bool,
 }
 
-/// Sort axis for the Authors / Series discovery indexes (name A–Z or most books first).
+/// Sort axis for the Authors / Series / Shelves index pages (name A–Z or most books first).
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IndexSort {
@@ -143,11 +143,13 @@ pub enum IndexSort {
     BookCount,
 }
 
-/// Persisted, library-wide sort choices for the discovery index pages (Authors + Series).
+/// Persisted, library-wide sort choices for the index pages (Authors, Series, Shelves).
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscoveryPrefs {
     #[serde(default)]
     pub authors_sort: IndexSort,
     #[serde(default)]
     pub series_sort: IndexSort,
+    #[serde(default)]
+    pub shelves_sort: IndexSort,
 }

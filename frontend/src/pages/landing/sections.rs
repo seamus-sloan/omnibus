@@ -13,6 +13,7 @@ use super::table::{BookTable, BookTableContext};
 use super::toolbar::Toolbar;
 use crate::components::shelf_facets::pencil_glyph;
 use crate::components::ShelfFacets;
+use crate::shelf_access::ShelfAccess;
 
 /// Header banner fields sourced from the page's derived view state.
 #[derive(Clone, PartialEq)]
@@ -52,15 +53,12 @@ pub(super) fn LandingHeader(
         section_title,
         selected_shelf,
     } = view;
-    // Owner/admin gating, mirroring `shelf_detail`'s header: `None` viewer
-    // until the boot effect resolves, so the pencil stays hidden on SSR +
-    // first paint (hydration parity, rule 07); system shelves stay locked.
+    // The shelf page's rule (`shelf_access`): `None` viewer until the boot
+    // effect resolves, so the pencil stays hidden on SSR + first paint
+    // (hydration parity, rule 07); system shelves stay locked.
     let viewer = crate::use_current_user_summary()();
     let can_edit = selected_shelf.as_ref().is_some_and(|s| {
-        !s.kind.is_system()
-            && viewer
-                .as_ref()
-                .is_some_and(|u| u.id == s.owner_user_id || u.is_admin)
+        ShelfAccess::resolve(viewer.as_ref(), s.owner_user_id, &s.owner_username, s.kind).can_edit()
     });
     rsx! {
         header { class: "lib-header", "data-testid": "lib-header",

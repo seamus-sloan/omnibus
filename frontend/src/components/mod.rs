@@ -76,10 +76,10 @@ pub mod credential_card;
 pub mod back_link;
 pub use back_link::disc_back_link;
 
-// Shared "pick books from the whole library" fetch/filter/grid, used by the
-// create-shelf hand-picked body and the shelf-detail "add books" modal.
-pub mod library_picker_grid;
-pub use library_picker_grid::{filter_library, use_library_fetch, LibraryPickerGrid};
+// Shared "pick books from the whole library" picker — server-backed, used by
+// the create-shelf hand-picked body and the shelf page's "add books" modal.
+pub mod library_picker;
+pub use library_picker::LibraryPicker;
 
 // F1.11 follow-up: hover-overlay "edit photo" affordance + modal with
 // three actions (paste URL, upload file, scan Open Library). Mounted by
@@ -158,13 +158,12 @@ pub mod user_avatar;
 // markup ships under web SSR, web WASM, and mobile native.
 pub mod auth;
 
-// F3.1 shelves: the left-rail shelf list (shared library chrome) and the
-// create-shelf modal it mounts. Platform-agnostic so the rail renders the
-// same under web SSR/WASM and mobile native.
+// F3.1 shelves: the create-shelf modal and the shelf SVG marks every shelf
+// surface draws. Platform-agnostic so both render the same under web SSR/WASM
+// and mobile native.
 pub mod create_shelf_modal;
-pub mod shelves_rail;
+pub mod shelf_glyphs;
 pub use create_shelf_modal::CreateShelfModal;
-pub use shelves_rail::{RailActive, ShelvesRail};
 
 // Mobile connectivity pill (offline / syncing status), mounted by the
 // mobile `ScreenLayout`. Mobile-only: it reads the offline sync engine.

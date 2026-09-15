@@ -236,6 +236,11 @@ pub struct ShelfSummary {
     pub owner_user_id: i64,
     /// Owner's username, for `by <name>` attribution on shelves you don't own.
     pub owner_username: String,
+    /// Whether the owner has uploaded an avatar, so attribution can draw
+    /// `GET /api/users/{owner_user_id}/avatar` instead of a monogram.
+    /// `default` keeps payloads from older servers deserializable.
+    #[serde(default)]
+    pub owner_has_avatar: bool,
     pub kind: ShelfKind,
     pub name: String,
     pub visibility: Visibility,
@@ -256,6 +261,10 @@ pub struct Shelf {
     pub owner_user_id: i64,
     /// Owner's username, for `by <name>` attribution on shelves you don't own.
     pub owner_username: String,
+    /// Whether the owner has uploaded an avatar — see
+    /// [`ShelfSummary::owner_has_avatar`].
+    #[serde(default)]
+    pub owner_has_avatar: bool,
     pub kind: ShelfKind,
     pub name: String,
     pub description: Option<String>,

@@ -1,7 +1,7 @@
-//! Client-local persistence for the discovery-index sort choices
+//! Client-local persistence for the index-page sort choices
 //! ([`DiscoveryPrefs`]), layered on [`crate::client_store`] (localStorage on
 //! web, a JSON file on mobile, inert on SSR). A single library-wide key — the
-//! Authors and Series indexes aren't scoped per library path.
+//! Authors, Series, and Shelves indexes aren't scoped per library path.
 
 use omnibus_shared::DiscoveryPrefs;
 

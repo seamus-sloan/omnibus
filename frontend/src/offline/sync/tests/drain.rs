@@ -173,6 +173,7 @@ async fn drain_remaps_temp_shelf_ids_across_later_ops() {
             id: -80,
             owner_user_id: 1,
             owner_username: "elena".into(),
+            owner_has_avatar: false,
             kind: omnibus_shared::ShelfKind::Manual,
             name: "Drain Shelf".into(),
             visibility: omnibus_shared::Visibility::Private,

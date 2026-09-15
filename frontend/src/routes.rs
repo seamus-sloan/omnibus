@@ -423,7 +423,8 @@ pub fn StatsChart() -> Element {
     rsx! {}
 }
 
-/// Route target for `/shelves` — the shelves index (mobile-first; web renders a plain list).
+/// Route target for `/shelves` — the shelves index: a searchable, owner-grouped
+/// card grid on web, the full-screen list in the native shell.
 #[component]
 pub fn Shelves() -> Element {
     use_page_title(|| Some("Shelves".into()));

@@ -70,6 +70,7 @@ fn sample_shelf() -> Shelf {
         id: 5,
         owner_user_id: 1,
         owner_username: "reader".into(),
+        owner_has_avatar: false,
         kind: ShelfKind::Smart,
         name: "Le Guin EPUBs".into(),
         description: None,

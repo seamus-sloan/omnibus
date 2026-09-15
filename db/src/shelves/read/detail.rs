@@ -112,6 +112,8 @@ pub async fn shelf_exclusive_hidden_uuids(
 pub async fn get_shelf(pool: &SqlitePool, id: i64) -> Result<Option<Shelf>, ShelfError> {
     let Some(r) = sqlx::query(
         "SELECT s.id, s.owner_user_id, COALESCE(u.display_name, u.username) AS owner_username,
+                EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = s.owner_user_id)
+                    AS owner_has_avatar,
                 s.kind, s.name, s.description, s.visibility, s.accent, s.match_mode,
                 s.sync_to_kobo
            FROM shelves s
@@ -153,6 +155,7 @@ pub async fn get_shelf(pool: &SqlitePool, id: i64) -> Result<Option<Shelf>, Shel
         id,
         owner_user_id,
         owner_username: r.try_get("owner_username")?,
+        owner_has_avatar: r.try_get::<i64, _>("owner_has_avatar")? != 0,
         kind,
         name: r.try_get("name")?,
         description: r.try_get("description")?,

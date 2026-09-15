@@ -534,6 +534,7 @@ pub(crate) async fn queue_create_shelf(req: &CreateShelfRequest) -> Option<Shelf
     let shelf = Shelf {
         id: temp,
         owner_user_id: me.as_ref().map(|u| u.id).unwrap_or_default(),
+        owner_has_avatar: me.as_ref().is_some_and(|u| u.has_avatar),
         owner_username: me.map(|u| u.username).unwrap_or_default(),
         kind: req.kind,
         name: req.name.clone(),

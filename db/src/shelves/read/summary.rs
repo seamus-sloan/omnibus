@@ -19,6 +19,7 @@ struct VisibleShelfRow {
     id: i64,
     owner_user_id: i64,
     owner_username: String,
+    owner_has_avatar: bool,
     kind: ShelfKind,
     name: String,
     visibility: Visibility,
@@ -60,6 +61,8 @@ async fn fetch_visible_shelf_rows(
     // 1 for anyone else; `position, id` still breaks ties inside each group.
     let rows = sqlx::query(
         "SELECT s.id, s.owner_user_id, COALESCE(u.display_name, u.username) AS owner_username,
+                EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = s.owner_user_id)
+                    AS owner_has_avatar,
                 s.kind, s.name, s.visibility, s.accent, s.match_mode
            FROM shelves s
            JOIN users u ON u.id = s.owner_user_id
@@ -93,6 +96,7 @@ async fn fetch_visible_shelf_rows(
             id,
             owner_user_id: r.try_get("owner_user_id")?,
             owner_username: r.try_get("owner_username")?,
+            owner_has_avatar: r.try_get::<i64, _>("owner_has_avatar")? != 0,
             kind,
             name: r.try_get("name")?,
             visibility: parse_visibility(&r.try_get::<String, _>("visibility")?)?,
@@ -196,6 +200,7 @@ fn assemble_shelf_summaries(
             id: row.id,
             owner_user_id: row.owner_user_id,
             owner_username: row.owner_username,
+            owner_has_avatar: row.owner_has_avatar,
             kind: row.kind,
             name: row.name,
             visibility: row.visibility,

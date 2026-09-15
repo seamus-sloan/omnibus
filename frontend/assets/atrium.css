@@ -2146,6 +2146,181 @@ a.idx-letter-on:focus-visible {
   color: var(--ink-2);
 }
 
+/* ===== Shelves index — /shelves (web) =====
+   Rides the /authors + /series chrome above (`.idx-header`, `.idx-toolbar`,
+   `.idx-btn`) and adds owner chips, owner-grouped sections, and shelf cards
+   whose member covers stand on a ledge lit in the shelf's accent. */
+.shv-head-row {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 24px; flex-wrap: wrap;
+}
+.shv-new { flex-shrink: 0; }
+.shv-new-plus { font-size: 15px; line-height: 1; }
+/* `.atrium` scope: a bare class loses its margin to `.atrium p { margin: 0 }`. */
+.atrium .shv-admin-note {
+  margin-top: 10px;
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12.5px; color: var(--ink-2);
+}
+
+.shv-owners {
+  margin-top: 14px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+}
+.shv-owners > .label { margin-right: 6px; }
+.shv-owner-chip { font: inherit; font-size: 12.5px; padding: 3px 11px 3px 3px; }
+.shv-owner-chip--all { padding-left: 11px; }
+.shv-owner-chip.on { background: var(--bg-3); }
+
+/* Owner avatars: each site draws its circle and `UserAvatar` fills it. */
+.shv-chip-av,
+.shv-group-av,
+.shv-card-owner-av {
+  display: inline-grid; place-items: center; flex: none;
+  border-radius: 50%; overflow: hidden;
+  background: var(--bg-3); color: var(--ink-1);
+  font-family: var(--mono); font-weight: 600; letter-spacing: .02em;
+}
+.shv-chip-av { width: 22px; height: 22px; font-size: 8.5px; }
+.shv-group-av { width: 36px; height: 36px; font-size: 12px; border: 1px solid var(--line-2); }
+.shv-card-owner-av { width: 22px; height: 22px; font-size: 8.5px; border: 1px solid var(--line-2); }
+.shv-av { display: grid; place-items: center; width: 100%; height: 100%; }
+.shv-av-photo {
+  width: 100%; height: 100%; aspect-ratio: 1 / 1;
+  border-radius: 50%; object-fit: cover; display: block;
+}
+
+.shv-body { padding-bottom: 12px; }
+.shv-group { margin-top: 34px; }
+.shv-group-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 12px; margin-bottom: 18px;
+  border-bottom: 1px solid var(--line-2);
+}
+/* `.atrium` scope: outranks the base `.atrium h2` display size. */
+.atrium .shv-group-title { font-size: 28px; line-height: 1.05; min-width: 0; }
+.shv-group-count { margin-left: auto; font-size: 11px; color: var(--ink-3); }
+
+.shv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 18px;
+}
+.shv-cell { display: flex; min-width: 0; }
+.shv-card {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  overflow: hidden; color: inherit; text-decoration: none;
+  transition: border-color .15s, background .15s;
+}
+@media (hover: hover) {
+  .shv-card:hover {
+    border-color: color-mix(in oklch, var(--shelf-accent) 55%, var(--line));
+    background: var(--bg-2);
+  }
+}
+.shv-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The ledge: member covers standing on a plank lit in the shelf's accent. */
+.shv-ledge {
+  position: relative; height: 134px;
+  display: flex; align-items: flex-end; justify-content: center; gap: 8px;
+  padding: 18px 18px 14px;
+  background:
+    radial-gradient(120% 95% at 50% 115%,
+      color-mix(in oklch, var(--shelf-accent) 30%, transparent), transparent 72%),
+    var(--bg-2);
+  border-bottom: 1px solid var(--line-2);
+}
+.shv-ledge::after {
+  content: ''; position: absolute; left: 14px; right: 14px; bottom: 10px;
+  height: 4px; border-radius: 2px;
+  background: color-mix(in oklch, var(--shelf-accent) 40%, var(--bg-3));
+  box-shadow: 0 4px 10px color-mix(in oklch, black 38%, transparent);
+}
+.shv-ledge-book {
+  position: relative; z-index: 1;
+  flex: 0 1 58px; min-width: 0; aspect-ratio: 2 / 3; margin-bottom: 4px;
+  border-radius: 2px 4px 4px 2px; overflow: hidden;
+  background: var(--cover-fallback-bg);
+  box-shadow:
+    0 10px 16px color-mix(in oklch, black 42%, transparent),
+    inset 0 0 0 1px color-mix(in oklch, black 18%, transparent);
+  transition: transform .3s cubic-bezier(.2,.7,.2,1);
+}
+.shv-ledge-book img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.shv-ledge-book--blank {
+  background: linear-gradient(165deg,
+    color-mix(in oklch, var(--shelf-accent) 18%, var(--bg-3)), var(--cover-fallback-bg));
+}
+/* The last book leans on its neighbour, the way it does on a shelf that isn't full. */
+.shv-ledge-book:last-child:not(:only-child) { transform: rotate(-6deg); transform-origin: 100% 100%; }
+@media (hover: hover) {
+  .shv-card:hover .shv-ledge-book { transform: translateY(-4px); }
+  .shv-card:hover .shv-ledge-book:nth-child(2) { transition-delay: .03s; }
+  .shv-card:hover .shv-ledge-book:nth-child(3) { transition-delay: .06s; }
+  .shv-card:hover .shv-ledge-book:last-child:not(:only-child) {
+    transform: translateY(-4px) rotate(-6deg); transition-delay: .09s;
+  }
+}
+@media (prefers-reduced-motion: reduce) { .shv-ledge-book { transition: none; } }
+.shv-ledge-empty {
+  position: relative; z-index: 1; align-self: center;
+  display: inline-flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 12px 18px; border: 1.5px dashed var(--line); border-radius: 10px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.shv-ledge-empty svg { color: color-mix(in oklch, var(--shelf-accent) 70%, var(--ink-2)); }
+
+.shv-card-body {
+  flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px;
+  padding: 14px 16px 15px;
+}
+.shv-card-name {
+  font-family: var(--serif); font-weight: 600;
+  font-size: 22px; line-height: 1.08; letter-spacing: -0.005em;
+  color: var(--ink-0);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; overflow-wrap: anywhere;
+}
+.shv-card-facets { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.shv-facet {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.shv-facet--kind { color: color-mix(in oklch, var(--shelf-accent) 78%, var(--ink-1)); }
+.shv-card-foot {
+  margin-top: auto; padding-top: 6px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  font-size: 12.5px; color: var(--ink-1);
+}
+.shv-card-count { white-space: nowrap; }
+.shv-card-owner {
+  display: inline-flex; align-items: center; gap: 7px;
+  min-width: 0; color: var(--ink-2);
+}
+.shv-card-owner-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.shv-empty {
+  margin-top: 36px; padding: 52px 24px;
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+  text-align: center;
+  border: 1.5px dashed var(--line); border-radius: var(--r-lg);
+}
+.shv-empty-msg { max-width: 440px; font-size: 14px; color: var(--ink-2); }
+
+@media (max-width: 600px) {
+  .shv-grid { grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: 12px; }
+  .shv-ledge { height: 112px; gap: 5px; padding: 14px 12px 12px; }
+  .shv-ledge-book { flex-basis: 42px; }
+  .shv-card-body { padding: 12px 12px 13px; }
+  .shv-card-name { font-size: 19px; }
+}
+
 
 /* ── F5.1 Metadata edit form ────────────────────────────────────────
  *
@@ -7461,69 +7636,6 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 /* ── F3.1 Shelves ─────────────────────────────────────────────────── */
 
-/* Two-column shell: fixed rail + fluid main column (landing + detail). */
-.shelf-layout {
-  display: grid;
-  grid-template-columns: 264px 1fr;
-  gap: 24px;
-  align-items: start;
-}
-.shelf-main { min-width: 0; }
-@media (max-width: 900px) {
-  .shelf-layout { grid-template-columns: 1fr; }
-  .shelf-rail { display: none; }
-}
-
-/* Left rail. */
-.shelf-rail {
-  position: sticky; top: 4.5rem;
-  display: flex; flex-direction: column; gap: 10px;
-  padding: 14px;
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
-  border-radius: 14px;
-}
-.shelf-rail-head {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 8px;
-}
-.shelf-rail-new {
-  font: inherit; font-size: 12px; font-weight: 500;
-  color: var(--ink-1); background: transparent;
-  border: 1px solid var(--line-2); border-radius: 8px;
-  padding: 3px 8px; cursor: pointer;
-  transition: background .15s, color .15s, border-color .15s;
-}
-@media (hover: hover) {
-  .shelf-rail-new:hover { color: var(--ink-0); background: var(--bg-2); border-color: var(--line); }
-}
-
-.shelf-rail-list { display: flex; flex-direction: column; gap: 2px; }
-.shelf-row {
-  display: flex; align-items: center; gap: 9px;
-  padding: 7px 9px; border-radius: 9px;
-  color: var(--ink-1); text-decoration: none;
-  transition: background .12s, color .12s;
-}
-@media (hover: hover) { .shelf-row:hover { background: var(--bg-2); color: var(--ink-0); } }
-.shelf-row--active { background: var(--bg-3); color: var(--ink-0); }
-.shelf-row-marker {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 16px; flex: 0 0 16px; color: var(--ink-2);
-}
-.shelf-row-swatch {
-  width: 11px; height: 11px; border-radius: 3px;
-  border: 1px solid color-mix(in oklch, black 25%, transparent);
-}
-.shelf-row-name {
-  flex: 1 1 auto; min-width: 0; font-size: 13px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.shelf-row-count { font-size: 11px; color: var(--ink-3); }
-.shelf-row-owner { margin-left: 6px; font-size: 10.5px; color: var(--ink-3); font-weight: 400; }
-.shelf-row-vis { display: inline-flex; color: var(--ink-3); flex: 0 0 auto; }
-.shelf-rail-foot { font-size: 10.5px; color: var(--ink-3); margin: 2px 0 0; }
-
 /* Create / add-books modal. */
 .shelf-modal-overlay {
   position: fixed; inset: 0; z-index: 120;
@@ -7683,51 +7795,133 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .shelf-preview-empty { font-size: 11.5px; color: var(--ink-3); margin: 0; }
 .shelf-preview-count { font-size: 13px; color: var(--ink-1); margin: 0 0 10px; }
 .shelf-preview-count em { color: var(--ink-0); font-style: normal; font-weight: 600; }
-.shelf-preview-grid, .shelf-picker-grid {
+.shelf-preview-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
   gap: 8px;
 }
 
-/* Hand-picked / add-books picker. */
-.shelf-picker { display: flex; flex-direction: column; gap: 12px; }
-.shelf-picker-bar { display: flex; align-items: center; gap: 12px; }
-.shelf-picker-search {
-  flex: 1 1 auto;
-  font: inherit; font-size: 13px; color: var(--ink-0);
-  background: var(--bg-2); border: 1px solid var(--line-2);
-  border-radius: 10px; padding: 8px 11px;
-}
-.shelf-picker-search:focus { outline: none; border-color: var(--accent); }
-.shelf-picker-count { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
-.shelf-picker-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
-
 .shelf-cover-tile { display: block; }
-.shelf-cover-tile--selectable {
-  padding: 0; border: 2px solid transparent; border-radius: 10px;
-  background: transparent; cursor: pointer; transition: border-color .12s;
-}
-@media (hover: hover) { .shelf-cover-tile--selectable:hover { border-color: var(--line); } }
-.shelf-cover-tile--picked { border-color: var(--accent); }
 
-/* Shelf detail. */
-.shelf-detail-header { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
-.shelf-back { font-size: 12px; color: var(--ink-2); text-decoration: none; }
-@media (hover: hover) { .shelf-back:hover { color: var(--ink-0); } }
+/* ── Library picker — Add books / hand-picked New shelf ───────────────
+   Cards, not bare covers: plenty of books carry no cover art, and a wall of
+   identical plates gives a reader nothing to pick by. Each card carries the
+   title, author and format, marks what is already on the shelf, and the tray
+   above shows what's picked so far. */
+.pick { display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 0; }
+.pick-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.pick-kicker {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+/* `.atrium` scope: outranks the base heading size. */
+.atrium .pick-title { margin-top: 4px; font-size: 30px; line-height: 1.05; overflow-wrap: anywhere; }
+.pick-close {
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  font: inherit; font-size: 15px; line-height: 1;
+  background: var(--bg-2); border: 1px solid var(--line-2);
+  color: var(--ink-1); cursor: pointer;
+}
+@media (hover: hover) { .pick-close:hover { color: var(--ink-0); background: var(--bg-3); } }
+
+.pick-search-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.pick-search { position: relative; flex: 1 1 260px; display: flex; align-items: center; }
+.pick-search > svg { position: absolute; left: 11px; color: var(--ink-3); pointer-events: none; }
+.pick-search input {
+  width: 100%; font: inherit; font-size: 13px; color: var(--ink-0);
+  background: var(--bg-2); border: 1px solid var(--line-2);
+  border-radius: 10px; padding: 9px 32px 9px 34px;
+}
+.pick-search input:focus { outline: none; border-color: var(--accent); }
+/* The styled clear button is ours; without this Chrome draws its own search
+   cancel glyph right beside it and the box shows two ×. */
+.pick-search input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+.pick-search-clear {
+  position: absolute; right: 8px; width: 20px; height: 20px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: transparent; border: 0; color: var(--ink-3); cursor: pointer;
+}
+@media (hover: hover) { .pick-search-clear:hover { color: var(--ink-0); background: var(--bg-3); } }
+.pick-status { font-family: var(--mono); font-size: 11px; color: var(--ink-2); white-space: nowrap; }
+.pick-review {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+  padding: 6px 10px; border-radius: 999px; white-space: nowrap;
+  color: var(--ink-2); background: var(--bg-2); border: 1px solid var(--line-2);
+  cursor: pointer;
+}
+.pick-review[aria-pressed="true"] {
+  color: var(--accent-ink);
+  background: color-mix(in oklch, var(--accent) 16%, var(--bg-2));
+  border-color: color-mix(in oklch, var(--accent) 50%, var(--line-2));
+}
+@media (hover: hover) { .pick-review:hover { color: var(--ink-0); border-color: var(--line); } }
+
+.pick-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 2px; }
+.pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(236px, 1fr)); gap: 10px; }
+.pick-card {
+  display: grid; grid-template-columns: 44px 1fr 20px; gap: 12px; align-items: center;
+  width: 100%; padding: 10px; text-align: left; border-radius: 12px;
+  font: inherit; color: inherit;
+  background: var(--bg-2); border: 1px solid var(--line-2); cursor: pointer;
+  transition: border-color .12s, background .12s;
+}
+@media (hover: hover) { .pick-card:hover { border-color: var(--line); background: var(--bg-3); } }
+.pick-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pick-card[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 12%, var(--bg-2));
+}
+.pick-card[aria-disabled="true"] { opacity: .6; cursor: default; }
+@media (hover: hover) {
+  .pick-card[aria-disabled="true"]:hover { border-color: var(--line-2); background: var(--bg-2); }
+}
+.pick-cover { display: block; width: 44px; }
+.pick-meta { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pick-name {
+  font-size: 13.5px; font-weight: 500; line-height: 1.25; color: var(--ink-0);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.pick-author { font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 1px; }
+.pick-tag, .pick-on-shelf {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 5px;
+  border: 1px solid var(--line-2); color: var(--ink-3);
+}
+.pick-on-shelf {
+  color: color-mix(in oklch, var(--ok) 85%, var(--ink-1));
+  border-color: color-mix(in oklch, var(--ok) 40%, var(--line-2));
+}
+.pick-check {
+  width: 20px; height: 20px; border-radius: 50%;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); color: var(--accent-ink); background: transparent;
+}
+.pick-card[aria-pressed="true"] .pick-check { background: var(--accent); border-color: transparent; }
+.pick-card[aria-disabled="true"] .pick-check { visibility: hidden; }
+
+.pick-state {
+  padding: 44px 16px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  font-size: 13.5px; color: var(--ink-2);
+}
+.pick-more-row { display: flex; justify-content: center; padding: 14px 0 4px; }
+.pick-more { font-size: 12.5px; }
+.pick-foot {
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  border-top: 1px solid var(--line-2); padding-top: 12px;
+}
+
+/* Shared shelf chrome: badges, the landing header's edit pencil and facet
+   row, the ⋯ menu, rule chips, and the member grid's add tile. */
 .shelf-badge {
   font-family: var(--mono); font-size: 10px; font-weight: 600;
   letter-spacing: .04em; text-transform: uppercase;
   color: var(--ink-2); background: var(--bg-2);
   border: 1px solid var(--line-2); border-radius: 6px; padding: 2px 7px;
 }
-.shelf-badge--owner { text-transform: none; letter-spacing: 0; color: var(--ink-3); }
 /* Kobo wireless-sync opt-in (#924). */
 .shelf-badge--kobo { color: #34d399; border-color: #34d39955; }
-.shelf-title-row { display: flex; align-items: center; gap: 10px; }
-/* min-width:0 lets long titles ellipsize instead of pushing the controls off-row. */
-.shelf-title {
-  margin: 0; font-size: 26px; color: var(--ink-0);
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 .shelf-edit-btn {
   display: inline-flex; align-items: center; justify-content: center;
   color: var(--ink-2); background: transparent;
@@ -7740,14 +7934,6 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .shelf-facet { font-size: 12px; color: var(--ink-2); }
 .shelf-facet--kind { color: var(--accent); }
 .shelf-facet-dot { color: var(--ink-3); }
-.shelf-actions { position: relative; flex-shrink: 0; }
-.shelf-actions-btn {
-  font: inherit; font-size: 18px; line-height: 1;
-  color: var(--ink-1); background: var(--bg-2);
-  border: 1px solid var(--line-2); border-radius: 8px;
-  width: 32px; height: 32px; cursor: pointer;
-}
-@media (hover: hover) { .shelf-actions-btn:hover { color: var(--ink-0); background: var(--bg-3); } }
 .shelf-actions-menu {
   position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
   min-width: 180px; display: flex; flex-direction: column;
@@ -7766,14 +7952,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .shelf-menu-item--danger:hover { background: color-mix(in oklch, var(--bad) 14%, transparent); }
 }
 
-.shelf-rule-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
 .shelf-rule-chip {
   font-size: 12px; color: var(--ink-1);
   background: var(--bg-2); border: 1px solid var(--line-2);
   border-radius: 999px; padding: 4px 11px;
 }
-.shelf-desc { color: var(--ink-2); font-size: 13.5px; margin: 0 0 14px; }
-.shelf-sort-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
 
 .shelf-grid { margin-top: 4px; }
 .shelf-add-tile {
@@ -7786,7 +7969,155 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 @media (hover: hover) {
   .shelf-add-tile:hover { color: var(--ink-0); border-color: var(--accent); background: var(--bg-1); }
 }
-.shelf-add-tile-plus { font-size: 24px; line-height: 1; }
+.shelf-add-tile-plus { font-size: 24px; line-height: 1; display: inline-flex; }
+.shelf-add-tile-plus svg { width: 22px; height: 22px; }
+
+/* ── Shelf page — /shelves/:id (web) ──────────────────────────────────
+   A hero lit in the shelf's accent over the member grid. Every viewer gets
+   the shelf's actions; a viewer who can't change it gets them greyed, with
+   the lock note beneath saying why. The native screen styles itself under
+   `.m-shelf-*`. */
+.shd-page { padding-bottom: 60px; }
+.shd-crumbs { padding-top: 22px; }
+.shd-back {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--ink-2); transition: color .15s;
+}
+@media (hover: hover) { .shd-back:hover { color: var(--ink-0); } }
+.shd-state {
+  padding-top: 28px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 14px;
+}
+
+.shd-hero {
+  margin-top: 14px; padding: 28px 30px 26px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px 28px; align-items: start;
+  border: 1px solid var(--line-2); border-radius: var(--r-xl);
+  background:
+    radial-gradient(90% 150% at 100% 0%,
+      color-mix(in oklch, var(--shelf-accent) 20%, transparent), transparent 62%),
+    var(--bg-1);
+}
+.shd-hero-main { min-width: 0; }
+.shd-kicker { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.shd-kicker-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.shd-kicker-item--kind { color: color-mix(in oklch, var(--shelf-accent) 80%, var(--ink-1)); }
+/* `.atrium` scope: outranks the base heading size and the `p` margin reset. */
+.atrium .shd-title {
+  margin-top: 10px;
+  font-size: clamp(38px, 5vw, 60px); line-height: 1;
+  overflow-wrap: anywhere;
+}
+.shd-owner {
+  margin-top: 16px;
+  display: inline-flex; align-items: center; gap: 9px;
+  font-size: 13.5px; color: var(--ink-1);
+}
+.shd-owner-av {
+  display: inline-grid; place-items: center; flex: none;
+  width: 28px; height: 28px; border-radius: 50%; overflow: hidden;
+  background: var(--bg-3); color: var(--ink-1); border: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+}
+.shd-owner-lead { color: var(--ink-2); }
+.shd-owner-name { color: var(--ink-0); font-weight: 600; }
+.atrium .shd-desc {
+  margin-top: 14px; max-width: 640px;
+  font-size: 14px; line-height: 1.55; color: var(--ink-1);
+}
+.shd-rules { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.shd-rules-lead { margin-right: 2px; font-size: 12.5px; color: var(--ink-2); }
+.shd-kobo { display: inline-block; margin-top: 14px; }
+
+.shd-actions {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end;
+  gap: 8px;
+}
+.shd-action svg { flex: none; }
+/* Greyed, not gone: a locked control keeps its place and its focus. */
+.shd-action[aria-disabled="true"],
+.shd-action.primary[aria-disabled="true"] {
+  background: var(--bg-2); color: var(--ink-3); border-color: var(--line-2);
+  font-weight: 500; cursor: not-allowed; opacity: .72;
+}
+.shd-action[aria-disabled="true"]:hover { background: var(--bg-2); border-color: var(--line-2); }
+.shd-action[aria-disabled="true"]:active { transform: none; }
+.shd-more { position: relative; }
+.shd-more-btn { width: 36px; padding: 0; justify-content: center; font-size: 17px; }
+.shd-menu-scrim { position: fixed; inset: 0; z-index: 29; }
+.shd-menu { min-width: 200px; }
+.shd-menu-item { display: flex; align-items: center; gap: 8px; }
+.shd-menu-check { width: 12px; flex: none; color: var(--accent); }
+
+.shd-note { grid-column: 1 / -1; }
+.shd-note--locked {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 12px 14px; border-radius: var(--r-md);
+  background: color-mix(in oklch, var(--warn) 8%, var(--bg-2));
+  border: 1px solid color-mix(in oklch, var(--warn) 28%, var(--line-2));
+  font-size: 13px; color: var(--ink-1);
+}
+.shd-note-icon { display: inline-flex; margin-top: 2px; color: var(--warn); }
+.shd-note-text { display: flex; flex-direction: column; gap: 2px; }
+.shd-note-text strong { color: var(--ink-0); font-weight: 600; }
+
+.shd-books { margin-top: 34px; }
+.shd-books-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+  padding-bottom: 12px; margin-bottom: 22px;
+  border-bottom: 1px solid var(--line-2);
+}
+.atrium .shd-books-title {
+  font-size: 28px; line-height: 1.05;
+  display: inline-flex; align-items: baseline; gap: 10px;
+}
+.shd-books-count { font-size: 11px; color: var(--ink-3); }
+.shd-sort { display: inline-flex; align-items: center; gap: 8px; }
+.atrium .shd-alert { margin-bottom: 16px; }
+.shd-grid .shelf-add-tile { min-height: 0; aspect-ratio: 2 / 3; }
+
+.shd-tile { position: relative; transition: opacity .2s; }
+.shd-tile--leaving { opacity: .35; pointer-events: none; }
+.shd-tile-remove {
+  position: absolute; top: 8px; right: 8px; z-index: 3;
+  width: 30px; height: 30px; padding: 0; border-radius: 50%;
+  display: grid; place-items: center;
+  color: var(--ink-0); cursor: pointer;
+  background: color-mix(in oklch, var(--bg-0) 72%, transparent);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(6px);
+  opacity: 0; transform: scale(.9);
+  transition: opacity .15s, transform .15s, background .15s, border-color .15s;
+}
+.shd-tile:hover .shd-tile-remove,
+.shd-tile:focus-within .shd-tile-remove { opacity: 1; transform: none; }
+@media (hover: none) { .shd-tile-remove { opacity: 1; transform: none; } }
+@media (hover: hover) {
+  .shd-tile-remove:hover {
+    background: color-mix(in oklch, var(--bad) 35%, var(--bg-0));
+    border-color: var(--bad);
+  }
+}
+.shd-tile-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.shd-empty {
+  padding: 52px 24px;
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+  text-align: center;
+  border: 1.5px dashed var(--line); border-radius: var(--r-lg);
+}
+.shd-empty-msg { max-width: 440px; font-size: 14px; color: var(--ink-2); }
+
+@media (max-width: 760px) {
+  .shd-hero { grid-template-columns: 1fr; padding: 22px 20px; }
+  .shd-actions { justify-content: flex-start; }
+}
 
 /* ── Add-books file drop zone ──────────────────────────────────────── */
 .file-drop-zone {
@@ -11804,6 +12135,7 @@ html {
   background: transparent; border: 0; cursor: pointer; padding: 0;
 }
 .lmq-slink:hover { color: var(--accent); }
+.lmq-slab-acts { display: inline-flex; align-items: baseline; gap: 20px; }
 
 .lmq-shwrap { position: relative; display: flex; align-items: stretch; }
 /* The peek needs room INSIDE the scroller: `overflow-x: auto` clips the block

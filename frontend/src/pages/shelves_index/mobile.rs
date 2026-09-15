@@ -1,8 +1,7 @@
-//! Shelves index page (`/shelves`) — a full-screen list of the caller's
-//! shelves, the mobile design's primary shelf-navigation surface (reached from
-//! the library header). Each row links to that shelf's detail page; the header
-//! hosts a "New shelf" action. On web (which browses shelves via the rail) it
-//! stands in as a plain list.
+//! Native-shell shelves index — a full-screen list of the caller's shelves,
+//! the mobile design's primary shelf-navigation surface (reached from the
+//! library header). Each row links to that shelf's detail page; the header
+//! hosts a "New shelf" action.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
@@ -11,9 +10,9 @@ use omnibus_shared::{ShelfKind, ShelfSummary, Visibility};
 use crate::components::CreateShelfModal;
 use crate::{data, use_server_url, Route};
 
-/// Shelves index — see the module doc.
+/// Native-shell shelves index — see the module doc.
 #[component]
-pub fn ShelvesIndexPage() -> Element {
+pub(super) fn MobileShelvesIndex() -> Element {
     let mut shelves = use_signal(Vec::<ShelfSummary>::new);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(|| None::<String>);

@@ -315,6 +315,7 @@ fn summary_of(shelf: &Shelf) -> ShelfSummary {
         id: shelf.id,
         owner_user_id: shelf.owner_user_id,
         owner_username: shelf.owner_username.clone(),
+        owner_has_avatar: shelf.owner_has_avatar,
         kind: shelf.kind,
         name: shelf.name.clone(),
         visibility: shelf.visibility,

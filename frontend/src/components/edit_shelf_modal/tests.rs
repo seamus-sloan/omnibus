@@ -14,6 +14,7 @@ fn shelf(kind: ShelfKind, sync_to_kobo: bool) -> Shelf {
         id: 7,
         owner_user_id: 1,
         owner_username: "sloan".into(),
+        owner_has_avatar: false,
         kind,
         name: "Cosy Reads".into(),
         description: None,

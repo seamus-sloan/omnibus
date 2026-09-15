@@ -1,8 +1,8 @@
 //! Facet row for a shelf: kind ("Smart shelf" / "Hand-picked shelf" /
 //! "Wishlist"), visibility, and — for smart shelves — one chip per rule
-//! ("Author is Brandon Sanderson"). Mounted under the shelf-detail title and
-//! the landing header's section title; extra badges (Kobo sync, owner
-//! attribution) pass through as children so they share the row.
+//! ("Author is Brandon Sanderson"). Mounted under the landing header's
+//! section title; the shelf page's kicker speaks the same labels. Extra
+//! badges pass through as children so they share the row.
 
 use dioxus::prelude::*;
 use omnibus_shared::{RuleField, RuleOp, Shelf, ShelfKind, ShelfRule, Visibility};
@@ -11,21 +11,14 @@ use omnibus_shared::{RuleField, RuleOp, Shelf, ShelfKind, ShelfRule, Visibility}
 /// rule chips, inside the same flex row.
 #[component]
 pub fn ShelfFacets(shelf: Shelf, children: Element) -> Element {
-    let kind_label = match shelf.kind {
-        ShelfKind::Smart => "Smart shelf",
-        ShelfKind::Manual => "Hand-picked shelf",
-        ShelfKind::Wishlist => "Wishlist",
-    };
-    let vis_label = match shelf.visibility {
-        Visibility::Private => "Private",
-        Visibility::Public => "Public",
-    };
+    let kind = kind_label(shelf.kind);
+    let visibility = visibility_label(shelf.visibility);
     let is_smart = shelf.kind == ShelfKind::Smart;
     rsx! {
         div { class: "shelf-facets", "data-testid": "shelf-facets",
-            span { class: "shelf-facet shelf-facet--kind", "{kind_label}" }
+            span { class: "shelf-facet shelf-facet--kind", "{kind}" }
             span { class: "shelf-facet-dot", "\u{00b7}" }
-            span { class: "shelf-facet", "{vis_label}" }
+            span { class: "shelf-facet", "{visibility}" }
             {children}
             if is_smart {
                 for (i, rule) in shelf.rules.iter().enumerate() {
@@ -33,6 +26,23 @@ pub fn ShelfFacets(shelf: Shelf, children: Element) -> Element {
                 }
             }
         }
+    }
+}
+
+/// "Smart shelf" / "Hand-picked shelf" / "Wishlist".
+pub fn kind_label(kind: ShelfKind) -> &'static str {
+    match kind {
+        ShelfKind::Smart => "Smart shelf",
+        ShelfKind::Manual => "Hand-picked shelf",
+        ShelfKind::Wishlist => "Wishlist",
+    }
+}
+
+/// "Private" / "Public".
+pub fn visibility_label(visibility: Visibility) -> &'static str {
+    match visibility {
+        Visibility::Private => "Private",
+        Visibility::Public => "Public",
     }
 }
 

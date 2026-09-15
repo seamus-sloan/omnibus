@@ -1,19 +1,62 @@
 //! The shelves row below the stack, drawn text first: names as type on a
 //! hairline rule with up to three member covers peeking in above the name on
 //! hover, which costs ~110px instead of the 170px the cover-mosaic tiles took.
-//! Selecting filters the landing book list in place; nothing here navigates.
-//! Horizontal paging (the `‹`/`›` arrows) is driven by `marquee.js`.
+//! Selecting filters the landing book list in place; only the slab's "All
+//! shelves" link leaves, for the full `/shelves` index — which is now the only
+//! way there, since the top nav carries no Shelves link. Horizontal paging
+//! (the `‹`/`›` arrows) is driven by `marquee.js`.
+//!
+//! The row carries a subset of what the index lists: [`rail_shelves`] applies
+//! the same inclusion rule as the iOS landing rail, so another reader's
+//! private shelves and every wishlist but the viewer's own stocked one stay
+//! off it.
 
 use dioxus::prelude::*;
+use dioxus_router::Link;
 use omnibus_shared::{ShelfKind, ShelfSummary, Visibility};
 
-use crate::components::shelves_rail::{cog_icon, heart_icon, shows_owner_attribution};
+use crate::components::shelf_glyphs::{cog_icon, heart_icon};
 use crate::components::CreateShelfModal;
+use crate::shelf_access::shows_owner_attribution;
 use crate::shelf_selection::ShelfSelection;
+use crate::Route;
 
 /// How many member covers peek in above a shelf name on hover. Three reads as
 /// a hint of the shelf without becoming a mosaic again.
 pub(super) const PEEK_COVERS: usize = 3;
+
+/// Which shelves the row shows, mirroring the iOS rail's `railShelves`: the
+/// viewer's own — whatever their visibility or kind — plus other readers'
+/// *shared* shelves, minus any wishlist nobody has put a book in.
+///
+/// Three exclusions fall out of that, and each is deliberate: another reader's
+/// private shelf (only an admin's read returns one at all), another reader's
+/// wishlist (auto-provisioned per account, so it is noise rather than a
+/// choice they made), and an empty wishlist of the viewer's own.
+///
+/// The order is left exactly as the server sent it — the viewer's own first,
+/// then each owner's shelves in creation order — because that ordering is the
+/// contract `db::shelves::read::summary` writes for this row, and the iOS rail
+/// likewise applies no sort of its own.
+///
+/// Unlike that rail there is **no cap**: iOS takes the first 8 because a phone
+/// rail cannot scroll far, while this row pages horizontally, so truncating
+/// would hide shelves the arrows can already reach.
+///
+/// `viewer_id` is `None` until the boot effect resolves the viewer; nothing
+/// counts as "yours" until it lands, which is the same concession the iOS rail
+/// makes rather than guessing.
+pub(super) fn rail_shelves(all: &[ShelfSummary], viewer_id: Option<i64>) -> Vec<ShelfSummary> {
+    all.iter()
+        .filter(|s| {
+            let is_own = viewer_id == Some(s.owner_user_id);
+            let shared_by_another = s.visibility == Visibility::Public && !s.kind.is_system();
+            let unused_wishlist = s.kind == ShelfKind::Wishlist && s.book_count == 0;
+            (is_own || shared_by_another) && !unused_wishlist
+        })
+        .cloned()
+        .collect()
+}
 
 /// Caption meta line: `"N books"`, plus `Public` when the shelf is shared,
 /// plus `by <owner>` when the viewer doesn't own it. Kind is carried by the
@@ -101,6 +144,9 @@ pub(super) fn ShelfGallery(props: ShelfGalleryProps) -> Element {
     // `None` until the boot effect resolves the viewer (SSR + first paint), so
     // attribution stays withheld rather than guessed — same rule as the rail.
     let viewer_id = crate::use_current_user_summary()().map(|u| u.id);
+    // Same inclusion rule and same order as the iOS rail; the arrows page
+    // through the result rather than capping it.
+    let shelves = rail_shelves(&shelves, viewer_id);
     let all_active = selection == ShelfSelection::All;
     let all_meta = match all_count {
         Some(1) => "1 book".to_string(),
@@ -114,12 +160,20 @@ pub(super) fn ShelfGallery(props: ShelfGalleryProps) -> Element {
             aria_label: "Shelves",
             div { class: "lmq-slab",
                 span { class: "k", "{slab_line(!all_active)}" }
-                button {
-                    r#type: "button",
-                    class: "lmq-slink",
-                    "data-testid": "new-shelf",
-                    onclick: move |_| show_create.set(true),
-                    "\u{FF0B} New shelf"
+                div { class: "lmq-slab-acts",
+                    button {
+                        r#type: "button",
+                        class: "lmq-slink",
+                        "data-testid": "new-shelf",
+                        onclick: move |_| show_create.set(true),
+                        "\u{FF0B} New shelf"
+                    }
+                    Link {
+                        to: Route::Shelves {},
+                        class: "lmq-slink",
+                        "data-testid": "gallery-all-shelves",
+                        "All shelves \u{2192}"
+                    }
                 }
             }
             div { class: "lmq-shwrap",

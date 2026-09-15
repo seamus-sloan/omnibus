@@ -4,7 +4,11 @@ import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
-import { bookTile, selectShelfInGallery } from "../utils/shelves";
+import {
+  bookTile,
+  openShelfFromIndex,
+  selectShelfInGallery,
+} from "../utils/shelves";
 
 // The 3c "not in your library" chooser: own it (creates a fileless book plus
 // its first physical copy) or wishlist it (creates a fileless book tracked
@@ -273,10 +277,12 @@ test("adds a not-in-library book to the wishlist, shows it on the owner's Wishli
     const viewerPage = await context.newPage();
     try {
       await logInAsViewer(viewerPage);
-      await gotoReady(viewerPage, "/");
-      await selectShelfInGallery(viewerPage, wishlist.id, wishlist.name);
+      // Another reader's wishlist is deliberately absent from the landing row
+      // — it is provisioned per account rather than curated — so a non-owner
+      // reaches it through the /shelves index, which lists every shelf they
+      // may see.
+      await openShelfFromIndex(viewerPage, wishlist.id);
       await expect(bookTile(viewerPage, title)).toBeVisible();
-      await expect(viewerPage.getByTestId("lib-page-error")).toHaveCount(0);
     } finally {
       await context.close();
     }
@@ -295,8 +301,10 @@ test("adds a not-in-library book to the wishlist, shows it on the owner's Wishli
       .toBe(200);
   }
 
-  await gotoReady(page, "/");
-  await selectShelfInGallery(page, wishlist.id, wishlist.name);
+  // Emptied, the wishlist drops off the landing row altogether (an unstocked
+  // wishlist is filtered out of it), so confirm the removal where the shelf
+  // still lists: its own page, reached from the index.
+  await openShelfFromIndex(page, wishlist.id);
   await expect(bookTile(page, title)).toHaveCount(0);
 });
 

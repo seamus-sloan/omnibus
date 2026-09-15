@@ -5,13 +5,10 @@
 //! and submit through [`crate::data::create_shelf`].
 
 use dioxus::prelude::*;
-use omnibus_shared::{
-    CreateShelfRequest, EbookMetadata, MatchMode, Shelf, ShelfKind, ShelfRule, Visibility,
-};
+use omnibus_shared::{CreateShelfRequest, MatchMode, Shelf, ShelfKind, ShelfRule, Visibility};
 
-use crate::components::library_picker_grid::{filter_library, use_library_fetch};
 use crate::components::shelf_rule_builder::{RuleBuilder, RuleDraft};
-use crate::components::LibraryPickerGrid;
+use crate::components::LibraryPicker;
 use crate::{data, use_server_url};
 
 #[cfg(test)]
@@ -74,7 +71,11 @@ pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<She
                             }
                         },
                         ShelfKind::Manual | ShelfKind::Wishlist => rsx! {
-                            PickerBody { picked, server_url: server_url.clone() }
+                            LibraryPicker {
+                                picked,
+                                server_url: server_url.clone(),
+                                search_testid: "shelf-picker-search",
+                            }
                         },
                     }
                 }
@@ -289,43 +290,6 @@ pub fn VisibilityToggle(visibility: Visibility, on_change: EventHandler<Visibili
                 onclick: move |_| on_change.call(Visibility::Public),
                 "Public"
             }
-        }
-    }
-}
-
-/// Hand-picked picker: a searchable, selectable cover grid over the library.
-#[component]
-fn PickerBody(picked: Signal<Vec<String>>, server_url: String) -> Element {
-    let library = use_signal(Vec::<EbookMetadata>::new);
-    let mut query = use_signal(String::new);
-
-    use_library_fetch(server_url.clone(), library);
-
-    // Memoized so filter only reruns when library/query change, not on every render.
-    let filtered = use_memo(move || {
-        let library_books = library.read();
-        filter_library(&library_books, &query.read())
-            .into_iter()
-            .cloned()
-            .collect::<Vec<EbookMetadata>>()
-    });
-    let filtered = filtered();
-    let picked_count = picked.read().len();
-
-    rsx! {
-        div { class: "shelf-picker",
-            div { class: "shelf-picker-bar",
-                input {
-                    r#type: "search",
-                    class: "shelf-picker-search",
-                    placeholder: "Search your library\u{2026}",
-                    "data-testid": "shelf-picker-search",
-                    value: "{query}",
-                    oninput: move |e| query.set(e.value()),
-                }
-                span { class: "mono shelf-picker-count", "On this shelf \u{b7} {picked_count}" }
-            }
-            LibraryPickerGrid { books: filtered, server_url: server_url.clone(), picked }
         }
     }
 }

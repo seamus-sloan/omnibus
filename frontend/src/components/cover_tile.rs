@@ -1,7 +1,7 @@
 //! Shared cover-tile primitives: the responsive `src`/`srcset` builder and
 //! the `CoverTile` wrapper used by the landing grid, shelf detail, and the
-//! create-shelf / add-books pickers. One home for the tile chrome so a
-//! styling tweak lands in every surface at once.
+//! smart-rule preview. One home for the tile chrome so a styling tweak lands
+//! in every surface at once.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
@@ -37,30 +37,12 @@ pub fn thumb_srcs(
     }
 }
 
-/// Toggle a book `uuid` in a picker's selection signal (remove if present, else append).
-pub fn toggle_picked(picked: &mut Signal<Vec<String>>, uuid: &str) {
-    picked.with_mut(|v| {
-        if let Some(pos) = v.iter().position(|x| x == uuid) {
-            v.remove(pos);
-        } else {
-            v.push(uuid.to_string());
-        }
-    });
-}
-
 /// How a [`CoverTile`] wraps its [`Cover`].
 #[derive(Clone, PartialEq)]
 pub enum CoverTileKind {
     /// A `<div class="shelf-cover-tile">` with no interaction — the smart-rule
     /// preview grid.
     ReadOnly,
-    /// A selectable `<button class="shelf-cover-tile shelf-cover-tile--selectable">`
-    /// carrying `aria-pressed`; the picker grids. `selected` drives the
-    /// `--picked` modifier and `on_toggle` fires on click.
-    Selectable {
-        selected: bool,
-        on_toggle: EventHandler<()>,
-    },
     /// A `<Link>` to the book-detail page with a title caption below — the
     /// shelf member grid.
     MemberLink { title: String },
@@ -85,25 +67,6 @@ pub fn CoverTile(
                 Cover { book, src_override: src, srcset, sizes: cover_sizes }
             }
         },
-        CoverTileKind::Selectable {
-            selected,
-            on_toggle,
-        } => {
-            let class = if selected {
-                "shelf-cover-tile shelf-cover-tile--selectable shelf-cover-tile--picked"
-            } else {
-                "shelf-cover-tile shelf-cover-tile--selectable"
-            };
-            rsx! {
-                button {
-                    r#type: "button",
-                    class: "{class}",
-                    "aria-pressed": if selected { "true" } else { "false" },
-                    onclick: move |_| on_toggle.call(()),
-                    Cover { book, src_override: src, srcset, sizes: cover_sizes }
-                }
-            }
-        }
         CoverTileKind::MemberLink { title } => rsx! {
             Link {
                 to: Route::BookDetail { uuid: uuid.clone() },
